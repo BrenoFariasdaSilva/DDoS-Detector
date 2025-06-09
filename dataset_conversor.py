@@ -148,14 +148,26 @@ def load_dataset(input_path):
 
    if ext == ".csv": # If the file is in CSV format
       df = pd.read_csv(input_path) # Load the CSV file into a pandas DataFrame
+
    elif ext == ".arff": # If the file is in ARFF format
-      data, meta = scipy_arff.loadarff(input_path) # Load the ARFF file using scipy
-      df = pd.DataFrame(data) # Convert the loaded data to a pandas DataFrame
-      for col in df.columns: # Iterate through each column in the DataFrame
-         if df[col].dtype == object: # If the column data type is object (usually for string data)
-            df[col] = df[col].apply(lambda x: x.decode("utf-8") if isinstance(x, bytes) else x) # Decode bytes to strings if necessary
+      try:
+         data, meta = scipy_arff.loadarff(input_path) # Try loading the ARFF file using scipy
+         df = pd.DataFrame(data) # Convert the loaded data to a pandas DataFrame
+         for col in df.columns: # Iterate through each column in the DataFrame
+            if df[col].dtype == object: # If the column data type is object (usually for string data)
+               df[col] = df[col].apply(lambda x: x.decode("utf-8") if isinstance(x, bytes) else x) # Decode bytes to strings if necessary
+      except Exception as e:
+         verbose_output(f"{BackgroundColors.YELLOW}Warning: Failed to load ARFF with scipy ({e}). Trying with liac-arff...{Style.RESET_ALL}")
+         try:
+            with open(input_path, 'r', encoding='utf-8') as f:
+               data = arff.load(f) # Load the ARFF file using liac-arff
+            df = pd.DataFrame(data['data'], columns=[attr[0] for attr in data['attributes']]) # Create DataFrame from liac-arff output
+         except Exception as e2:
+            raise RuntimeError(f"Failed to load ARFF file with both scipy and liac-arff: {e2}")
+
    elif ext == ".txt": # If the file is in TXT format
       df = pd.read_csv(input_path, sep="\t") # Load the TXT file into a pandas DataFrame using tab as the separator
+
    else: # If the file extension is not supported
       raise ValueError(f"Unsupported file format: {ext}")
 
