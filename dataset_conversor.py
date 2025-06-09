@@ -113,9 +113,9 @@ def clean_file(input_path, cleaned_path):
    if file_extension == ".arff": # If the file is in ARFF format
       for line in lines: # Iterate through each line in the file
          if line.strip().lower().startswith("@attribute") and "{" in line and "}" in line: # If the line is an attribute definition with a domain
-            parts = line.split("{") # Split the line into parts at the first occurrence of '{'
+            parts = line.split("{") # Split the line into parts at the first occurrence of "{"
             before = parts[0] # Get the part before the domain
-            domain = parts[1].split("}")[0] # Get the domain part (between '{' and '}')
+            domain = parts[1].split("}")[0] # Get the domain part (between "{" and "}")
             after = line.split("}")[1] # Get the part after the domain
 
             cleaned_domain = ",".join([val.strip() for val in domain.split(",")]) # Clean the domain by removing extra spaces around comma-separated values
@@ -150,19 +150,19 @@ def load_dataset(input_path):
       df = pd.read_csv(input_path) # Load the CSV file into a pandas DataFrame
 
    elif ext == ".arff": # If the file is in ARFF format
-      try:
+      try: # Try to load the ARFF file using scipy
          data, meta = scipy_arff.loadarff(input_path) # Try loading the ARFF file using scipy
          df = pd.DataFrame(data) # Convert the loaded data to a pandas DataFrame
          for col in df.columns: # Iterate through each column in the DataFrame
             if df[col].dtype == object: # If the column data type is object (usually for string data)
                df[col] = df[col].apply(lambda x: x.decode("utf-8") if isinstance(x, bytes) else x) # Decode bytes to strings if necessary
-      except Exception as e:
+      except Exception as e: # If there is an error loading the ARFF file with scipy
          verbose_output(f"{BackgroundColors.YELLOW}Warning: Failed to load ARFF with scipy ({e}). Trying with liac-arff...{Style.RESET_ALL}")
-         try:
-            with open(input_path, 'r', encoding='utf-8') as f:
+         try: # Try to load the ARFF file using liac-arff
+            with open(input_path, "r", encoding="utf-8") as f:
                data = arff.load(f) # Load the ARFF file using liac-arff
-            df = pd.DataFrame(data['data'], columns=[attr[0] for attr in data['attributes']]) # Create DataFrame from liac-arff output
-         except Exception as e2:
+            df = pd.DataFrame(data["data"], columns=[attr[0] for attr in data["attributes"]]) # Create DataFrame from liac-arff output
+         except Exception as e2: # If there is an error loading the ARFF file with liac-arff
             raise RuntimeError(f"Failed to load ARFF file with both scipy and liac-arff: {e2}")
 
    elif ext == ".txt": # If the file is in TXT format
