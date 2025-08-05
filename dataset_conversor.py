@@ -3,6 +3,7 @@ import atexit # For playing a sound when the program finishes
 import os # For running commands in the terminal
 import pandas as pd # For handling CSV and TXT file formats
 import platform # For getting the operating system name
+from fastparquet import ParquetFile # For handling Parquet file format
 from colorama import Style # For coloring the terminal output
 from scipy.io import arff as scipy_arff # used to read ARFF files
 from tqdm import tqdm # For showing a progress bar
@@ -87,7 +88,7 @@ def get_dataset_files(directory=INPUT_DIRECTORY):
          continue # If the current directory contains any of the ignore words, skip it
 
       for file in files: # Iterate through files in the current directory
-         if os.path.splitext(file)[1].lower() in [".arff", ".csv", ".txt"]: # Verify if the file has a valid extension
+         if os.path.splitext(file)[1].lower() in [".arff", ".csv", ".txt", ".parquet"]: # Verify if the file has a valid extension
             dataset_files.append(os.path.join(root, file)) # Append the full path of the file to the list
 
    return dataset_files # Return the list of dataset files
@@ -127,6 +128,9 @@ def clean_file(input_path, cleaned_path):
       for line in lines: # Iterate through each line in the file
          cleaned_line = ",".join([val.strip() for val in line.strip().split(",")]) + "\n" # Clean the line by removing extra spaces around comma-separated values
          cleaned_lines.append(cleaned_line) # Append the cleaned line to the cleaned lines list
+   elif file_extension == ".parquet": # If the file is in Parquet format
+      df = pd.read_parquet(input_path, engine="fastparquet") # Load the Parquet file into a pandas DataFrame
+      df.to_parquet(cleaned_path, index=False) # Save the DataFrame to the cleaned path in Parquet format
    else: # If the file extension is not supported
       raise ValueError(f"Unsupported file extension: {file_extension}") # Raise an error for unsupported file extensions
 
@@ -167,6 +171,10 @@ def load_dataset(input_path):
 
    elif ext == ".txt": # If the file is in TXT format
       df = pd.read_csv(input_path, sep="\t") # Load the TXT file into a pandas DataFrame using tab as the separator
+
+   elif ext == ".parquet": # If the file is in Parquet format
+      pf = ParquetFile(input_path) # Load the Parquet file using fastparquet
+      df = pf.to_pandas() # Convert the Parquet file to a pandas DataFrame
 
    else: # If the file extension is not supported
       raise ValueError(f"Unsupported file format: {ext}")
@@ -223,6 +231,19 @@ def convert_to_txt(df, output_path):
 
    df.to_csv(output_path, sep="\t", index=False) # Save the DataFrame to the specified output path in TXT format, using tab as the separator and without the index
 
+def convert_to_parquet(df, output_path):
+   """
+   Convert a pandas DataFrame to PARQUET format and save it to the specified output path.
+
+   :param df: pandas DataFrame to be converted.
+   :param output_path: Path to save the converted PARQUET file.
+   :return: None
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Converting DataFrame to PARQUET format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")
+
+   df.to_parquet(output_path, index=False) # Save the DataFrame to the specified output path in PARQUET format, without the index
+
 def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIRECTORY):
    """
    Batch convert dataset files from the input directory to multiple formats (ARFF, CSV, TXT) in the output directory.
@@ -258,6 +279,7 @@ def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIREC
       convert_to_arff(df, os.path.join(OUTPUT_DIRECTORY, f"{name}.arff")) if ext != ".arff" else None # Convert the DataFrame to ARFF format and save it if the file is not already in ARFF format
       convert_to_csv(df, os.path.join(OUTPUT_DIRECTORY, f"{name}.csv")) if ext != ".csv" else None # Convert the DataFrame to CSV format and save it if the file is not already in CSV format
       convert_to_txt(df, os.path.join(OUTPUT_DIRECTORY, f"{name}.txt")) if ext != ".txt" else None # Convert the DataFrame to TXT format and save it if the file is not already in TXT format
+      convert_to_parquet(df, os.path.join(OUTPUT_DIRECTORY, f"{name}.parquet")) if ext != ".parquet" else None # Convert the DataFrame to PARQUET format and save it if the file is not already in PARQUET format
 
 def play_sound():
    """
