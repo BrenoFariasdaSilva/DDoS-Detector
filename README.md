@@ -68,32 +68,34 @@ Bullet points of the requirements.
 
 1. Clone the repository with the following command:
 
-```bash
-git clone https://github.com/BrenoFariasDaSilva/DDoS-Detector.git
-cd DDoS-Detector
-```
+   ```bash
+   git clone https://github.com/BrenoFariasDaSilva/DDoS-Detector.git
+   cd DDoS-Detector
+   ```
 
 ## Installation:
+
 * Programing Language:
 
-	* Manually:
-		```bash
-		# Programing Language:
-		sudo apt install program-language -y
-		```
+  * Manually:
+      ```bash
+      # Programing Language:
+      sudo apt install program-language -y
+      ```
 
   * Using Makefile:
-    ```bash
-    make install
-    ```
+      ```bash
+      make install
+      ```
 
   * Using ShellScript:
-    ```bash
-    chmod +x install.sh
-    sudo ./install.sh
-    ```  
+      ```bash
+      chmod +x install.sh
+      sudo ./install.sh
+      ```  
 
 ## Run Programing Language Code:
+
 ```bash
 # Command here 
 ```
@@ -102,17 +104,17 @@ cd DDoS-Detector
 
 1. Install the project dependencies with the following command:
 
-```bash
-make dependencies
-```
+   ```bash
+   make dependencies
+   ```
 
 ### Dataset - Optional
 
 1. Download the dataset from [WEBSITE-HERE]() and place it in this project directory `(/DDoS-Detector)` and run the following command:
 
-```bash
-make dataset
-```
+   ```bash
+   make dataset
+   ```
 
 ## Usage
 
