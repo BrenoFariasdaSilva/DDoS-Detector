@@ -285,6 +285,30 @@ def split_data(train_df, test_df, split_required, label_col=None):
 
 	return X_train, X_test, y_train, y_test, feature_names # Return the training and testing features and labels, along with feature names
 
+def get_models():
+	"""
+	Initializes and returns a dictionary of models to train.
+
+	:param: None
+	:return: Dictionary of model name and instance
+	"""
+
+	verbose_output(f"{BackgroundColors.GREEN}Initializing models for training...{Style.RESET_ALL}") # Output the verbose message
+
+	return { # Dictionary of models to train
+		"Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
+		"SVM": SVC(kernel="rbf", probability=True, random_state=42),
+		"XGBoost": XGBClassifier(eval_metric="mlogloss", random_state=42),
+		"Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
+		"KNN": KNeighborsClassifier(n_neighbors=5),
+		"Nearest Centroid": NearestCentroid(),
+		"Gradient Boosting": GradientBoostingClassifier(random_state=42),
+		"LightGBM": lgb.LGBMClassifier(force_row_wise=True, min_gain_to_split=0.01, random_state=42, verbosity=-1),
+		"MLP (Neural Net)": MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=42),
+		# Few-Shot Learning
+		# Contrastive Learning
+	}
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
