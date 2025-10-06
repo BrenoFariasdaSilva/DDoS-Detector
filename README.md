@@ -54,7 +54,6 @@ Project-Description.
     - [Creative Commons Zero v1.0 Universal (CC0 1.0)](#creative-commons-zero-v10-universal-cc0-10)
     - [MIT License](#mit-license)
 
-
 ## Introduction
 
 Detailed project description.
