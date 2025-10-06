@@ -21,8 +21,14 @@ desktop.ini
 */data/
 */dataset/
 */results/
+*/Datasets/
 
 # Ignore the Data Files
 *.csv
+*.json
+*.xml
+*.xls
 *.xlsx
-.txt
+*.txt
+!requirements.txt
+!README.md
