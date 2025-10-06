@@ -309,6 +309,26 @@ def get_models():
 		# Contrastive Learning
 	}
 
+def format_duration(seconds):
+	"""
+	Formats a duration in seconds into a human-readable string.
+
+	:param seconds: Duration in seconds (float or int)
+	:return: Formatted string with the duration in appropriate units (seconds, minutes, or hours)
+	"""
+
+	if seconds < 60: # Less than one minute
+		return f"{seconds:.2f}s"
+	elif seconds < 3600: # Less than one hour
+		minutes = int(seconds // 60)
+		remaining_seconds = seconds % 60
+		return f"{minutes}m {int(remaining_seconds)}s"
+	else: # One hour or more
+		hours = int(seconds // 3600)
+		remaining_minutes = int((seconds % 3600) // 60)
+		remaining_seconds = seconds % 60
+		return f"{hours}h {remaining_minutes}m {int(remaining_seconds)}s"
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
