@@ -125,6 +125,34 @@ def detect_label_column(columns, common_names=None):
 
 	return None # If no common name is found, return None
 
+def load_arff_file_safely(path):
+	"""
+	Loads an ARFF file with preprocessing to sanitize nominal attribute definitions by removing extra spaces inside curly braces (e.g., { 'A', 'B' } → {'A','B'}).
+
+	:param path: Path to the ARFF file
+	:return: Dictionary parsed from ARFF content
+	"""
+
+	verbose_output(f"{BackgroundColors.GREEN}Loading ARFF file: {BackgroundColors.CYAN}{path}{Style.RESET_ALL}") # Output the verbose message
+
+	with open(path, "r") as f: # Open the ARFF file in read mode
+		lines = f.readlines() # Read all lines from the ARFF file
+
+	cleaned_lines = [] # List to store the cleaned lines
+	for line in lines: # Iterate through each line in the ARFF file
+		if "@attribute" in line and "{" in line and "}" in line: # If the line contains an attribute definition with braces
+			before_brace, brace_content = line.split("{", 1) # Split the line into parts before the first brace
+			values, after_brace = brace_content.split("}", 1) # Split the line into parts before and after the braces
+			values = ",".join([v.strip() for v in values.split(",")]) # Remove spaces around values
+			line = f"{before_brace}{{{values}}}{after_brace}" # Reconstruct the line with cleaned values
+
+		cleaned_lines.append(line) # Append the cleaned line to the list
+
+	with open(path, "w") as f: # Open the ARFF file in write mode
+		f.writelines(cleaned_lines) # Write the cleaned lines back to the ARFF file
+
+	return liac_arff.loads("".join(cleaned_lines)) # Parse ARFF content into dictionary
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
