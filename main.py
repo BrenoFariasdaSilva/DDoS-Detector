@@ -205,6 +205,57 @@ def load_and_prepare_data(training_data_path=None, testing_data_path=None):
 
 	return train_df, test_df, split_required # Return dataframes and split flag
 
+def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label_encoder=None):
+	"""
+	Applies one-hot encoding and scaling to features.
+	One-hot encoding is a process of converting categorical variables into a format that can be provided to machine learning algorithms to do a better job in prediction. It creates binary columns for each category in the categorical variable, where each column represents the presence or absence of that category.
+	Automatically detects the label column if not provided.
+	Can align columns to a reference set and reuse scaler and label encoder.
+
+	:param df: DataFrame with features and labels
+	:param label_col: Name of the label column (optional)
+	:param ref_columns: Reference columns for aligning one-hot encoded features (optional)
+	:param scaler: Fitted StandardScaler to reuse (optional)
+	:param label_encoder: Fitted LabelEncoder to reuse (optional)
+	:return: Tuple (X_scaled, y, feature_names, X_encoded, scaler, label_encoder)
+	"""
+
+	verbose_output(f"{BackgroundColors.GREEN}Using label column: {label_col}{Style.RESET_ALL}")
+
+	if label_col is None: # If label_col is not provided, automatically detect it
+		label_col = detect_label_column(df.columns) # Detect the label column from the DataFrame columns
+		if label_col is None: # If no label column is detected
+			raise ValueError(f"{BackgroundColors.RED}No label column detected in the DataFrame. Please provide a valid label column name.{Style.RESET_ALL}")
+
+	df = df.dropna(subset=[label_col]) # Remove rows with NaN in the label column
+	y = df[label_col] # Extract label column (keep original)
+	X = df.drop(label_col, axis=1) # Extract features only
+
+	X_encoded = pd.get_dummies(X) # Apply one-hot encoding only to features
+
+	X_encoded = X_encoded.dropna() # Drop rows with NaNs in features
+	y = y.loc[X_encoded.index] # Align y with the cleaned X_encoded
+
+	if ref_columns is not None: # Align one-hot encoded columns to reference if given
+		X_encoded = X_encoded.reindex(columns=ref_columns, fill_value=0)
+
+	if scaler is None: # Initialize scaler if not provided
+		scaler = StandardScaler() # Create a new StandardScaler instance
+		X_scaled_array = scaler.fit_transform(X_encoded) # Fit and transform the features using the scaler
+	else:
+		X_scaled_array = scaler.transform(X_encoded) # Transform using existing scaler
+
+	X_scaled = pd.DataFrame(X_scaled_array, columns=X_encoded.columns, index=X_encoded.index) # Convert scaled array back to DataFrame with column names and original indices
+
+	if not pd.api.types.is_numeric_dtype(y): # Verify if label is not already numeric
+		if label_encoder is None: # Initialize label encoder if not provided
+			label_encoder = LabelEncoder() # Create a new LabelEncoder instance
+			y = label_encoder.fit_transform(y) # Transform the labels to numeric format
+		else: # If label encoder is provided, use it to transform labels
+			y = label_encoder.transform(y) # Use existing label encoder to transform labels
+
+	return X_scaled, y, X_encoded.columns, X_encoded, scaler, label_encoder # Return scaled features, labels, feature names, one-hot DataFrame, scaler, and label encoder
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
