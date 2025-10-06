@@ -153,6 +153,33 @@ def load_arff_file_safely(path):
 
 	return liac_arff.loads("".join(cleaned_lines)) # Parse ARFF content into dictionary
 
+def load_file(file_path):
+	"""
+	Loads a file based on its extension.
+
+	:param file_path: Path to the file
+	:return: DataFrame with loaded data
+	"""
+
+	verbose_output(f"{BackgroundColors.GREEN}Loading file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
+
+	ext = file_path.lower().split(".")[-1] # Get file extension
+
+	if ext == "arff": # ARFF file
+		verbose_output(f"{BackgroundColors.GREEN}Loading data from ARFF file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}")
+		arff_data = load_arff_file_safely(file_path) # Load ARFF data using safe loader
+		df = pd.DataFrame(arff_data["data"], columns=[attr[0] for attr in arff_data["attributes"]]) # Create DataFrame with correct column names
+	elif ext in ["csv", "txt"]: # CSV or TXT
+		verbose_output(f"{BackgroundColors.GREEN}Loading data from CSV/TXT file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}")
+		df = pd.read_csv(file_path) # Load CSV or TXT file into DataFrame
+	elif ext == "parquet": # Parquet file
+		verbose_output(f"{BackgroundColors.GREEN}Loading data from Parquet file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}")
+		df = pd.read_parquet(file_path) # Load Parquet file into DataFrame
+	else:
+		raise ValueError(f"{BackgroundColors.RED}Unsupported file extension: {ext}{Style.RESET_ALL}")
+
+	return df # Return the loaded DataFrame
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
