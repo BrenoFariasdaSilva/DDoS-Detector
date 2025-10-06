@@ -180,6 +180,31 @@ def load_file(file_path):
 
 	return df # Return the loaded DataFrame
 
+def load_and_prepare_data(training_data_path=None, testing_data_path=None):
+	"""
+	Loads and prepares the training and testing data from the input files.
+	Supports Parquet, ARFF, CSV, and TXT formats.
+
+	:param training_data_path: Path to the training file
+	:param testing_data_path: Path to the testing file
+	:return: Tuple (train_df, test_df, split_required)
+	"""
+
+	verbose_output(f"{BackgroundColors.GREEN}Loading and preparing data...{Style.RESET_ALL}") # Output the verbose message
+
+	if training_data_path is None or testing_data_path is None: # If either path is missing
+		raise ValueError(f"{BackgroundColors.RED}Both training_data_path and testing_data_path must be provided.{Style.RESET_ALL}")
+
+	split_required = os.path.abspath(training_data_path) == os.path.abspath(testing_data_path) # Normalize to absolute paths and determine if the same file is used for both training and testing
+
+	if split_required: # If the same file is used for both training and testing
+		verbose_output(f"{BackgroundColors.YELLOW}The same file was provided for training and testing: {BackgroundColors.CYAN}{training_data_path}{BackgroundColors.YELLOW}. Performing automatic split into training and testing sets.{Style.RESET_ALL}")
+
+	train_df = load_file(training_data_path) # Load training file
+	test_df = None if split_required else load_file(testing_data_path) # Load testing file only if different
+
+	return train_df, test_df, split_required # Return dataframes and split flag
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
