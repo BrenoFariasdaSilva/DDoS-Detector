@@ -350,6 +350,48 @@ def train_model(model, X_train, y_train, index, model_name, dataset_name):
 
 	return model, duration # Return trained model and duration
 
+def build_extended_metrics(conf_matrix, labels, duration_str):
+	"""
+	Builds extended metrics for each class.
+
+	:param conf_matrix: Confusion matrix
+	:param labels: List of class labels
+	:param duration_str: String of the duration of the model training
+	:return: DataFrame with extended metrics per class
+	"""
+
+	verbose_output(f"{BackgroundColors.GREEN}Building extended metrics from confusion matrix...{Style.RESET_ALL}") # Output the verbose message
+
+	metrics_list = [] # List to store metrics for each class
+
+	for i, label in enumerate(labels): # Iterate through each label
+		TP = conf_matrix[i, i] # True Positives for the class
+		FN = np.sum(conf_matrix[i, :]) - TP # False Negatives for the class
+		FP = np.sum(conf_matrix[:, i]) - TP # False Positives for the class
+		TN = np.sum(conf_matrix) - (TP + FP + FN) # True Negatives for the class
+
+		support = TP + FN # Support for the class (number of true instances)
+		accuracy = round((TP + TN) / np.sum(conf_matrix), 2) if np.sum(conf_matrix) > 0 else 0 # Accuracy for the class
+		precision = round(TP / (TP + FP), 2) if (TP + FP) > 0 else 0 # Precision for the class
+		recall = round(TP / (TP + FN), 2) if (TP + FN) > 0 else 0 # Recall for the class
+		f1 = round(2 * precision * recall / (precision + recall), 2) if (precision + recall) > 0 else 0 # F1-Score for the class
+
+		metrics_list.append({ # Append the metrics for the class to the list
+			"Class": label,
+			"Training Duration": duration_str, # Format the training duration
+			"Correct (TP)": TP,
+			"Wrong (FN)": FN,
+			"False Positives (FP)": FP,
+			"True Negatives (TN)": TN,
+			"Support": support,
+			"Accuracy (per class)": accuracy,
+			"Precision": precision,
+			"Recall": recall,
+			"F1-Score": f1,
+		})
+
+	return pd.DataFrame(metrics_list) # Return a DataFrame with the extended metrics for each class
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
