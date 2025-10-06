@@ -467,6 +467,30 @@ def extract_average_metrics(metrics_df, dataset_name, model_name):
 		"F1-Score": round(float(avg_row["F1-Score"]), 2)
 	}
 
+def get_model_results_file_header():
+	"""
+	Returns the header for the model results CSV file.
+
+	:return: List of column names for the model results CSV
+	"""
+
+	verbose_output(true_string=f"{BackgroundColors.GREEN}Getting header for model results CSV file...{Style.RESET_ALL}") # Verbose output indicating the header retrieval
+
+	return [ # List of column names for the model results CSV
+		"Dataset", # Name of the dataset
+		"Model", # Name of the ML model
+		"Training Duration", # Duration of training the model
+		"Correct (TP)", # True Positives
+		"Wrong (FN)", # False Negatives
+		"False Positives (FP)", # False Positives
+		"True Negatives (TN)", # True Negatives
+		"Support", # Total number of samples for the class
+		"Accuracy (per class)", # Accuracy for the class (TP + TN) / Total
+		"Precision", # Precision score
+		"Recall", # Recall score
+		"F1-Score" # F1-score
+	]
+
 def generate_overall_performance_summary(all_model_scores, output_path="."):
 	"""
 	Generates an overall performance summary CSV combining all datasets and models with detailed metrics.
