@@ -102,6 +102,29 @@ def verify_filepath_exists(filepath):
 
    return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
 
+def detect_label_column(columns, common_names=None):
+	"""
+	Detects the label column from a list of common label names.
+
+	:param columns: List of DataFrame column names
+	:param common_names: List of common label column names (optional)
+	:return: The detected label column name or None if not found
+	"""
+
+	verbose_output(f"{BackgroundColors.GREEN}Detecting label column from the provided columns: {BackgroundColors.CYAN}{columns}{Style.RESET_ALL}") # Output the verbose message
+
+	if common_names is None: # If common_names is not provided, use a default list
+		common_names = ["class", "label", "target", "outcome", "result", "attack_detected"]
+
+	columns_lower = [col.lower() for col in columns] # Convert all column names to lowercase for case-insensitive comparison
+
+	for name in common_names: # Iterate through each common name
+		if name.lower() in columns_lower: # If the common name is found in the columns
+			index = columns_lower.index(name.lower()) # Get the index of the common name in the columns
+			return columns[index] # Return the original column name (not lowercase) at that index
+
+	return None # If no common name is found, return None
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
