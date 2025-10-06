@@ -33,6 +33,7 @@ desktop.ini
 *.xls
 *.xlsx
 *.txt
+*.parquet
 !requirements.txt
 !README.md
 
