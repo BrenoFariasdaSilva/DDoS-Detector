@@ -329,6 +329,27 @@ def format_duration(seconds):
 		remaining_seconds = seconds % 60
 		return f"{hours}h {remaining_minutes}m {int(remaining_seconds)}s"
 
+def train_model(model, X_train, y_train, index, model_name, dataset_name):
+	"""
+	Trains a single model with timing and verbose output.
+
+	:param model: Model instance to train
+	:param X_train: Training features
+	:param y_train: Training labels
+	:param index: Model index for display
+	:param model_name: Name of the model
+	:param dataset_name: Name of the dataset
+	:return: Trained model and training duration
+	"""
+
+	start_time = time.time() # Start timer for training duration in seconds
+	model.fit(X_train, y_train) # Train the model
+	duration = [time.time() - start_time, format_duration(time.time() - start_time)] # List to store the duration of training in seconds and in string
+
+	print(f"{BackgroundColors.GREEN}	- Training {BackgroundColors.CYAN}{index:02d} - {model_name}{BackgroundColors.GREEN} for the dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} done in {BackgroundColors.CYAN}{duration[1]}{Style.RESET_ALL}")
+
+	return model, duration # Return trained model and duration
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
