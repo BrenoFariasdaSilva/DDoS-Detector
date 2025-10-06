@@ -467,6 +467,51 @@ def extract_average_metrics(metrics_df, dataset_name, model_name):
 		"F1-Score": round(float(avg_row["F1-Score"]), 2)
 	}
 
+def generate_overall_performance_summary(all_model_scores, output_path="."):
+	"""
+	Generates an overall performance summary CSV combining all datasets and models with detailed metrics.
+
+	:param all_model_scores: List of dictionaries with model scores.
+	:param output_path: Path where the summary CSV will be saved.
+	:return: None
+	"""
+
+	verbose_output(true_string=f"{BackgroundColors.GREEN}Generating overall performance summary...{Style.RESET_ALL}") # Print start message
+
+	columns = get_model_results_file_header() # Get the header for the model results CSV file
+
+	formatted_scores = [] # Initialize list to store reformatted model score dictionaries
+
+	for entry in all_model_scores: # Iterate through each model score entry
+		dataset_name = entry.get("Dataset", "Unknown") # Use the dataset from entry or fallback to "Unknown"
+		model_name = entry.get("Model", "") # Get the full model name from the entry
+		if "-" in model_name: # If the model name has a prefix like "03-XGBoost"
+			model_name = model_name.split("-", 1)[-1].replace("_", " ").strip() # Remove numeric prefix and clean name
+
+		formatted_scores.append({ # Create a dictionary aligned with the defined column structure
+			"Dataset": dataset_name, # Dataset name
+			"Model": model_name, # Cleaned model name
+			"Training Duration": entry.get("Training Duration", 0), # Training duration formatted
+			"Correct (TP)": entry.get("Correct (TP)", ""), # True Positives
+			"Wrong (FN)": entry.get("Wrong (FN)", ""), # False Negatives
+			"False Positives (FP)": entry.get("False Positives (FP)", ""), # False Positives
+			"True Negatives (TN)": entry.get("True Negatives (TN)", ""), # True Negatives
+			"Support": entry.get("Support", ""), # Support (samples)
+			"Accuracy (per class)": entry.get("Accuracy (per class)", ""), # Accuracy
+			"Precision": entry.get("Precision", ""), # Precision
+			"Recall": entry.get("Recall", ""), # Recall
+			"F1-Score": entry.get("F1-Score", "") # F1-Score
+		})
+
+	formatted_scores = sorted(formatted_scores, key=lambda x: (x["Dataset"], -float(x["F1-Score"]))) # Sort first by Dataset name (alphabetically), then by F1-Score (descending within each dataset)
+
+	output_df = pd.DataFrame(formatted_scores, columns=columns) # Create a DataFrame using the sorted scores and defined column order
+	os.makedirs(os.path.join(output_path, OUTPUT_DIR)) if not os.path.exists(os.path.join(output_path, OUTPUT_DIR)) else None # Ensure the output directory exists
+	output_file = os.path.join(output_path, f"{OUTPUT_DIR}/Overall_Performance.csv") # Define the output file path
+	output_df.to_csv(output_file, index=False) # Save the DataFrame to CSV without including the index
+
+	verbose_output(true_string=f"{BackgroundColors.GREEN}Overall performance summary saved to: {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}") # Print success message with file path
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
