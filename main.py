@@ -256,6 +256,35 @@ def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label
 
 	return X_scaled, y, X_encoded.columns, X_encoded, scaler, label_encoder # Return scaled features, labels, feature names, one-hot DataFrame, scaler, and label encoder
 
+def split_data(train_df, test_df, split_required, label_col=None):
+	"""
+	Handles splitting of data if needed, or uses provided train/test datasets.
+
+	:param train_df: DataFrame for training data
+	:param test_df: DataFrame for testing data (can be None if split_required is True)
+	:param split_required: Boolean indicating if train/test split is required
+	:param label_col: Label column name (optional)
+	:return: Tuple (X_train, X_test, y_train, y_test, feature_names)
+	"""
+
+	verbose_output(f"{BackgroundColors.GREEN}Preparing data for training and testing...{Style.RESET_ALL}")
+
+	if split_required: # Same file for train and test -> split internally after preprocessing
+		X_scaled, y, feature_names, _, scaler, label_encoder = preprocess_features(train_df, label_col) # Preprocess features and labels
+		verbose_output(f"{BackgroundColors.GREEN}Splitting dataset into train/test sets...{Style.RESET_ALL}") 
+		X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.25, random_state=42, stratify=y)
+	else: # Different files for train and test -> preprocess separately
+		X_train_scaled, y_train, feature_names_train, _, scaler, label_encoder = preprocess_features(train_df, label_col) # Preprocess training features and labels
+		X_test_scaled, y_test, feature_names_test, _, _, _ = preprocess_features(test_df, label_col, ref_columns=feature_names_train, scaler=scaler, label_encoder=label_encoder) # For test set, reuse scaler and label encoder, and align columns to train's feature names
+
+		if list(feature_names_train) != list(feature_names_test): # Verify if feature names in train and test sets match
+			raise ValueError(f"{BackgroundColors.RED}Mismatch in feature columns between training and testing datasets.{Style.RESET_ALL}")
+
+		X_train, X_test = X_train_scaled, X_test_scaled # Assign preprocessed features to train and test sets
+		feature_names = feature_names_train # Use training feature names as reference
+
+	return X_train, X_test, y_train, y_test, feature_names # Return the training and testing features and labels, along with feature names
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
