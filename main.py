@@ -392,6 +392,31 @@ def build_extended_metrics(conf_matrix, labels, duration_str):
 
 	return pd.DataFrame(metrics_list) # Return a DataFrame with the extended metrics for each class
 
+def evaluate_model(model, X_test, y_test, duration_str):
+	"""
+	Evaluates the model on the test data.
+
+	:param model: Trained model
+	:param X_test: Test features
+	:param y_test: Test labels
+	:param duration_str: String of the duration of the model training
+	:return: Tuple containing:
+				- Classification report dictionary
+				- Extended metrics DataFrame
+	"""
+
+	verbose_output(f"{BackgroundColors.GREEN}Evaluating model: {model.__class__.__name__}...{Style.RESET_ALL}") # Output the verbose message
+
+	preds = model.predict(X_test) # Make predictions on the test data
+
+	report = classification_report(y_test, preds, output_dict=True, zero_division=0) # Generate classification report as dictionary
+
+	conf_matrix = confusion_matrix(y_test, preds) # Generate confusion matrix
+
+	metrics_df = build_extended_metrics(conf_matrix, model.classes_, duration_str) # Build extended metrics DataFrame from confusion matrix
+
+	return report, metrics_df # Return the report and extended metrics
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
