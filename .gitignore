@@ -1,9 +1,9 @@
 # System Files
-.DS_Store
-Thumbs.db
+**/.DS_Store
+**/Thumbs.db
 
 # Ignore the Windows .Desktop Files
-desktop.ini
+**/desktop.ini
 
 # Ignore the Compressed Files
 *.zip
@@ -13,18 +13,18 @@ desktop.ini
 .tar.gz
 
 # Ignore the Data Directories
-*/Dados/*
-*/Data/*
-*/Dataset/*
-*/Datasets/*
-*/Results/*
-*/Result/*
-*/result/*
-*/results/*
-*/dados/*
-*/data/*
-*/dataset/*
-*/datasets/*
+**/Dados/*
+**/Data/*
+**/Dataset/*
+**/Datasets/*
+**/Results/*
+**/Result/*
+**/result/*
+**/results/*
+**/dados/*
+**/data/*
+**/dataset/*
+**/datasets/*
 !.assets/*
 
 # Ignore the Data Files
@@ -35,6 +35,7 @@ desktop.ini
 *.xlsx
 *.txt
 *.parquet
+*.arff
 *.png
 *.jpg
 *.jpeg
@@ -42,6 +43,7 @@ desktop.ini
 *.bmp
 *.tiff
 *.svg
+*.~lock*
 !requirements.txt
 !README.md
 
