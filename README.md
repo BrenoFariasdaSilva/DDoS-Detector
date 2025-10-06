@@ -29,7 +29,7 @@ Project-Description.
 
 <div align="center">
   
-![RepoBeats Statistics](RepoBeats-SVG-URL "Repobeats analytics image")
+![RepoBeats Statistics](https://repobeats.axiom.co/api/embed/deca67a753c6ad283c2b87e95f2b676767739706.svg "Repobeats analytics image")
 
 </div>
 
