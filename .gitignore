@@ -13,15 +13,18 @@ desktop.ini
 .tar.gz
 
 # Ignore the Data Directories
-*/Dados/
-*/Data/
-*/Dataset/
-*/Results/
-*/dados/
-*/data/
-*/dataset/
-*/results/
-*/Datasets/
+*/Dados/*
+*/Data/*
+*/Dataset/*
+*/Datasets/*
+*/Results/*
+*/Result/*
+*/result/*
+*/results/*
+*/dados/*
+*/data/*
+*/dataset/*
+*/datasets/*
 
 # Ignore the Data Files
 *.csv
