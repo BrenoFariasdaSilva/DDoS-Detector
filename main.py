@@ -438,6 +438,35 @@ def save_results(report, metrics_df, results_dir, index, model_name):
 	pd.DataFrame(report).transpose().to_csv(f"{filename_base}-Classification_report.csv", float_format="%.2f", index_label="Class") # Save classification report
 	metrics_df.to_csv(f"{filename_base}-Extended_metrics.csv", index=False, float_format="%.2f") # Save extended confusion matrix
 
+def extract_average_metrics(metrics_df, dataset_name, model_name):
+	"""
+	Extracts the average row from the extended metrics dataframe.
+
+	:param metrics_df: DataFrame with extended metrics
+	:param dataset_name: Name of the dataset
+	:param model_name: Name of the model
+	:return: Dictionary with average metrics for summary
+	"""
+
+	verbose_output(f"{BackgroundColors.GREEN}Extracting average metrics for {model_name} on the {dataset_name} dataset...{Style.RESET_ALL}") # Output the verbose message
+
+	avg_row = metrics_df.iloc[-1] # Get the last row which contains the average metrics
+
+	return { # Return a dictionary with the average metrics
+		"Dataset": dataset_name,
+		"Training Duration": avg_row["Training Duration"],
+		"Model": model_name,
+		"Correct (TP)": int(avg_row["Correct (TP)"]),
+		"Wrong (FN)": int(avg_row["Wrong (FN)"]),
+		"False Positives (FP)": int(avg_row["False Positives (FP)"]),
+		"True Negatives (TN)": int(avg_row["True Negatives (TN)"]),
+		"Support": int(avg_row["Support"]),
+		"Accuracy (per class)": round(float(avg_row["Accuracy (per class)"]), 2),
+		"Precision": round(float(avg_row["Precision"]), 2),
+		"Recall": round(float(avg_row["Recall"]), 2),
+		"F1-Score": round(float(avg_row["F1-Score"]), 2)
+	}
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
