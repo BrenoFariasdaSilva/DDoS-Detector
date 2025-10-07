@@ -344,6 +344,30 @@ def normalize_feature_name(name):
 
    return name.strip().replace("  ", " ") # Strip whitespace and replace double spaces with single spaces
 
+def run_genetic_algorithm_feature_selection(df, n_generations=20, population_size=30, train_test_ratio=0.2):
+   """
+   Run the genetic algorithm for feature selection on the given DataFrame.
+
+   :param df: DataFrame to process.
+   :param n_generations: Number of generations for the Genetic Algorithm.
+   :param population_size: Population size for the Genetic Algorithm.
+   :param train_test_ratio: Proportion of the dataset to include in the test split.
+   :return: Best individual, feature names, training and testing sets (X_train, X_test, y_train, y_test).
+   """
+
+   if df is None: # If loading the dataset failed
+      return [] # Return an empty list
+
+   X_train, X_test, y_train, y_test, feature_names = split_dataset(df, train_test_ratio) # Split the dataset
+
+   if X_train is None or X_test is None or y_train is None or y_test is None: # If splitting the dataset failed
+      return [] # Return an empty list
+
+   toolbox, population, hof = setup_genetic_algorithm(len(feature_names), population_size) # Setup the Genetic Algorithm
+   best_ind = run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations) # Run the Genetic Algorithm loop
+
+   return best_ind, feature_names, X_train, X_test, y_train, y_test # Return all required values
+
 def extract_rfe_ranking(csv_path):
    """
    Extract RFE rankings from the RFE results file.
@@ -431,30 +455,6 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path):
       analyze_top_features(df_features, y_series, best_features, csv_path=csv_path) # Analyze and visualize the top features
 
    return best_features # Return the list of best features
-
-def run_genetic_algorithm_feature_selection(df, n_generations=20, population_size=30, train_test_ratio=0.2):
-   """
-   Run the genetic algorithm for feature selection on the given DataFrame.
-
-   :param df: DataFrame to process.
-   :param n_generations: Number of generations for the Genetic Algorithm.
-   :param population_size: Population size for the Genetic Algorithm.
-   :param train_test_ratio: Proportion of the dataset to include in the test split.
-   :return: Best individual, feature names, training and testing sets (X_train, X_test, y_train, y_test).
-   """
-
-   if df is None: # If loading the dataset failed
-      return [] # Return an empty list
-
-   X_train, X_test, y_train, y_test, feature_names = split_dataset(df, train_test_ratio) # Split the dataset
-
-   if X_train is None or X_test is None or y_train is None or y_test is None: # If splitting the dataset failed
-      return [] # Return an empty list
-
-   toolbox, population, hof = setup_genetic_algorithm(len(feature_names), population_size) # Setup the Genetic Algorithm
-   best_ind = run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations) # Run the Genetic Algorithm loop
-
-   return best_ind, feature_names, X_train, X_test, y_train, y_test # Return all required values
 
 def run_population_sweep(csv_path, n_generations=20, min_pop=3, max_pop=30, train_test_ratio=0.2):
    """
