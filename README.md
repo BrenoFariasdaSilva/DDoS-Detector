@@ -50,7 +50,6 @@ Project-Description.
     - [3. Clone the repository](#3-clone-the-repository)
     - [4. Virtual environment (strongly recommended)](#4-virtual-environment-strongly-recommended)
     - [5. Install dependencies](#5-install-dependencies)
-  - [Run Programing Language Code:](#run-programing-language-code)
     - [Dataset - Optional](#dataset---optional)
   - [Results - Optional](#results---optional)
   - [How to Cite?](#how-to-cite)
@@ -202,12 +201,6 @@ pip install -r requirements.txt
 ```
 
 ---
-
-## Run Programing Language Code:
-
-```bash
-# Command here 
-```
 
 ### Dataset - Optional
 
