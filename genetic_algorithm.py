@@ -391,6 +391,47 @@ def save_best_features(best_features, rfe_ranking, csv_path):
          rank_info = f" (RFE ranking {rfe_ranking[feat_norm]})" if feat_norm in rfe_ranking else " (RFE ranking N/A)" # Get RFE ranking info
          f.write(f"{i}. {feat_norm}{rank_info}\n") # Write feature and its RFE ranking
 
+def save_and_analyze_results(best_ind, feature_names, X, y, csv_path):
+   """
+   Save best feature subset and analyze them.
+
+   :param best_ind: Best individual from the Genetic Algorithm.
+   :param feature_names: List of feature names.
+   :param X: Feature set (DataFrame or numpy array).
+   :param y: Target variable (Series or array).
+   :param csv_path: Path to the original CSV file for saving outputs.
+   :return: List of best features
+   """
+
+   best_features = [f for f, bit in zip(feature_names, best_ind) if bit == 1] # Extract best features
+   rfe_ranking = extract_rfe_ranking(csv_path) # Extract RFE rankings
+
+   print(f"\n{BackgroundColors.GREEN}Best features subset found: {BackgroundColors.CYAN}{best_features}{Style.RESET_ALL}")
+
+   save_best_features(best_features, rfe_ranking, csv_path) # Save best features and their RFE rankings
+
+   if best_features: # If there are best features to analyze
+      if not isinstance(X, pd.DataFrame): # If X is not a pandas DataFrame
+         try: # Try to create a DataFrame with original feature names
+            df_features = pd.DataFrame(X, columns=list(feature_names)) # Create DataFrame with original feature names
+         except Exception: # If creating DataFrame with original feature names fails
+            df_features = pd.DataFrame(X) # Create DataFrame without original feature names
+            df_features.columns = [f"feature_{i}" for i in range(df_features.shape[1])] # Generic feature names
+      else: # If X is already a pandas DataFrame
+         df_features = X.copy() # Use the DataFrame as is
+
+      if not isinstance(y, pd.Series): # If y is not a pandas Series
+         try: # Try to create a Series with original indices
+            y_series = pd.Series(y, index=df_features.index) # Create Series with original indices
+         except Exception: # If creating Series with original indices fails
+            y_series = pd.Series(y) # Create Series without original indices
+      else: # If y is already a pandas Series
+         y_series = y.reindex(df_features.index) if not df_features.index.equals(y.index) else y # Align indices if necessary
+
+      analyze_top_features(df_features, y_series, best_features, csv_path=csv_path) # Analyze and visualize the top features
+
+   return best_features # Return the list of best features
+
 def main():
    """
    Main function.
