@@ -22,6 +22,10 @@ dataset_descriptor: $(VENV)
 	clear;
 	time $(PYTHON_VENV) ./dataset_descriptor.py
 
+genetic_algorithm: $(VENV)
+	clear;
+	time $(PYTHON_VENV) ./genetic_algorithm.py
+
 rfe: $(VENV)
 	clear;
 	time $(PYTHON_VENV) ./rfe.py
@@ -46,4 +50,4 @@ clean:
 	find . -type f -name '*.pyc' -delete
 	find . -type d -name '__pycache__' -delete
 
-.PHONY: all main clean dependencies generate_requirements dataset_descriptor rfe
+.PHONY: all main clean dependencies generate_requirements dataset_descriptor genetic_algorithm rfe 
