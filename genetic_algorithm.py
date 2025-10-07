@@ -344,6 +344,32 @@ def normalize_feature_name(name):
 
    return name.strip().replace("  ", " ") # Strip whitespace and replace double spaces with single spaces
 
+def extract_rfe_ranking(csv_path):
+   """
+   Extract RFE rankings from the RFE results file.
+
+   :param csv_path: Path to the original CSV file for saving outputs.
+   :return: Dictionary of feature names and their RFE rankings.
+   """
+
+   rfe_ranking = {} # Dictionary to store feature names and their RFE rankings
+   rfe_file_path = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE_results_RandomForestClassifier.txt" # Path to the RFE results file
+
+   if not verify_filepath_exists(rfe_file_path): # If the RFE results file does not exist
+      print(f"{BackgroundColors.YELLOW}RFE results file not found: {rfe_file_path}. Skipping RFE ranking extraction.{Style.RESET_ALL}")
+      return rfe_ranking # Return empty dictionary
+   
+   with open(rfe_file_path, "r") as f: # Open the RFE results file
+      lines = f.readlines() # Read all lines
+      for line in lines: # For each line
+         match = re.match(r"\d+\s+-\s+Column\s+\d+:\s+(.+?)\s*:\s+Selected\s+\(Rank\s+(\d+)\)", line) # Match the line with regex
+         if match: # If the line matches the regex
+            feature_name = normalize_feature_name(match.group(1)) # Normalize the feature name
+            rank = int(match.group(2).strip()) # Extract the rank
+            rfe_ranking[feature_name] = rank # Add to the dictionary
+               
+   return rfe_ranking # Return the RFE rankings dictionary
+
 def main():
    """
    Main function.
