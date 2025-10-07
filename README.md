@@ -43,6 +43,10 @@ Project-Description.
       - [Linux](#linux)
       - [macOS](#macos)
       - [Windows](#windows)
+    - [2. Install `make` utility](#2-install-make-utility)
+      - [Linux](#linux-1)
+      - [macOS](#macos-1)
+      - [Windows](#windows-1)
     - [Clone the repository](#clone-the-repository)
   - [Installation:](#installation)
   - [Run Programing Language Code:](#run-programing-language-code)
@@ -115,6 +119,44 @@ python3 --version
 
 ```powershell
 python --version
+```
+
+---
+
+### 2. Install `make` utility
+
+The `make` utility is used to automate tasks such as setting up the virtual environment and installing dependencies.
+
+#### Linux
+`make` is usually pre-installed. If not:
+
+```bash
+sudo apt install build-essential -y  # Debian/Ubuntu
+sudo dnf install make -y            # Fedora/RHEL
+make --version
+```
+
+#### macOS
+`make` comes pre-installed with Xcode Command Line Tools:
+
+```bash
+xcode-select --install
+make --version
+```
+
+#### Windows
+1. Install via [Chocolatey](https://chocolatey.org/):
+
+```powershell
+choco install make
+```
+
+Or, install [GnuWin32 Make](http://gnuwin32.sourceforge.net/packages/make.htm).
+
+2. Verify installation:
+
+```powershell
+make --version
 ```
 
 ---
