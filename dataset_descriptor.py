@@ -92,6 +92,26 @@ def load_dataset(filepath, low_memory=True):
       print(f"{BackgroundColors.RED}Error loading {BackgroundColors.GREEN}{filepath}: {e}{Style.RESET_ALL}")
       return None
 
+def detect_label_column(columns):
+   """
+   Try to guess the label column based on common naming conventions.
+   
+   :param columns: List of column names
+   :return: The name of the label column if found, else None
+   """
+
+   candidates = ["label", "class", "target"]
+
+   for col in columns: # First search for exact matches
+      if col.lower() in candidates: # Verify if the column name matches any candidate exactly
+         return col # Return the column name if found
+
+   for col in columns: # Second search for partial matches
+      if "target" in col.lower() or "label" in col.lower(): # Verify if the column name contains any candidate
+         return col # Return the column name if found
+
+   return None # Return None if no label column is found
+
 def main():
    """
    Main function.
