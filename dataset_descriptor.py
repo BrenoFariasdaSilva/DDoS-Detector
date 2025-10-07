@@ -169,6 +169,36 @@ def summarize_classes(df, label_col):
    
    return "None", "None" # Return "None" if no label column
 
+def get_dataset_info(filepath, low_memory=True):
+   """
+   Extracts dataset information from a CSV file and returns it as a dictionary.
+
+   :param filepath: Path to the CSV file
+   :param low_memory: Whether to use low memory mode when loading the CSV (default:True)
+   :return: Dictionary containing dataset information
+   """
+
+   df = load_dataset(filepath, low_memory) # Load the dataset
+   
+   if df is None: # If the dataset could not be loaded
+      return None # Return None
+
+   label_col = detect_label_column(df.columns) # Try to detect the label column
+   n_samples, n_features, n_numeric, n_int, n_categorical, n_other, categorical_cols_str = summarize_features(df) # Summarize features
+   missing_summary = summarize_missing_values(df) # Summarize missing values
+   classes_str, class_dist_str = summarize_classes(df, label_col) # Summarize classes and distributions
+
+   return { # Return the dataset information as a dictionary
+      "Dataset Name": os.path.basename(filepath),
+      "Number of Samples": n_samples,
+      "Number of Features": n_features,
+      "Feature Types": f"{n_numeric} numeric (float64), {n_int} integer (int64), {n_categorical} categorical (object/category/bool/string), {n_other} other",
+      "Categorical Features (object/string)": categorical_cols_str,
+      "Missing Values": missing_summary,
+      "Classes": classes_str,
+      "Class Distribution": class_dist_str
+   }
+
 def main():
    """
    Main function.
