@@ -182,6 +182,94 @@ def analyze_top_features(df, y, top_features, csv_path="."):
       plt.savefig(f"{output_dir}/{base_dataset_name}-{safe_filename(feature)}.png") # Save plot
       plt.close() # Close plot to free memory
 
+def run_rfe(csv_path):
+   """
+   Runs Recursive Feature Elimination on the provided dataset.
+
+   Assumptions:
+   - The dataset is a CSV.
+   - The last column is the target.
+   - Features are all other columns.
+
+   :param csv_path: Path to the CSV file
+   :return: None
+   """
+
+   if not verify_filepath_exists(csv_path): # Check file existence early
+      print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
+      return # Exit if file does not exist
+
+   print(f"\n{BackgroundColors.GREEN}Loading {BackgroundColors.CYAN}{csv_path}{BackgroundColors.GREEN} CSV dataset file...{Style.RESET_ALL}") # Output loading message
+   df = pd.read_csv(csv_path, low_memory=False) # Disable low_memory to avoid mixed dtype warning
+
+   if df.shape[1] < 2: # Need at least one feature and one target
+      print(f"{BackgroundColors.RED}CSV must contain at least one feature column and one target column.{Style.RESET_ALL}")
+      return # Exit if not enough columns
+
+   X = df.iloc[:, :-1] # Features assumed to be all columns except last
+   y = df.iloc[:, -1] # Target assumed to be last column
+
+   if y.dtype == object or y.dtype == "category": # Encode non-numeric target if necessary
+      y, uniques = pd.factorize(y) # Convert to numeric
+
+   X = X.select_dtypes(include=["number"]) # Keep only numeric features
+
+   X = X.replace([np.inf, -np.inf], np.nan) # Replace infinities with NaN
+
+   X = X.dropna() # Drop rows with NaNs
+
+   y = y[X.index] # Align y with cleaned X
+
+   if X.empty: # Check if any numeric features remain
+      print(f"{BackgroundColors.RED}No valid numeric features remain after cleaning.{Style.RESET_ALL}")
+      return
+
+   """
+   Apply genetic algorithms to select the most relevant features and check for variables correlation.
+   Not only that, i must mesure the great amount of features to select the best ones (1, 2, 5, 10, 15, 20, 25) and the metric must be the F1-Score, false positive rate, accuracy, false negative rate, precision, recall, and the time to train and test the model.
+   """
+
+   scaler = StandardScaler() # Preprocessing: scale numeric features
+   try:
+      X_scaled = scaler.fit_transform(X) # Scale features
+   except Exception as exc:
+      print(f"{BackgroundColors.RED}Error scaling features: {exc}{Style.RESET_ALL}")
+      return # Exit if scaling fails
+
+   X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42) # Train/test split
+
+   model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1) # Base model
+
+   n_features = X.shape[1] # Number of features
+   n_select = 10 if n_features >= 10 else n_features # Select up to 10 features or all if fewer
+
+   selector = RFE(model, n_features_to_select=n_select, step=1) # RFE setup
+   selector = selector.fit(X_train, y_train) # Fit RFE
+
+   results = [] # Create a list with index, feature, selection status, and ranking
+   for idx, (feature, selected, ranking) in enumerate(zip(X.columns, selector.support_, selector.ranking_)):
+      status = f"{BackgroundColors.GREEN}Selected{Style.RESET_ALL}" if selected else f"{BackgroundColors.YELLOW}Not Selected{Style.RESET_ALL}"
+      results.append((idx, feature, status, ranking)) # Append tuple to results
+
+   results.sort(key=lambda x: x[3]) # Sort results by ranking (ascending: 1 = most important)
+
+   output_file = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE_results_{model.__class__.__name__}.txt" # Define output file path
+   os.makedirs(os.path.dirname(output_file), exist_ok=True) # Create directory if it doesn't exist
+
+   with open(output_file, "w", encoding="utf-8") as f: # Write results to file
+      header = f"RFE Results with {n_select} Selected Features and the classifier {model.__class__.__name__}:\n" # Header for the results file
+      f.write(header) # Write header to file
+
+      for idx, (col_idx, feature, status, ranking) in enumerate(results, start=1): # Write each result to the file
+         plain_status = "Selected" if "Selected" in status else "Not Selected" # Plain text status
+         line = f"{idx} - Column {col_idx}: {feature}: {plain_status} (Rank {ranking})" # Format line
+         f.write(line + "\n") # Write line to file
+
+   top_features = [feature for (_, feature, status, ranking) in results if "Selected" in status] # List of top features
+
+   if top_features: # Analyze top features if any were selected
+      analyze_top_features(X, y, top_features, csv_path=csv_path) # Analyze top features
+
 def main():
    """
    Main function.
