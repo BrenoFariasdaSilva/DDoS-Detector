@@ -183,6 +183,36 @@ def split_dataset(df, train_test_ratio=0.2):
 
    return X_train, X_test, y_train, y_test, X.columns # Return the split data and feature names
 
+def setup_genetic_algorithm(n_features, population_size=30):
+   """
+   Setup DEAP Genetic Algorithm: creator, toolbox, population, and Hall of Fame.
+   DEAP is a library for evolutionary algorithms in Python.
+
+   :param n_features: Number of features in dataset
+   :param population_size: Size of the population
+   :return: toolbox, population, hall_of_fame
+   """
+
+   # Avoid re-creating FitnessMax and Individual
+   if not hasattr(creator, "FitnessMax"): # If FitnessMax is not already created
+      creator.create("FitnessMax", base.Fitness, weights=(1.0,)) # Maximize F1-score
+   if not hasattr(creator, "Individual"): # If Individual is not already created
+      creator.create("Individual", list, fitness=creator.FitnessMax) # Individual = list with fitness
+
+   toolbox = base.Toolbox() # Create a toolbox
+   toolbox.register("attr_bool", random.randint, 0, 1) # Attribute generator (0 or 1)
+   toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_bool, n=n_features) # Individual generator
+   toolbox.register("population", tools.initRepeat, list, toolbox.individual) # Population generator
+
+   toolbox.register("mate", tools.cxTwoPoint) # Crossover operator
+   toolbox.register("mutate", tools.mutFlipBit, indpb=0.05) # Mutation operator
+   toolbox.register("select", tools.selTournament, tournsize=3) # Selection operator
+
+   population = toolbox.population(n=population_size) # Create the initial population
+   hof = tools.HallOfFame(1) # Hall of Fame to store the best individual
+
+   return toolbox, population, hof # Return the toolbox, population, and Hall of Fame
+
 def main():
    """
    Main function.
