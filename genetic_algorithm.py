@@ -287,6 +287,16 @@ def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_tes
 
    return hof[0] # Return the best individual from the Hall of Fame
 
+def safe_filename(name):
+   """
+   Sanitize a string to be safe for use as a filename.
+
+   :param name: The string to be sanitized.
+   :return: A sanitized string safe for use as a filename.
+   """
+
+   return re.sub(r'[\\/*?:"<>|]', "_", name) # Replace invalid filename characters with underscores
+
 def main():
    """
    Main function.
