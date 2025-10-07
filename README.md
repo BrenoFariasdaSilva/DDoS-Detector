@@ -37,7 +37,7 @@ Project-Description.
 - [DDoS-Detector. ](#ddos-detector-)
   - [Table of Contents](#table-of-contents)
   - [Introduction - @UPDATE](#introduction---update)
-  - [Requirements](#requirements)
+  - [Requirements - @UPDATE](#requirements---update)
   - [Setup](#setup)
     - [1. Install Python](#1-install-python)
       - [Linux](#linux)
@@ -62,7 +62,7 @@ Project-Description.
 
 Detailed project description.
 
-## Requirements
+## Requirements - @UPDATE
 
 Bullet points of the requirements.
 
