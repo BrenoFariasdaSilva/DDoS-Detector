@@ -132,9 +132,9 @@ def load_dataset(filepath, low_memory=True):
    try: # Try to load the dataset
       df = pd.read_csv(filepath, low_memory=low_memory) # Load the dataset
       return df # Return the DataFrame
-   except Exception as e:
+   except Exception as e: # If an error occurs
       print(f"{BackgroundColors.RED}Error loading {BackgroundColors.GREEN}{filepath}: {e}{Style.RESET_ALL}")
-      return None
+      return None # Return None if an error occurs
 
 def detect_label_column(columns):
    """
@@ -144,7 +144,7 @@ def detect_label_column(columns):
    :return: The name of the label column if found, else None
    """
 
-   candidates = ["label", "class", "target"]
+   candidates = ["label", "class", "target"] # Common label column names
 
    for col in columns: # First search for exact matches
       if col.lower() in candidates: # Verify if the column name matches any candidate exactly
@@ -309,6 +309,8 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
 def play_sound():
    """
    Plays a sound when the program finishes and skips if the operating system is Windows.
+
+   :param: None
    :return: None
    """
 
