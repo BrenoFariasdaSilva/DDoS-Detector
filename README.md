@@ -47,7 +47,7 @@ Project-Description.
       - [Linux](#linux-1)
       - [macOS](#macos-1)
       - [Windows](#windows-1)
-    - [Clone the repository](#clone-the-repository)
+    - [3. Clone the repository](#3-clone-the-repository)
   - [Installation:](#installation)
   - [Run Programing Language Code:](#run-programing-language-code)
     - [Dependencies](#dependencies)
@@ -161,7 +161,7 @@ make --version
 
 ---
 
-### Clone the repository
+### 3. Clone the repository
 
 1. Clone the repository with the following command:
 
