@@ -133,6 +133,16 @@ def play_sound():
    else: # If the sound file does not exist
       print(f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{SOUND_FILE}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}")
 
+def safe_filename(name):
+   """
+   Converts a string to a safe filename by replacing invalid characters with underscores.
+
+   :param name: The original string
+   :return: A safe filename string
+   """
+
+   return re.sub(r'[\\/*?:"<>|]', "_", name) # Replace invalid characters with underscores
+
 def main():
    """
    Main function.
