@@ -687,6 +687,26 @@ def explain_predictions_with_lime(model, X_train, X_test, feature_names, model_n
 		lime_df = pd.DataFrame(exp.as_list(), columns=["feature", "weight"]) # Create a DataFrame for LIME explanation
 		lime_df.to_csv(f"{model_name}_lime_instance_{i+1}.csv", index=False, float_format="%.2f") # Save LIME explanation to CSV
 
+def explain_with_multiple_methods(model, X_train, X_test, feature_names, model_name="Model"):
+	"""
+	Explains model predictions using multiple methods: SHAP, TreeExplainer, and LIME.
+	:param model: Trained model
+	:param X_train: Training features
+	:param X_test: Testing features
+	:param feature_names: Names of the features
+	:param model_name: Name of the model for saving files
+	:return: None
+	"""
+
+	print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Iniciando explicações para {model_name}...{Style.RESET_ALL}")
+
+	if "xgboost" in str(type(model)).lower() or "randomforest" in str(type(model)).lower(): # If the model is XGBoost or Random Forest
+		explain_predictions_with_tree_shap(model, X_train, X_test, feature_names, model_name=model_name) # Explain predictions using SHAP's TreeExplainer
+	else: # For other models
+		explain_predictions_with_shap(model, X_train, X_test, feature_names) # Explain predictions using SHAP values
+
+	explain_predictions_with_lime(model, X_train, X_test, feature_names, model_name=model_name) # Explain predictions using LIME, as it works with any model
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
