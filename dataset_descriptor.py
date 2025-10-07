@@ -26,6 +26,22 @@ RUN_FUNCTIONS = {
    "Play Sound": True, # Set to True to play a sound when the program finishes
 }
 
+# Functions Definitions:
+
+def verbose_output(true_string="", false_string=""):
+   """
+   Outputs a message if the VERBOSE constant is set to True.
+
+   :param true_string: The string to be outputted if the VERBOSE constant is set to True.
+   :param false_string: The string to be outputted if the VERBOSE constant is set to False.
+   :return: None
+   """
+
+   if VERBOSE and true_string != "": # If the VERBOSE constant is set to True and the true_string is set
+      print(true_string) # Output the true statement string
+   elif false_string != "": # If the false_string is set
+      print(false_string) # Output the false statement string
+
 def main():
    """
    Main function.
