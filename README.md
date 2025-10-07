@@ -64,7 +64,7 @@ Detailed project description.
 
 ## Requirements - @UPDATE
 
-Bullet points of the requirements.
+Bullet points of the requirements, such as languages, libraries, tools, etc.
 
 ## Setup
 
