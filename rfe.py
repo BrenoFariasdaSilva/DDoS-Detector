@@ -90,6 +90,20 @@ RUN_FUNCTIONS = {
 
 # Functions Definitions:
 
+def verbose_output(true_string="", false_string=""):
+   """
+   Outputs a message if the VERBOSE constant is set to True.
+
+   :param true_string: The string to be outputted if the VERBOSE constant is set to True.
+   :param false_string: The string to be outputted if the VERBOSE constant is set to False.
+   :return: None
+   """
+   
+   if VERBOSE and true_string != "": # If VERBOSE is True and a true_string was provided
+      print(true_string)
+   elif false_string != "": # If a false_string was provided
+      print(false_string)
+
 def main():
    """
    Main function.
