@@ -49,6 +49,7 @@ Project-Description.
       - [Windows](#windows-1)
     - [3. Clone the repository](#3-clone-the-repository)
     - [4. Virtual environment (strongly recommended)](#4-virtual-environment-strongly-recommended)
+    - [5. Install dependencies](#5-install-dependencies)
   - [Run Programing Language Code:](#run-programing-language-code)
     - [Dependencies](#dependencies)
     - [Dataset - Optional](#dataset---optional)
@@ -185,6 +186,24 @@ python -m venv venv
 source venv/bin/activate # Linux/macOS
 venv\Scripts\activate # Windows
 ```
+
+### 5. Install dependencies
+
+1. Install Python packages:
+
+With `make`:
+
+```bash
+make dependencies
+```
+
+Or manually:
+
+```bash
+pip install -r requirements.txt
+```
+
+---
 
 ## Run Programing Language Code:
 
