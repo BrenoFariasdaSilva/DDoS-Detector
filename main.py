@@ -1,15 +1,13 @@
-# pip install colorama pandas scikit-learn xgboost lightgbm shap lime matplotlib numpy
-
 #@TODO: Add cross validation
-#@TODO: add threads for each algorithm training?
-#@TODO: search and review the code for overfitting issues
-#@TODO: Seleção de Atributos com Base em Correlação + Regressão Lasso
-# 1. Remover atributos com baixa variância (quase constantes)
-# 2. Analisar a correlação com a variável target
-# 3. Remover atributos altamente correlacionados entre si (multicolinearidade)
-# 4. Aplicar regressão Lasso (com L1 regularization)
-#@TODO: Implementar a função de seleção de atributos
-#@TODO: Adicionar testes para a função de seleção de atributos
+#@TODO: Add threads for each algorithm training?
+#@TODO: Search and review the code for overfitting issues
+#@TODO: Correlation-Based Feature Selection + Lasso Regression
+# 1. Remove features with low variance (nearly constant)
+# 2. Analyze the correlation with the target variable
+# 3. Remove features that are highly correlated with each other (multicollinearity)
+# 4. Apply Lasso regression (with L1 regularization)
+#@TODO: Implement the feature selection function
+#@TODO: Add tests for the feature selection function
 
 import arff as liac_arff # For loading ARFF files
 import atexit # For registering a function to run at exit
