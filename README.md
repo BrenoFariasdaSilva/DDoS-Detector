@@ -48,7 +48,6 @@ Project-Description.
       - [macOS](#macos-1)
       - [Windows](#windows-1)
     - [3. Clone the repository](#3-clone-the-repository)
-  - [Installation:](#installation)
   - [Run Programing Language Code:](#run-programing-language-code)
     - [Dependencies](#dependencies)
     - [Dataset - Optional](#dataset---optional)
@@ -169,27 +168,6 @@ make --version
    git clone https://github.com/BrenoFariasDaSilva/DDoS-Detector.git
    cd DDoS-Detector
    ```
-
-## Installation:
-
-* Programing Language:
-
-  * Manually:
-      ```bash
-      # Programing Language:
-      sudo apt install program-language -y
-      ```
-
-  * Using Makefile:
-      ```bash
-      make install
-      ```
-
-  * Using ShellScript:
-      ```bash
-      chmod +x install.sh
-      sudo ./install.sh
-      ```  
 
 ## Run Programing Language Code:
 
