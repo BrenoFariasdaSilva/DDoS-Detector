@@ -213,6 +213,55 @@ def write_report(report_rows, base_dir, output_filename):
    report_csv_path = os.path.join(base_dir, output_filename) # Path to save the report CSV
    report_df.to_csv(report_csv_path, index=False) # Save the report to a CSV file
 
+def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename="_dataset_descriptor.csv"):
+   """
+   Generates a CSV report for the specified input path.
+   The Dataset Name column will include subdirectories if present.
+
+   :param input_path: Directory or file path containing the dataset
+   :param file_extension: File extension to filter (default: .csv)
+   :param low_memory: Whether to use low memory mode when loading CSVs (default: True)
+   :param output_filename: Name of the CSV file to save the report
+   :return: True if the report was generated successfully, False otherwise
+   """
+
+   report_rows = [] # List to store report rows
+   ignore_files = [output_filename] # Ignore the output CSV itself
+   sorted_matching_files = [] # List to store matching files
+
+   if os.path.isdir(input_path): # If the input path is a directory
+      print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Scanning directory for {file_extension} files...{Style.RESET_ALL}") # Output scanning message
+      sorted_matching_files = collect_matching_files(input_path, file_extension, ignore_files) # Collect matching files
+      base_dir = os.path.abspath(input_path) # Get the absolute path of the base directory
+   elif os.path.isfile(input_path) and input_path.endswith(file_extension): # If the input path is a file
+      print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing single file...{Style.RESET_ALL}") # Output processing single file message
+      sorted_matching_files = [input_path] # Only process this single file
+      base_dir = os.path.dirname(os.path.abspath(input_path)) # Get the base directory of the file
+   else: # If the input path is neither a directory nor a valid file
+      print(f"{BackgroundColors.RED}Input path is neither a directory nor a valid {file_extension} file: {input_path}{Style.RESET_ALL}") # Output the error message
+      sorted_matching_files = [] # No files to process
+      base_dir = os.path.abspath(input_path) # Just use the input path as base_dir for error message
+
+   if not sorted_matching_files: # If no matching files were found
+      print(f"{BackgroundColors.RED}No matching {file_extension} files found in: {input_path}{Style.RESET_ALL}")
+      return False # Exit the function
+
+   for idx, filepath in enumerate(sorted_matching_files, 1): # Process each matching file
+      print(f" {BackgroundColors.GREEN}Processing file {BackgroundColors.CYAN}{idx}/{len(sorted_matching_files)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")
+      info = get_dataset_info(filepath, low_memory) # Get dataset info
+      if info: # If info was successfully retrieved
+         relative_path = os.path.relpath(filepath, base_dir) # Get path relative to base_dir
+         info["Dataset Name"] = relative_path.replace("\\", "/") # Use relative path for Dataset Name and normalize slashes
+         report_rows.append(info) # Add the info to the report rows
+
+   if report_rows: # If there are report rows to write
+      write_report(report_rows, base_dir, output_filename)
+      print(f"\n{BackgroundColors.GREEN}Report saved to: {BackgroundColors.CYAN}{output_filename}{Style.RESET_ALL}") # Output the path to the saved report
+      return True # Return True indicating success
+   else: # If no report rows were generated
+      print(f"\n{BackgroundColors.RED}No valid CSV files found in the specified path: {input_path}{Style.RESET_ALL}") # Output the error message
+      return False # Return False indicating failure
+
 def main():
    """
    Main function.
