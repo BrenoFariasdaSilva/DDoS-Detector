@@ -18,6 +18,10 @@ main: $(VENV)
 	clear;
 	time $(PYTHON_VENV) ./main.py
 
+dataset_descriptor: $(VENV)
+	clear;
+	time $(PYTHON_VENV) ./dataset_descriptor.py
+
 # Create virtual environment and install dependencies
 $(VENV):
 	@echo "Using Python at: $(PYTHON)"
@@ -38,4 +42,4 @@ clean:
 	find . -type f -name '*.pyc' -delete
 	find . -type d -name '__pycache__' -delete
 
-.PHONY: main clean dependencies generate_requirements
+.PHONY: main clean dependencies generate_requirements dataset_descriptor
