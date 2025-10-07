@@ -136,6 +136,19 @@ def summarize_features(df):
 
    return n_samples, n_features, n_numeric, n_int, n_categorical, n_other, categorical_cols_str # Return the summary values
 
+def summarize_missing_values(df):
+   """
+   Summarizes missing values for the dataset.
+
+   :param df: The pandas DataFrame
+   :return: Summary string of missing values
+   """
+
+   missing_vals = df.isnull().sum() # Get count of missing values per column
+   missing_summary = ", ".join([f"{col} ({cnt})" for col, cnt in missing_vals.items() if cnt > 0]) if missing_vals.sum() > 0 else "None" # Create summary string or "None"
+
+   return missing_summary # Return the missing values summary
+
 def main():
    """
    Main function.
