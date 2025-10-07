@@ -254,6 +254,39 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test):
 
    return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return all metrics
 
+def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=20):
+   """
+   Run Genetic Algorithm generations with a tqdm progress bar.
+
+   :param toolbox: DEAP toolbox with registered functions.
+   :param population: Initial population.
+   :param hof: Hall of Fame to store the best individual.
+   :param X_train: Training feature set.
+   :param y_train: Training target variable.
+   :param X_test: Testing feature set.
+   :param y_test: Testing target variable.
+   :param n_generations: Number of generations to run.
+   :return: best individual
+   """
+
+   def fitness(ind): # Fitness function for DEAP
+      acc, prec, rec, f1, fpr, fnr, t = evaluate_individual(ind, X_train, y_train, X_test, y_test) # Evaluate the individual
+      return (f1,) # Return F1-score as the fitness value
+
+   toolbox.register("evaluate", fitness) # Register the fitness function
+
+   for _ in range(1, n_generations + 1): # Loop for the specified number of generations
+      offspring = algorithms.varAnd(population, toolbox, cxpb=0.5, mutpb=0.2) # Apply crossover and mutation
+      fits = list(map(toolbox.evaluate, offspring)) # Evaluate the offspring
+
+      for ind, fit in zip(offspring, fits): # Assign fitness values
+         ind.fitness.values = fit # Set the fitness value
+      
+      population[:] = toolbox.select(offspring, k=len(population)) # Select the next generation population
+      hof.update(population) # Update the Hall of Fame
+
+   return hof[0] # Return the best individual from the Hall of Fame
+
 def main():
    """
    Main function.
