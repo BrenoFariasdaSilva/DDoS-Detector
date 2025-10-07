@@ -50,7 +50,7 @@ Project-Description - @UPDATE.
     - [3. Clone the repository](#3-clone-the-repository)
     - [4. Virtual environment (Strongly Recommended)](#4-virtual-environment-strongly-recommended)
     - [5. Install dependencies](#5-install-dependencies)
-    - [6. Dataset - Optional](#6-dataset---optional)
+    - [6. Dataset - @UPDATE](#6-dataset---update)
   - [Results - @UPDATE](#results---update)
   - [How to Cite?](#how-to-cite)
   - [Contributing](#contributing)
@@ -202,7 +202,7 @@ pip install -r requirements.txt
 
 ---
 
-### 6. Dataset - Optional
+### 6. Dataset - @UPDATE
 
 1. Download the dataset you want to use and place it in this project directory `(/DDoS-Detector)`, inside the `Datasets` folder.
 A few of the used datasets can be found at:
