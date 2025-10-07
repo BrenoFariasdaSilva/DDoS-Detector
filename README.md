@@ -52,7 +52,6 @@ Project-Description.
     - [5. Install dependencies](#5-install-dependencies)
   - [Run Programing Language Code:](#run-programing-language-code)
     - [Dataset - Optional](#dataset---optional)
-  - [Usage](#usage)
   - [Results - Optional](#results---optional)
   - [How to Cite?](#how-to-cite)
   - [Contributing](#contributing)
@@ -217,14 +216,6 @@ pip install -r requirements.txt
    ```bash
    make dataset
    ```
-
-## Usage
-
-In order to run the project, run the following command:
-
-```bash
-make run
-```
 
 ## Results - Optional
 
