@@ -156,6 +156,33 @@ def load_dataset(csv_path):
 
    return df # Return the loaded DataFrame
 
+def split_dataset(df, train_test_ratio=0.2):
+   """
+   Split dataset into training and testing sets.
+
+   :param df: DataFrame to split.
+   :param train_test_ratio: Proportion of the dataset to include in the test split.
+   :return: X_train, X_test, y_train, y_test
+   """
+
+   X = df.iloc[:, :-1].select_dtypes(include=["number"]) # Select only numeric features
+   y = df.iloc[:, -1] # Target variable
+   if y.dtype == object or y.dtype == "category": # If the target variable is categorical
+      y, _ = pd.factorize(y) # Factorize the target variable
+
+   X = X.replace([np.inf, -np.inf], np.nan).dropna() # Remove rows with NaN or infinite values
+   y = y[X.index] # Align y with cleaned X
+
+   if X.empty: # If no numeric features remain after cleaning
+      print(f"{BackgroundColors.RED}No valid numeric features remain after cleaning.{Style.RESET_ALL}")
+      return None, None, None, None, None # Return None values
+
+   scaler = StandardScaler() # Initialize the scaler
+   X_scaled = scaler.fit_transform(X) # Scale the features
+   X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=train_test_ratio, random_state=42) # Split the dataset
+
+   return X_train, X_test, y_train, y_test, X.columns # Return the split data and feature names
+
 def main():
    """
    Main function.
