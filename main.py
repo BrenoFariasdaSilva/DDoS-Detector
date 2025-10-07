@@ -617,6 +617,46 @@ def explain_predictions_with_tree_shap(model, X_train, X_test, feature_names, mo
 		})
 		shap_df.to_csv(f"{model_name}_tree_shap_instance_{i+1}.csv", index=False, float_format="%.2f") # Save SHAP values to CSV
 
+def explain_predictions_with_shap(model, X_train, X_test, feature_names):
+	"""
+	Explains model predictions using SHAP values.
+	:param model: Trained model
+	:param X_train: Training features
+	:param X_test: Testing features
+	:param feature_names: Names of the features
+	:return: None
+	"""
+
+	verbose_output(f"{BackgroundColors.GREEN}Explaining predictions with SHAP...{Style.RESET_ALL}")
+
+	X_explain = X_test[:5] # Select the first 5 instances for explanation
+	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Explaining Predictions with SHAP...{Style.RESET_ALL}")
+
+	explainer = shap.Explainer(model, X_train, feature_names=feature_names) # Create a SHAP explainer for the model
+	shap_values = explainer(X_explain) # Calculate SHAP values for the selected instances
+
+	for i in range(len(X_explain)): # Iterate through each instance
+		shap_val = shap_values[i].values # Get SHAP values for the instance
+		feat_val = shap_values[i].data # Get feature values for the instance
+
+		shap_val = shap_val.flatten() # Flatten the SHAP values
+		feat_val = feat_val.flatten() # Flatten the feature values
+
+		if len(feature_names) != len(shap_val) or len(shap_val) != len(feat_val): # Verify if lengths match
+			print(f"[Erro] Comprimentos incompatíveis na instância {i+1}:")
+			print(f" - feature_names: {len(feature_names)}")
+			print(f" - shap_value: {len(shap_val)}")
+			print(f" - feature_value: {len(feat_val)}")
+			continue # Skip this instance if lengths do not match
+
+		shap_df = pd.DataFrame({ # Create a DataFrame for SHAP values
+			"feature": feature_names,
+			"shap_value": shap_val,
+			"feature_value": feat_val
+		})
+
+		shap_df.to_csv(f"shap_values_instance_{i+1}.csv", index=False) # Save SHAP values to CSV
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
