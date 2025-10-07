@@ -297,6 +297,43 @@ def safe_filename(name):
 
    return re.sub(r'[\\/*?:"<>|]', "_", name) # Replace invalid filename characters with underscores
 
+def analyze_top_features(df, y, top_features, csv_path="."):
+   """
+   Analyze and visualize the top features.
+
+   :param df: DataFrame containing the features.
+   :param y: Target variable.
+   :param top_features: List of top feature names.
+   :param csv_path: Path to the original CSV file for saving outputs.
+   :return: None
+   """
+
+   df_analysis = df[top_features].copy() # Create a copy of the DataFrame with only the top features
+   df_analysis["Target"] = pd.Series(y, index=df_analysis.index).astype(str) # Add the target variable to the DataFrame
+
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Directory to save outputs
+   os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
+
+   base_dataset_name = os.path.splitext(os.path.basename(csv_path))[0] # Base name of the dataset
+
+   summary = df_analysis.groupby("Target")[top_features].agg(["mean", "std"]) # Calculate mean and std for each feature grouped by target
+   summary.columns = [f"{col}_{stat}" for col, stat in summary.columns] # Flatten MultiIndex columns
+   summary = summary.round(3) # Round to 3 decimal places
+
+   summary_csv_path = f"{output_dir}/{base_dataset_name}_feature_summary.csv" # Path to save the summary CSV
+   summary.to_csv(summary_csv_path, encoding="utf-8") # Save the summary to a CSV file
+   print(f"\n{BackgroundColors.GREEN}Feature summary saved to {BackgroundColors.CYAN}{summary_csv_path}{Style.RESET_ALL}") # Notify user
+
+   for feature in top_features: # For each top feature
+      plt.figure(figsize=(8, 5)) # Create a new figure
+      sns.boxplot(x="Target", y=feature, data=df_analysis, hue="Target", palette="Set2", dodge=False) # Boxplot
+      plt.title(f"Distribution of '{feature}' by class") # Title
+      plt.xlabel("Traffic Type") # X-axis label
+      plt.ylabel(feature) # Y-axis label
+      plt.tight_layout() # Adjust layout
+      plt.savefig(f"{output_dir}/{base_dataset_name}-{safe_filename(feature)}.png") # Save the plot
+      plt.close() # Close the plot to free memory
+
 def main():
    """
    Main function.
