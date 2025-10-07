@@ -636,6 +636,7 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test, dataset_dir, dat
 def explain_predictions_with_tree_shap(model, X_train, X_test, feature_names, model_name="TreeModel"):
 	"""
 	Explains predictions using SHAP's TreeExplainer.
+
 	:param model: Trained model
 	:param X_train: Training features
 	:param X_test: Testing features
@@ -668,6 +669,7 @@ def explain_predictions_with_tree_shap(model, X_train, X_test, feature_names, mo
 def explain_predictions_with_shap(model, X_train, X_test, feature_names):
 	"""
 	Explains model predictions using SHAP values.
+
 	:param model: Trained model
 	:param X_train: Training features
 	:param X_test: Testing features
@@ -708,6 +710,7 @@ def explain_predictions_with_shap(model, X_train, X_test, feature_names):
 def explain_predictions_with_lime(model, X_train, X_test, feature_names, model_name="Model"):
 	"""
 	Explains model predictions using LIME.
+
 	:param model: Trained model
 	:param X_train: Training features
 	:param X_test: Testing features
@@ -738,6 +741,7 @@ def explain_predictions_with_lime(model, X_train, X_test, feature_names, model_n
 def explain_with_multiple_methods(model, X_train, X_test, feature_names, model_name="Model"):
 	"""
 	Explains model predictions using multiple methods: SHAP, TreeExplainer, and LIME.
+
 	:param model: Trained model
 	:param X_train: Training features
 	:param X_test: Testing features
@@ -759,6 +763,7 @@ def play_sound():
 	"""
 	Plays a sound when the program finishes.
 
+	:param: None
 	:return: None
 	"""
 
