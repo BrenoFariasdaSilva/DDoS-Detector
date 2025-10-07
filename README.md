@@ -206,12 +206,12 @@ Discuss the results obtained in the project.
 If you use the Repository-Name in your research, please cite it using the following BibTeX entry:
 
 ```
-@misc{softwareRepository-Name:2024,
-  title = {Repository-Name: Project-Description},
+@misc{softwareDDoS-Detector:2025,
+  title = {DDoS-Detector: A Tool for Detecting DDoS Attacks},
   author = {Breno Farias da Silva},
-  year = {2024},
-  howpublished = {https://github.com/BrenoFariasdaSilva/Repository-Name},
-  note = {Accessed on September 11, 2024}
+  year = {2025},
+  howpublished = {https://github.com/BrenoFariasdaSilva/DDoS-Detector},
+  note = {Accessed on October 6, 2026}
 }
 ```
 
