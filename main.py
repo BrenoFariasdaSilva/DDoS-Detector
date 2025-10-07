@@ -18,6 +18,23 @@ Description :
 		- Generation of detailed classification and extended metrics reports
 		- Aggregation of performance results across datasets and models
 
+Usage:
+	First, you must configure the DATASETS dictionary with the correct paths to your datasets.
+		DATASETS = {
+			"./CIC-IDS2017-Dataset": [
+				"./CIC-IDS2017-Dataset/Infiltration-Thursday-no-metadata.parquet",
+				"./CIC-IDS2017-Dataset/Infiltration-Thursday-no-metadata.parquet"
+			],
+			"./UNSW-NB15-Dataset": [
+				"./UNSW-NB15-Dataset/UNSW_NB15_training-set.parquet",
+				"./UNSW-NB15-Dataset/UNSW_NB15_testing-set.parquet"
+			],
+			...
+		}
+	
+	Now, in order to run the script, simply execute:
+		make main
+
 TODOs:
 	- Add cross-validation support for better generalization.
 	- Add multithreading to parallelize model training.
@@ -73,7 +90,7 @@ class BackgroundColors: # Colors for the terminal
    CLEAR_TERMINAL = "\033[H\033[J" # Clear the terminal
 
 # Execution Constants
-OUTPUT_DIR = f"Results" # Directory to save results
+OUTPUT_DIR = f"./Results" # Directory to save results
 VERBOSE = False # Set to True for verbose output
 DATASETS = { # Dictionary containing dataset directory paths with their training and testing file paths
 	"./CIC-IDS2017-Dataset": [
