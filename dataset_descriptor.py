@@ -54,6 +54,28 @@ def verify_filepath_exists(filepath):
 
    return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
 
+def collect_matching_files(input_dir, file_format=".csv", ignore_files=None):
+   """
+   Recursively collects all files in the specified directory and subdirectories
+   that match the given file format and are not in the ignore list.
+
+   :param input_dir: Directory to search
+   :param file_format: File format to include (default: .csv)
+   :param ignore_files: List of filenames to ignore
+   :return: Sorted list of matching file paths
+   """
+
+   ignore_files = ignore_files or [] # Default to empty list if None
+   matching_files = [] # List to store matching file paths
+   
+   for root, _, files in os.walk(input_dir): # Walk through the directory
+      for file in files: # For each file
+         if file.endswith(file_format) and file not in ignore_files: # Verify if it matches the format and is not ignored
+            matching_files.append(os.path.join(root, file)) # Add the full file path to the list
+   
+   sorted_matching_files = sorted(set(matching_files)) # Remove duplicates and sort the list
+   return sorted_matching_files # Return the sorted list of matching files
+
 def main():
    """
    Main function.
