@@ -48,6 +48,7 @@ Project-Description.
       - [macOS](#macos-1)
       - [Windows](#windows-1)
     - [3. Clone the repository](#3-clone-the-repository)
+    - [4. Virtual environment (strongly recommended)](#4-virtual-environment-strongly-recommended)
   - [Run Programing Language Code:](#run-programing-language-code)
     - [Dependencies](#dependencies)
     - [Dataset - Optional](#dataset---optional)
@@ -166,6 +167,24 @@ make --version
    git clone https://github.com/BrenoFariasDaSilva/DDoS-Detector.git
    cd DDoS-Detector
    ```
+
+### 4. Virtual environment (strongly recommended)
+
+With `make`:
+
+```bash
+make venv
+source venv/bin/activate # Linux/macOS
+venv\Scripts\activate # Windows
+```
+
+Or manually:
+
+```bash
+python -m venv venv
+source venv/bin/activate # Linux/macOS
+venv\Scripts\activate # Windows
+```
 
 ## Run Programing Language Code:
 
