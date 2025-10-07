@@ -119,6 +119,7 @@ def play_sound():
    """
    Plays a sound when the program finishes and skips if the operating system is Windows.
 
+   :param: None
    :return: None
    """
    
@@ -230,9 +231,9 @@ def run_rfe(csv_path):
    """
 
    scaler = StandardScaler() # Preprocessing: scale numeric features
-   try:
+   try: # Try to scale features
       X_scaled = scaler.fit_transform(X) # Scale features
-   except Exception as exc:
+   except Exception as exc: # Catch any exception during scaling
       print(f"{BackgroundColors.RED}Error scaling features: {exc}{Style.RESET_ALL}")
       return # Exit if scaling fails
 
@@ -274,6 +275,7 @@ def main():
    """
    Main function.
 
+   :param: None
    :return: None
    """
    
