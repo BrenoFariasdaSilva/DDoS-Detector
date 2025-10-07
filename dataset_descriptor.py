@@ -76,6 +76,22 @@ def collect_matching_files(input_dir, file_format=".csv", ignore_files=None):
    sorted_matching_files = sorted(set(matching_files)) # Remove duplicates and sort the list
    return sorted_matching_files # Return the sorted list of matching files
 
+def load_dataset(filepath, low_memory=True):
+   """
+   Loads a dataset from a CSV file.
+   
+   :param filepath: Path to the CSV file
+   :param low_memory: Whether to use low memory mode (default: True)
+   :return: Pandas DataFrame
+   """
+
+   try: # Try to load the dataset
+      df = pd.read_csv(filepath, low_memory=low_memory) # Load the dataset
+      return df # Return the DataFrame
+   except Exception as e:
+      print(f"{BackgroundColors.RED}Error loading {BackgroundColors.GREEN}{filepath}: {e}{Style.RESET_ALL}")
+      return None
+
 def main():
    """
    Main function.
