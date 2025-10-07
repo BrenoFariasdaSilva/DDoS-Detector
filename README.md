@@ -1,6 +1,6 @@
 <div align="center">
   
-# [DDoS-Detector.](https://github.com/BrenoFariasdaSilva/DDoS-Detector) <img src="Icon-Image-URL"  width="3%" height="3%">
+# [DDoS-Detector.](https://github.com/BrenoFariasdaSilva/DDoS-Detector) <img src="[Icon-Image-URL](https://github.com/avastjs/cyber-icons/blob/main/logo.svg)"  width="3%" height="3%">
 
 </div>
 
