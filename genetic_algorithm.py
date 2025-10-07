@@ -213,6 +213,47 @@ def setup_genetic_algorithm(n_features, population_size=30):
 
    return toolbox, population, hof # Return the toolbox, population, and Hall of Fame
 
+def evaluate_individual(individual, X_train, y_train, X_test, y_test):
+   """
+   Evaluate the fitness of an individual solution.
+
+   :param individual: A list representing the individual solution (binary mask for feature selection).
+   :param X_train: Training feature set.
+   :param y_train: Training target variable.
+   :param X_test: Testing feature set.
+   :param y_test: Testing target variable.
+   :return: Tuple containing accuracy, precision, recall, F1-score, FPR,
+   """
+
+   if sum(individual) == 0: # If no features are selected, return worst possible scores
+      return 0, 0, 0, 0, 1, 1, float("inf") # Accuracy, Precision, Recall, F1-score, FPR, FNR, Time
+
+   selected_idx = [i for i, bit in enumerate(individual) if bit == 1] # Indices of selected features
+   X_train_sel = X_train[:, selected_idx] # Select features for training set
+   X_test_sel = X_test[:, selected_idx] # Select features for testing set
+
+   start_time = time.time() # Start time measurement
+   model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1) # Initialize the model
+   model.fit(X_train_sel, y_train) # Train the model
+   y_pred = model.predict(X_test_sel) # Make predictions
+   elapsed_time = time.time() - start_time # Calculate elapsed time
+
+   acc = accuracy_score(y_test, y_pred) # Calculate accuracy
+   prec = precision_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate precision
+   rec = recall_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate recall
+   f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate F1-score
+
+   cm = confusion_matrix(y_test, y_pred, labels=np.unique(y_test)) # Confusion matrix
+   tn = cm[0, 0] if cm.shape == (2, 2) else 0 # True negatives
+   fp = cm[0, 1] if cm.shape == (2, 2) else 0 # False positives
+   fn = cm[1, 0] if cm.shape == (2, 2) else 0 # False negatives
+   tp = cm[1, 1] if cm.shape == (2, 2) else 0 # True positives
+
+   fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # False positive rate
+   fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # False negative rate
+
+   return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return all metrics
+
 def main():
    """
    Main function.
