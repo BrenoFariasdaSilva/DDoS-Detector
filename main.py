@@ -536,6 +536,55 @@ def generate_overall_performance_summary(all_model_scores, output_path="."):
 
 	verbose_output(true_string=f"{BackgroundColors.GREEN}Overall performance summary saved to: {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}") # Print success message with file path
 
+def train_and_evaluate_models(X_train, X_test, y_train, y_test, dataset_dir, dataset_name):
+	"""
+	Trains and evaluates multiple models.
+
+	:param X_train: Training features
+	:param X_test: Testing features
+	:param y_train: Training labels
+	:param y_test: Testing labels
+	:param dataset_dir: Directory of the dataset for saving files
+	:param dataset_name: Name of the dataset for saving files
+	:return: Tuple containing:
+				- Dictionary of trained models
+				- List of dicts with extracted model metrics for summary (in memory)
+	"""
+
+	verbose_output(f"{BackgroundColors.GREEN}Training and evaluating models for the {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} dataset...{Style.RESET_ALL}")
+
+	models = get_models() # Dictionary of models to train
+	model_metrics_list = [] # List to store metrics dicts for each model, for later summary
+	results_dir = os.path.join(dataset_dir, "Results") # Directory to save results for the current dataset
+
+	for index, (name, model) in enumerate(models.items(), start=1): # Iterate through each model with an index starting from 1
+		model, duration = train_model(model, X_train, y_train, index, name, dataset_name) # Train the model and get duration
+		report, metrics_df = evaluate_model(model, X_test, y_test, duration[1]) # Evaluate model using reusable function
+		save_results(report, metrics_df, results_dir, index, name) # Save reports and metrics
+
+		avg_row = metrics_df.iloc[-1] # Get the last row (average metrics)
+
+		metrics_dict = { # Compose in-memory summary dictionary
+			"Dataset": dataset_name,
+			"Model": name,
+			"Training Duration": duration[1],
+			"Correct (TP)": int(avg_row["Correct (TP)"]),
+			"Wrong (FN)": int(avg_row["Wrong (FN)"]),
+			"False Positives (FP)": int(avg_row["False Positives (FP)"]),
+			"True Negatives (TN)": int(avg_row["True Negatives (TN)"]),
+			"Support": int(avg_row["Support"]),
+			"Accuracy (per class)": round(float(avg_row["Accuracy (per class)"]), 2),
+			"Precision": round(float(avg_row["Precision"]), 2),
+			"Recall": round(float(avg_row["Recall"]), 2),
+			"F1-Score": round(float(avg_row["F1-Score"]), 2)
+		}
+
+		model_metrics_list.append(metrics_dict) # Add to summary list
+
+	generate_overall_performance_summary(model_metrics_list, output_path=results_dir) # Generate overall performance summary for all models for the current dataset
+
+	return models, model_metrics_list # Return trained models and metrics
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
