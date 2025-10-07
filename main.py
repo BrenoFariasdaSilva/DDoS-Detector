@@ -76,6 +76,8 @@ RUN_FUNCTIONS = { # Dictionary containing information about the functions to run
 	"Play Sound": True
 }
 
+# Functions Definitions:
+
 def verbose_output(true_string="", false_string=""):
 	"""
 	Outputs a message if the VERBOSE constant is set to True.
