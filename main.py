@@ -657,6 +657,36 @@ def explain_predictions_with_shap(model, X_train, X_test, feature_names):
 
 		shap_df.to_csv(f"shap_values_instance_{i+1}.csv", index=False) # Save SHAP values to CSV
 
+def explain_predictions_with_lime(model, X_train, X_test, feature_names, model_name="Model"):
+	"""
+	Explains model predictions using LIME.
+	:param model: Trained model
+	:param X_train: Training features
+	:param X_test: Testing features
+	:param feature_names: Names of the features
+	:param model_name: Name of the model for saving files
+	:return: None
+	"""
+
+	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Explaining Predictions with LIME...{Style.RESET_ALL}")
+	X_explain = X_test[:5] # Select the first 5 instances for explanation
+
+	explainer = LimeTabularExplainer( # Create a LIME explainer for tabular data
+		training_data=X_train.values, # Training data for the explainer
+		feature_names=feature_names, # Names of the features
+		class_names=[str(c) for c in model.classes_] if hasattr(model, "classes_") else ["Class 0", "Class 1"], # Class names for the model
+		mode="classification" # Mode of the explainer (classification or regression)
+	)
+
+	for i in range(len(X_explain)): # Iterate through each instance
+		exp = explainer.explain_instance( # Explain the instance using LIME
+			data_row=X_explain.iloc[i].values, # Data row to explain
+			predict_fn=model.predict_proba, # Prediction function for the model
+			num_features=len(feature_names) # Number of features to include in the explanation
+		)
+		lime_df = pd.DataFrame(exp.as_list(), columns=["feature", "weight"]) # Create a DataFrame for LIME explanation
+		lime_df.to_csv(f"{model_name}_lime_instance_{i+1}.csv", index=False, float_format="%.2f") # Save LIME explanation to CSV
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
