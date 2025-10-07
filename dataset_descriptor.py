@@ -199,6 +199,20 @@ def get_dataset_info(filepath, low_memory=True):
       "Class Distribution": class_dist_str
    }
 
+def write_report(report_rows, base_dir, output_filename):
+   """
+   Writes the report rows to a CSV file.
+
+   :param report_rows: List of dictionaries containing report data
+   :param base_dir: Base directory for saving the report
+   :param output_filename: Name of the output CSV file
+   :return: None
+   """
+
+   report_df = pd.DataFrame(report_rows) # Create a DataFrame from the report rows
+   report_csv_path = os.path.join(base_dir, output_filename) # Path to save the report CSV
+   report_df.to_csv(report_csv_path, index=False) # Save the report to a CSV file
+
 def main():
    """
    Main function.
