@@ -51,7 +51,7 @@ Project-Description.
     - [4. Virtual environment (strongly recommended)](#4-virtual-environment-strongly-recommended)
     - [5. Install dependencies](#5-install-dependencies)
     - [6. Dataset - Optional](#6-dataset---optional)
-  - [Results - Optional](#results---optional)
+  - [Results - @UPDATE](#results---update)
   - [How to Cite?](#how-to-cite)
   - [Contributing](#contributing)
   - [Collaborators](#collaborators)
@@ -210,7 +210,7 @@ A few of the used datasets can be found at:
    - [CICIDS2017](https://www.unb.ca/cic/datasets/ids-2017.html)
    - [NSL-KDD](https://www.unb.ca/cic/datasets/nsl.html)
 
-## Results - Optional
+## Results - @UPDATE
 
 Discuss the results obtained in the project.
 
