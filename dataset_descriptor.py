@@ -1,0 +1,45 @@
+import atexit # For playing a sound when the program finishes
+import os # For running a command in the terminal
+import pandas as pd # For data manipulation
+import platform # For getting the operating system name
+from colorama import Style # For coloring the terminal
+
+# Macros:
+class BackgroundColors: # Colors for the terminal
+   CYAN = "\033[96m" # Cyan
+   GREEN = "\033[92m" # Green
+   YELLOW = "\033[93m" # Yellow
+   RED = "\033[91m" # Red
+   BOLD = "\033[1m" # Bold
+   UNDERLINE = "\033[4m" # Underline
+   CLEAR_TERMINAL = "\033[H\033[J" # Clear the terminal
+
+# Execution Constants:
+VERBOSE = False # Set to True to output verbose messages
+
+# Sound Constants:
+SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
+SOUND_FILE = "./.assets/Sounds/NotificationSound.wav" # The path to the sound file
+
+# RUN_FUNCTIONS:
+RUN_FUNCTIONS = {
+   "Play Sound": True, # Set to True to play a sound when the program finishes
+}
+
+def main():
+   """
+   Main function.
+
+   :return: None
+   """
+
+   pass
+
+if __name__ == "__main__":
+   """
+   This is the standard boilerplate that calls the main() function.
+
+   :return: None
+   """
+
+   main() # Call the main function
