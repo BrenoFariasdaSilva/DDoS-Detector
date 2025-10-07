@@ -1,13 +1,44 @@
-#@TODO: Add cross validation
-#@TODO: Add threads for each algorithm training?
-#@TODO: Search and review the code for overfitting issues
-#@TODO: Correlation-Based Feature Selection + Lasso Regression
-# 1. Remove features with low variance (nearly constant)
-# 2. Analyze the correlation with the target variable
-# 3. Remove features that are highly correlated with each other (multicollinearity)
-# 4. Apply Lasso regression (with L1 regularization)
-#@TODO: Implement the feature selection function
-#@TODO: Add tests for the feature selection function
+"""
+================================================================================
+Machine Learning Intrusion Detection Evaluation Framework
+================================================================================
+Author      : Breno Farias da Silva
+Created     : 2025-10-07
+Description :
+	This script provides a modular framework for loading, preprocessing,
+	training, and evaluating multiple machine learning models on a variety
+	of cybersecurity intrusion detection datasets. It supports common formats
+	such as ARFF, CSV, TXT, and Parquet, and integrates model explainability
+	through SHAP and LIME.
+
+	The workflow includes:
+		- Data loading and preprocessing (scaling, encoding, label detection)
+		- Model initialization (Random Forest, XGBoost, LightGBM, etc.)
+		- Automated training with timing and evaluation metrics
+		- Generation of detailed classification and extended metrics reports
+		- Aggregation of performance results across datasets and models
+
+TODOs:
+	- Add cross-validation support for better generalization.
+	- Add multithreading to parallelize model training.
+	- Review the pipeline for potential overfitting issues.
+	- Implement correlation-based feature selection and LASSO regularization.
+		1. Remove low-variance (nearly constant) features.
+		2. Analyze correlation with target variable.
+		3. Remove highly correlated features (multicollinearity).
+		4. Apply LASSO (L1) regression for feature selection.
+	- Implement the feature selection function.
+	- Add unit tests for the feature selection process.
+
+Dependencies:
+	- Python >= 3.9
+	- pandas, numpy, scikit-learn, lightgbm, xgboost, shap, lime, colorama
+
+Output:
+	- Model performance reports (.csv)
+	- Extended confusion matrix with detailed class metrics
+	- Overall performance summary by dataset and algorithm
+"""
 
 import arff as liac_arff # For loading ARFF files
 import atexit # For registering a function to run at exit
