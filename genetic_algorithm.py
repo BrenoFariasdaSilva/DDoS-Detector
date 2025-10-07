@@ -370,6 +370,27 @@ def extract_rfe_ranking(csv_path):
                
    return rfe_ranking # Return the RFE rankings dictionary
 
+def save_best_features(best_features, rfe_ranking, csv_path):
+   """
+   Save the best features and their RFE rankings to a results file.
+
+   :param best_features: List of best features selected by the Genetic Algorithm.
+   :param rfe_ranking: Dictionary of feature names and their RFE rankings.
+   :param csv_path: Path to the original CSV file for saving outputs.
+   :return: None
+   """
+
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Directory to save outputs
+   os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
+   results_file = f"{output_dir}/Genetic_Algorithm_results.txt" # Path to save the results file
+
+   with open(results_file, "w") as f: # Open the results file for writing
+      f.write("Best Feature Subset:\n") # Write header
+      for i, feat in enumerate(best_features, start=1): # For each best feature
+         feat_norm = normalize_feature_name(feat) # Normalize the feature name
+         rank_info = f" (RFE ranking {rfe_ranking[feat_norm]})" if feat_norm in rfe_ranking else " (RFE ranking N/A)" # Get RFE ranking info
+         f.write(f"{i}. {feat_norm}{rank_info}\n") # Write feature and its RFE ranking
+
 def main():
    """
    Main function.
