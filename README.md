@@ -39,6 +39,10 @@ Project-Description.
   - [Introduction](#introduction)
   - [Requirements](#requirements)
   - [Setup](#setup)
+    - [1. Install Python](#1-install-python)
+      - [Linux](#linux)
+      - [macOS](#macos)
+      - [Windows](#windows)
     - [Clone the repository](#clone-the-repository)
   - [Installation:](#installation)
   - [Run Programing Language Code:](#run-programing-language-code)
@@ -63,6 +67,57 @@ Detailed project description.
 Bullet points of the requirements.
 
 ## Setup
+
+Before running the project, ensure that both **Python** and the **make utility** are installed on your system. Follow the instructions below according to your operating system.
+
+### 1. Install Python
+
+The project requires **Python 3.9 or higher**.
+
+#### Linux
+On Debian/Ubuntu-based distributions:
+
+```bash
+sudo apt update
+sudo apt install python3 python3-venv python3-pip -y
+```
+
+On Fedora/RHEL-based distributions:
+
+```bash
+sudo dnf install python3 python3-venv python3-pip -y
+```
+
+Verify installation:
+
+```bash
+python3 --version
+```
+
+#### macOS
+1. Install via Homebrew (recommended):
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" # if Homebrew not installed
+brew install python
+```
+
+2. Verify installation:
+
+```bash
+python3 --version
+```
+
+#### Windows
+1. Download Python from the official website: [https://www.python.org/downloads/windows/](https://www.python.org/downloads/windows/)
+2. Run the installer and check **“Add Python to PATH”**.
+3. Verify installation:
+
+```powershell
+python --version
+```
+
+---
 
 ### Clone the repository
 
