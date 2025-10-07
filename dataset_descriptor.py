@@ -149,6 +149,26 @@ def summarize_missing_values(df):
 
    return missing_summary # Return the missing values summary
 
+def summarize_classes(df, label_col):
+   """
+   Summarizes classes and class distributions if a label column exists.
+
+   :param df: The pandas DataFrame
+   :param label_col: The name of the label column
+   :return: Tuple containing string of classes and class distribution summary
+   """
+
+   if label_col and label_col in df.columns: # If a label column exists
+      classes = df[label_col].unique() # Get unique classes
+      classes_str = ", ".join(map(str, classes)) # Create string of classes
+      class_counts = df[label_col].value_counts() # Get counts of each class
+      total = class_counts.sum() # Total number of samples
+      class_dist_list = [f"{cls}: {cnt} ({cnt/total*100:.2f}%)" for cls, cnt in class_counts.items()] # Create class distribution list
+      class_dist_str = ", ".join(class_dist_list) # Create class distribution string
+      return classes_str, class_dist_str # Return the classes and class distribution
+   
+   return "None", "None" # Return "None" if no label column
+
 def main():
    """
    Main function.
