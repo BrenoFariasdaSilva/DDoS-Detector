@@ -22,6 +22,10 @@ dataset_descriptor: $(VENV)
 	clear;
 	time $(PYTHON_VENV) ./dataset_descriptor.py
 
+rfe: $(VENV)
+	clear;
+	time $(PYTHON_VENV) ./rfe.py
+
 # Create virtual environment and install dependencies
 $(VENV):
 	@echo "Using Python at: $(PYTHON)"
@@ -42,4 +46,4 @@ clean:
 	find . -type f -name '*.pyc' -delete
 	find . -type d -name '__pycache__' -delete
 
-.PHONY: main clean dependencies generate_requirements dataset_descriptor
+.PHONY: all main clean dependencies generate_requirements dataset_descriptor rfe
