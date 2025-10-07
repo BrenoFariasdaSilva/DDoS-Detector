@@ -1,3 +1,47 @@
+"""
+================================================================================
+Dataset Descriptor and Report Generator
+================================================================================
+Author      : Breno Farias da Silva
+Created     : 2025-10-07
+Description :
+   This script automates the process of scanning datasets within a directory,
+   extracting relevant statistical and structural information, and compiling
+   the results into a comprehensive CSV report. It supports recursive
+   directory traversal and detailed feature analysis for educational or
+   research purposes in data-centric projects.
+
+   Key features include:
+      - Recursive discovery of dataset files by extension (default: .csv)
+      - Detection of label columns based on naming conventions
+      - Summary of sample and feature counts, feature types, and missing values
+      - Class distribution analysis for classification datasets
+      - Structured report generation in CSV format
+      - Optional sound notification upon completion (cross-platform support)
+
+Usage:
+   Modify the variable `input_path` in the `main()` function to point to
+   the dataset directory or single CSV file you wish to analyze.
+   Then, simply run:
+      $ make dataset_descriptor
+
+TODOs:
+   - Add CLI argument parsing for input paths, file extensions, and options.
+   - Implement progress bars for large dataset scans.
+   - Extend format support to ARFF, Parquet, and JSON.
+   - Add summary statistics (mean, std, min, max) for numeric features.
+   - Include timestamped report filenames for multiple runs.
+   - Improve verbosity control and structured logging.
+
+Dependencies:
+   - Python >= 3.9
+   - pandas, colorama
+
+Output:
+   - A CSV file named `_dataset_descriptor.csv` saved in the dataset directory,
+   containing metadata and summary statistics for each discovered dataset.
+"""
+
 import atexit # For playing a sound when the program finishes
 import os # For running a command in the terminal
 import pandas as pd # For data manipulation
