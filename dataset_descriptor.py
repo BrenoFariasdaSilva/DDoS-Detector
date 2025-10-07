@@ -112,6 +112,30 @@ def detect_label_column(columns):
 
    return None # Return None if no label column is found
 
+def summarize_features(df):
+   """
+   Summarizes number of samples, features, and feature types.
+   Ensures the sum of feature types matches the number of columns.
+
+   :param df: pandas DataFrame
+   :return: Tuple containing:
+            n_samples, n_features, n_numeric, n_int, n_categorical, n_other, categorical columns string
+   """
+
+   n_samples, n_features = df.shape # Get number of samples and features
+   dtypes = df.dtypes # Get data types of each column
+
+   n_numeric = dtypes[dtypes == "float64"].count() # Count float64 types
+   n_int = dtypes[dtypes == "int64"].count() + dtypes[dtypes == "Int64"].count() # Count int64 and Int64 types
+   n_categorical = dtypes[dtypes.isin(["object", "category", "bool", "string"])].count() # Count categorical types
+
+   n_other = n_features - (n_numeric + n_int + n_categorical) # Anything else goes to "other"
+
+   categorical_cols = df.select_dtypes(include=["object", "category", "bool", "string"]).columns.tolist() # List of categorical columns
+   categorical_cols_str = ", ".join(categorical_cols) if categorical_cols else "None" # Create string of categorical columns or "None"
+
+   return n_samples, n_features, n_numeric, n_int, n_categorical, n_other, categorical_cols_str # Return the summary values
+
 def main():
    """
    Main function.
