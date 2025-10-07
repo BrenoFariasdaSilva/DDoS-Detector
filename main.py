@@ -715,7 +715,37 @@ def main():
 	:return: None
 	"""
 
-	pass
+	print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Starting Machine Learning Pipeline...{Style.RESET_ALL}\n") # Print the start message and clear the terminal
+
+	sorted_datasets = sorted(DATASETS.items()) # Sort datasets alphabetically by keys
+
+	all_model_scores = [] # List to store all models' performance metrics across all datasets
+
+	for index, (dataset_key, (training_file_path, testing_file_path)) in enumerate(sorted_datasets, start=1): # Enumerate through sorted datasets with index starting from 1
+		dataset_name = os.path.basename(dataset_key) # Get the dataset name from the directory path
+
+		print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset {BackgroundColors.CYAN}{index}/{len(sorted_datasets)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN}{Style.RESET_ALL}")
+
+		if not verify_filepath_exists(training_file_path) or not verify_filepath_exists(testing_file_path): # If either training or testing file does not exist
+			print(f"{BackgroundColors.RED}Missing input files for {dataset_name}. Skipping.{Style.RESET_ALL}")
+			continue # Skip to the next dataset if files are missing
+
+		train_df, test_df, split_required = load_and_prepare_data(training_file_path, testing_file_path) # Load and prepare the training and testing data
+		X_train, X_test, y_train, y_test, feature_names = split_data(train_df, test_df, split_required) # Split the data into training and testing sets, and preprocess features
+
+		models, dataset_model_scores = train_and_evaluate_models(X_train, X_test, y_train, y_test, dataset_key, dataset_name) # Train and evaluate models on the dataset, returning trained models and their performance metrics
+
+		# for model_name, model in models.items(): # Iterate through each trained model
+			# print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Explaining predictions for {model_name} on {dataset_name}...{Style.RESET_ALL}")
+			# explain_with_multiple_methods(model, X_train, X_test, feature_names, model_name=model_name) # Explain model predictions using multiple methods
+
+		all_model_scores.extend(dataset_model_scores) if dataset_model_scores else None # Extend the list of all model scores with the current dataset's scores if available
+
+		print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Pipeline for {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} finished successfully.{Style.RESET_ALL}\n")
+
+	generate_overall_performance_summary(all_model_scores) if all_model_scores else None # Generate overall performance summary if there are any model scores
+
+	print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}All datasets processed. Overall analysis finished.{Style.RESET_ALL}")
 
 if __name__ == "__main__":
 	"""
