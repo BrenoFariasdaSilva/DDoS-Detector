@@ -50,7 +50,7 @@ Project-Description.
     - [3. Clone the repository](#3-clone-the-repository)
     - [4. Virtual environment (strongly recommended)](#4-virtual-environment-strongly-recommended)
     - [5. Install dependencies](#5-install-dependencies)
-    - [Dataset - Optional](#dataset---optional)
+    - [6. Dataset - Optional](#6-dataset---optional)
   - [Results - Optional](#results---optional)
   - [How to Cite?](#how-to-cite)
   - [Contributing](#contributing)
@@ -202,13 +202,13 @@ pip install -r requirements.txt
 
 ---
 
-### Dataset - Optional
+### 6. Dataset - Optional
 
-1. Download the dataset from [WEBSITE-HERE]() and place it in this project directory `(/DDoS-Detector)` and run the following command:
-
-   ```bash
-   make dataset
-   ```
+1. Download the dataset you want to use and place it in this project directory `(/DDoS-Detector)`, inside the `Datasets` folder.
+A few of the used datasets can be found at:
+   - [CICDDoS2019](https://www.unb.ca/cic/datasets/ddos-2019.html)
+   - [CICIDS2017](https://www.unb.ca/cic/datasets/ids-2017.html)
+   - [NSL-KDD](https://www.unb.ca/cic/datasets/nsl.html)
 
 ## Results - Optional
 
