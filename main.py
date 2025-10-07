@@ -707,6 +707,21 @@ def explain_with_multiple_methods(model, X_train, X_test, feature_names, model_n
 
 	explain_predictions_with_lime(model, X_train, X_test, feature_names, model_name=model_name) # Explain predictions using LIME, as it works with any model
 
+def play_sound():
+	"""
+	Plays a sound when the program finishes.
+
+	:return: None
+	"""
+
+	if verify_filepath_exists(SOUND_FILE): # If the sound file exists
+		if platform.system() in SOUND_COMMANDS: # If the platform.system() is in the SOUND_COMMANDS dictionary
+			os.system(f"{SOUND_COMMANDS[platform.system()]} {SOUND_FILE}") # Play the sound
+		else: # If the platform.system() is not in the SOUND_COMMANDS dictionary
+			print(f"{BackgroundColors.RED}The {BackgroundColors.CYAN}platform.system(){BackgroundColors.RED} is not in the {BackgroundColors.CYAN}SOUND_COMMANDS dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}")
+	else: # If the sound file does not exist
+		print(f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{SOUND_FILE}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}")
+
 def main():
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
@@ -746,6 +761,8 @@ def main():
 	generate_overall_performance_summary(all_model_scores) if all_model_scores else None # Generate overall performance summary if there are any model scores
 
 	print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}All datasets processed. Overall analysis finished.{Style.RESET_ALL}")
+
+	atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None # Register the play_sound function to be called at exit if enabled
 
 if __name__ == "__main__":
 	"""
