@@ -33,7 +33,18 @@ def main():
    :return: None
    """
 
-   pass
+   print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Dataset Descriptor{BackgroundColors.GREEN}!{Style.RESET_ALL}", end="\n\n") # Output the Welcome message
+
+   input_path = "./DDoS/CICDDoS2019/03-11/" # Path to the CSV file
+
+   if verify_filepath_exists(input_path): # Verify if the input path exists
+      generate_dataset_report(input_path=input_path, low_memory=True) # Generate the dataset report
+   else: # If the input path does not exist
+      print(f"{BackgroundColors.RED}Input path does not exist: {input_path}{Style.RESET_ALL}") # Output the error message
+
+   print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
+
+   atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None # Register the play_sound function to be called when the program finishes
 
 if __name__ == "__main__":
    """
