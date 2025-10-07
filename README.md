@@ -48,7 +48,7 @@ Project-Description.
       - [macOS](#macos-1)
       - [Windows](#windows-1)
     - [3. Clone the repository](#3-clone-the-repository)
-    - [4. Virtual environment (strongly recommended)](#4-virtual-environment-strongly-recommended)
+    - [4. Virtual environment (Strongly Recommended)](#4-virtual-environment-strongly-recommended)
     - [5. Install dependencies](#5-install-dependencies)
     - [6. Dataset - Optional](#6-dataset---optional)
   - [Results - @UPDATE](#results---update)
@@ -166,7 +166,7 @@ make --version
    cd DDoS-Detector
    ```
 
-### 4. Virtual environment (strongly recommended)
+### 4. Virtual environment (Strongly Recommended)
 
 With `make`:
 
