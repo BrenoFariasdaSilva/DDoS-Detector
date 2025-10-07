@@ -334,6 +334,16 @@ def analyze_top_features(df, y, top_features, csv_path="."):
       plt.savefig(f"{output_dir}/{base_dataset_name}-{safe_filename(feature)}.png") # Save the plot
       plt.close() # Close the plot to free memory
 
+def normalize_feature_name(name):
+   """
+   Normalize feature name by stripping whitespace and replacing double spaces with single spaces.
+
+   :param name: The feature name to normalize.
+   :return: Normalized feature name
+   """
+
+   return name.strip().replace("  ", " ") # Strip whitespace and replace double spaces with single spaces
+
 def main():
    """
    Main function.
