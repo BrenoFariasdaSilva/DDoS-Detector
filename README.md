@@ -51,7 +51,6 @@ Project-Description.
     - [4. Virtual environment (strongly recommended)](#4-virtual-environment-strongly-recommended)
     - [5. Install dependencies](#5-install-dependencies)
   - [Run Programing Language Code:](#run-programing-language-code)
-    - [Dependencies](#dependencies)
     - [Dataset - Optional](#dataset---optional)
   - [Usage](#usage)
   - [Results - Optional](#results---optional)
@@ -210,14 +209,6 @@ pip install -r requirements.txt
 ```bash
 # Command here 
 ```
-
-### Dependencies
-
-1. Install the project dependencies with the following command:
-
-   ```bash
-   make dependencies
-   ```
 
 ### Dataset - Optional
 
