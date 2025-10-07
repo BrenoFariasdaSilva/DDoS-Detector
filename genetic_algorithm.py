@@ -456,6 +456,40 @@ def run_genetic_algorithm_feature_selection(df, n_generations=20, population_siz
 
    return best_ind, feature_names, X_train, X_test, y_train, y_test # Return all required values
 
+def run_population_sweep(csv_path, n_generations=20, min_pop=3, max_pop=30, train_test_ratio=0.2):
+   """
+   Run the genetic algorithm for feature selection with population sizes from min_pop to max_pop.
+   Show a progress bar and only save the best result overall.
+   """
+
+   best_score = -1 # Initialize best score
+   best_result = None # Initialize best result
+   results = {} # Dictionary to store results for each population size
+
+   df = load_dataset(csv_path) # Load the dataset
+   for pop_size in tqdm(range(min_pop, max_pop + 1), desc=f"{BackgroundColors.GREEN}Population Sweep{Style.RESET_ALL}", unit="pop"):
+      ga_result = run_genetic_algorithm_feature_selection(df, n_generations=n_generations, population_size=pop_size, train_test_ratio=train_test_ratio) # Run the Genetic Algorithm feature selection
+
+      if ga_result is None: # If running the Genetic Algorithm failed
+         continue # Skip to the next population size
+
+      best_ind, feature_names, X_train, X_test, y_train, y_test = ga_result # Unpack the result
+      best_features = [f for f, bit in zip(feature_names, best_ind) if bit == 1] # Extract best features
+      results[pop_size] = best_features # Store the best features for this population size
+
+      metrics = evaluate_individual(best_ind, X_train, y_train, X_test, y_test) # Evaluate the best individual
+      acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics # Unpack the metrics
+
+      if f1 > best_score: # If the F1-score is better than the best score
+         best_score = f1 # Update the best score
+         best_result = (best_ind, feature_names, X_train, X_test, y_train, y_test) # Update the best result
+
+   if best_result: # After the sweep, if we have a best result
+      best_ind, feature_names, X_train, X_test, y_train, y_test = best_result # Unpack the best result
+      save_and_analyze_results(best_ind, feature_names, X_train, y_train, csv_path) # Save and analyze the best results
+
+   return results # Return the results dictionary
+
 def main():
    """
    Main function.
