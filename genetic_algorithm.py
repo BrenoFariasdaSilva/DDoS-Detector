@@ -518,7 +518,7 @@ def main():
 
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Genetic Algorithm Feature Selection{BackgroundColors.GREEN} program!{Style.RESET_ALL}")
 
-   csv_file = "./DDoS/CICDDoS2019/01-12/DrDoS_DNS.csv"
+   csv_file = "./Datasets/DDoS/CICDDoS2019/01-12/DrDoS_DNS.csv"
 
    sweep_results = run_population_sweep(csv_file, n_generations=20, min_pop=3, max_pop=30, train_test_ratio=0.2)
 
