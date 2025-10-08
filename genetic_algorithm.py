@@ -569,7 +569,7 @@ def main():
 
    csv_file = "./Datasets/DDoS/CICDDoS2019/01-12/DrDoS_DNS.csv"
 
-   sweep_results = run_population_sweep(csv_file, n_generations=20, min_pop=3, max_pop=30, train_test_ratio=0.2)
+   sweep_results = run_population_sweep(csv_file, n_generations=20, min_pop=5, max_pop=30, train_test_ratio=0.2)
 
    print(f"\n{BackgroundColors.GREEN}Summary of best features by population size:{Style.RESET_ALL}") # Print summary of results
    for pop_size, features in sweep_results.items(): # For each population size and its best features
