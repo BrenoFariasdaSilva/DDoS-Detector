@@ -415,19 +415,19 @@ def print_metrics(metrics):
    print(f"   False Negative Rate (FNR): {fnr:.4f}")
    print(f"   Elapsed Time (s): {elapsed_time:.2f}")
 
-def save_best_features(best_features, rfe_ranking, csv_path):
+def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
    """
    Save the best features and their RFE rankings to a results file.
 
    :param best_features: List of best features selected by the Genetic Algorithm.
    :param rfe_ranking: Dictionary of feature names and their RFE rankings.
    :param csv_path: Path to the original CSV file for saving outputs.
+   :param metrics: Dictionary or tuple containing evaluation metrics.
    :return: None
    """
-
-   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Directory to save outputs
-   os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
-   results_file = f"{output_dir}/Genetic_Algorithm_results.txt" # Path to save the results file
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/"  # Directory to save outputs
+   os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
+   results_file = f"{output_dir}/Genetic_Algorithm_results.txt"  # Path to save the results file
 
    with open(results_file, "w") as f: # Open the results file for writing
       f.write("Best Feature Subset:\n") # Write header
@@ -436,7 +436,18 @@ def save_best_features(best_features, rfe_ranking, csv_path):
          rank_info = f" (RFE ranking {rfe_ranking[feat_norm]})" if feat_norm in rfe_ranking else " (RFE ranking N/A)" # Get RFE ranking info
          f.write(f"{i}. {feat_norm}{rank_info}\n") # Write feature and its RFE ranking
 
-def save_and_analyze_results(best_ind, feature_names, X, y, csv_path):
+      if metrics: # If metrics are provided
+         acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics # Unpack metrics
+         f.write("\n\nPerformance Metrics:\n") # Header for metrics section
+         f.write(f"Accuracy: {acc:.4f}\n")
+         f.write(f"Precision: {prec:.4f}\n")
+         f.write(f"Recall: {rec:.4f}\n")
+         f.write(f"F1-Score: {f1:.4f}\n")
+         f.write(f"False Positive Rate (FPR): {fpr:.4f}\n")
+         f.write(f"False Negative Rate (FNR): {fnr:.4f}\n")
+         f.write(f"Elapsed Time (s): {elapsed_time:.2f}\n")
+
+def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=None):
    """
    Save best feature subset and analyze them.
 
@@ -445,6 +456,7 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path):
    :param X: Feature set (DataFrame or numpy array).
    :param y: Target variable (Series or array).
    :param csv_path: Path to the original CSV file for saving outputs.
+   :param metrics: Dictionary or tuple containing evaluation metrics.
    :return: List of best features
    """
 
@@ -453,7 +465,7 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path):
 
    print(f"\n{BackgroundColors.GREEN}Best features subset found: {BackgroundColors.CYAN}{best_features}{Style.RESET_ALL}")
 
-   save_best_features(best_features, rfe_ranking, csv_path) # Save best features and their RFE rankings
+   save_best_features(best_features, rfe_ranking, csv_path, metrics=metrics) # Save best features, rankings, and metrics
 
    if best_features: # If there are best features to analyze
       if not isinstance(X, pd.DataFrame): # If X is not a pandas DataFrame
