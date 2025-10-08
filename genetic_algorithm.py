@@ -415,19 +415,16 @@ def print_metrics(metrics):
    print(f"   False Negative Rate (FNR): {fnr:.4f}")
    print(f"   Elapsed Time (s): {elapsed_time:.2f}")
 
-def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
+def write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=None):
    """
-   Save the best features and their RFE rankings to a results file.
+   Write the best features and their RFE rankings to a results file.
 
    :param best_features: List of best features selected by the Genetic Algorithm.
    :param rfe_ranking: Dictionary of feature names and their RFE rankings.
-   :param csv_path: Path to the original CSV file for saving outputs.
+   :param results_file: Path to the results file for saving outputs.
    :param metrics: Dictionary or tuple containing evaluation metrics.
    :return: None
    """
-   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/"  # Directory to save outputs
-   os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
-   results_file = f"{output_dir}/Genetic_Algorithm_results.txt"  # Path to save the results file
 
    with open(results_file, "w") as f: # Open the results file for writing
       f.write("Best Feature Subset:\n") # Write header
@@ -446,6 +443,22 @@ def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
          f.write(f"False Positive Rate (FPR): {fpr:.4f}\n")
          f.write(f"False Negative Rate (FNR): {fnr:.4f}\n")
          f.write(f"Elapsed Time (s): {elapsed_time:.2f}\n")
+
+def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
+   """
+   Save the best features and their RFE rankings to a results file.
+
+   :param best_features: List of best features selected by the Genetic Algorithm.
+   :param rfe_ranking: Dictionary of feature names and their RFE rankings.
+   :param csv_path: Path to the original CSV file for saving outputs.
+   :param metrics: Dictionary or tuple containing evaluation metrics.
+   :return: None
+   """
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/"  # Directory to save outputs
+   os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
+   results_file = f"{output_dir}/Genetic_Algorithm_results.txt"  # Path to save the results file
+
+   write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=metrics) # Delegate writing to helper function
 
 def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=None):
    """
