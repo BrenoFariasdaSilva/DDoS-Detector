@@ -394,6 +394,27 @@ def extract_rfe_ranking(csv_path):
                
    return rfe_ranking # Return the RFE rankings dictionary
 
+def print_metrics(metrics):
+   """
+   Print performance metrics.
+
+   :param metrics: Dictionary or tuple containing evaluation metrics.
+   :return: None
+   """
+
+   if not metrics: # If metrics is None or empty
+      return # Do nothing
+   
+   acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics
+   print(f"\n{BackgroundColors.GREEN}Performance Metrics for Best Result:{Style.RESET_ALL}")
+   print(f"   Accuracy: {acc:.4f}")
+   print(f"   Precision: {prec:.4f}")
+   print(f"   Recall: {rec:.4f}")
+   print(f"   F1-Score: {f1:.4f}")
+   print(f"   False Positive Rate (FPR): {fpr:.4f}")
+   print(f"   False Negative Rate (FNR): {fnr:.4f}")
+   print(f"   Elapsed Time (s): {elapsed_time:.2f}")
+
 def save_best_features(best_features, rfe_ranking, csv_path):
    """
    Save the best features and their RFE rankings to a results file.
@@ -464,6 +485,7 @@ def run_population_sweep(csv_path, n_generations=20, min_pop=3, max_pop=30, trai
 
    best_score = -1 # Initialize best score
    best_result = None # Initialize best result
+   best_metrics = None # Initialize best metrics
    results = {} # Dictionary to store results for each population size
 
    df = load_dataset(csv_path) # Load the dataset
@@ -482,10 +504,12 @@ def run_population_sweep(csv_path, n_generations=20, min_pop=3, max_pop=30, trai
 
       if f1 > best_score: # If the F1-score is better than the best score
          best_score = f1 # Update the best score
+         best_metrics = metrics # Update the best metrics
          best_result = (best_ind, feature_names, X_train, X_test, y_train, y_test) # Update the best result
 
    if best_result: # After the sweep, if we have a best result
       best_ind, feature_names, X_train, X_test, y_train, y_test = best_result # Unpack the best result
+      print_metrics(best_metrics) # Print the best performance metrics
       save_and_analyze_results(best_ind, feature_names, X_train, y_train, csv_path) # Save and analyze the best results
 
    return results # Return the results dictionary
