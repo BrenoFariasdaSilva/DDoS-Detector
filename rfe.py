@@ -140,6 +140,17 @@ def analyze_top_features(df, y, top_features, csv_path="."):
       plt.savefig(f"{output_dir}/{base_dataset_name}-{safe_filename(feature)}.png") # Save plot
       plt.close() # Close plot to free memory
 
+def verify_filepath_exists(filepath):
+   """
+   Verify if a file or folder exists at the specified path.
+
+   :param filepath: Path to the file or folder
+   :return: True if the file or folder exists, False otherwise
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output the verbose message
+   return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
+
 def run_rfe(csv_path):
    """
    Runs Recursive Feature Elimination on the provided dataset.
@@ -241,17 +252,6 @@ def verbose_output(true_string="", false_string=""):
       print(true_string)
    elif false_string != "": # If a false_string was provided
       print(false_string)
-
-def verify_filepath_exists(filepath):
-   """
-   Verify if a file or folder exists at the specified path.
-
-   :param filepath: Path to the file or folder
-   :return: True if the file or folder exists, False otherwise
-   """
-   
-   verbose_output(f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output the verbose message
-   return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
 
 def play_sound():
    """
