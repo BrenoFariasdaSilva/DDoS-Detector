@@ -186,6 +186,23 @@ def load_and_clean_data(csv_path):
 
    return X, y # Return features and target
 
+def scale_and_split(X, y, test_size=0.2, random_state=42):
+   """
+   Scales numeric features and splits into train/test sets.
+
+   :param X: Features DataFrame
+   :param y: Target Series
+   :param test_size: Proportion of the dataset to include in the test split
+   :param random_state: Random seed for reproducibility
+   :return: X_train, X_test, y_train, y_test
+   """
+
+   scaler = StandardScaler() # Initialize the scaler
+   X_scaled = scaler.fit_transform(X) # Scale the features
+   X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=test_size, random_state=random_state) # Split into train/test sets
+
+   return X_train, X_test, y_train, y_test # Return the split data
+
 def run_rfe(csv_path):
    """
    Runs Recursive Feature Elimination on the provided dataset.
@@ -208,14 +225,7 @@ def run_rfe(csv_path):
    if X is None or y is None: # Exit if loading or cleaning failed
       return # Exit if loading or cleaning failed
 
-   scaler = StandardScaler() # Preprocessing: scale numeric features
-   try: # Try to scale features
-      X_scaled = scaler.fit_transform(X) # Scale features
-   except Exception as exc: # Catch any exception during scaling
-      print(f"{BackgroundColors.RED}Error scaling features: {exc}{Style.RESET_ALL}")
-      return # Exit if scaling fails
-
-   X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42) # Train/test split
+   X_train, X_test, y_train, y_test = scale_and_split(X, y, test_size=0.2, random_state=42) # Scale features and split
 
    model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1) # Base model
 
