@@ -427,22 +427,23 @@ def write_best_features_to_file(best_features, rfe_ranking, results_file, metric
    """
 
    with open(results_file, "w") as f: # Open the results file for writing
-      f.write("Best Feature Subset:\n") # Write header
+      acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics # Unpack metrics
+      f.write("Performance Metrics for the Random Forest Classifier using the best feature subset from the Genetic Algorithm:\n") # Header for metrics section
+      f.write(f"Accuracy: {acc:.4f}\n")
+      f.write(f"Precision: {prec:.4f}\n")
+      f.write(f"Recall: {rec:.4f}\n")
+      f.write(f"F1-Score: {f1:.4f}\n")
+      f.write(f"False Positive Rate (FPR): {fpr:.4f}\n")
+      f.write(f"False Negative Rate (FNR): {fnr:.4f}\n")
+      f.write(f"Elapsed Time (s): {elapsed_time:.2f}\n")
+
+      f.write("\n\nBest Feature Subset using Genetic Algorithm:\n") # Write header
       for i, feat in enumerate(best_features, start=1): # For each best feature
          feat_norm = normalize_feature_name(feat) # Normalize the feature name
          rank_info = f" (RFE ranking {rfe_ranking[feat_norm]})" if feat_norm in rfe_ranking else " (RFE ranking N/A)" # Get RFE ranking info
          f.write(f"{i}. {feat_norm}{rank_info}\n") # Write feature and its RFE ranking
 
-      if metrics: # If metrics are provided
-         acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics # Unpack metrics
-         f.write("\n\nPerformance Metrics:\n") # Header for metrics section
-         f.write(f"Accuracy: {acc:.4f}\n")
-         f.write(f"Precision: {prec:.4f}\n")
-         f.write(f"Recall: {rec:.4f}\n")
-         f.write(f"F1-Score: {f1:.4f}\n")
-         f.write(f"False Positive Rate (FPR): {fpr:.4f}\n")
-         f.write(f"False Negative Rate (FNR): {fnr:.4f}\n")
-         f.write(f"Elapsed Time (s): {elapsed_time:.2f}\n")
+      print(f"\n{BackgroundColors.GREEN}Best features and metrics saved to {BackgroundColors.CYAN}{results_file}{Style.RESET_ALL}") # Notify user
 
 def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
    """
