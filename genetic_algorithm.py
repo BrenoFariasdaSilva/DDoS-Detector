@@ -406,14 +406,14 @@ def print_metrics(metrics):
       return # Do nothing
    
    acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics
-   print(f"\n{BackgroundColors.GREEN}Performance Metrics for Best Result:{Style.RESET_ALL}")
-   print(f"   Accuracy: {acc:.4f}")
-   print(f"   Precision: {prec:.4f}")
-   print(f"   Recall: {rec:.4f}")
-   print(f"   F1-Score: {f1:.4f}")
-   print(f"   False Positive Rate (FPR): {fpr:.4f}")
-   print(f"   False Negative Rate (FNR): {fnr:.4f}")
-   print(f"   Elapsed Time (s): {elapsed_time:.2f}")
+   print(f"\n{BackgroundColors.GREEN}Performance Metrics for the Random Forest Classifier using the best feature subset:{Style.RESET_ALL}")
+   print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{acc:.4f}{Style.RESET_ALL}")
+   print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{prec:.4f}{Style.RESET_ALL}")
+   print(f"   {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{rec:.4f}{Style.RESET_ALL}")
+   print(f"   {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{f1:.4f}{Style.RESET_ALL}")
+   print(f"   {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{fpr:.4f}{Style.RESET_ALL}")
+   print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{fnr:.4f}{Style.RESET_ALL}")
+   print(f"   {BackgroundColors.GREEN}Elapsed Time (s): {BackgroundColors.CYAN}{elapsed_time:.2f}{Style.RESET_ALL}")
 
 def write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=None):
    """
