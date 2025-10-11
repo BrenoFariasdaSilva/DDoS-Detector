@@ -224,6 +224,20 @@ def normalize_feature_name(name):
 
    return re.sub(r'\s+|[^0-9a-zA-Z_]', '_', name) # Replace spaces and special characters with underscores
 
+def extract_top_features(selector, X_columns):
+   """
+   Returns top selected features and their RFE rankings.
+
+   :param selector: Fitted RFE object
+   :param X_columns: Original feature column names
+   :return: top_features list, rfe_ranking dict
+   """
+
+   rfe_ranking = {normalize_feature_name(f): r for f, r in zip(X_columns, selector.ranking_)} # Map normalized feature names to their RFE rankings
+   top_features = [f for f, s in zip(X_columns, selector.support_) if s] # List of top selected features
+
+   return top_features, rfe_ranking # Return the top features and their rankings
+
 def analyze_top_features(df, y, top_features, csv_path="."):
    """
    Analyze distribution of top features for each class and save plots + CSV summary.
@@ -280,6 +294,7 @@ def run_rfe(csv_path):
    selector, model = run_rfe_selector(X_train, y_train) # Run RFE to select top features
 
    metrics = compute_rfe_metrics(selector, model, X_train, X_test, y_train, y_test) # Compute performance metrics
+   top_features, rfe_ranking = extract_top_features(selector, X.columns) # Extract top features and their rankings
 
    output_file = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE_results_{model.__class__.__name__}.txt" # Define output file path
    os.makedirs(os.path.dirname(output_file), exist_ok=True) # Create directory if it doesn't exist
