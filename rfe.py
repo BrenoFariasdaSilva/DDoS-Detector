@@ -239,9 +239,8 @@ def print_top_features(top_features, rfe_ranking):
    print(f"\n{BackgroundColors.BOLD}Top {len(top_features)} features selected by RFE:{Style.RESET_ALL}")
 
    for i, feat in enumerate(top_features, start=1): # Print each top feature with its ranking
-      feat_norm = normalize_feature_name(feat) # Normalize the feature name
-      rank_info = f" {BackgroundColors.GREEN}(RFE ranking {BackgroundColors.CYAN}{rfe_ranking[feat_norm]}{Style.RESET_ALL})" if feat_norm in rfe_ranking else " (RFE ranking N/A)" # Get ranking info
-      print(f"{i}. {feat_norm}{rank_info}") # Print the feature and its ranking
+      rank_info = f" {BackgroundColors.GREEN}(RFE ranking {BackgroundColors.CYAN}{rfe_ranking[feat]}{Style.RESET_ALL})" if feat in rfe_ranking else " (RFE ranking N/A)" # Get ranking info
+      print(f"{i}. {feat}{rank_info}") # Print the feature and its ranking
 
 def save_rfe_results(csv_path, top_features, rfe_ranking, metrics, model_name):
    """
@@ -270,9 +269,8 @@ def save_rfe_results(csv_path, top_features, rfe_ranking, metrics, model_name):
 
       f.write("\n\nBest Feature Subset using Recursive Feature Elimination (RFE)\n") # Write header for features
       for i, feat in enumerate(top_features, start=1): # Write each top feature with its ranking
-         feat_norm = normalize_feature_name(feat) # Normalize the feature name
-         rank_info = f" (RFE ranking {rfe_ranking[feat_norm]})" if feat_norm in rfe_ranking else " (RFE ranking N/A)" # Get ranking info
-         f.write(f"{i}. {feat_norm}{rank_info}\n") # Write the feature and its ranking
+         rank_info = f" (RFE ranking {rfe_ranking[feat]})" if feat in rfe_ranking else " (RFE ranking N/A)" # Get ranking info
+         f.write(f"{i}. {feat}{rank_info}\n") # Write the feature and its ranking
 
    print(f"\n{BackgroundColors.GREEN}Best features and metrics saved to {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}")
 
