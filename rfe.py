@@ -151,6 +151,41 @@ def verify_filepath_exists(filepath):
    verbose_output(f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output the verbose message
    return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
 
+def load_and_clean_data(csv_path):
+   """
+   Loads the CSV dataset, selects numeric features, encodes target if necessary,
+   and drops invalid values.
+
+   :param csv_path: Path to the CSV dataset file
+   :return: X (DataFrame of numeric features), y (target Series)
+   """
+
+   if not verify_filepath_exists(csv_path): # If the CSV file does not exist
+      print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
+      return None, None # Return None if file not found
+
+   print(f"\n{BackgroundColors.GREEN}Loading {BackgroundColors.CYAN}{csv_path}{BackgroundColors.GREEN} CSV dataset file...{Style.RESET_ALL}")
+   df = pd.read_csv(csv_path, low_memory=False) # Load the dataset
+
+   if df.shape[1] < 2: # If there are less than 2 columns
+      print(f"{BackgroundColors.RED}CSV must contain at least one feature column and one target column.{Style.RESET_ALL}")
+      return None, None # Return None if not enough columns
+
+   X = df.iloc[:, :-1] # All columns except the last
+   y = df.iloc[:, -1] # Last column as target
+
+   if y.dtype == object or y.dtype.name == "category": # If target is categorical
+      y, _ = pd.factorize(y) # Encode target labels as integers
+
+   X = X.select_dtypes(include=["number"]).replace([np.inf, -np.inf], np.nan).dropna() # Keep only numeric columns and drop rows with NaN or infinite values
+   y = y[X.index] # Align target with cleaned features
+
+   if X.empty: # If no numeric features remain
+      print(f"{BackgroundColors.RED}No valid numeric features remain after cleaning.{Style.RESET_ALL}")
+      return None, None # Return None if no valid features
+
+   return X, y # Return features and target
+
 def run_rfe(csv_path):
    """
    Runs Recursive Feature Elimination on the provided dataset.
@@ -168,35 +203,10 @@ def run_rfe(csv_path):
       print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
       return # Exit if file does not exist
 
-   print(f"\n{BackgroundColors.GREEN}Loading {BackgroundColors.CYAN}{csv_path}{BackgroundColors.GREEN} CSV dataset file...{Style.RESET_ALL}") # Output loading message
-   df = pd.read_csv(csv_path, low_memory=False) # Disable low_memory to avoid mixed dtype warning
+   X, y = load_and_clean_data(csv_path) # Load and clean dataset
 
-   if df.shape[1] < 2: # Need at least one feature and one target
-      print(f"{BackgroundColors.RED}CSV must contain at least one feature column and one target column.{Style.RESET_ALL}")
-      return # Exit if not enough columns
-
-   X = df.iloc[:, :-1] # Features assumed to be all columns except last
-   y = df.iloc[:, -1] # Target assumed to be last column
-
-   if y.dtype == object or y.dtype == "category": # Encode non-numeric target if necessary
-      y, uniques = pd.factorize(y) # Convert to numeric
-
-   X = X.select_dtypes(include=["number"]) # Keep only numeric features
-
-   X = X.replace([np.inf, -np.inf], np.nan) # Replace infinities with NaN
-
-   X = X.dropna() # Drop rows with NaNs
-
-   y = y[X.index] # Align y with cleaned X
-
-   if X.empty: # Check if any numeric features remain
-      print(f"{BackgroundColors.RED}No valid numeric features remain after cleaning.{Style.RESET_ALL}")
-      return
-
-   """
-   Apply genetic algorithms to select the most relevant features and check for variables correlation.
-   Not only that, i must mesure the great amount of features to select the best ones (1, 2, 5, 10, 15, 20, 25) and the metric must be the F1-Score, false positive rate, accuracy, false negative rate, precision, recall, and the time to train and test the model.
-   """
+   if X is None or y is None: # Exit if loading or cleaning failed
+      return # Exit if loading or cleaning failed
 
    scaler = StandardScaler() # Preprocessing: scale numeric features
    try: # Try to scale features
