@@ -53,18 +53,20 @@ Notes:
 """
 
 import atexit # For playing a sound when the program finishes
-import os # For file and directory operations
-import numpy as np # For numerical operations
-import pandas as pd # For data manipulation
 import matplotlib.pyplot as plt # For plotting
+import numpy as np # For numerical operations
+import os # For file and directory operations
+import pandas as pd # For data manipulation
+import platform # For getting the operating system name
 import re # For regular expressions
 import seaborn as sns # For advanced plots
-import platform # For getting the operating system name
+import time # For measuring elapsed time
 from colorama import Style # For coloring the terminal
+from sklearn.ensemble import RandomForestClassifier # For the Random Forest model
+from sklearn.feature_selection import RFE # For Recursive Feature Elimination
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix # For performance metrics
 from sklearn.model_selection import train_test_split # For splitting the data
 from sklearn.preprocessing import StandardScaler # For scaling the data (standardization)
-from sklearn.feature_selection import RFE # For Recursive Feature Elimination
-from sklearn.ensemble import RandomForestClassifier # For the Random Forest model
 
 # Macros:
 class BackgroundColors: # Colors for the terminal
