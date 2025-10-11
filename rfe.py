@@ -253,6 +253,39 @@ def print_top_features(top_features, rfe_ranking):
       rank_info = f" (RFE ranking {rfe_ranking[feat_norm]})" if feat_norm in rfe_ranking else " (RFE ranking N/A)" # Get ranking info
       print(f"{i}. {feat_norm}{rank_info}") # Print the feature and its ranking
 
+def save_rfe_results(csv_path, top_features, rfe_ranking, metrics, model_name):
+   """
+   Saves top features and optional performance metrics to a structured results file.
+
+   :param csv_path: Original CSV file path
+   :param top_features: List of top features
+   :param rfe_ranking: Dict mapping normalized feature names to RFE rankings
+   :param metrics: Performance metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
+   :param model_name: Name of the classifier
+   """
+
+   output_file = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE_Results.txt" # Define output file path
+   os.makedirs(os.path.dirname(output_file), exist_ok=True) # Create directory if it doesn't exist
+
+   with open(output_file, "w", encoding="utf-8") as f: # Open the output file for writing
+      acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics # Unpack metrics
+      f.write("\nPerformance Metrics for the Random Forest Classifier using the best feature subset from RFE:\n") # Write header
+      f.write(f"Accuracy: {acc:.4f}\n") # Write accuracy
+      f.write(f"Precision: {prec:.4f}\n") # Write precision
+      f.write(f"Recall: {rec:.4f}\n") # Write recall
+      f.write(f"F1-Score: {f1:.4f}\n") # Write F1-score
+      f.write(f"False Positive Rate (FPR): {fpr:.4f}\n") # Write FPR
+      f.write(f"False Negative Rate (FNR): {fnr:.4f}\n") # Write FNR
+      f.write(f"Elapsed Time (s): {elapsed_time:.2f}\n") # Write elapsed time
+
+      f.write("\n\nBest Feature Subset using Recursive Feature Elimination (RFE)\n") # Write header for features
+      for i, feat in enumerate(top_features, start=1): # Write each top feature with its ranking
+         feat_norm = normalize_feature_name(feat) # Normalize the feature name
+         rank_info = f" (RFE ranking {rfe_ranking[feat_norm]})" if feat_norm in rfe_ranking else " (RFE ranking N/A)" # Get ranking info
+         f.write(f"{i}. {feat_norm}{rank_info}\n") # Write the feature and its ranking
+
+   print(f"\n{BackgroundColors.GREEN}Best features and metrics saved to {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}")
+
 def analyze_top_features(df, y, top_features, csv_path="."):
    """
    Analyze distribution of top features for each class and save plots + CSV summary.
@@ -311,19 +344,7 @@ def run_rfe(csv_path):
    metrics = compute_rfe_metrics(selector, model, X_train, X_test, y_train, y_test) # Compute performance metrics
    top_features, rfe_ranking = extract_top_features(selector, X.columns) # Extract top features and their rankings
    print_top_features(top_features, rfe_ranking) # Print top features to terminal
-   output_file = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE_results_{model.__class__.__name__}.txt" # Define output file path
-   os.makedirs(os.path.dirname(output_file), exist_ok=True) # Create directory if it doesn't exist
-
-   with open(output_file, "w", encoding="utf-8") as f: # Write results to file
-      header = f"RFE Results with {n_select} Selected Features and the classifier {model.__class__.__name__}:\n" # Header for the results file
-      f.write(header) # Write header to file
-
-      for idx, (col_idx, feature, status, ranking) in enumerate(results, start=1): # Write each result to the file
-         plain_status = "Selected" if "Selected" in status else "Not Selected" # Plain text status
-         line = f"{idx} - Column {col_idx}: {feature}: {plain_status} (Rank {ranking})" # Format line
-         f.write(line + "\n") # Write line to file
-
-   top_features = [feature for (_, feature, status, ranking) in results if "Selected" in status] # List of top features
+   save_rfe_results(csv_path, top_features, rfe_ranking, metrics, model.__class__.__name__) # Save results to file
 
    if top_features: # Analyze top features if any were selected
       analyze_top_features(X, y, top_features, csv_path=csv_path) # Analyze top features
