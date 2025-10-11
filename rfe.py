@@ -222,38 +222,54 @@ def run_rfe_selector(X_train, y_train, n_select=10):
 
    return selector, model # Return the fitted selector and model
 
+def compute_rfe_metrics(selector, model, X_train, X_test, y_train, y_test):
+   """
+   Computes performance metrics using the RFE-selected estimator.
+
+   :param selector: Fitted RFE object
+   :param model: Base estimator used in RFE
+   :param X_train: Training features
+   :param X_test: Testing features
+   :param y_train: Training target
+   :param y_test: Testing target
+   :return: metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
+   """
+
+   start_time = time.time() # Start time measurement
+   y_pred = selector.estimator_.fit(X_train, y_train).predict(X_test) # Fit and predict using the RFE-selected estimator
+   acc = accuracy_score(y_test, y_pred) # Calculate accuracy
+   prec = precision_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate precision
+   rec = recall_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate recall
+   f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate F1-score
+
+   if len(np.unique(y_test)) == 2: # If binary classification
+      tn, fp, fn, tp = confusion_matrix(y_test, y_pred, labels=[0, 1]).ravel() # Get confusion matrix values
+      fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # Calculate false positive rate
+      fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # Calculate false negative rate
+   else: # For multi-class classification
+      fpr, fnr = 0, 0 # Set FPR and FNR to 0
+
+   elapsed_time = time.time() - start_time # Calculate elapsed time
+   return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return the metrics
+
 def run_rfe(csv_path):
    """
-   Runs Recursive Feature Elimination on the provided dataset.
+   Runs Recursive Feature Elimination on the provided dataset, prints top features,
+   and saves structured results including optional performance metrics.
 
-   Assumptions:
-   - The dataset is a CSV.
-   - The last column is the target.
-   - Features are all other columns.
-
-   :param csv_path: Path to the CSV file
+   :param csv_path: Path to the CSV dataset file
    :return: None
    """
 
-   if not verify_filepath_exists(csv_path): # Check file existence early
-      print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
-      return # Exit if file does not exist
+   X, y = load_and_clean_data(csv_path) # Load and clean the dataset
 
-   X, y = load_and_clean_data(csv_path) # Load and clean dataset
+   if X is None or y is None: # If loading failed
+      return # Exit the function
 
-   if X is None or y is None: # Exit if loading or cleaning failed
-      return # Exit if loading or cleaning failed
+   X_train, X_test, y_train, y_test = scale_and_split(X, y) # Scale and split the data
+   selector, model = run_rfe_selector(X_train, y_train) # Run RFE to select top features
 
-   X_train, X_test, y_train, y_test = scale_and_split(X, y, test_size=0.2, random_state=42) # Scale features and split
-
-   selector, model = run_rfe_selector(X_train, y_train, n_select=10) # Run RFE and get fitted selector and model
-
-   results = [] # Create a list with index, feature, selection status, and ranking
-   for idx, (feature, selected, ranking) in enumerate(zip(X.columns, selector.support_, selector.ranking_)):
-      status = f"{BackgroundColors.GREEN}Selected{Style.RESET_ALL}" if selected else f"{BackgroundColors.YELLOW}Not Selected{Style.RESET_ALL}"
-      results.append((idx, feature, status, ranking)) # Append tuple to results
-
-   results.sort(key=lambda x: x[3]) # Sort results by ranking (ascending: 1 = most important)
+   metrics = compute_rfe_metrics(selector, model, X_train, X_test, y_train, y_test) # Compute performance metrics
 
    output_file = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE_results_{model.__class__.__name__}.txt" # Define output file path
    os.makedirs(os.path.dirname(output_file), exist_ok=True) # Create directory if it doesn't exist
