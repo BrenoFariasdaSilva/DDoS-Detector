@@ -102,44 +102,6 @@ def safe_filename(name):
 
    return re.sub(r'[\\/*?:"<>|]', "_", name) # Replace invalid characters with underscores
 
-def analyze_top_features(df, y, top_features, csv_path="."):
-   """
-   Analyze distribution of top features for each class and save plots + CSV summary.
-   Numeric values are rounded to 3 decimal places.
-
-   :param df: The DataFrame containing the features
-   :param y: The target variable (class labels)
-   :param top_features: List of top feature names to analyze
-   :param csv_path: Path to the original CSV file (used for naming output files)
-   :return: None
-   """
-
-   df_analysis = df[top_features].copy() # Create a copy of the DataFrame with only the top features
-   df_analysis["Target"] = pd.Series(y, index=df_analysis.index).astype(str) # Add the target column as string for better plotting
-
-   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Define output directory
-   os.makedirs(output_dir, exist_ok=True) # Create directory if it doesn't exist
-
-   base_dataset_name = os.path.splitext(os.path.basename(csv_path))[0] # Base name of the dataset without extension
-
-   summary = df_analysis.groupby("Target")[top_features].agg(["mean", "std"]) # Group by target and calculate mean and std
-   summary.columns = [f"{col}_{stat}" for col, stat in summary.columns] # Flatten MultiIndex columns
-   summary = summary.round(3) # Round to 3 decimal places
-
-   summary_csv_path = f"{output_dir}/{base_dataset_name}_feature_summary.csv" # Define summary CSV path
-   summary.to_csv(summary_csv_path, encoding="utf-8") # Save summary to CSV
-   print(f"Feature summary saved to: {summary_csv_path}") # Output the path to the summary CSV
-
-   for feature in top_features: # Plot distribution for each top feature
-      plt.figure(figsize=(8, 5)) # Set figure size
-      sns.boxplot(x="Target", y=feature, data=df_analysis, hue="Target", palette="Set2", dodge=False) # Boxplot
-      plt.title(f"Distribution of '{feature}' by class") # Set title
-      plt.xlabel("Traffic Type") # Set x-axis label
-      plt.ylabel(feature) # Set y-axis label
-      plt.tight_layout() # Adjust layout
-      plt.savefig(f"{output_dir}/{base_dataset_name}-{safe_filename(feature)}.png") # Save plot
-      plt.close() # Close plot to free memory
-
 def verify_filepath_exists(filepath):
    """
    Verify if a file or folder exists at the specified path.
@@ -251,6 +213,44 @@ def compute_rfe_metrics(selector, model, X_train, X_test, y_train, y_test):
 
    elapsed_time = time.time() - start_time # Calculate elapsed time
    return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return the metrics
+
+def analyze_top_features(df, y, top_features, csv_path="."):
+   """
+   Analyze distribution of top features for each class and save plots + CSV summary.
+   Numeric values are rounded to 3 decimal places.
+
+   :param df: The DataFrame containing the features
+   :param y: The target variable (class labels)
+   :param top_features: List of top feature names to analyze
+   :param csv_path: Path to the original CSV file (used for naming output files)
+   :return: None
+   """
+
+   df_analysis = df[top_features].copy() # Create a copy of the DataFrame with only the top features
+   df_analysis["Target"] = pd.Series(y, index=df_analysis.index).astype(str) # Add the target column as string for better plotting
+
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Define output directory
+   os.makedirs(output_dir, exist_ok=True) # Create directory if it doesn't exist
+
+   base_dataset_name = os.path.splitext(os.path.basename(csv_path))[0] # Base name of the dataset without extension
+
+   summary = df_analysis.groupby("Target")[top_features].agg(["mean", "std"]) # Group by target and calculate mean and std
+   summary.columns = [f"{col}_{stat}" for col, stat in summary.columns] # Flatten MultiIndex columns
+   summary = summary.round(3) # Round to 3 decimal places
+
+   summary_csv_path = f"{output_dir}/{base_dataset_name}_feature_summary.csv" # Define summary CSV path
+   summary.to_csv(summary_csv_path, encoding="utf-8") # Save summary to CSV
+   print(f"Feature summary saved to: {summary_csv_path}") # Output the path to the summary CSV
+
+   for feature in top_features: # Plot distribution for each top feature
+      plt.figure(figsize=(8, 5)) # Set figure size
+      sns.boxplot(x="Target", y=feature, data=df_analysis, hue="Target", palette="Set2", dodge=False) # Boxplot
+      plt.title(f"Distribution of '{feature}' by class") # Set title
+      plt.xlabel("Traffic Type") # Set x-axis label
+      plt.ylabel(feature) # Set y-axis label
+      plt.tight_layout() # Adjust layout
+      plt.savefig(f"{output_dir}/{base_dataset_name}-{safe_filename(feature)}.png") # Save plot
+      plt.close() # Close plot to free memory
 
 def run_rfe(csv_path):
    """
