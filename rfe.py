@@ -258,7 +258,7 @@ def save_rfe_results(csv_path, top_features, rfe_ranking, metrics, model_name):
 
    with open(output_file, "w", encoding="utf-8") as f: # Open the output file for writing
       acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics # Unpack metrics
-      f.write("\nPerformance Metrics for the Random Forest Classifier using the best feature subset from RFE:\n") # Write header
+      f.write("Performance Metrics for the Random Forest Classifier using the best feature subset from RFE:\n") # Write header
       f.write(f"Accuracy: {acc:.4f}\n") # Write accuracy
       f.write(f"Precision: {prec:.4f}\n") # Write precision
       f.write(f"Recall: {rec:.4f}\n") # Write recall
@@ -267,7 +267,7 @@ def save_rfe_results(csv_path, top_features, rfe_ranking, metrics, model_name):
       f.write(f"False Negative Rate (FNR): {fnr:.4f}\n") # Write FNR
       f.write(f"Elapsed Time (s): {elapsed_time:.2f}\n") # Write elapsed time
 
-      f.write("\n\nBest Feature Subset using Recursive Feature Elimination (RFE)\n") # Write header for features
+      f.write("\nBest Feature Subset using Recursive Feature Elimination (RFE)\n") # Write header for features
       for i, feat in enumerate(top_features, start=1): # Write each top feature with its ranking
          rank_info = f" (RFE ranking {rfe_ranking[feat]})" if feat in rfe_ranking else " (RFE ranking N/A)" # Get ranking info
          f.write(f"{i}. {feat}{rank_info}\n") # Write the feature and its ranking
