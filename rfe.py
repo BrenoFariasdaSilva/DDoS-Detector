@@ -214,6 +214,16 @@ def compute_rfe_metrics(selector, model, X_train, X_test, y_train, y_test):
    elapsed_time = time.time() - start_time # Calculate elapsed time
    return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return the metrics
 
+def normalize_feature_name(name):
+   """
+   Normalize feature names for consistent output (remove special characters, spaces, etc.).
+
+   :param name: Original feature name
+   :return: Normalized feature name
+   """
+
+   return re.sub(r'\s+|[^0-9a-zA-Z_]', '_', name) # Replace spaces and special characters with underscores
+
 def analyze_top_features(df, y, top_features, csv_path="."):
    """
    Analyze distribution of top features for each class and save plots + CSV summary.
