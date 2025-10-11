@@ -238,6 +238,21 @@ def extract_top_features(selector, X_columns):
 
    return top_features, rfe_ranking # Return the top features and their rankings
 
+def print_top_features(top_features, rfe_ranking):
+   """
+   Prints top features and their RFE rankings to the terminal.
+
+   :param top_features: List of top features
+   :param rfe_ranking: Dict mapping normalized feature names to RFE rankings
+   """
+
+   print(f"\n{BackgroundColors.BOLD}Top {len(top_features)} features selected by RFE:{Style.RESET_ALL}")
+
+   for i, feat in enumerate(top_features, start=1): # Print each top feature with its ranking
+      feat_norm = normalize_feature_name(feat) # Normalize the feature name
+      rank_info = f" (RFE ranking {rfe_ranking[feat_norm]})" if feat_norm in rfe_ranking else " (RFE ranking N/A)" # Get ranking info
+      print(f"{i}. {feat_norm}{rank_info}") # Print the feature and its ranking
+
 def analyze_top_features(df, y, top_features, csv_path="."):
    """
    Analyze distribution of top features for each class and save plots + CSV summary.
@@ -295,7 +310,7 @@ def run_rfe(csv_path):
 
    metrics = compute_rfe_metrics(selector, model, X_train, X_test, y_train, y_test) # Compute performance metrics
    top_features, rfe_ranking = extract_top_features(selector, X.columns) # Extract top features and their rankings
-
+   print_top_features(top_features, rfe_ranking) # Print top features to terminal
    output_file = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE_results_{model.__class__.__name__}.txt" # Define output file path
    os.makedirs(os.path.dirname(output_file), exist_ok=True) # Create directory if it doesn't exist
 
