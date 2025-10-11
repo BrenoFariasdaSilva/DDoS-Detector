@@ -346,8 +346,8 @@ def run_rfe(csv_path):
    print_top_features(top_features, rfe_ranking) # Print top features to terminal
    save_rfe_results(csv_path, top_features, rfe_ranking, metrics, model.__class__.__name__) # Save results to file
 
-   if top_features: # Analyze top features if any were selected
-      analyze_top_features(X, y, top_features, csv_path=csv_path) # Analyze top features
+   if top_features: # If there are top features to analyze
+      analyze_top_features(X, y, top_features, csv_path=csv_path) # Analyze and visualize top features
 
 def verbose_output(true_string="", false_string=""):
    """
