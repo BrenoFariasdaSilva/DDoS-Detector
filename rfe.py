@@ -250,7 +250,7 @@ def print_top_features(top_features, rfe_ranking):
 
    for i, feat in enumerate(top_features, start=1): # Print each top feature with its ranking
       feat_norm = normalize_feature_name(feat) # Normalize the feature name
-      rank_info = f" (RFE ranking {rfe_ranking[feat_norm]})" if feat_norm in rfe_ranking else " (RFE ranking N/A)" # Get ranking info
+      rank_info = f" {BackgroundColors.GREEN}(RFE ranking {BackgroundColors.CYAN}{rfe_ranking[feat_norm]}{Style.RESET_ALL})" if feat_norm in rfe_ranking else " (RFE ranking N/A)" # Get ranking info
       print(f"{i}. {feat_norm}{rank_info}") # Print the feature and its ranking
 
 def save_rfe_results(csv_path, top_features, rfe_ranking, metrics, model_name):
@@ -312,7 +312,7 @@ def analyze_top_features(df, y, top_features, csv_path="."):
 
    summary_csv_path = f"{output_dir}/{base_dataset_name}_feature_summary.csv" # Define summary CSV path
    summary.to_csv(summary_csv_path, encoding="utf-8") # Save summary to CSV
-   print(f"Feature summary saved to: {summary_csv_path}") # Output the path to the summary CSV
+   print(f"{BackgroundColors.GREEN}Feature summary saved to {BackgroundColors.CYAN}{summary_csv_path}{Style.RESET_ALL}")
 
    for feature in top_features: # Plot distribution for each top feature
       plt.figure(figsize=(8, 5)) # Set figure size
