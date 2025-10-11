@@ -455,9 +455,10 @@ def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
    :param metrics: Dictionary or tuple containing evaluation metrics.
    :return: None
    """
+
    output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/"  # Directory to save outputs
    os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
-   results_file = f"{output_dir}/Genetic_Algorithm_results.txt"  # Path to save the results file
+   results_file = f"{output_dir}/Genetic_Algorithm_Results.txt"  # Path to save the results file
 
    write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=metrics) # Delegate writing to helper function
 
