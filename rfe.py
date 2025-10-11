@@ -203,6 +203,25 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
 
    return X_train, X_test, y_train, y_test # Return the split data
 
+def run_rfe_selector(X_train, y_train, n_select=10):
+   """
+   Runs RFE with RandomForestClassifier and returns the selector object.
+
+   :param X_train: Training features
+   :param y_train: Training target
+   :param n_select: Number of features to select
+   :return: selector (fitted RFE object)
+   """
+
+   model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1) # Initialize the Random Forest model
+   n_features = X_train.shape[1] # Get the number of features
+   n_select = n_select if n_features >= n_select else n_features # Adjust n_select if more than available features
+
+   selector = RFE(model, n_features_to_select=n_select, step=1) # Initialize RFE
+   selector = selector.fit(X_train, y_train) # Fit RFE
+
+   return selector, model # Return the fitted selector and model
+
 def run_rfe(csv_path):
    """
    Runs Recursive Feature Elimination on the provided dataset.
@@ -227,13 +246,7 @@ def run_rfe(csv_path):
 
    X_train, X_test, y_train, y_test = scale_and_split(X, y, test_size=0.2, random_state=42) # Scale features and split
 
-   model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1) # Base model
-
-   n_features = X.shape[1] # Number of features
-   n_select = 10 if n_features >= 10 else n_features # Select up to 10 features or all if fewer
-
-   selector = RFE(model, n_features_to_select=n_select, step=1) # RFE setup
-   selector = selector.fit(X_train, y_train) # Fit RFE
+   selector, model = run_rfe_selector(X_train, y_train, n_select=10) # Run RFE and get fitted selector and model
 
    results = [] # Create a list with index, feature, selection status, and ranking
    for idx, (feature, selected, ranking) in enumerate(zip(X.columns, selector.support_, selector.ranking_)):
