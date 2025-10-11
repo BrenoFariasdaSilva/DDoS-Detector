@@ -536,8 +536,8 @@ def run_population_sweep(csv_path, n_generations=20, min_pop=3, max_pop=30, trai
 
    if best_result: # After the sweep, if we have a best result
       best_ind, feature_names, X_train, X_test, y_train, y_test = best_result # Unpack the best result
-      print_metrics(best_metrics) # Print the best performance metrics
-      save_and_analyze_results(best_ind, feature_names, X_train, y_train, csv_path) # Save and analyze the best results
+      print_metrics(best_metrics) if VERBOSE else None # Print the best metrics if VERBOSE is True
+      save_and_analyze_results(best_ind, feature_names, X_train, y_train, csv_path, metrics=best_metrics) # Save and analyze the best results
 
    return results # Return the results dictionary
 
