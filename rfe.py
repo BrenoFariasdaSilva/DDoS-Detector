@@ -343,6 +343,7 @@ def run_rfe(csv_path):
 
    metrics = compute_rfe_metrics(selector, model, X_train, X_test, y_train, y_test) # Compute performance metrics
    top_features, rfe_ranking = extract_top_features(selector, X.columns) # Extract top features and their rankings
+
    print_top_features(top_features, rfe_ranking) # Print top features to terminal
    save_rfe_results(csv_path, top_features, rfe_ranking, metrics, model.__class__.__name__) # Save results to file
 
