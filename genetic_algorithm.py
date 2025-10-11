@@ -311,7 +311,7 @@ def analyze_top_features(df, y, top_features, csv_path="."):
    df_analysis = df[top_features].copy() # Create a copy of the DataFrame with only the top features
    df_analysis["Target"] = pd.Series(y, index=df_analysis.index).astype(str) # Add the target variable to the DataFrame
 
-   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Directory to save outputs
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis" # Directory to save outputs
    os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
 
    base_dataset_name = os.path.splitext(os.path.basename(csv_path))[0] # Base name of the dataset
@@ -322,7 +322,7 @@ def analyze_top_features(df, y, top_features, csv_path="."):
 
    summary_csv_path = f"{output_dir}/{base_dataset_name}_feature_summary.csv" # Path to save the summary CSV
    summary.to_csv(summary_csv_path, encoding="utf-8") # Save the summary to a CSV file
-   print(f"\n{BackgroundColors.GREEN}Feature summary saved to {BackgroundColors.CYAN}{summary_csv_path}{Style.RESET_ALL}") # Notify user
+   print(f"\n{BackgroundColors.GREEN}Features summary saved to {BackgroundColors.CYAN}{summary_csv_path}{Style.RESET_ALL}") # Notify user
 
    for feature in top_features: # For each top feature
       plt.figure(figsize=(8, 5)) # Create a new figure
