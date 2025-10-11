@@ -573,10 +573,11 @@ def main():
 
    sweep_results = run_population_sweep(csv_file, n_generations=20, min_pop=5, max_pop=30, train_test_ratio=0.2)
 
-   print(f"\n{BackgroundColors.GREEN}Summary of best features by population size:{Style.RESET_ALL}") # Print summary of results
-   for pop_size, features in sweep_results.items(): # For each population size and its best features
-      print(f"  Pop {pop_size}: {len(features)} features -> {features}") # Print the population size and the best features
-
+   if VERBOSE and sweep_results: # If VERBOSE is True and there are results
+      print(f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}") # Print detailed results
+      for pop_size, features in sweep_results.items(): # For each population size and its best features
+         print(f"  Pop {pop_size}: {len(features)} features -> {features}") # Print the population size and the best features
+   
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
 
    atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None # Register the play_sound function to be called when the program finishes
