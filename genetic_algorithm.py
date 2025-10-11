@@ -437,7 +437,7 @@ def write_best_features_to_file(best_features, rfe_ranking, results_file, metric
       f.write(f"False Negative Rate (FNR): {fnr:.4f}\n")
       f.write(f"Elapsed Time (s): {elapsed_time:.2f}\n")
 
-      f.write("\n\nBest Feature Subset using Genetic Algorithm:\n") # Write header
+      f.write("\nBest Feature Subset using Genetic Algorithm:\n") # Write header
       for i, feat in enumerate(best_features, start=1): # For each best feature
          feat_norm = normalize_feature_name(feat) # Normalize the feature name
          rank_info = f" (RFE ranking {rfe_ranking[feat_norm]})" if feat_norm in rfe_ranking else " (RFE ranking N/A)" # Get RFE ranking info
