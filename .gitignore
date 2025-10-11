@@ -1,6 +1,8 @@
 # System Files
 **/.DS_Store
 **/Thumbs.db
+Icon? # match Icon<CR>
+**/Icon? # explicit: match at any nested level
 
 # Ignore the Windows .Desktop Files
 **/desktop.ini
