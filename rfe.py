@@ -214,16 +214,6 @@ def compute_rfe_metrics(selector, model, X_train, X_test, y_train, y_test):
    elapsed_time = time.time() - start_time # Calculate elapsed time
    return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return the metrics
 
-def normalize_feature_name(name):
-   """
-   Normalize feature names for consistent output (remove special characters, spaces, etc.).
-
-   :param name: Original feature name
-   :return: Normalized feature name
-   """
-
-   return re.sub(r'\s+|[^0-9a-zA-Z_]', '_', name) # Replace spaces and special characters with underscores
-
 def extract_top_features(selector, X_columns):
    """
    Returns top selected features and their RFE rankings.
@@ -233,7 +223,7 @@ def extract_top_features(selector, X_columns):
    :return: top_features list, rfe_ranking dict
    """
 
-   rfe_ranking = {normalize_feature_name(f): r for f, r in zip(X_columns, selector.ranking_)} # Map normalized feature names to their RFE rankings
+   rfe_ranking = {f: r for f, r in zip(X_columns, selector.ranking_)} # Map normalized feature names to their RFE rankings
    top_features = [f for f, s in zip(X_columns, selector.support_) if s] # List of top selected features
 
    return top_features, rfe_ranking # Return the top features and their rankings
