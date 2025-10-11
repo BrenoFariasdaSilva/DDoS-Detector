@@ -92,51 +92,6 @@ RUN_FUNCTIONS = {
 
 # Functions Definitions:
 
-def verbose_output(true_string="", false_string=""):
-   """
-   Outputs a message if the VERBOSE constant is set to True.
-
-   :param true_string: The string to be outputted if the VERBOSE constant is set to True.
-   :param false_string: The string to be outputted if the VERBOSE constant is set to False.
-   :return: None
-   """
-   
-   if VERBOSE and true_string != "": # If VERBOSE is True and a true_string was provided
-      print(true_string)
-   elif false_string != "": # If a false_string was provided
-      print(false_string)
-
-def verify_filepath_exists(filepath):
-   """
-   Verify if a file or folder exists at the specified path.
-
-   :param filepath: Path to the file or folder
-   :return: True if the file or folder exists, False otherwise
-   """
-   
-   verbose_output(f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output the verbose message
-   return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
-
-def play_sound():
-   """
-   Plays a sound when the program finishes and skips if the operating system is Windows.
-
-   :param: None
-   :return: None
-   """
-   
-   current_os = platform.system() # Get the current operating system
-   if current_os == "Windows": # If the current operating system is Windows
-      return # Do nothing
-
-   if verify_filepath_exists(SOUND_FILE): # If the sound file exists
-      if current_os in SOUND_COMMANDS: # If the platform.system() is in the SOUND_COMMANDS dictionary
-         os.system(f"{SOUND_COMMANDS[current_os]} {SOUND_FILE}") # Play the sound
-      else: # If the platform.system() is not in the SOUND_COMMANDS dictionary
-         print(f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not in the {BackgroundColors.CYAN}SOUND_COMMANDS dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}")
-   else: # If the sound file does not exist
-      print(f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{SOUND_FILE}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}")
-
 def safe_filename(name):
    """
    Converts a string to a safe filename by replacing invalid characters with underscores.
@@ -272,6 +227,51 @@ def run_rfe(csv_path):
 
    if top_features: # Analyze top features if any were selected
       analyze_top_features(X, y, top_features, csv_path=csv_path) # Analyze top features
+
+def verbose_output(true_string="", false_string=""):
+   """
+   Outputs a message if the VERBOSE constant is set to True.
+
+   :param true_string: The string to be outputted if the VERBOSE constant is set to True.
+   :param false_string: The string to be outputted if the VERBOSE constant is set to False.
+   :return: None
+   """
+   
+   if VERBOSE and true_string != "": # If VERBOSE is True and a true_string was provided
+      print(true_string)
+   elif false_string != "": # If a false_string was provided
+      print(false_string)
+
+def verify_filepath_exists(filepath):
+   """
+   Verify if a file or folder exists at the specified path.
+
+   :param filepath: Path to the file or folder
+   :return: True if the file or folder exists, False otherwise
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output the verbose message
+   return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
+
+def play_sound():
+   """
+   Plays a sound when the program finishes and skips if the operating system is Windows.
+
+   :param: None
+   :return: None
+   """
+   
+   current_os = platform.system() # Get the current operating system
+   if current_os == "Windows": # If the current operating system is Windows
+      return # Do nothing
+
+   if verify_filepath_exists(SOUND_FILE): # If the sound file exists
+      if current_os in SOUND_COMMANDS: # If the platform.system() is in the SOUND_COMMANDS dictionary
+         os.system(f"{SOUND_COMMANDS[current_os]} {SOUND_FILE}") # Play the sound
+      else: # If the platform.system() is not in the SOUND_COMMANDS dictionary
+         print(f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not in the {BackgroundColors.CYAN}SOUND_COMMANDS dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}")
+   else: # If the sound file does not exist
+      print(f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{SOUND_FILE}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}")
 
 def main():
    """
