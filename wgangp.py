@@ -157,6 +157,36 @@ class CSVFlowDataset(Dataset):
       y = int(self.labels[idx]) # Get encoded label
       return x, y # Return (features, label)
 
+class ResidualBlockFC(nn.Module):
+   """
+   Simple fully-connected residual block used in the generator.
+   
+   :param dim: input and output dimensionality of the block
+   """
+   
+   def __init__(self, dim): # Constructor taking the input/output dimension
+      """
+      Simple residual fully-connected block used in the generator.
+
+      :param dim: input and output dimensionality of the block
+      """
+      super().__init__() # Initialize the parent nn.Module class
+
+      self.net = nn.Sequential( # Define the residual transformation path
+         nn.Linear(dim, dim), # First linear projection
+         nn.BatchNorm1d(dim), # Normalize activations
+         nn.LeakyReLU(0.2, inplace=True), # Apply nonlinearity
+         nn.Linear(dim, dim), # Second linear projection
+         nn.BatchNorm1d(dim), # Second batch normalization
+      ) # End of sequential block
+
+      self.act = nn.LeakyReLU(0.2, inplace=True) # Activation after merging residual shortcut
+
+   def forward(self, x): # Forward computation of the block
+      out = self.net(x) # Compute residual branch output
+      out = out + x # Apply skip connection
+      return self.act(out) # Apply activation to merged result
+
 # Functions Definitions:
 
 def verbose_output(true_string="", false_string=""):
