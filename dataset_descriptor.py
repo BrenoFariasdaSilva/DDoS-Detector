@@ -90,6 +90,31 @@ def verbose_output(true_string="", false_string=""):
    elif false_string != "": # If the false_string is set
       print(false_string) # Output the false statement string
 
+def get_files_to_process(directory_path, file_extension=".csv"):
+   """
+   Get all of the specified files in a directory (non-recursive).
+   
+   :param directory_path: Path to the directory to search
+   :param file_extension: File extension to filter (default: .csv)
+   :return: List of files with the specified extension
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Getting all {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files in the directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}") # Output the verbose message
+
+   if not os.path.isdir(directory_path): # If the path is not a directory
+      verbose_output(f"{BackgroundColors.RED}The specified path is not a directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}") # Output the verbose message
+      return [] # Return an empty list
+
+   files = [] # List to store the files
+
+   for item in os.listdir(directory_path): # List all items in the directory
+      item_path = os.path.join(directory_path, item) # Get the full path of the item
+      
+      if os.path.isfile(item_path) and item.lower().endswith(file_extension): # If the item is a file and has the specified extension
+         files.append(item_path) # Add the file to the list
+
+   return sorted(files) # Return sorted list for consistency
+
 def verify_filepath_exists(filepath):
    """
    Verify if a file or folder exists at the specified path.
@@ -434,12 +459,18 @@ def main():
 
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Dataset Descriptor{BackgroundColors.GREEN}!{Style.RESET_ALL}", end="\n\n") # Output the Welcome message
 
-   input_path = "./DDoS/CICDDoS2019/03-11/" # Path to the CSV file
+   input_path = "./Datasets/DDoS/CICDDoS2019/01-12/" # Path to the CSV file
+   if not verify_filepath_exists(input_path): # Verify if the directory exists
+      print(f"{BackgroundColors.RED}The specified input path does not exist: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}") # Output the error message
+      return # Exit the program
+   
+   files_to_process = get_files_to_process(input_path, file_extension=".csv") # Get all CSV files in the input path
 
-   if verify_filepath_exists(input_path): # Verify if the input path exists
-      generate_dataset_report(input_path=input_path, low_memory=True) # Generate the dataset report
-   else: # If the input path does not exist
-      print(f"{BackgroundColors.RED}Input path does not exist: {input_path}{Style.RESET_ALL}") # Output the error message
+   for file in files_to_process: # Output each file to be processed
+      print(f"{BackgroundColors.YELLOW}Found file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}") # Output the found file
+      success = generate_dataset_report(file, file_extension=".csv", low_memory=True, output_filename="_dataset_descriptor.csv") # Generate the dataset report for each file
+      if not success: # If the report was not generated successfully
+         print(f"{BackgroundColors.RED}Failed to generate dataset report for file: {file}{Style.RESET_ALL}") # Output the failure message
 
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
 
