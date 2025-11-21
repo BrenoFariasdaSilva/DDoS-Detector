@@ -90,6 +90,73 @@ RUN_FUNCTIONS = {
    "Play Sound": True, # Set to True to play a sound when the program finishes
 }
 
+# Classes Definitions:
+
+class CSVFlowDataset(Dataset):
+   """
+   Initialize the CSVFlowDataset.
+   This class loads flow data from a CSV file, applies scaling to features,
+
+   :param csv_path: Path to CSV file containing flows and labels.
+   :param label_col: Column name that contains the class labels.
+   :param feature_cols: Optional list of feature column names. If None, all columns except label_col are used.
+   :param scaler: Optional pre-fitted StandardScaler to use for features.
+   :param label_encoder: Optional pre-fitted LabelEncoder to transform labels.
+   :param fit_scaler: If True and scaler is None, fit a new StandardScaler on the data.
+   :return: None
+   """
+
+   def __init__( # Begin constructor for initializing the dataset
+      self, # Instance reference
+      csv_path: str, # Path pointing to the CSV file
+      label_col: str, # Column containing class labels
+      feature_cols: Optional[List[str]] = None, # Optional list of selected features
+      scaler: Optional[StandardScaler] = None, # Optional feature scaler
+      label_encoder: Optional[LabelEncoder] = None, # Optional label encoder
+      fit_scaler: bool = True # Whether to fit scaler on data
+   ): # Close constructor signature
+      df = pd.read_csv(csv_path) # Load CSV file into a DataFrame
+
+      if feature_cols is None: # When user does not specify features
+         feature_cols = [c for c in df.columns if c != label_col] # Select every column except label
+
+      self.label_col = label_col # Save label column name
+      self.feature_cols = feature_cols # Save list of feature columns
+
+      self.labels_raw = df[label_col].values.astype(str) # Extract raw labels and convert to strings
+
+      self.labels: Any # Must be Any or Pylance will error
+
+      if label_encoder is None: # If no label encoder is given
+         self.label_encoder = LabelEncoder() # Create a fresh label encoder
+         self.labels = self.label_encoder.fit_transform(self.labels_raw) # Fit encoder and encode labels
+      else: # If encoder is provided
+         self.label_encoder = label_encoder # Store provided encoder
+         self.labels = self.label_encoder.transform(self.labels_raw) # Encode labels with given encoder
+
+      X = df[feature_cols].values.astype(np.float32) # Extract features and cast to float32
+
+      if scaler is None: # If no scaler is provided
+         self.scaler = StandardScaler() # Instantiate a default scaler
+         if fit_scaler: # Fit scaler when requested
+            self.X = self.scaler.fit_transform(X) # Fit and transform features
+         else: # Do not fit scaler
+            self.X = self.scaler.transform(X) # Only transform features
+      else: # Scaler is provided
+         self.scaler = scaler # Store provided scaler
+         self.X = self.scaler.transform(X) # Transform features with external scaler
+
+      self.n_classes = len(self.label_encoder.classes_) # Count number of unique classes
+      self.feature_dim = self.X.shape[1] # Determine dimensionality of features
+
+   def __len__(self): # Return number of samples in the dataset
+      return len(self.X) # Return number of feature vectors
+
+   def __getitem__(self, idx): # Fetch one item by index
+      x = self.X[idx] # Get feature row
+      y = int(self.labels[idx]) # Get encoded label
+      return x, y # Return (features, label)
+
 # Functions Definitions:
 
 def verbose_output(true_string="", false_string=""):
