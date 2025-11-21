@@ -258,6 +258,30 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
 		"pca_object": pca
 	}
 
+def print_pca_results(results):
+	"""
+	Prints PCA results in a formatted way.
+
+	:param results: Dictionary containing PCA evaluation results
+	:return: None
+	"""
+	
+	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}PCA Results (n_components={results['n_components']}):{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}Explained Variance Ratio: {BackgroundColors.CYAN}{results['explained_variance']:.4f} ({results['explained_variance']*100:.2f}%){Style.RESET_ALL}")
+	print(f"\n  {BackgroundColors.BOLD}10-Fold Cross-Validation Metrics (Training Set):{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}CV Accuracy: {BackgroundColors.CYAN}{results['cv_accuracy']:.4f}{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}CV Precision: {BackgroundColors.CYAN}{results['cv_precision']:.4f}{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}CV Recall: {BackgroundColors.CYAN}{results['cv_recall']:.4f}{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}CV F1-Score: {BackgroundColors.CYAN}{results['cv_f1_score']:.4f}{Style.RESET_ALL}")
+	print(f"\n  {BackgroundColors.BOLD}Test Set Metrics:{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}Test Accuracy: {BackgroundColors.CYAN}{results['test_accuracy']:.4f}{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}Test Precision: {BackgroundColors.CYAN}{results['test_precision']:.4f}{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}Test Recall: {BackgroundColors.CYAN}{results['test_recall']:.4f}{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}Test F1-Score: {BackgroundColors.CYAN}{results['test_f1_score']:.4f}{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}Test FPR: {BackgroundColors.CYAN}{results['test_fpr']:.4f}{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}Test FNR: {BackgroundColors.CYAN}{results['test_fnr']:.4f}{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{results['elapsed_time']:.2f}s{Style.RESET_ALL}")
+
 def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32]):
 	"""
 	Runs PCA analysis with different numbers of components and evaluates performance.
