@@ -318,7 +318,20 @@ def verbose_output(true_string="", false_string=""):
       print(true_string) # Output the true statement string
    elif false_string != "": # If the false_string is set
       print(false_string) # Output the false statement string
-      
+
+def set_seed(seed: int):
+   """
+   Sets random seeds for reproducibility across all libraries.
+
+   :param seed: The seed value to use for all random number generators
+   :return: None
+   """
+
+   random.seed(seed) # Set Python random seed for reproducibility
+   np.random.seed(seed) # Set NumPy random seed for reproducibility
+   torch.manual_seed(seed) # Set PyTorch CPU seed for reproducibility
+   torch.cuda.manual_seed_all(seed) # Set CUDA seed for all devices
+
 def train(args):
    """
    Train the WGAN-GP model using the provided arguments.
