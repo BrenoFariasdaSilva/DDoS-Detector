@@ -43,6 +43,7 @@ Output:
 """
 
 import atexit # For playing a sound when the program finishes
+import matplotlib.pyplot as plt # For plotting
 import numpy as np # For numerical operations
 import os # For running a command in the terminal
 import pandas as pd # For data manipulation
@@ -257,6 +258,56 @@ def compute_tsne_separability(df, label_col, random_state=42):
       verbose_output(f"{BackgroundColors.RED}t-SNE separability computation failed: {e}{Style.RESET_ALL}") # Output verbose message
       return "N/A" # Return "N/A" if computation fails
 
+def save_tsne_plot(df, label_col, dataset_name, output_dir="Results", random_state=42):
+   """
+   Generates and saves a 3D t-SNE scatter plot colored by class labels.
+
+   The plot visually represents class separability in a 3D embedding space.
+
+   :param df: pandas DataFrame
+   :param label_col: Label column name
+   :param dataset_name: Dataset filename (used for naming the PNG)
+   :param output_dir: Directory to save the PNG image (default: "Results")
+   :param random_state: Random seed for reproducibility
+   """
+
+   if label_col is None or label_col not in df.columns:
+      return # Skip if no labels present
+
+   numeric_df = df.select_dtypes(include=["float64", "int64", "Int64"]) # Select numeric columns
+   if numeric_df.empty:
+      return # Skip if no numeric features
+
+   try: # Try to generate t-SNE plot
+      tsne = TSNE(n_components=3, random_state=random_state, init="pca", learning_rate="auto") # Initialize t-SNE
+      tsne_result = tsne.fit_transform(numeric_df.fillna(0)) # Fit and transform numeric features
+
+      tsne_df = pd.DataFrame(tsne_result, columns=["TSNE1", "TSNE2", "TSNE3"]) # Create DataFrame with t-SNE results
+      tsne_df[label_col] = df[label_col].values # Add label column
+
+      fig = plt.figure(figsize=(8, 6)) # Create figure
+      ax = fig.add_subplot(111, projection="3d") # Add 3D subplot
+
+      for label in tsne_df[label_col].unique(): # Plot each class separately
+         subset = tsne_df[tsne_df[label_col] == label] # Subset for the class
+         ax.scatter(subset["TSNE1"], subset["TSNE2"], subset["TSNE3"], s=30, alpha=0.8, label=str(label)) # Scatter plot for the class
+
+      ax.set_title(f"3D t-SNE Class Distribution – {dataset_name}", fontsize=12) # Set title
+      ax.set_xlabel("TSNE1") # Set x-axis label
+      ax.set_ylabel("TSNE2") # Set y-axis label
+      ax.set_zlabel("TSNE3") # Set z-axis label
+      ax.legend(title=label_col, loc="best", fontsize=8) # Add legend
+      plt.tight_layout() # Adjust layout
+
+      os.makedirs(output_dir, exist_ok=True) # Ensure output directory exists
+      image_path = os.path.join(output_dir, f"TSNE_3D_{os.path.splitext(dataset_name)[0]}.png") # Image path
+      plt.savefig(image_path, dpi=150) # Save the figure
+      plt.close() # Close the plot to free memory
+
+      verbose_output(f"{BackgroundColors.GREEN}3D t-SNE plot saved: {image_path}{Style.RESET_ALL}")
+   except Exception as e: # Handle exceptions gracefully
+      verbose_output(f"{BackgroundColors.RED}3D t-SNE plot generation failed: {e}{Style.RESET_ALL}")
+
 def get_dataset_info(filepath, low_memory=True):
    """
    Extracts dataset information from a CSV file and returns it as a dictionary.
@@ -276,6 +327,7 @@ def get_dataset_info(filepath, low_memory=True):
    missing_summary = summarize_missing_values(df) # Summarize missing values
    classes_str, class_dist_str = summarize_classes(df, label_col) # Summarize classes and distributions
    tsne_separability = compute_tsne_separability(df, label_col) # Compute t-SNE separability score
+   save_tsne_plot(df, label_col, os.path.basename(filepath)) # Generate and save 3D t-SNE visualization
 
    return { # Return the dataset information as a dictionary
       "Dataset Name": os.path.basename(filepath),
