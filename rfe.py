@@ -129,6 +129,8 @@ def load_and_clean_data(csv_path):
    print(f"\n{BackgroundColors.GREEN}Loading {BackgroundColors.CYAN}{csv_path}{BackgroundColors.GREEN} CSV dataset file...{Style.RESET_ALL}")
    df = pd.read_csv(csv_path, low_memory=False) # Load the dataset
 
+   df.columns = df.columns.str.strip() # Clean column names by stripping leading/trailing whitespace
+
    if df.shape[1] < 2: # If there are less than 2 columns
       print(f"{BackgroundColors.RED}CSV must contain at least one feature column and one target column.{Style.RESET_ALL}")
       return None, None # Return None if not enough columns
