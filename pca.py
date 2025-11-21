@@ -112,6 +112,53 @@ def verify_filepath_exists(filepath):
 	verbose_output(f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output the verbose message
 	return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
 
+def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32]):
+	"""
+	Runs PCA analysis with different numbers of components and evaluates performance.
+
+	:param csv_path: Path to the CSV dataset file
+	:param n_components_list: List of component counts to test
+	:return: None
+	"""
+
+	X, y = load_and_clean_data(csv_path) # Load and clean the dataset
+	
+	if X is None or y is None: # If loading failed
+		return # Exit the function
+	
+	max_components = min(X.shape[1], max(n_components_list)) # Maximum valid components
+	n_components_list = [n for n in n_components_list if n <= max_components] # Filter valid component counts
+	
+	if not n_components_list: # If no valid component counts remain
+		print(f"{BackgroundColors.RED}No valid component counts. Dataset has only {X.shape[1]} features.{Style.RESET_ALL}")
+		return # Exit the function
+	
+	print(f"\n{BackgroundColors.CYAN}PCA Configuration:{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}• Testing components: {BackgroundColors.CYAN}{n_components_list}{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}• Evaluation: {BackgroundColors.CYAN}10-Fold Stratified Cross-Validation{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}• Model: {BackgroundColors.CYAN}Random Forest (100 estimators){Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}• Split: {BackgroundColors.CYAN}80/20 (train/test){Style.RESET_ALL}\n")
+	
+	X_train, X_test, y_train, y_test, scaler = scale_and_split(X, y) # Scale and split the data
+	
+	all_results = [] # List to store all results
+	
+	for n_components in tqdm(n_components_list, desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}", unit="config"): # Loop over each number of components
+		print(f"\n{BackgroundColors.BOLD}Testing PCA with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}")
+		
+		results = apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components) # Apply PCA and evaluate
+		all_results.append(results) # Store the results
+		print_pca_results(results) if VERBOSE else None # Print results if VERBOSE is True
+	
+	save_pca_results(csv_path, all_results) # Save all results to files
+	
+	best_result = max(all_results, key=lambda x: x['cv_f1_score']) # Find the best configuration based on CV F1-Score
+ 
+	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Best Configuration:{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}n_components = {BackgroundColors.CYAN}{best_result['n_components']}{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}CV F1-Score = {BackgroundColors.CYAN}{best_result['cv_f1_score']:.4f}{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}Explained Variance = {BackgroundColors.CYAN}{best_result['explained_variance']:.4f}{Style.RESET_ALL}")
+
 def play_sound():
    """
    Plays a sound when the program finishes and skips if the operating system is Windows.
