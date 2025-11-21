@@ -160,6 +160,23 @@ def load_and_clean_data(csv_path):
 	
 	return X, y # Return features and target
 
+def scale_and_split(X, y, test_size=0.2, random_state=42):
+	"""
+	Scales numeric features and splits into train/test sets.
+
+	:param X: Features DataFrame
+	:param y: Target Series
+	:param test_size: Proportion of the dataset to include in the test split
+	:param random_state: Random seed for reproducibility
+	:return: X_train, X_test, y_train, y_test, scaler
+	"""
+
+	scaler = StandardScaler() # Initialize the scaler
+	X_scaled = scaler.fit_transform(X) # Scale the features
+	X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=test_size, random_state=random_state, stratify=y) # Split into train/test sets
+
+	return X_train, X_test, y_train, y_test, scaler # Return the split data and scaler
+
 def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32]):
 	"""
 	Runs PCA analysis with different numbers of components and evaluates performance.
