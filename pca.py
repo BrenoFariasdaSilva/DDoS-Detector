@@ -282,6 +282,78 @@ def print_pca_results(results):
 	print(f"  {BackgroundColors.GREEN}Test FNR: {BackgroundColors.CYAN}{results['test_fnr']:.4f}{Style.RESET_ALL}")
 	print(f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{results['elapsed_time']:.2f}s{Style.RESET_ALL}")
 
+def save_pca_results(csv_path, all_results):
+	"""
+	Saves PCA results to a structured text file and CSV comparison.
+
+	:param csv_path: Original CSV file path
+	:param all_results: List of result dictionaries from different PCA configurations
+	:return: None
+	"""
+
+	output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Output directory
+	os.makedirs(output_dir, exist_ok=True) # Create output directory if it doesn't exist
+	
+	output_file = f"{output_dir}/PCA_Results.txt" # Output text file path
+	with open(output_file, "w", encoding="utf-8") as f: # Open the output file for writing
+		f.write("="*80 + "\n")
+		f.write("Principal Component Analysis (PCA) Feature Extraction Results\n")
+		f.write("="*80 + "\n\n")
+		f.write("Configuration:\n")
+		f.write("  - Evaluation Method: 10-Fold Stratified Cross-Validation\n")
+		f.write("  - Model: Random Forest Classifier (100 estimators)\n")
+		f.write("  - Train/Test Split: 80/20\n")
+		f.write("  - Scaling: StandardScaler (z-score normalization)\n\n")
+		
+		for i, results in enumerate(all_results, 1): # Loop over each configuration's results
+			f.write(f"\n{'='*80}\n")
+			f.write(f"Configuration {i}: PCA with {results['n_components']} Components\n")
+			f.write(f"{'='*80}\n\n")
+			f.write(f"Explained Variance Ratio: {results['explained_variance']:.4f} ({results['explained_variance']*100:.2f}%)\n\n")
+			
+			f.write("10-Fold Cross-Validation Metrics (Training Set):\n")
+			f.write(f"  Accuracy:  {results['cv_accuracy']:.4f}\n")
+			f.write(f"  Precision: {results['cv_precision']:.4f}\n")
+			f.write(f"  Recall:    {results['cv_recall']:.4f}\n")
+			f.write(f"  F1-Score:  {results['cv_f1_score']:.4f}\n\n")
+			
+			f.write("Test Set Metrics:\n")
+			f.write(f"  Accuracy:  {results['test_accuracy']:.4f}\n")
+			f.write(f"  Precision: {results['test_precision']:.4f}\n")
+			f.write(f"  Recall:    {results['test_recall']:.4f}\n")
+			f.write(f"  F1-Score:  {results['test_f1_score']:.4f}\n")
+			f.write(f"  FPR:       {results['test_fpr']:.4f}\n")
+			f.write(f"  FNR:       {results['test_fnr']:.4f}\n")
+			f.write(f"  Training Time: {results['elapsed_time']:.2f}s\n")
+	
+	print(f"\n{BackgroundColors.GREEN}Detailed results saved to {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}")
+	
+	comparison_data = [] # List to store comparison data
+	for results in all_results: # Loop over each configuration's results
+		comparison_data.append({ # Append results to comparison data
+			"n_components": results['n_components'],
+			"explained_variance": round(results['explained_variance'], 4),
+			"cv_accuracy": round(results['cv_accuracy'], 4),
+			"cv_precision": round(results['cv_precision'], 4),
+			"cv_recall": round(results['cv_recall'], 4),
+			"cv_f1_score": round(results['cv_f1_score'], 4),
+			"test_accuracy": round(results['test_accuracy'], 4),
+			"test_precision": round(results['test_precision'], 4),
+			"test_recall": round(results['test_recall'], 4),
+			"test_f1_score": round(results['test_f1_score'], 4),
+			"test_fpr": round(results['test_fpr'], 4),
+			"test_fnr": round(results['test_fnr'], 4),
+			"training_time_s": round(results['elapsed_time'], 2)
+		})
+	
+	comparison_df = pd.DataFrame(comparison_data) # Create DataFrame from comparison data
+	csv_output = f"{output_dir}/PCA_Comparison.csv" # Output CSV file path
+	comparison_df.to_csv(csv_output, index=False) # Save comparison DataFrame to CSV
+	print(f"{BackgroundColors.GREEN}Comparison CSV saved to {BackgroundColors.CYAN}{csv_output}{Style.RESET_ALL}")
+	
+	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}PCA Configuration Comparison:{Style.RESET_ALL}")
+	print(comparison_df.to_string(index=False)) if VERBOSE else None
+
 def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32]):
 	"""
 	Runs PCA analysis with different numbers of components and evaluates performance.
