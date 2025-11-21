@@ -449,6 +449,69 @@ def train(args):
 
    print("Training finished.") # Print final training completion message
 
+def generate(args):
+   """
+   Generate synthetic samples from a saved generator checkpoint.
+
+   :param args: parsed arguments namespace containing generation options
+   :return: None
+   """
+
+   device = torch.device("cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu") # Select device for generation
+   ckpt = torch.load(args.checkpoint, map_location=device) # Load checkpoint from disk
+   args_ck = ckpt.get("args", {}) # Retrieve saved arguments from checkpoint
+   scaler = ckpt.get("scaler", None) # Try to get scaler from checkpoint
+   label_encoder = ckpt.get("label_encoder", None) # Try to get label encoder from checkpoint
+
+   if scaler is None or label_encoder is None: # If scaler or label encoder missing
+      if args.csv_path is None: # Check if CSV path is provided
+         raise RuntimeError("Checkpoint missing scaler/label_encoder. Provide --csv_path to reconstruct them.") # Raise error if not
+      tmp_ds = CSVFlowDataset(args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols) # Rebuild dataset to get scaler and encoder
+      scaler = tmp_ds.scaler # Use scaler from rebuilt dataset
+      label_encoder = tmp_ds.label_encoder # Use label encoder from rebuilt dataset
+
+   if args.feature_dim is not None: # If feature dimension is provided
+      feature_dim = args.feature_dim # Use provided feature dimension
+   else:
+      if scaler is not None and hasattr(scaler, "mean_"):
+         feature_dim = scaler.mean_.shape[0] # Infer feature dimension from scaler
+      else:
+         raise RuntimeError("Unable to determine feature dimension; provide --feature_dim or a checkpoint with scaler.") # Raise error if not available
+   n_classes = len(label_encoder.classes_) # Get number of classes from label encoder
+
+   G = Generator(latent_dim=args.latent_dim, feature_dim=feature_dim, n_classes=n_classes,
+      hidden_dims=args.g_hidden, embed_dim=args.embed_dim, n_resblocks=args.n_resblocks).to(device) # Initialize generator model
+   G.load_state_dict(ckpt["state_dict"] if "state_dict" in ckpt else ckpt) # Load generator weights from checkpoint
+   G.eval() # Set generator to evaluation mode
+
+   n = args.n_samples # Number of samples to generate
+   if args.label is not None: # If a specific label is requested
+      labels = np.array([args.label] * n, dtype=np.int64) # Create array of repeated label
+   else:
+      labels = np.random.randint(0, n_classes, size=(n,), dtype=np.int64) # Sample labels uniformly
+
+   batch_size = args.gen_batch_size # Set generation batch size
+   all_fake = [] # List to store generated feature batches
+   all_labels = [] # List to store corresponding labels
+   with torch.no_grad(): # Disable gradient computation for generation
+      for i in range(0, n, batch_size): # Loop over batches for generation
+         b = min(batch_size, n - i) # Calculate current batch size
+         z = torch.randn(b, args.latent_dim, device=device) # Sample noise for batch
+         y = torch.from_numpy(labels[i:i + b]).to(device, dtype=torch.long) # Convert labels to tensor
+         fake = G(z, y).cpu().numpy() # Generate fake samples and move to CPU
+         all_fake.append(fake) # Append generated features to list
+         all_labels.append(labels[i:i + b]) # Append labels to list
+
+   X_fake = np.vstack(all_fake) # Stack all generated feature batches
+   Y_fake = np.concatenate(all_labels) # Concatenate all label arrays
+
+   X_orig = scaler.inverse_transform(X_fake) # Inverse transform features to original scale
+
+   df = pd.DataFrame(X_orig, columns=args.feature_cols if args.feature_cols is not None else [f"f{i}" for i in range(feature_dim)]) # Create DataFrame for generated data
+   df[args.label_col] = label_encoder.inverse_transform(Y_fake) # Map integer labels back to original strings
+   df.to_csv(args.out_file, index=False) # Save generated data to CSV file
+   print(f"Saved {n} generated samples to {args.out_file}") # Print completion message
+
 def verify_filepath_exists(filepath):
    """
    Verify if a file or folder exists at the specified path.
