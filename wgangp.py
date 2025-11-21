@@ -319,6 +319,45 @@ def verbose_output(true_string="", false_string=""):
    elif false_string != "": # If the false_string is set
       print(false_string) # Output the false statement string
 
+def parse_args():
+   """
+   Parse command-line arguments and return namespace.
+   
+   :return: parsed arguments namespace
+   """
+
+   p = argparse.ArgumentParser(description="DRCGAN-like WGAN-GP for CICDDoS2019 features") # Create argument parser
+   p.add_argument("--mode", choices=["train", "gen"], required=True) # Add mode argument
+   p.add_argument("--csv_path", type=str, default=None, help="Path to CSV (training data) - required for training.") # Add CSV path argument
+   p.add_argument("--label_col", type=str, default="Label", help="Column name for class label") # Add label column argument
+   p.add_argument("--feature_cols", nargs="+", default=None, help="List of feature column names (if omitted, use all except label)") # Add feature columns argument
+   p.add_argument("--out_dir", type=str, default="outputs", help="Where to save models/logs") # Add output directory argument
+   p.add_argument("--epochs", type=int, default=60) # Add epochs argument
+   p.add_argument("--batch_size", type=int, default=64) # Add batch size argument
+   p.add_argument("--latent_dim", type=int, default=100) # Add latent dimension argument
+   p.add_argument("--g_hidden", nargs="+", type=int, default=[256, 512]) # Add generator hidden layers argument
+   p.add_argument("--d_hidden", nargs="+", type=int, default=[512, 256, 128]) # Add discriminator hidden layers argument
+   p.add_argument("--embed_dim", type=int, default=32) # Add embedding dimension argument
+   p.add_argument("--n_resblocks", type=int, default=3) # Add number of residual blocks argument
+   p.add_argument("--critic_steps", type=int, default=5) # Add critic steps argument
+   p.add_argument("--lr", type=float, default=1e-4) # Add learning rate argument
+   p.add_argument("--beta1", type=float, default=0.5) # Add beta1 argument for Adam optimizer
+   p.add_argument("--beta2", type=float, default=0.9) # Add beta2 argument for Adam optimizer
+   p.add_argument("--lambda_gp", type=float, default=10.0, dest="lambda_gp") # Add gradient penalty lambda argument
+   p.add_argument("--seed", type=int, default=42) # Add seed argument for reproducibility
+   p.add_argument("--save_every", type=int, default=5) # Add save frequency argument
+   p.add_argument("--log_interval", type=int, default=50) # Add log interval argument
+   p.add_argument("--sample_batch", type=int, default=16) # Add sample batch argument
+   p.add_argument("--force_cpu", action="store_true") # Add force CPU argument
+   p.add_argument("--checkpoint", type=str, default=None, help="Path to generator checkpoint for generation") # Add checkpoint argument
+   p.add_argument("--n_samples", type=int, default=1000) # Add number of samples argument
+   p.add_argument("--label", type=int, default=None, help="If set, generate samples for this class id only") # Add label argument for generation
+   p.add_argument("--out_file", type=str, default="generated.csv") # Add output file argument
+   p.add_argument("--gen_batch_size", type=int, default=256) # Add generation batch size argument
+   p.add_argument("--feature_dim", type=int, default=None, help="If known, supply feature dim") # Add feature dimension argument
+   p.add_argument("--gen_only", action="store_true") # Add generation only flag
+   return p.parse_args() # Parse arguments and return namespace
+
 def set_seed(seed: int):
    """
    Sets random seeds for reproducibility across all libraries.
