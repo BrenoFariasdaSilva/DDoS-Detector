@@ -43,10 +43,13 @@ Output:
 """
 
 import atexit # For playing a sound when the program finishes
+import numpy as np # For numerical operations
 import os # For running a command in the terminal
 import pandas as pd # For data manipulation
 import platform # For getting the operating system name
 from colorama import Style # For coloring the terminal
+from itertools import combinations # For computing pairwise combinations
+from sklearn.manifold import TSNE # For data separability analysis
 
 # Macros:
 class BackgroundColors: # Colors for the terminal
@@ -213,6 +216,47 @@ def summarize_classes(df, label_col):
    
    return "None", "None" # Return "None" if no label column
 
+def compute_tsne_separability(df, label_col, random_state=42):
+   """
+   Computes a basic t-SNE separability score for the dataset.
+
+   The score is based on the average Euclidean distance between class centroids
+   in the 2D t-SNE projection. A higher value indicates better class separability.
+
+   :param df: pandas DataFrame
+   :param label_col: Name of the label column
+   :param random_state: Random seed for reproducibility (default: 42)
+   :return: Float separability score, or "N/A" if not applicable
+   """
+
+   verbose_output(f"{BackgroundColors.YELLOW}Computing t-SNE separability score...{Style.RESET_ALL}") # Output verbose message
+
+   if label_col is None or label_col not in df.columns: # If no label column is found
+      return "N/A" # Return "N/A"
+
+   numeric_df = df.select_dtypes(include=["float64", "int64", "Int64"]) # Select numeric columns
+   if numeric_df.empty: # If there are no numeric features
+      return "N/A" # Return "N/A"
+
+   try: # Try to compute t-SNE
+      tsne = TSNE(n_components=2, random_state=random_state, init="pca", learning_rate="auto") # Initialize t-SNE
+      tsne_result = tsne.fit_transform(numeric_df.fillna(0)) # Fit and transform numeric features
+
+      temp_df = pd.DataFrame(tsne_result, columns=["TSNE1", "TSNE2"]) # Create DataFrame with t-SNE results
+      temp_df[label_col] = df[label_col].values # Add label column
+
+      centroids = temp_df.groupby(label_col)[["TSNE1", "TSNE2"]].mean() # Compute class centroids
+      if len(centroids) < 2: # If less than 2 classes exist
+         return "N/A" # Return "N/A"
+
+      distances = [np.linalg.norm(c1 - c2) for c1, c2 in combinations(centroids.values, 2)] # Compute distances
+      separability_score = float(np.mean(distances)) # Average distance as score
+
+      return round(separability_score, 4) # Return rounded score
+   except Exception as e: # Handle exceptions gracefully
+      verbose_output(f"{BackgroundColors.RED}t-SNE separability computation failed: {e}{Style.RESET_ALL}") # Output verbose message
+      return "N/A" # Return "N/A" if computation fails
+
 def get_dataset_info(filepath, low_memory=True):
    """
    Extracts dataset information from a CSV file and returns it as a dictionary.
@@ -231,6 +275,7 @@ def get_dataset_info(filepath, low_memory=True):
    n_samples, n_features, n_numeric, n_int, n_categorical, n_other, categorical_cols_str = summarize_features(df) # Summarize features
    missing_summary = summarize_missing_values(df) # Summarize missing values
    classes_str, class_dist_str = summarize_classes(df, label_col) # Summarize classes and distributions
+   tsne_separability = compute_tsne_separability(df, label_col) # Compute t-SNE separability score
 
    return { # Return the dataset information as a dictionary
       "Dataset Name": os.path.basename(filepath),
@@ -240,7 +285,8 @@ def get_dataset_info(filepath, low_memory=True):
       "Categorical Features (object/string)": categorical_cols_str,
       "Missing Values": missing_summary,
       "Classes": classes_str,
-      "Class Distribution": class_dist_str
+      "Class Distribution": class_dist_str,
+      "t-SNE Separability Score": tsne_separability,
    }
 
 def write_report(report_rows, base_dir, output_filename):
