@@ -255,6 +255,54 @@ class Generator(nn.Module):
       out = self.out(x) # Produce final feature vector
       return out # Return generated sample
 
+class Discriminator(nn.Module):
+   """
+   Conditional critic/discriminator: takes feature vector concatenated with label embedding.
+   Returns scalar score (Wasserstein critic).
+   
+   :param feature_dim: dimensionality of input feature vectors
+   """
+
+   def __init__( # Constructor for critic network
+      self,
+      feature_dim: int, # Dimensionality of feature vectors
+      n_classes: int, # Number of class labels
+      hidden_dims: Optional[List[int]] = None, # Optional critic architecture
+      embed_dim: int = 32 # Embedding dimension for labels
+   ): # End signature
+      """
+      Conditional critic/discriminator network that scores (x, y).
+
+      :param feature_dim: dimensionality of input feature vector
+      :param n_classes: number of classes for conditioning
+      :param hidden_dims: list of hidden layer sizes
+      :param embed_dim: dimensionality of label embedding
+      """
+
+      super().__init__() # Initialize discriminator internals
+
+      if hidden_dims is None: # Assign default architecture when unspecified
+         hidden_dims = [512, 256, 128] # Standard critic hierarchy
+
+      self.embed = nn.Embedding(n_classes, embed_dim) # Store label embedding table
+
+      input_dim = feature_dim + embed_dim # Combined input dimension
+      layers = [] # List to accumulate layers
+      prev = input_dim # Initialize previous width
+
+      for h in hidden_dims: # Build critic layers
+         layers.append(nn.Linear(prev, h)) # Linear transformation
+         layers.append(nn.LeakyReLU(0.2, inplace=True)) # Activation function
+         prev = h # Update width tracker
+
+      layers.append(nn.Linear(prev, 1)) # Output layer producing scalar score
+      self.net = nn.Sequential(*layers) # Create critic network
+
+   def forward(self, x, y): # Compute critic score
+      y_e = self.embed(y) # Convert label to embedding
+      inp = torch.cat([x, y_e], dim=1) # Join features with embedding
+      return self.net(inp).squeeze(1) # Produce scalar score
+
 # Functions Definitions:
 
 def verbose_output(true_string="", false_string=""):
