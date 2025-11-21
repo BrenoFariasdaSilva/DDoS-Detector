@@ -1,17 +1,18 @@
-# Detect system Python dynamically
-PYTHON := $(shell command -v python3 2>/dev/null || command -v python)
+# Variables
 VENV := venv
 OS := $(shell uname 2>/dev/null || echo Windows)
 
-# Detect correct Python and Pip commands for venv
+# Detect correct Python and Pip commands based on OS
 ifeq ($(OS), Windows)
+	PYTHON := $(VENV)/Scripts/python.exe
 	PIP := $(VENV)/Scripts/pip.exe
-	PYTHON_VENV := $(VENV)/Scripts/python.exe
+	PYTHON_CMD := python
 	CLEAR_CMD := cls
 	TIME_CMD :=
 else
+	PYTHON := $(VENV)/bin/python3
 	PIP := $(VENV)/bin/pip
-	PYTHON_VENV := $(VENV)/bin/python
+	PYTHON_CMD := python3
 	CLEAR_CMD := clear
 	TIME_CMD := time
 endif
