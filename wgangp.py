@@ -318,6 +318,90 @@ def verbose_output(true_string="", false_string=""):
       print(true_string) # Output the true statement string
    elif false_string != "": # If the false_string is set
       print(false_string) # Output the false statement string
+      
+def train(args):
+   """
+   Train the WGAN-GP model using the provided arguments.
+
+   :param args: parsed arguments namespace containing training configuration
+   :return: None
+   """
+
+   device = torch.device("cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu") # Select device for training
+   set_seed(args.seed) # Set random seed for reproducibility
+
+   dataset = CSVFlowDataset(args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols) # Load dataset from CSV
+   dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=4) # Create dataloader for batching
+
+   feature_dim = dataset.feature_dim # Get feature dimensionality from dataset
+   n_classes = dataset.n_classes # Get number of label classes from dataset
+
+   G = Generator(latent_dim=args.latent_dim, feature_dim=feature_dim, n_classes=n_classes,
+      hidden_dims=args.g_hidden, embed_dim=args.embed_dim, n_resblocks=args.n_resblocks).to(device) # Initialize generator model
+   D = Discriminator(feature_dim=feature_dim, n_classes=n_classes,
+      hidden_dims=args.d_hidden, embed_dim=args.embed_dim).to(device) # Initialize discriminator model
+
+   opt_D = torch.optim.Adam(D.parameters(), lr=args.lr, betas=(args.beta1, args.beta2)) # Create optimizer for discriminator
+   opt_G = torch.optim.Adam(G.parameters(), lr=args.lr, betas=(args.beta1, args.beta2)) # Create optimizer for generator
+
+   fixed_noise = torch.randn(args.sample_batch, args.latent_dim, device=device) # Generate fixed noise for inspection
+   fixed_labels = torch.randint(0, n_classes, (args.sample_batch,), device=device) # Generate fixed labels for inspection
+
+   os.makedirs(args.out_dir, exist_ok=True) # Ensure output directory exists
+   step = 0 # Initialize global step counter
+
+   for epoch in range(args.epochs): # Loop over epochs
+      for real_x_np, labels_np in dataloader: # Loop over batches in dataloader
+         real_x = real_x_np.to(device) # Move real features to device
+         labels = labels_np.to(device, dtype=torch.long) # Move labels to device and set type
+
+         loss_D = torch.tensor(0.0, device=device) # Initialize discriminator loss
+         gp = torch.tensor(0.0, device=device) # Initialize gradient penalty
+         for _ in range(args.critic_steps): # Train discriminator multiple steps
+            z = torch.randn(args.batch_size, args.latent_dim, device=device) # Sample noise for discriminator step
+            fake_x = G(z, labels).detach() # Generate fake samples and detach for discriminator
+            d_real = D(real_x, labels) # Get discriminator score for real samples
+            d_fake = D(fake_x, labels) # Get discriminator score for fake samples
+            gp = gradient_penalty(D, real_x, fake_x, labels, device) # Compute gradient penalty
+
+            loss_D = d_fake.mean() - d_real.mean() + args.lambda_gp * gp # Calculate WGAN-GP discriminator loss
+
+            opt_D.zero_grad() # Zero discriminator gradients
+            loss_D.backward() # Backpropagate discriminator loss
+            opt_D.step() # Update discriminator parameters
+
+         z = torch.randn(args.batch_size, args.latent_dim, device=device) # Sample noise for generator step
+         gen_labels = torch.randint(0, n_classes, (args.batch_size,), device=device) # Sample labels for generator
+         fake_x = G(z, gen_labels) # Generate fake samples with generator
+         g_loss = -D(fake_x, gen_labels).mean() # Calculate generator loss
+
+         opt_G.zero_grad() # Zero generator gradients
+         g_loss.backward() # Backpropagate generator loss
+         opt_G.step() # Update generator parameters
+
+         if step % args.log_interval == 0: # Log training progress periodically
+            print(f"[Epoch {epoch}/{args.epochs}] step {step} | loss_D: {loss_D.item():.4f} | loss_G: {g_loss.item():.4f} | gp: {gp.item():.4f}") # Print training status
+         step += 1 # Increment global step counter
+
+      if (epoch + 1) % args.save_every == 0 or epoch == args.epochs - 1: # Save checkpoints periodically
+         g_path = os.path.join(args.out_dir, f"generator_epoch{epoch+1}.pt") # Path for generator checkpoint
+         d_path = os.path.join(args.out_dir, f"discriminator_epoch{epoch+1}.pt") # Path for discriminator checkpoint
+         torch.save({
+            "epoch": epoch + 1, # Save current epoch number
+            "state_dict": G.state_dict(), # Save generator state dict
+            "scaler": dataset.scaler, # Save scaler for inverse transform
+            "label_encoder": dataset.label_encoder, # Save label encoder for mapping
+            "args": vars(args) # Save training arguments
+         }, g_path) # Save generator checkpoint to disk
+         torch.save({
+            "epoch": epoch + 1, # Save current epoch number
+            "state_dict": D.state_dict(), # Save discriminator state dict
+            "args": vars(args) # Save training arguments
+         }, d_path) # Save discriminator checkpoint to disk
+         torch.save(G.state_dict(), os.path.join(args.out_dir, "generator_latest.pt")) # Save latest generator weights
+         print(f"Saved generator to {g_path}") # Print checkpoint save message
+
+   print("Training finished.") # Print final training completion message
 
 def verify_filepath_exists(filepath):
    """
