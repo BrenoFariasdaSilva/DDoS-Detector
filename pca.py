@@ -177,6 +177,87 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
 
 	return X_train, X_test, y_train, y_test, scaler # Return the split data and scaler
 
+def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_folds=10):
+	"""
+	Applies PCA transformation and evaluates performance using 10-fold Stratified Cross-Validation
+	on the training set, then tests on the held-out test set.
+
+	:param X_train: Training features (scaled)
+	:param y_train: Training target
+	:param X_test: Testing features (scaled)
+	:param y_test: Testing target
+	:param n_components: Number of principal components to keep
+	:param cv_folds: Number of cross-validation folds (default: 10)
+	:return: Dictionary containing metrics, explained variance, and PCA object
+	"""
+
+	pca = PCA(n_components=n_components, random_state=42) # Initialize PCA
+	
+	X_train_pca = pca.fit_transform(X_train) # Fit PCA on training data and transform
+	X_test_pca = pca.transform(X_test) # Transform test data using the fitted PCA
+ 
+	explained_variance = pca.explained_variance_ratio_.sum() # Total explained variance ratio
+	
+	model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1) # Initialize Random Forest model
+	
+	print(f"{BackgroundColors.GREEN}  Running 10-fold Stratified CV on training data...{Style.RESET_ALL}")
+	skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42) # Stratified K-Fold cross-validator
+	
+	cv_accs, cv_precs, cv_recs, cv_f1s = [], [], [], [] # Lists to store CV metrics
+	
+	for train_idx, val_idx in tqdm(skf.split(X_train_pca, y_train), total=cv_folds, desc="  CV Folds", leave=False): # Loop over each fold
+		X_train_fold = X_train_pca[train_idx] # Training data for this fold
+		X_val_fold = X_train_pca[val_idx] # Validation data for this fold
+		y_train_fold = y_train.iloc[train_idx] if isinstance(y_train, pd.Series) else y_train[train_idx] # Training target for this fold
+		y_val_fold = y_train.iloc[val_idx] if isinstance(y_train, pd.Series) else y_train[val_idx] # Validation target for this fold
+		
+		model.fit(X_train_fold, y_train_fold) # Fit model on training fold
+		y_pred_fold = model.predict(X_val_fold) # Predict on validation fold
+		
+		cv_accs.append(accuracy_score(y_val_fold, y_pred_fold)) # Calculate and store metrics
+		cv_precs.append(precision_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)) # Calculate and store metrics
+		cv_recs.append(recall_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)) # Calculate and store metrics
+		cv_f1s.append(f1_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)) # Calculate and store metrics
+	
+	cv_acc_mean = np.mean(cv_accs) # Mean CV metrics
+	cv_prec_mean = np.mean(cv_precs) # Mean CV metrics
+	cv_rec_mean = np.mean(cv_recs) # Mean CV metrics
+	cv_f1_mean = np.mean(cv_f1s) # Mean CV metrics
+	
+	start_time = time.time() # Start timing for test set evaluation
+	model.fit(X_train_pca, y_train) # Fit model on full training data
+	y_pred = model.predict(X_test_pca) # Predict on test data
+	elapsed_time = time.time() - start_time # Elapsed time for test evaluation
+	
+	acc = accuracy_score(y_test, y_pred) # Calculate test metrics
+	prec = precision_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate test metrics
+	rec = recall_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate test metrics
+	f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate test metrics
+	
+	fpr, fnr = 0, 0 # Initialize FPR and FNR
+	unique_classes = np.unique(y_test) # Get unique classes in the test set
+	if len(unique_classes) == 2: # If binary classification
+		tn, fp, fn, tp = confusion_matrix(y_test, y_pred, labels=unique_classes).ravel() # Get confusion matrix values
+		fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # Calculate False Positive Rate
+		fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # Calculate False Negative Rate
+	
+	return { # Return all results in a dictionary
+		"n_components": n_components,
+		"explained_variance": explained_variance,
+		"cv_accuracy": cv_acc_mean,
+		"cv_precision": cv_prec_mean,
+		"cv_recall": cv_rec_mean,
+		"cv_f1_score": cv_f1_mean,
+		"test_accuracy": acc,
+		"test_precision": prec,
+		"test_recall": rec,
+		"test_f1_score": f1,
+		"test_fpr": fpr,
+		"test_fnr": fnr,
+		"elapsed_time": elapsed_time,
+		"pca_object": pca
+	}
+
 def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32]):
 	"""
 	Runs PCA analysis with different numbers of components and evaluates performance.
