@@ -332,6 +332,39 @@ def set_seed(seed: int):
    torch.manual_seed(seed) # Set PyTorch CPU seed for reproducibility
    torch.cuda.manual_seed_all(seed) # Set CUDA seed for all devices
 
+def gradient_penalty(critic, real_samples, fake_samples, labels, device):
+   """
+   Compute the WGAN-GP gradient penalty.
+
+   :param critic: critic network callable that accepts (samples, labels)
+   :param real_samples: tensor of real samples (B, feature_dim)
+   :param fake_samples: tensor of fake samples (B, feature_dim)
+   :param labels: tensor of integer labels (B,)
+   :param device: torch device to run computations on
+   :return: scalar gradient penalty term
+   """
+
+   batch_size = real_samples.size(0) # Get batch size from real samples
+   alpha = torch.rand(batch_size, 1, device=device) # Sample random interpolation factors
+   alpha = alpha.expand_as(real_samples) # Expand alpha to match feature shape
+   interpolates = alpha * real_samples + ((1 - alpha) * fake_samples) # Create interpolated samples
+   interpolates.requires_grad_(True) # Enable gradients for interpolated samples
+   d_interpolates = critic(interpolates, labels) # Get critic scores for interpolated samples
+   grad_outputs = torch.ones_like(d_interpolates, device=device) # Create gradient outputs tensor
+
+   grads = autograd.grad( # Compute gradients of critic outputs with respect to interpolates
+      outputs=d_interpolates,
+      inputs=interpolates,
+      grad_outputs=grad_outputs,
+      create_graph=True,
+      retain_graph=True,
+      only_inputs=True
+   )[0] # Get gradients tensor
+   grads = grads.view(batch_size, -1) # Flatten gradients per sample
+   grad_norm = torch.sqrt(torch.sum(grads ** 2, dim=1) + 1e-12) # Compute L2 norm of gradients
+   gp = ((grad_norm - 1) ** 2).mean() # Calculate gradient penalty term
+   return gp # Return scalar gradient penalty
+
 def train(args):
    """
    Train the WGAN-GP model using the provided arguments.
