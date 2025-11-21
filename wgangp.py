@@ -187,6 +187,74 @@ class ResidualBlockFC(nn.Module):
       out = out + x # Apply skip connection
       return self.act(out) # Apply activation to merged result
 
+class Generator(nn.Module):
+   """
+   Conditional generator: input z + label embedding (one-hot or embedding), outputs feature vector.
+   Uses residual blocks internally (DRC-style).
+   
+   :param latent_dim: dimensionality of input noise vector
+   """
+
+   def __init__( # Constructor defining generator architecture
+      self,
+      latent_dim: int, # Dimensionality of latent noise vector
+      feature_dim: int, # Dimensionality of generated features
+      n_classes: int, # Number of label classes
+      hidden_dims: Optional[List[int]] = None, # Optional hidden layer configuration
+      embed_dim: int = 32, # Size of label embedding
+      n_resblocks: int = 3 # Number of residual blocks to apply
+   ): # End constructor signature
+      """
+      Conditional generator that maps (z, y) -> feature vector.
+
+      :param latent_dim: dimensionality of noise vector z
+      :param feature_dim: dimensionality of output feature vector
+      :param n_classes: number of conditioning classes
+      :param hidden_dims: list of hidden layer sizes for initial MLP
+      :param embed_dim: size of label embedding
+      :param n_resblocks: number of residual blocks to apply
+      """
+
+      super().__init__() # Initialize module internals
+
+      if hidden_dims is None: # Use default architecture if none given
+         hidden_dims = [256, 512] # Default MLP layer widths
+
+      self.latent_dim = latent_dim # Store latent input size
+      self.feature_dim = feature_dim # Store output size
+      self.n_classes = n_classes # Store number of classes
+      self.embed = nn.Embedding(n_classes, embed_dim) # Create label embedding table
+
+      input_dim = latent_dim + embed_dim # Combined dimension of noise + embedding
+      layers = [] # Container for MLP layers
+      prev = input_dim # Track previous layer width
+
+      for h in hidden_dims: # Build MLP layers
+         layers.append(nn.Linear(prev, h)) # Add linear layer
+         layers.append(nn.BatchNorm1d(h)) # Normalize activations
+         layers.append(nn.LeakyReLU(0.2, inplace=True)) # Apply activation
+         prev = h # Update width tracker
+
+      res_dim = prev # Width entering residual blocks
+      self.pre = nn.Sequential(*layers) # Store assembled MLP
+
+      self.resblocks = nn.ModuleList( # Build list of residual blocks
+         [ResidualBlockFC(res_dim) for _ in range(n_resblocks)] # Create required count of blocks
+      ) # End block list
+
+      self.out = nn.Sequential( # Output mapping layer
+         nn.Linear(res_dim, feature_dim), # Final linear projection
+      ) # End output block
+
+   def forward(self, z, y): # Compute generator output
+      y_e = self.embed(y) # Convert class ID to embedding
+      x = torch.cat([z, y_e], dim=1) # Concatenate noise and embedding
+      x = self.pre(x) # Process through MLP
+      for b in self.resblocks: # Loop through residual blocks
+         x = b(x) # Apply block
+      out = self.out(x) # Produce final feature vector
+      return out # Return generated sample
+
 # Functions Definitions:
 
 def verbose_output(true_string="", false_string=""):
