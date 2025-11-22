@@ -78,11 +78,12 @@ import seaborn as sns # For enhanced plotting
 import time # For measuring execution time
 from colorama import Style # For coloring the terminal
 from deap import base, creator, tools, algorithms # For the genetic algorithm
-from tqdm import tqdm # For progress bars
 from sklearn.ensemble import RandomForestClassifier # For the machine learning model
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix # For model evaluation
-from sklearn.model_selection import train_test_split # For splitting the dataset
+from sklearn.model_selection import train_test_split, StratifiedKFold # For splitting the dataset and cross-validation
 from sklearn.preprocessing import StandardScaler # For feature scaling
+from tqdm import tqdm # For progress bars
+from xgboost import XGBClassifier # For XGBoost classifier
 
 # Macros:
 class BackgroundColors: # Colors for the terminal
@@ -188,6 +189,27 @@ def preprocess_dataframe(df, remove_zero_variance=True):
             df_clean = df_clean.drop(columns=zero_var_cols) # Drop zero-variance columns
 
    return df_clean # Return the cleaned DataFrame
+
+def instantiate_estimator(estimator_cls=None):
+   """
+   Instantiate a classifier. If estimator_cls is None, use RandomForestClassifier.
+
+   :param estimator_cls: Class of the estimator to instantiate (or None)
+   :return: instantiated estimator
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Instantiating the estimator: {BackgroundColors.CYAN}{estimator_cls.__name__ if estimator_cls else 'RandomForestClassifier'}{Style.RESET_ALL}") # Output the verbose message
+   
+   if estimator_cls is None: # If no estimator class is provided
+      return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1) # Return a default RandomForestClassifier
+
+   if estimator_cls is XGBClassifier and XGBClassifier is not None: # If the estimator class is XGBClassifier
+      return XGBClassifier(use_label_encoder=False, eval_metric="logloss", n_jobs=-1, random_state=42) # Return an XGBClassifier with default params
+
+   try: # Try to instantiate the provided estimator class
+      return estimator_cls() # Instantiate with default parameters
+   except Exception: # If instantiation fails
+      return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1) # Fallback to default RandomForestClassifier
 
 def load_dataset(csv_path):
    """
