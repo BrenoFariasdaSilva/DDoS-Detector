@@ -93,7 +93,8 @@ class BackgroundColors: # Colors for the terminal
 # Execution Constants
 OUTPUT_DIR = f"./Results" # Directory to save results
 VERBOSE = False # Set to True for verbose output
-DATASETS = {
+SAMPLE_SIZE = None # Set to an integer (e.g., 100000) to sample data for faster testing, None to use full dataset
+DATASETS = { # Dictionary containing dataset paths and feature files
 	"CICDDoS2019-Dataset": {
 		"train": "./Datasets/DDoS/CICDDoS2019/01-12/DrDoS_DNS.csv",
 		"test":  "./Datasets/DDoS/CICDDoS2019/01-12/DrDoS_DNS.csv",
@@ -272,10 +273,15 @@ def load_and_prepare_data(training_data_path=None, testing_data_path=None):
 	split_required = os.path.abspath(training_data_path) == os.path.abspath(testing_data_path) # Normalize to absolute paths and determine if the same file is used for both training and testing
 
 	if split_required: # If the same file is used for both training and testing
-		verbose_output(f"{BackgroundColors.YELLOW}The same file was provided for training and testing: {BackgroundColors.CYAN}{training_data_path}{BackgroundColors.YELLOW}. Performing automatic split into training and testing sets.{Style.RESET_ALL}")
+		verbose_output(f"{BackgroundColors.GREEN}The same file was provided for training and testing: {BackgroundColors.CYAN}{training_data_path}{BackgroundColors.GREEN}. Performing automatic split into training and testing sets.{Style.RESET_ALL}")
 
 	train_df = load_file(training_data_path) # Load training file
 	test_df = None if split_required else load_file(testing_data_path) # Load testing file only if different
+
+	if SAMPLE_SIZE is not None and len(train_df) > SAMPLE_SIZE: # If SAMPLE_SIZE is set and training data exceeds it
+		train_df = train_df.sample(n=SAMPLE_SIZE, random_state=42) # Sample training data
+		if test_df is not None and len(test_df) > SAMPLE_SIZE: # If testing data exists and exceeds SAMPLE_SIZE
+			test_df = test_df.sample(n=SAMPLE_SIZE, random_state=42) # Sample testing data
 
 	return train_df, test_df, split_required # Return dataframes and split flag
 
