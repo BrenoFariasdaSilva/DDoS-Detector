@@ -869,7 +869,8 @@ def explain_predictions_with_lime(model, X_train, X_test, feature_names, model_n
 	:return: None
 	"""
 
-	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Explaining Predictions with LIME...{Style.RESET_ALL}")
+	verbose_output(f"{BackgroundColors.GREEN}Explaining Predictions with LIME...{Style.RESET_ALL}")
+
 	X_explain = X_test[:5] # Select the first 5 instances for explanation
 
 	explainer = LimeTabularExplainer( # Create a LIME explainer for tabular data
