@@ -777,16 +777,19 @@ def main():
    :return: None
    """
 
-   print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Genetic Algorithm Feature Selection{BackgroundColors.GREEN} program!{Style.RESET_ALL}")
+   print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Genetic Algorithm Feature Selection{BackgroundColors.GREEN} program!{Style.RESET_ALL}", end="\n\n") # Output the welcome message
 
-   csv_file = "./Datasets/DDoS/CICDDoS2019/01-12/DrDoS_DNS.csv"
+   input_path = "./Datasets/DDoS/CICDDoS2019/01-12/"
+   files_to_process = get_files_to_process(input_path, file_extension=".csv") # Get list of CSV files to process
+   files_to_process = ["./Datasets/DDoS/CICDDoS2019/01-12/DrDoS_DNS.csv"]
 
-   sweep_results = run_population_sweep(csv_file, n_generations=20, min_pop=5, max_pop=30, train_test_ratio=0.2)
+   for file in files_to_process: # For each file to process
+      sweep_results = run_population_sweep(file, n_generations=20, min_pop=5, max_pop=30) # Run population sweep
 
-   if VERBOSE and sweep_results: # If VERBOSE is True and there are results
-      print(f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}") # Print detailed results
-      for pop_size, features in sweep_results.items(): # For each population size and its best features
-         print(f"  Pop {pop_size}: {len(features)} features -> {features}") # Print the population size and the best features
+      if VERBOSE and sweep_results: # If VERBOSE is True and there are results
+         print(f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}") # Print detailed results
+         for pop_size, features in sweep_results.items(): # For each population size and its best features
+            print(f"  Pop {pop_size}: {len(features)} features -> {features}") # Print the population size and the best features
    
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
 
