@@ -138,6 +138,41 @@ def verify_filepath_exists(filepath):
 
    return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
 
+def get_features_from_file(file_path, start_line_keyword="Best Feature Subset using"):
+	"""
+	Extracts feature names from a feature analysis results file (Genetic Algorithm or RFE).
+
+	:param file_path: Path to the feature results file
+	:param start_line_keyword: String that indicates where to start collecting features
+										e.g., "Best Feature Subset using Genetic Algorithm"
+												"Best Feature Subset using Recursive Feature Elimination"
+	:return: List of feature names
+	"""
+ 
+	verbose_output(f"{BackgroundColors.GREEN}Extracting features from file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
+
+	features = [] # List to store feature names
+	start_collecting = False # Flag to indicate when to start collecting features
+
+	with open(file_path, "r") as f: # Open the feature results file in read mode
+		for line in f: # Iterate through each line in the file
+			line = line.strip() # Remove leading/trailing whitespace
+			if start_line_keyword in line: # Start collecting after this line
+				start_collecting = True # Set flag to start collecting features
+				continue # Skip the line with the keyword
+
+			if start_collecting: # If we are in the feature collection section
+				if not line: # If the line is empty
+					break # Stop at first empty line after features section
+
+				match = re.match(r"\d+\.\s+(.*?)(\s+\(RFE ranking \d+\))?$", line) # Match lines like: "1. Feature Name (RFE ranking X)"
+
+				if match: # If the line matches the expected format
+					feature_name = match.group(1).strip() # Extract the feature name
+					features.append(feature_name) # Add the feature name to the list
+
+	return features # Return the list of feature names
+
 def detect_label_column(columns, common_names=None):
 	"""
 	Detects the label column from a list of common label names.
