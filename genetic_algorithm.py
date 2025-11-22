@@ -393,7 +393,7 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
 
    return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return metrics
 
-def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=20):
+def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100):
    """
    Run Genetic Algorithm generations with a tqdm progress bar.
 
@@ -407,6 +407,8 @@ def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_tes
    :param n_generations: Number of generations to run.
    :return: best individual
    """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Running Genetic Algorithm for {n_generations} generations.{Style.RESET_ALL}") # Output the verbose message
 
    def fitness(ind): # Fitness function for DEAP
       acc, prec, rec, f1, fpr, fnr, t = evaluate_individual(ind, X_train, y_train, X_test, y_test) # Evaluate the individual
