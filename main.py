@@ -713,54 +713,87 @@ def cross_validate_model(model, X, y, cv=10, scoring='f1_weighted'):
  
 	return scores.mean(), scores.std() # Return mean and std of scores
 
-def train_and_evaluate_models(X_train, X_test, y_train, y_test, dataset_dir, dataset_name):
+def train_and_evaluate_models(X_train, X_test, y_train, y_test, dataset_dir, dataset_name, use_cv=True, selected_features=None, features_file=None, return_metrics_only=False):
 	"""
-	Trains and evaluates multiple models.
-
-	:param X_train: Training features
+ 	Trains and evaluates multiple models on the provided dataset.
+  
+  	:param X_train: Training features
 	:param X_test: Testing features
 	:param y_train: Training labels
-	:param y_test: Testing labels
-	:param dataset_dir: Directory of the dataset for saving files
-	:param dataset_name: Name of the dataset for saving files
+ 	:param y_test: Testing labels
+	:param dataset_dir: Directory of the dataset
+ 	:param dataset_name: Name of the dataset
+  	:param use_cv: Whether to use cross-validation (default is True)
+	:param selected_features: List of selected features (if any)
+	:param features_file: Path to the features selection file (if any)
+	:param return_metrics_only: If True, only returns metrics without saving results
 	:return: Tuple containing:
 				- Dictionary of trained models
-				- List of dicts with extracted model metrics for summary (in memory)
+				- List of model metrics dictionaries
 	"""
+ 
+	verbose_output(f"{BackgroundColors.GREEN}Starting training and evaluation of models using {'cross-validation' if use_cv else 'train/test split'}...{Style.RESET_ALL}")
+ 
+	models = get_models() # Get the dictionary of models to train
+	model_metrics_list = [] # List to store metrics for each model
+	results_dir = os.path.join(dataset_dir, "Results") # Directory to save results
+	
+	feat_extraction_method = "" # Suffix for feature extraction method
+	if selected_features is not None and features_file: # If feature selection is used and a features file is provided
+		features_basename = os.path.basename(features_file) # Get the base name of the features file
+		features_name = os.path.splitext(features_basename)[0] # Remove file extension
+		if "Genetic" in features_name or "GA" in features_name: # If genetic algorithm is indicated in the filename
+			feat_extraction_method = "-GA" # Use GA suffix
+		elif "RFE" in features_name: # If Recursive Feature Elimination is indicated in the filename
+			feat_extraction_method = "-RFE" # Use RFE suffix
+		elif "PCA" in features_name: # If PCA is indicated in the filename
+			feat_extraction_method = "-PCA" # Use PCA suffix
+		else: # Use first part of the filename (up to 15 chars) as suffix
+			feat_extraction_method = f"-{features_name[:15]}" # Generic suffix
+	
+	total_models = len(models) # Total number of models to train
+	model_pbar = tqdm(models.items(), total=total_models, desc=f"Training models for {dataset_name}", bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]", ncols=100)
+	
+	for index, (name, model) in enumerate(model_pbar, start=1): # Iterate through each model with progress bar
+		model_pbar.set_description(f"[{index}/{total_models}] {name}") # Update progress bar description
+		if use_cv: # If cross-validation is to be used
+			mean_score, std_score = cross_validate_model(model, X_train, y_train) # Perform cross-validation
+			duration = [0, "CV"] # CV is not timed here
+			tqdm.write(f"{BackgroundColors.GREEN}✓ {name} - F1: {mean_score:.2f} ± {std_score:.2f}{Style.RESET_ALL}") # Output cross-validation results
+		else: # If not using cross-validation
+			start_time = time.time() # Start timer for training duration
+			model.fit(X_train, y_train) # Train the model
+			duration = [time.time() - start_time, format_duration(time.time() - start_time)] # List to store the duration of training in seconds and in string
+			tqdm.write(f"{BackgroundColors.GREEN}✓ {name} trained in {duration[1]}{Style.RESET_ALL}") # Output training duration
+			
+			report, metrics_df = evaluate_model(model, X_test, y_test, duration[1]) # Evaluate the model
+			if not return_metrics_only: # If not only returning metrics, save the results
+				save_results(report, metrics_df, results_dir, index, name, feat_extraction_method=feat_extraction_method) # Save the results to disk
+			avg_row = metrics_df.iloc[-1] # Get the average metrics row
+			metrics_dict = { # Create a dictionary with average metrics
+				"Dataset": dataset_name,
+				"Model": name,
+				"Training Duration": duration[1],
+				"Correct (TP)": int(avg_row["Correct (TP)"]),
+				"Wrong (FN)": int(avg_row["Wrong (FN)"]),
+				"False Positives (FP)": int(avg_row["False Positives (FP)"]),
+				"True Negatives (TN)": int(avg_row["True Negatives (TN)"]),
+				"Support": int(avg_row["Support"]),
+				"Accuracy (per class)": round(float(avg_row["Accuracy (per class)"]), 2),
+				"Precision": round(float(avg_row["Precision"]), 2),
+				"Recall": round(float(avg_row["Recall"]), 2),
+				"F1-Score": round(float(avg_row["F1-Score"]), 2),
+				"Features Count": len(selected_features) if selected_features is not None else "All"
+			}
+			model_metrics_list.append(metrics_dict) # Append metrics dictionary to the list
 
-	verbose_output(f"{BackgroundColors.GREEN}Training and evaluating models for the {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} dataset...{Style.RESET_ALL}")
+	if not use_cv and not return_metrics_only: # If not using cross-validation and not only returning metrics
+		generate_overall_performance_summary(model_metrics_list, output_path=results_dir, feat_extraction_method=feat_extraction_method) # Generate overall performance summary
+	
+	if selected_features is not None and model_metrics_list and not return_metrics_only: # If feature selection is used and metrics are available
+		print(f"{BackgroundColors.GREEN}Models trained with {BackgroundColors.CYAN}{len(selected_features)}{BackgroundColors.GREEN} selected features{Style.RESET_ALL}")
 
-	models = get_models() # Dictionary of models to train
-	model_metrics_list = [] # List to store metrics dicts for each model, for later summary
-	results_dir = os.path.join(dataset_dir, "Results") # Directory to save results for the current dataset
-
-	for index, (name, model) in enumerate(models.items(), start=1): # Iterate through each model with an index starting from 1
-		model, duration = train_model(model, X_train, y_train, index, name, dataset_name) # Train the model and get duration
-		report, metrics_df = evaluate_model(model, X_test, y_test, duration[1]) # Evaluate model using reusable function
-		save_results(report, metrics_df, results_dir, index, name) # Save reports and metrics
-
-		avg_row = metrics_df.iloc[-1] # Get the last row (average metrics)
-
-		metrics_dict = { # Compose in-memory summary dictionary
-			"Dataset": dataset_name,
-			"Model": name,
-			"Training Duration": duration[1],
-			"Correct (TP)": int(avg_row["Correct (TP)"]),
-			"Wrong (FN)": int(avg_row["Wrong (FN)"]),
-			"False Positives (FP)": int(avg_row["False Positives (FP)"]),
-			"True Negatives (TN)": int(avg_row["True Negatives (TN)"]),
-			"Support": int(avg_row["Support"]),
-			"Accuracy (per class)": round(float(avg_row["Accuracy (per class)"]), 2),
-			"Precision": round(float(avg_row["Precision"]), 2),
-			"Recall": round(float(avg_row["Recall"]), 2),
-			"F1-Score": round(float(avg_row["F1-Score"]), 2)
-		}
-
-		model_metrics_list.append(metrics_dict) # Add to summary list
-
-	generate_overall_performance_summary(model_metrics_list, output_path=results_dir) # Generate overall performance summary for all models for the current dataset
-
-	return models, model_metrics_list # Return trained models and metrics
+	return models, model_metrics_list # Return trained models and their metrics
 
 def explain_predictions_with_tree_shap(model, X_train, X_test, feature_names, model_name="TreeModel"):
 	"""
