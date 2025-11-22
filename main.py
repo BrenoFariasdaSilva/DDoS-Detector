@@ -243,12 +243,14 @@ def load_file(file_path):
 		df = pd.DataFrame(arff_data["data"], columns=[attr[0] for attr in arff_data["attributes"]]) # Create DataFrame with correct column names
 	elif ext in ["csv", "txt"]: # CSV or TXT
 		verbose_output(f"{BackgroundColors.GREEN}Loading data from CSV/TXT file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}")
-		df = pd.read_csv(file_path) # Load CSV or TXT file into DataFrame
+		df = pd.read_csv(file_path, low_memory=False) # Load CSV or TXT file into DataFrame with low_memory=False to avoid dtype warning
 	elif ext == "parquet": # Parquet file
 		verbose_output(f"{BackgroundColors.GREEN}Loading data from Parquet file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}")
 		df = pd.read_parquet(file_path) # Load Parquet file into DataFrame
-	else:
+	else: # Unsupported file extension
 		raise ValueError(f"{BackgroundColors.RED}Unsupported file extension: {ext}{Style.RESET_ALL}")
+
+	df.columns = df.columns.str.strip() # Clean column names by stripping leading/trailing whitespacee
 
 	return df # Return the loaded DataFrame
 
