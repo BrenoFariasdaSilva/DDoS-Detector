@@ -414,8 +414,8 @@ def get_models():
 		"Gradient Boosting": GradientBoostingClassifier(random_state=42),
 		"LightGBM": lgb.LGBMClassifier(force_row_wise=True, min_gain_to_split=0.01, random_state=42, verbosity=-1),
 		"MLP (Neural Net)": MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=42),
-		# Few-Shot Learning
-		# Contrastive Learning
+		# "Few-Shot Learning": FewShotLearning(),
+		# "Contrastive Learning": ContrastiveLearning()
 	}
 
 def format_duration(seconds):
