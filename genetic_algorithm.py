@@ -681,10 +681,19 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
 
    return best_features # Return the list of best features
 
-def run_population_sweep(csv_path, n_generations=20, min_pop=3, max_pop=30, train_test_ratio=0.2):
+def run_population_sweep(csv_path, n_generations=100, min_pop=5, max_pop=30):
    """
-   Run the genetic algorithm for feature selection with population sizes from min_pop to max_pop.
-   Show a progress bar and only save the best result overall.
+   Executes a genetic algorithm (GA) for feature selection across multiple population sizes.
+
+   This function performs a "population sweep," testing different population sizes
+   to identify the set of features that maximizes classification performance
+   (F1-Score) on the training dataset using 10-fold Stratified Cross-Validation.
+
+   :param csv_path: Path to the CSV dataset.
+   :param n_generations: Number of generations to run the GA for each population size.
+   :param min_pop: Minimum population size to test.
+   :param max_pop: Maximum population size to test.
+   :return: Dictionary mapping population sizes to their best feature subsets.
    """
 
    best_score = -1 # Initialize best score
@@ -693,28 +702,52 @@ def run_population_sweep(csv_path, n_generations=20, min_pop=3, max_pop=30, trai
    results = {} # Dictionary to store results for each population size
 
    df = load_dataset(csv_path) # Load the dataset
-   for pop_size in tqdm(range(min_pop, max_pop + 1), desc=f"{BackgroundColors.GREEN}Population Sweep{Style.RESET_ALL}", unit="pop"):
-      ga_result = run_genetic_algorithm_feature_selection(df, n_generations=n_generations, population_size=pop_size, train_test_ratio=train_test_ratio) # Run the Genetic Algorithm feature selection
+   if df is None: # If dataset loading failed
+      return {} # Return empty dictionary
+   
+   cleaned_df = preprocess_dataframe(df) # Preprocess the DataFrame
+   if cleaned_df is None or cleaned_df.empty: # If preprocessing failed or resulted in an empty DataFrame
+      print(f"{BackgroundColors.RED}Dataset empty after preprocessing. Exiting.{Style.RESET_ALL}")
+      return {} # Return empty dictionary
+   
+   X_train, X_test, y_train, y_test, feature_names = split_dataset(cleaned_df) # Apply train/test split and scaling
+   if X_train is None: # If splitting failed
+      return {} # Return empty dictionary
+   
+   print(f"\n{BackgroundColors.CYAN}Genetic Algorithm Configuration:{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}  Generations: {BackgroundColors.CYAN}20 fixed{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}  Population: {BackgroundColors.CYAN}{min_pop} to {max_pop} individuals{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}  Evaluation: {BackgroundColors.CYAN}10-fold Stratified CV on training set{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}  Crossover: {BackgroundColors.CYAN}0.5{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}  Mutation: {BackgroundColors.CYAN}0.2 (individual), 0.05 (gene){Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}  Selection: {BackgroundColors.CYAN}Tournament (tournsize=3){Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}  Dataset: {BackgroundColors.CYAN}{len(y_train)} training / {len(y_test)} testing  (80/20){Style.RESET_ALL}\n")
+   
+   for pop_size in tqdm(range(min_pop, max_pop + 1), desc=f"{BackgroundColors.GREEN}Population Sweep{Style.RESET_ALL}", unit="pop"): # For each population size
+      toolbox, population, hof = setup_genetic_algorithm(len(feature_names), pop_size) # 4.1. Configure the GA for the current population size
+      best_ind = run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations) # 4.2. Run the GA loop
 
-      if ga_result is None: # If running the Genetic Algorithm failed
+      if best_ind is None: # If no best individual was found
          continue # Skip to the next population size
 
-      best_ind, feature_names, X_train, X_test, y_train, y_test = ga_result # Unpack the result
       best_features = [f for f, bit in zip(feature_names, best_ind) if bit == 1] # Extract best features
-      results[pop_size] = best_features # Store the best features for this population size
+      results[pop_size] = best_features # Store best features for this population size
 
-      metrics = evaluate_individual(best_ind, X_train, y_train, X_test, y_test) # Evaluate the best individual
-      acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics # Unpack the metrics
+      metrics = evaluate_individual(best_ind, X_train, y_train, X_test, y_test) # 4.3. Reevaluate the best individual found
+      acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics # Unpack metrics
 
-      if f1 > best_score: # If the F1-score is better than the best score
-         best_score = f1 # Update the best score
-         best_metrics = metrics # Update the best metrics
-         best_result = (best_ind, feature_names, X_train, X_test, y_train, y_test) # Update the best result
+      if f1 > best_score: # 4.4. Check if this is the best global F1-Score
+         best_score = f1 # Update best score
+         best_metrics = metrics # Update best metrics
+         best_result = (best_ind, feature_names, X_train, X_test, y_train, y_test) # Update best result
 
-   if best_result: # After the sweep, if we have a best result
+   # 5. After testing all population sizes, select the best global result
+   if best_result: # If a best result was found
       best_ind, feature_names, X_train, X_test, y_train, y_test = best_result # Unpack the best result
-      print_metrics(best_metrics) if VERBOSE else None # Print the best metrics if VERBOSE is True
-      save_and_analyze_results(best_ind, feature_names, X_train, y_train, csv_path, metrics=best_metrics) # Save and analyze the best results
+      print_metrics(best_metrics) if VERBOSE else None # Print metrics if VERBOSE is enabled
+      save_and_analyze_results(best_ind, feature_names, X_train, y_train, csv_path, metrics=best_metrics, X_test=X_test, y_test=y_test) # 6. Save chosen features, metrics, and split data
+   else: # If no valid result was found
+      print(f"{BackgroundColors.RED}No valid results found during the sweep.{Style.RESET_ALL}")
 
    return results # Return the results dictionary
 
