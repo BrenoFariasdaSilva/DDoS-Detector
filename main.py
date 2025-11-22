@@ -526,7 +526,7 @@ def evaluate_model(model, X_test, y_test, duration_str):
 
 	return report, metrics_df # Return the report and extended metrics
 
-def save_results(report, metrics_df, results_dir, index, model_name):
+def save_results(report, metrics_df, results_dir, index, model_name, feat_extraction_method=""):
 	"""
 	Saves the classification report and extended metrics to disk.
 
@@ -535,6 +535,7 @@ def save_results(report, metrics_df, results_dir, index, model_name):
 	:param results_dir: Directory of the results of the dataset
 	:param index: Index of the model
 	:param model_name: Name of the model
+	:param feat_extraction_method: Optional suffix to add to filename (e.g., feature selection method)
 	"""
 
 	verbose_output(f"{BackgroundColors.GREEN}Saving results for {model_name}...{Style.RESET_ALL}")
@@ -542,7 +543,8 @@ def save_results(report, metrics_df, results_dir, index, model_name):
 	if not os.path.exists(results_dir): # If the results directory does not exist
 		os.makedirs(results_dir) # Create the results directory
 
-	filename_base = f"{results_dir}/{index:02d}-{model_name.replace(' ', '_').replace('(', '').replace(')', '')}" # Base filename for saving results
+	model_name_clean = model_name.replace(" ", "_").replace("(", "").replace(")", "") # Clean model name for filename
+	filename_base = f"{results_dir}/{index:02d}-{model_name_clean}{feat_extraction_method}" # Base filename for saving results
 
 	pd.DataFrame(report).transpose().to_csv(f"{filename_base}-Classification_report.csv", float_format="%.2f", index_label="Class") # Save classification report
 	metrics_df.to_csv(f"{filename_base}-Extended_metrics.csv", index=False, float_format="%.2f") # Save extended confusion matrix
