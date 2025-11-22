@@ -602,12 +602,13 @@ def get_model_results_file_header():
 		"F1-Score" # F1-score
 	]
 
-def generate_overall_performance_summary(all_model_scores, output_path="."):
+def generate_overall_performance_summary(all_model_scores, output_path=".", feat_extraction_method=""):
 	"""
 	Generates an overall performance summary CSV combining all datasets and models with detailed metrics.
 
 	:param all_model_scores: List of dictionaries with model scores.
 	:param output_path: Path where the summary CSV will be saved.
+	:param feat_extraction_method: Optional suffix to add to filename (e.g., feature selection method)
 	:return: None
 	"""
 
@@ -642,7 +643,7 @@ def generate_overall_performance_summary(all_model_scores, output_path="."):
 
 	output_df = pd.DataFrame(formatted_scores, columns=columns) # Create a DataFrame using the sorted scores and defined column order
 	os.makedirs(os.path.join(output_path, OUTPUT_DIR)) if not os.path.exists(os.path.join(output_path, OUTPUT_DIR)) else None # Ensure the output directory exists
-	output_file = os.path.join(output_path, f"{OUTPUT_DIR}/Overall_Performance.csv") # Define the output file path
+	output_file = os.path.join(output_path, f"{OUTPUT_DIR}/Overall_Performance{feat_extraction_method}.csv") # Define the output file path with feature suffix
 	output_df.to_csv(output_file, index=False) # Save the DataFrame to CSV without including the index
 
 	verbose_output(true_string=f"{BackgroundColors.GREEN}Overall performance summary saved to: {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}") # Print success message with file path
