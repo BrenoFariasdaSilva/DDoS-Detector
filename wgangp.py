@@ -503,7 +503,7 @@ def generate(args):
    label_encoder = ckpt.get("label_encoder", None) # Try to get label encoder from checkpoint
 
    if scaler is None or label_encoder is None: # If scaler or label encoder missing
-      if args.csv_path is None: # Check if CSV path is provided
+      if args.csv_path is None: # Verify if CSV path is provided
          raise RuntimeError("Checkpoint missing scaler/label_encoder. Provide --csv_path to reconstruct them.") # Raise error if not
       tmp_ds = CSVFlowDataset(args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols) # Rebuild dataset to get scaler and encoder
       scaler = tmp_ds.scaler # Use scaler from rebuilt dataset
