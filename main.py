@@ -694,6 +694,25 @@ def generate_feature_selection_comparison(baseline_metrics, feature_selected_met
 	
 	print(f"{BackgroundColors.GREEN}Feature selection comparison saved to: {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}")
 
+def cross_validate_model(model, X, y, cv=10, scoring='f1_weighted'):
+	"""
+	Performs k-fold cross-validation for a given model.
+
+	:param model: Model instance to evaluate
+	:param X: Features
+	:param y: Labels
+	:param cv: Number of cross-validation folds (default is 10)
+	:param scoring: Scoring metric to use (default is 'f1_weighted')
+	:return: Returns mean and std of the chosen scoring metric.
+	"""
+
+	verbose_output(f"{BackgroundColors.GREEN}Performing {cv}-fold cross-validation for {model.__class__.__name__}...{Style.RESET_ALL}")
+ 
+	skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=42) # Stratified K-Fold cross-validator
+	scores = cross_val_score(model, X, y, cv=skf, scoring=scoring) # Perform cross-validation and get scores
+ 
+	return scores.mean(), scores.std() # Return mean and std of scores
+
 def train_and_evaluate_models(X_train, X_test, y_train, y_test, dataset_dir, dataset_name):
 	"""
 	Trains and evaluates multiple models.
