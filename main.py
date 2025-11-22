@@ -64,19 +64,20 @@ import numpy as np # For numerical operations
 import os # For running a command in the terminal
 import pandas as pd # For data manipulation and analysis
 import platform # For detecting the operating system
+import re # For regular expressions
 import shap # For SHAP value explanations
 import time # For measuring time taken by operations
 from colorama import Style # For terminal text styling
 from lime.lime_tabular import LimeTabularExplainer # For LIME explanations
-from sklearn.ensemble import RandomForestClassifier # For Random Forest model
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier # For Gradient Boosting model
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier # For Gradient Boosting model
 from sklearn.linear_model import LogisticRegression # For logistic regression model
 from sklearn.metrics import classification_report, confusion_matrix # For evaluating model performance
-from sklearn.model_selection import train_test_split # For splitting the dataset into training and testing sets
+from sklearn.model_selection import cross_val_score, StratifiedKFold, train_test_split # For splitting the dataset into training and testing sets
 from sklearn.neighbors import KNeighborsClassifier, NearestCentroid # For k-nearest neighbors model
 from sklearn.neural_network import MLPClassifier # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler # For preprocessing data
 from sklearn.svm import SVC # For Support Vector Machine model
+from tqdm import tqdm # For progress bars
 from xgboost import XGBClassifier # For XGBoost classifier
 
 # Macros:
