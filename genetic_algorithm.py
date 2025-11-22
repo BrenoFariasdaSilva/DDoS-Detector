@@ -298,46 +298,100 @@ def setup_genetic_algorithm(n_features, population_size=30):
 
    return toolbox, population, hof # Return the toolbox, population, and Hall of Fame
 
-def evaluate_individual(individual, X_train, y_train, X_test, y_test):
+def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_cls=None):
    """
-   Evaluate the fitness of an individual solution.
+   Evaluate the fitness of an individual solution using 10-fold Stratified Cross-Validation
+   on the training set only (não combina train+test para evitar data leakage).
 
    :param individual: A list representing the individual solution (binary mask for feature selection).
    :param X_train: Training feature set.
    :param y_train: Training target variable.
-   :param X_test: Testing feature set.
-   :param y_test: Testing target variable.
-   :return: Tuple containing accuracy, precision, recall, F1-score, FPR,
+   :param X_test: Testing feature set (unused during CV, but kept for compatibility).
+   :param y_test: Testing target variable (unused during CV, but kept for compatibility).
+   :param estimator_cls: Classifier class to use (default: RandomForestClassifier).
+   :return: Tuple containing accuracy, precision, recall, F1-score, FPR, FNR, elapsed_time
    """
 
-   if sum(individual) == 0: # If no features are selected, return worst possible scores
-      return 0, 0, 0, 0, 1, 1, float("inf") # Accuracy, Precision, Recall, F1-score, FPR, FNR, Time
+   verbose_output(f"{BackgroundColors.GREEN}Evaluating individual: {BackgroundColors.CYAN}{individual}{Style.RESET_ALL}") # Output the verbose message
 
-   selected_idx = [i for i, bit in enumerate(individual) if bit == 1] # Indices of selected features
-   X_train_sel = X_train[:, selected_idx] # Select features for training set
-   X_test_sel = X_test[:, selected_idx] # Select features for testing set
+   if sum(individual) == 0: # If no features are selected
+      return 0, 0, 0, 0, 1, 1, float("inf") # Return worst possible scores
 
-   start_time = time.time() # Start time measurement
-   model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1) # Initialize the model
-   model.fit(X_train_sel, y_train) # Train the model
-   y_pred = model.predict(X_test_sel) # Make predictions
-   elapsed_time = time.time() - start_time # Calculate elapsed time
+   selected_idx = [i for i, bit in enumerate(individual) if bit == 1] # Get indices of selected features
+   X_train_sel = X_train[:, selected_idx] # Select features from training set
+   
+   accs, precs, recs, f1s, fprs, fnrs, times = [], [], [], [], [], [], [] # Lists to store metrics for each fold
 
-   acc = accuracy_score(y_test, y_pred) # Calculate accuracy
-   prec = precision_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate precision
-   rec = recall_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate recall
-   f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate F1-score
+   try: # Try to create StratifiedKFold splits
+      skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42) # 10-fold Stratified CV
+      splits = list(skf.split(X_train_sel, y_train)) # Generate splits
+   except Exception: # If StratifiedKFold fails (e.g., too few samples per class)
+      print(f"{BackgroundColors.YELLOW}Warning: StratifiedKFold failed, falling back to simple train/test split for evaluation due to {str(Exception)}{Style.RESET_ALL}") # Output warning message
+      X_test_sel = X_test[:, selected_idx] # Select features from test set
+      start_time = time.time() # Start timer
+      model = instantiate_estimator(estimator_cls) # Instantiate the model
+      model.fit(X_train_sel, y_train) # Fit the model on the training set
+      y_pred = model.predict(X_test_sel) # Predict on the test set
+      elapsed_time = time.time() - start_time # Calculate elapsed time
 
-   cm = confusion_matrix(y_test, y_pred, labels=np.unique(y_test)) # Confusion matrix
-   tn = cm[0, 0] if cm.shape == (2, 2) else 0 # True negatives
-   fp = cm[0, 1] if cm.shape == (2, 2) else 0 # False positives
-   fn = cm[1, 0] if cm.shape == (2, 2) else 0 # False negatives
-   tp = cm[1, 1] if cm.shape == (2, 2) else 0 # True positives
+      acc = accuracy_score(y_test, y_pred) # Calculate accuracy
+      prec = precision_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate precision
+      rec = recall_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate recall
+      f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate F1-score
 
-   fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # False positive rate
-   fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # False negative rate
+      cm = confusion_matrix(y_test, y_pred, labels=np.unique(y_test)) # Confusion matrix
+      tn = cm[0, 0] if cm.shape == (2, 2) else 0 # True negatives
+      fp = cm[0, 1] if cm.shape == (2, 2) else 0 # False positives
+      fn = cm[1, 0] if cm.shape == (2, 2) else 0 # False negatives
+      tp = cm[1, 1] if cm.shape == (2, 2) else 0 # True positives
 
-   return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return all metrics
+      fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # False positive rate
+      fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # False negative rate
+
+      return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return metrics
+
+   for train_idx, val_idx in splits: # For each fold
+      start_time = time.time() # Start timer
+      model = instantiate_estimator(estimator_cls) # Instantiate the model
+      
+      y_train_fold = y_train.iloc[train_idx] if hasattr(y_train, 'iloc') else y_train[train_idx] # Training target for the fold
+      y_val_fold = y_train.iloc[val_idx] if hasattr(y_train, 'iloc') else y_train[val_idx] # Validation target for the fold
+      
+      model.fit(X_train_sel[train_idx], y_train_fold) # Fit the model on the training fold
+      y_pred = model.predict(X_train_sel[val_idx]) # Predict on the validation fold
+      elapsed = time.time() - start_time # Calculate elapsed time
+
+      acc = accuracy_score(y_val_fold, y_pred) # Calculate accuracy
+      prec = precision_score(y_val_fold, y_pred, average="weighted", zero_division=0) # Calculate precision
+      rec = recall_score(y_val_fold, y_pred, average="weighted", zero_division=0) # Calculate recall
+      f1 = f1_score(y_val_fold, y_pred, average="weighted", zero_division=0) # Calculate F1-score
+
+      cm = confusion_matrix(y_val_fold, y_pred, labels=np.unique(y_val_fold)) # Confusion matrix
+      tn = cm[0, 0] if cm.shape == (2, 2) else 0 # True negatives
+      fp = cm[0, 1] if cm.shape == (2, 2) else 0 # False positives
+      fn = cm[1, 0] if cm.shape == (2, 2) else 0 # False negatives
+      tp = cm[1, 1] if cm.shape == (2, 2) else 0 # True positives
+
+      fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # False positive rate
+      fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # False negative rate
+
+      accs.append(acc) # Store metrics
+      precs.append(prec) # Store metrics
+      recs.append(rec) # Store metrics
+      f1s.append(f1) # Store metrics
+      fprs.append(fpr) # Store metrics
+      fnrs.append(fnr) # Store metrics
+      times.append(elapsed) # Store elapsed time
+
+   acc = float(np.mean(accs)) if accs else 0.0 # Average accuracy
+   prec = float(np.mean(precs)) if precs else 0.0 # Average precision
+   rec = float(np.mean(recs)) if recs else 0.0 # Average recall
+   f1 = float(np.mean(f1s)) if f1s else 0.0 # Average F1-score
+   fpr = float(np.mean(fprs)) if fprs else 0.0 # Average false positive rate
+   fnr = float(np.mean(fnrs)) if fnrs else 0.0 # Average false negative rate
+   elapsed_time = float(np.mean(times)) if times else float("inf") # Average elapsed time in seconds
+
+   return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return metrics
 
 def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=20):
    """
