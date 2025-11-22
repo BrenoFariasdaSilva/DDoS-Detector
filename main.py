@@ -285,56 +285,84 @@ def load_and_prepare_data(training_data_path=None, testing_data_path=None):
 
 	return train_df, test_df, split_required # Return dataframes and split flag
 
-def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label_encoder=None):
+def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label_encoder=None, selected_features=None):
 	"""
 	Applies one-hot encoding and scaling to features.
-	One-hot encoding is a process of converting categorical variables into a format that can be provided to machine learning algorithms to do a better job in prediction. It creates binary columns for each category in the categorical variable, where each column represents the presence or absence of that category.
-	Automatically detects the label column if not provided.
-	Can align columns to a reference set and reuse scaler and label encoder.
+	Optionally allows selecting only a subset of features.
 
-	:param df: DataFrame with features and labels
-	:param label_col: Name of the label column (optional)
-	:param ref_columns: Reference columns for aligning one-hot encoded features (optional)
-	:param scaler: Fitted StandardScaler to reuse (optional)
-	:param label_encoder: Fitted LabelEncoder to reuse (optional)
+	:param df: DataFrame with raw features
+	:param label_col: Name of the label column
+	:param ref_columns: Reference columns for reindexing (optional)
+	:param scaler: Pre-fitted scaler (optional)
+	:param label_encoder: Pre-fitted label encoder (optional)
+	:param selected_features: List of selected features to keep (optional)
 	:return: Tuple (X_scaled, y, feature_names, X_encoded, scaler, label_encoder)
 	"""
 
-	verbose_output(f"{BackgroundColors.GREEN}Using label column: {label_col}{Style.RESET_ALL}")
+	verbose_output(f"{BackgroundColors.GREEN}Preprocessing features and labels...{Style.RESET_ALL}")
+	verbose_output(f"\t{BackgroundColors.GREEN}Label Column: {BackgroundColors.CYAN}{label_col}{BackgroundColors.GREEN}{Style.RESET_ALL}")
+	verbose_output(f"\t{BackgroundColors.GREEN}Dataframe Shape: {BackgroundColors.CYAN}{df.shape}{BackgroundColors.GREEN}{Style.RESET_ALL}")
+	verbose_output(f"\tSelected Features {BackgroundColors.CYAN}{len(selected_features) if selected_features else 'All'}{BackgroundColors.GREEN}{Style.RESET_ALL}")
 
-	if label_col is None: # If label_col is not provided, automatically detect it
-		label_col = detect_label_column(df.columns) # Detect the label column from the DataFrame columns
+	if label_col is None: # If label_col is not provided, attempt to detect it
+		label_col = detect_label_column(df.columns) # Detect label column
 		if label_col is None: # If no label column is detected
-			raise ValueError(f"{BackgroundColors.RED}No label column detected in the DataFrame. Please provide a valid label column name.{Style.RESET_ALL}")
+			raise ValueError(f"{BackgroundColors.RED}No label column detected in the DataFrame.{Style.RESET_ALL}")
 
-	df = df.dropna(subset=[label_col]) # Remove rows with NaN in the label column
-	y = df[label_col] # Extract label column (keep original)
-	X = df.drop(label_col, axis=1) # Extract features only
+	df = df.dropna(subset=[label_col]) # Drop rows where label is NaN
+	y = df[label_col] # Extract labels
+	X = df.drop(label_col, axis=1) # Extract features
 
-	X_encoded = pd.get_dummies(X) # Apply one-hot encoding only to features
+	non_feature_cols = ["Unnamed: 0", "Flow ID", "Source IP", "Destination IP", "Timestamp"] # Common non-feature columns
+	cols_to_drop = [col for col in non_feature_cols if col in X.columns] # Identify columns to drop
+	if cols_to_drop: # If there are columns to drop
+		X = X.drop(columns=cols_to_drop) # Drop non-feature columns
 
-	X_encoded = X_encoded.dropna() # Drop rows with NaNs in features
-	y = y.loc[X_encoded.index] # Align y with the cleaned X_encoded
+	if selected_features is not None: # If selected_features is provided
+		missing_features = [f for f in selected_features if f not in X.columns] # Identify missing features
+		if missing_features: # If there are missing features
+			print(f"{BackgroundColors.RED}Warning: {len(missing_features)} features from selection file not found in dataset{Style.RESET_ALL}")
+			print(f"{BackgroundColors.RED}Missing features: {missing_features}{Style.RESET_ALL}")
+			raise ValueError(f"{BackgroundColors.RED}Some selected features not found in the DataFrame!{Style.RESET_ALL}")
 
-	if ref_columns is not None: # Align one-hot encoded columns to reference if given
-		X_encoded = X_encoded.reindex(columns=ref_columns, fill_value=0)
+		existing_features = [f for f in selected_features if f in X.columns] # Keep only features that exist
+		if not existing_features: # If no selected features exist in the DataFrame
+			raise ValueError(f"{BackgroundColors.RED}No selected features found in the DataFrame!{Style.RESET_ALL}")
+		X = X[existing_features] # Keep only selected features that exist
 
-	if scaler is None: # Initialize scaler if not provided
-		scaler = StandardScaler() # Create a new StandardScaler instance
-		X_scaled_array = scaler.fit_transform(X_encoded) # Fit and transform the features using the scaler
-	else:
-		X_scaled_array = scaler.transform(X_encoded) # Transform using existing scaler
+	X = X.replace([np.inf, -np.inf], np.nan) # Replace infinity with NaN
+	initial_rows = len(X) # Store initial number of rows
+	X = X.dropna() # Drop rows with NaN values
+	rows_dropped = initial_rows - len(X) # Calculate number of rows dropped
+	if rows_dropped > 0: # If any rows were dropped
+		verbose_output(f"{BackgroundColors.YELLOW}Warning: Dropped {rows_dropped} rows due to NaN/inf values in features.{Style.RESET_ALL}")
 
-	X_scaled = pd.DataFrame(X_scaled_array, columns=X_encoded.columns, index=X_encoded.index) # Convert scaled array back to DataFrame with column names and original indices
+	y = y.loc[X.index] # Align y with cleaned X
 
-	if not pd.api.types.is_numeric_dtype(y): # Verify if label is not already numeric
-		if label_encoder is None: # Initialize label encoder if not provided
-			label_encoder = LabelEncoder() # Create a new LabelEncoder instance
-			y = label_encoder.fit_transform(y) # Transform the labels to numeric format
-		else: # If label encoder is provided, use it to transform labels
-			y = label_encoder.transform(y) # Use existing label encoder to transform labels
+	X_encoded = pd.get_dummies(X) # One-hot encode categorical features
+	X_encoded = X_encoded.dropna() # Drop any rows with NaN values after encoding
+	y = y.loc[X_encoded.index] # Align y with encoded X
 
-	return X_scaled, y, X_encoded.columns, X_encoded, scaler, label_encoder # Return scaled features, labels, feature names, one-hot DataFrame, scaler, and label encoder
+	if ref_columns is not None: # If reference columns are provided
+		X_encoded = X_encoded.reindex(columns=ref_columns, fill_value=0) # Reindex to match reference columns
+		verbose_output(f"{BackgroundColors.GREEN}Reindexed features to match reference columns.{Style.RESET_ALL}")
+
+	if scaler is None: # If scaler is not provided, fit a new one
+		scaler = StandardScaler() # Initialize StandardScaler
+		X_scaled_array = scaler.fit_transform(X_encoded) # Fit and transform the data
+	else: # If scaler is provided, use it to transform
+		X_scaled_array = scaler.transform(X_encoded) # Transform the data with existing scaler
+
+	X_scaled = pd.DataFrame(X_scaled_array, columns=X_encoded.columns, index=X_encoded.index) # Create DataFrame from scaled array
+
+	if not pd.api.types.is_numeric_dtype(y): # If labels are not numeric
+		if label_encoder is None: # If label encoder is not provided, fit a new one
+			label_encoder = LabelEncoder() # Initialize LabelEncoder
+			y = label_encoder.fit_transform(y) # Fit and transform the labels
+		else: # If label encoder is provided, use it to transform
+			y = label_encoder.transform(y) # Transform the labels with existing encoder
+
+	return X_scaled, y, X_encoded.columns, X_encoded, scaler, label_encoder # Return processed data and objects
 
 def split_data(train_df, test_df, split_required, label_col=None):
 	"""
