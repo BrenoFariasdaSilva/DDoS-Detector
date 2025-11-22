@@ -275,6 +275,8 @@ def setup_genetic_algorithm(n_features, population_size=30):
    :param population_size: Size of the population
    :return: toolbox, population, hall_of_fame
    """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Setting up Genetic Algorithm with {n_features} features and population size {population_size}.{Style.RESET_ALL}") # Output the verbose message
 
    # Avoid re-creating FitnessMax and Individual
    if not hasattr(creator, "FitnessMax"): # If FitnessMax is not already created
