@@ -235,14 +235,16 @@ def load_dataset(csv_path):
 
    return df # Return the loaded DataFrame
 
-def split_dataset(df, train_test_ratio=0.2):
+def split_dataset(df, test_size=0.2):
    """
    Split dataset into training and testing sets.
 
    :param df: DataFrame to split.
-   :param train_test_ratio: Proportion of the dataset to include in the test split.
+   :param test_size: Proportion of the dataset to include in the test split.
    :return: X_train, X_test, y_train, y_test
    """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Splitting dataset into training and testing sets with test size = {test_size}.{Style.RESET_ALL}") # Output the verbose message
 
    X = df.iloc[:, :-1].select_dtypes(include=["number"]) # Select only numeric features
    y = df.iloc[:, -1] # Target variable
@@ -250,17 +252,19 @@ def split_dataset(df, train_test_ratio=0.2):
       y, _ = pd.factorize(y) # Factorize the target variable
 
    X = X.replace([np.inf, -np.inf], np.nan).dropna() # Remove rows with NaN or infinite values
-   y = y[X.index] # Align y with cleaned X
+   y = y.loc[X.index] if isinstance(y, pd.Series) else pd.Series(y, index=df.index).loc[X.index] # Align y with cleaned X
 
    if X.empty: # If no numeric features remain after cleaning
       print(f"{BackgroundColors.RED}No valid numeric features remain after cleaning.{Style.RESET_ALL}")
       return None, None, None, None, None # Return None values
 
+   X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42) # Split the dataset
+ 
    scaler = StandardScaler() # Initialize the scaler
-   X_scaled = scaler.fit_transform(X) # Scale the features
-   X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=train_test_ratio, random_state=42) # Split the dataset
+   X_train_scaled = scaler.fit_transform(X_train) # Fit scaler on training set and transform
+   X_test_scaled = scaler.transform(X_test) # Transform test set with the same scaler
 
-   return X_train, X_test, y_train, y_test, X.columns # Return the split data and feature names
+   return X_train_scaled, X_test_scaled, y_train, y_test, X.columns # Return the split data and feature names
 
 def setup_genetic_algorithm(n_features, population_size=30):
    """
