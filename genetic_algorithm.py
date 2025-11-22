@@ -492,6 +492,8 @@ def extract_rfe_ranking(csv_path):
    :param csv_path: Path to the original CSV file for saving outputs.
    :return: Dictionary of feature names and their RFE rankings.
    """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Extracting RFE rankings from results file.{Style.RESET_ALL}") # Output the verbose message
 
    rfe_ranking = {} # Dictionary to store feature names and their RFE rankings
    rfe_file_path = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE_results_RandomForestClassifier.txt" # Path to the RFE results file
