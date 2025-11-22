@@ -364,34 +364,35 @@ def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label
 
 	return X_scaled, y, X_encoded.columns, X_encoded, scaler, label_encoder # Return processed data and objects
 
-def split_data(train_df, test_df, split_required, label_col=None):
+def split_data(train_df, test_df, split_required, label_col=None, selected_features=None):
 	"""
-	Handles splitting of data if needed, or uses provided train/test datasets.
+ 	Splits the data into training and testing sets.
+  
+	:param train_df: DataFrame with training data
+	:param test_df: DataFrame with testing data
+	:param split_required: Boolean indicating if a split is required
+	:param label_col: Name of the label column
+	:param selected_features: List of selected features to keep (optional)
+ 	:return: Tuple (X_train, X_test, y_train, y_test, feature_names)
+  	"""
+   
+	if split_required: # If a split is required
+		verbose_output(f"{BackgroundColors.GREEN}Splitting data into train/test sets...{Style.RESET_ALL}")
+		X_scaled, y, feature_names, _, scaler, label_encoder = preprocess_features(train_df, label_col, selected_features=selected_features) # Preprocess features
+		verbose_output(f"{BackgroundColors.GREEN}Splitting data into train/test (75/25)...{Style.RESET_ALL}")
+		X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.25, random_state=42, stratify=y) # Split data into training and testing sets
+		verbose_output(f"{BackgroundColors.GREEN}Split complete. Train: {X_train.shape}, Test: {X_test.shape}{Style.RESET_ALL}")
+	else: # If no split is required
+		X_train_scaled, y_train, feature_names_train, _, scaler, label_encoder = preprocess_features(train_df, label_col, selected_features=selected_features) # Preprocess training features
+		X_test_scaled, y_test, feature_names_test, _, _, _ = preprocess_features(test_df, label_col, ref_columns=feature_names_train, scaler=scaler, label_encoder=label_encoder, selected_features=selected_features) # Preprocess testing features with reference columns and existing scaler/encoder
 
-	:param train_df: DataFrame for training data
-	:param test_df: DataFrame for testing data (can be None if split_required is True)
-	:param split_required: Boolean indicating if train/test split is required
-	:param label_col: Label column name (optional)
-	:return: Tuple (X_train, X_test, y_train, y_test, feature_names)
-	"""
-
-	verbose_output(f"{BackgroundColors.GREEN}Preparing data for training and testing...{Style.RESET_ALL}")
-
-	if split_required: # Same file for train and test -> split internally after preprocessing
-		X_scaled, y, feature_names, _, scaler, label_encoder = preprocess_features(train_df, label_col) # Preprocess features and labels
-		verbose_output(f"{BackgroundColors.GREEN}Splitting dataset into train/test sets...{Style.RESET_ALL}") 
-		X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.25, random_state=42, stratify=y)
-	else: # Different files for train and test -> preprocess separately
-		X_train_scaled, y_train, feature_names_train, _, scaler, label_encoder = preprocess_features(train_df, label_col) # Preprocess training features and labels
-		X_test_scaled, y_test, feature_names_test, _, _, _ = preprocess_features(test_df, label_col, ref_columns=feature_names_train, scaler=scaler, label_encoder=label_encoder) # For test set, reuse scaler and label encoder, and align columns to train's feature names
-
-		if list(feature_names_train) != list(feature_names_test): # Verify if feature names in train and test sets match
+		if list(feature_names_train) != list(feature_names_test): # Verify that feature columns match
 			raise ValueError(f"{BackgroundColors.RED}Mismatch in feature columns between training and testing datasets.{Style.RESET_ALL}")
 
-		X_train, X_test = X_train_scaled, X_test_scaled # Assign preprocessed features to train and test sets
-		feature_names = feature_names_train # Use training feature names as reference
+		X_train, X_test = X_train_scaled, X_test_scaled # Assign training and testing features
+		feature_names = feature_names_train # Use training feature names
 
-	return X_train, X_test, y_train, y_test, feature_names # Return the training and testing features and labels, along with feature names
+	return X_train, X_test, y_train, y_test, feature_names # Return split data and feature names
 
 def get_models():
 	"""
