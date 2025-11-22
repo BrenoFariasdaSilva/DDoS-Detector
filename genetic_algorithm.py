@@ -219,13 +219,15 @@ def load_dataset(csv_path):
    :return: DataFrame
    """
 
-   print(f"\n{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}") # Output the loading dataset message
+   verbose_output(f"\n{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}") # Output the loading dataset message
 
    if not verify_filepath_exists(csv_path): # If the CSV file does not exist
       print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
       return None # Return None
 
    df = pd.read_csv(csv_path, low_memory=False) # Load the dataset
+
+   df.columns = df.columns.str.strip() # Clean column names by stripping leading/trailing whitespace
 
    if df.shape[1] < 2: # If there are less than 2 columns
       print(f"{BackgroundColors.RED}CSV must have at least 1 feature and 1 target.{Style.RESET_ALL}")
