@@ -255,7 +255,7 @@ def compute_tsne_separability(df, label_col, random_state=42):
    :return: Float separability score, or "N/A" if not applicable
    """
 
-   verbose_output(f"{BackgroundColors.YELLOW}Computing t-SNE separability score...{Style.RESET_ALL}") # Output verbose message
+   verbose_output(f"{BackgroundColors.GREEN}Computing t-SNE separability score...{Style.RESET_ALL}") # Output verbose message
 
    if label_col is None or label_col not in df.columns: # If no label column is found
       return "N/A" # Return "N/A"
@@ -467,7 +467,7 @@ def main():
    files_to_process = get_files_to_process(input_path, file_extension=".csv") # Get all CSV files in the input path
 
    for file in files_to_process: # Output each file to be processed
-      print(f"{BackgroundColors.YELLOW}Found file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}") # Output the found file
+      verbose_output(f"{BackgroundColors.GREEN}Found file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}") # Output the found file
       success = generate_dataset_report(file, file_extension=".csv", low_memory=True, output_filename="_dataset_descriptor.csv") # Generate the dataset report for each file
       if not success: # If the report was not generated successfully
          print(f"{BackgroundColors.RED}Failed to generate dataset report for file: {file}{Style.RESET_ALL}") # Output the failure message
