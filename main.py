@@ -807,7 +807,7 @@ def explain_predictions_with_tree_shap(model, X_train, X_test, feature_names, mo
 	:return: None
 	"""
 
-	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Explaining Predictions with TreeExplainer...{Style.RESET_ALL}")
+	verbose_output(f"{BackgroundColors.GREEN}Explaining Predictions with SHAP TreeExplainer...{Style.RESET_ALL}")
 	X_explain = X_test[:5] # Select the first 5 instances for explanation
 
 	explainer = shap.TreeExplainer(model) # Create a SHAP TreeExplainer for the model
@@ -818,14 +818,10 @@ def explain_predictions_with_tree_shap(model, X_train, X_test, feature_names, mo
 		feat_val = X_explain.iloc[i].values.flatten() # Get feature values for the instance
 
 		if len(feature_names) != len(shap_val) or len(shap_val) != len(feat_val): # Verify if lengths match
-			print(f"[Erro] Comprimentos incompatíveis na instância {i+1}") 
+			verbose_output(f"{BackgroundColors.RED}Lengths do not match for instance {i+1}:{Style.RESET_ALL}")
 			continue # Skip this instance if lengths do not match
 
-		shap_df = pd.DataFrame({ # Create a DataFrame for SHAP values
-			"feature": feature_names,
-			"shap_value": shap_val.flatten(),
-			"feature_value": feat_val
-		})
+		shap_df = pd.DataFrame({"feature": feature_names, "shap_value": shap_val.flatten(), "feature_value": feat_val}) # Create a DataFrame for SHAP values
 		shap_df.to_csv(f"{model_name}_tree_shap_instance_{i+1}.csv", index=False, float_format="%.2f") # Save SHAP values to CSV
 
 def explain_predictions_with_shap(model, X_train, X_test, feature_names):
