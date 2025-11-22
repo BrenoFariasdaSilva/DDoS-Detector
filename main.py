@@ -176,6 +176,7 @@ def get_features_from_file(file_path, start_line_keyword="Best Feature Subset us
 def detect_label_column(columns, common_names=None):
 	"""
 	Detects the label column from a list of common label names.
+	Handles columns with leading/trailing whitespace.
 
 	:param columns: List of DataFrame column names
 	:param common_names: List of common label column names (optional)
@@ -187,12 +188,12 @@ def detect_label_column(columns, common_names=None):
 	if common_names is None: # If common_names is not provided, use a default list
 		common_names = ["class", "label", "target", "outcome", "result", "attack_detected"]
 
-	columns_lower = [col.lower() for col in columns] # Convert all column names to lowercase for case-insensitive comparison
+	columns_lower = [(col.strip().lower(), col) for col in columns] # Convert all column names to lowercase and strip whitespace
 
 	for name in common_names: # Iterate through each common name
-		if name.lower() in columns_lower: # If the common name is found in the columns
-			index = columns_lower.index(name.lower()) # Get the index of the common name in the columns
-			return columns[index] # Return the original column name (not lowercase) at that index
+		for col_lower, col_original in columns_lower: # Verify each column
+			if name.lower() == col_lower: # If the common name matches the stripped column name
+				return col_original # Return the original column name (with spaces if present)
 
 	return None # If no common name is found, return None
 
