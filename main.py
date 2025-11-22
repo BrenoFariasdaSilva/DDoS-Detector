@@ -93,27 +93,14 @@ class BackgroundColors: # Colors for the terminal
 # Execution Constants
 OUTPUT_DIR = f"./Results" # Directory to save results
 VERBOSE = False # Set to True for verbose output
-DATASETS = { # Dictionary containing dataset directory paths with their training and testing file paths
-	"./CIC-IDS2017-Dataset": [
-		"./CIC-IDS2017-Dataset/Infiltration-Thursday-no-metadata.parquet",
-		"./CIC-IDS2017-Dataset/Infiltration-Thursday-no-metadata.parquet"
-	],
-	"./Cybersecurity-Intrusion-Detection-Dataset": [
-		"./Cybersecurity-Intrusion-Detection-Dataset/cybersecurity_intrusion_data.arff",
-		"./Cybersecurity-Intrusion-Detection-Dataset/cybersecurity_intrusion_data.arff"
-	],
-	"./KDD-Dataset": [
-		"./KDD-Dataset/KDDTrain+.arff",
-		"./KDD-Dataset/KDDTest+.arff"
-	],
-	"./LUFlow-Dataset": [
-		"./LUFlow-Dataset/2022/06/2022.06.14/2022.06.14.csv",
-		"./LUFlow-Dataset/2022/06/2022.06.14/2022.06.14.csv"
-	],
-	"./UNSW-NB15-Dataset": [
-		"./UNSW-NB15-Dataset/UNSW_NB15_training-set.parquet",
-		"./UNSW-NB15-Dataset/UNSW_NB15_testing-set.parquet"
-	]
+DATASETS = {
+	"CICDDoS2019-Dataset": {
+		"train": "./Datasets/DDoS/CICDDoS2019/01-12/DrDoS_DNS.csv",
+		"test":  "./Datasets/DDoS/CICDDoS2019/01-12/DrDoS_DNS.csv",
+		"features": [
+			"./Datasets/DDoS/CICDDoS2019/01-12/Feature_Analysis/Genetic_Algorithm_Results.txt"
+		]
+	}
 }
 
 # Constants
