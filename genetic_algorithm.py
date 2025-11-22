@@ -416,15 +416,30 @@ def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_tes
 
    toolbox.register("evaluate", fitness) # Register the fitness function
 
-   for _ in range(1, n_generations + 1): # Loop for the specified number of generations
+   best_fitness = None # Track the best fitness value
+   gens_without_improvement = 0 # Counter for generations with no improvement
+   early_stop_gens = 10 # Number of generations to wait for improvement before stopping
+
+   for gen in range(1, n_generations + 1): # Loop for the specified number of generations
       offspring = algorithms.varAnd(population, toolbox, cxpb=0.5, mutpb=0.2) # Apply crossover and mutation
       fits = list(map(toolbox.evaluate, offspring)) # Evaluate the offspring
 
       for ind, fit in zip(offspring, fits): # Assign fitness values
          ind.fitness.values = fit # Set the fitness value
-      
+
       population[:] = toolbox.select(offspring, k=len(population)) # Select the next generation population
       hof.update(population) # Update the Hall of Fame
+
+      current_best_fitness = hof[0].fitness.values[0] if hof and hof[0].fitness.values else None # Get current best fitness
+      if best_fitness is None or (current_best_fitness is not None and current_best_fitness > best_fitness):
+         best_fitness = current_best_fitness # Update best fitness
+         gens_without_improvement = 0 # Reset counter
+      else:
+         gens_without_improvement += 1 # Increment counter
+
+      if gens_without_improvement >= early_stop_gens:
+         print(f"{BackgroundColors.YELLOW}Early stopping: No improvement in best fitness for {early_stop_gens} generations. Stopping at generation {gen}.{Style.RESET_ALL}")
+         break # Stop the loop early
 
    return hof[0] # Return the best individual from the Hall of Fame
 
