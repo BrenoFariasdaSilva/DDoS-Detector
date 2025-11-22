@@ -648,6 +648,52 @@ def generate_overall_performance_summary(all_model_scores, output_path=".", feat
 
 	verbose_output(true_string=f"{BackgroundColors.GREEN}Overall performance summary saved to: {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}") # Print success message with file path
 
+def generate_feature_selection_comparison(baseline_metrics, feature_selected_metrics, output_path=".", feat_extraction_method=""):
+	"""
+	Generates a comparison CSV showing performance with and without feature selection.
+	
+	:param baseline_metrics: List of dictionaries with baseline model scores (without feature selection)
+	:param feature_selected_metrics: List of dictionaries with feature-selected model scores
+	:param output_path: Path where the comparison CSV will be saved
+	:param feat_extraction_method: String indicating feature selection method
+	:return: None
+	"""
+	
+	verbose_output(true_string=f"{BackgroundColors.GREEN}Generating feature selection comparison...{Style.RESET_ALL}")
+	
+	comparison_data = [] # Create comparison data
+	
+	for baseline in baseline_metrics: # Iterate through each baseline metric
+		model_name = baseline.get("Model", "") # Get model name
+		dataset_name = baseline.get("Dataset", "") # Get dataset name
+		
+		feature_selected = next((fs for fs in feature_selected_metrics if fs.get("Model") == model_name and fs.get("Dataset") == dataset_name), None) # Find matching feature-selected model
+		
+		if feature_selected: # If a matching feature-selected model is found
+			baseline_f1 = float(baseline.get("F1-Score", 0)) # Get baseline F1-Score
+			feature_f1 = float(feature_selected.get("F1-Score", 0)) # Get feature-selected F1-Score
+			improvement = ((feature_f1 - baseline_f1) / baseline_f1 * 100) if baseline_f1 > 0 else 0 # Calculate percentage improvement
+			
+			comparison_data.append({ # Append comparison data
+				"Dataset": dataset_name, # Dataset name
+				"Model": model_name, # Model name
+				"F1-Score (Baseline)": round(baseline_f1, 4), # Round baseline F1-Score
+				"F1-Score (Feat. Selection)": round(feature_f1, 4), # Round feature-selected F1-Score
+				"Improvement (%)": round(improvement, 2), # Round improvement percentage
+				"Training Duration (Baseline)": baseline.get("Training Duration", ""), # Baseline training duration
+				"Training Duration (Feat. Selection)": feature_selected.get("Training Duration", ""), # Feature-selected training duration
+				"Features Used": feature_selected.get("Features Count", "N/A") # Number of features used
+			})
+	
+	comparison_data = sorted(comparison_data, key=lambda x: (x["Dataset"], -x["Improvement (%)"])) # Sort by improvement (descending)
+	
+	comparison_df = pd.DataFrame(comparison_data) # Create DataFrame from comparison data
+	os.makedirs(os.path.join(output_path, OUTPUT_DIR), exist_ok=True) # Ensure output directory exists
+	output_file = os.path.join(output_path, f"{OUTPUT_DIR}/{feat_extraction_method}-Feature_Selection_Comparison.csv") # Define output file path
+	comparison_df.to_csv(output_file, index=False) # Save comparison DataFrame to CSV
+	
+	print(f"{BackgroundColors.GREEN}Feature selection comparison saved to: {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}")
+
 def train_and_evaluate_models(X_train, X_test, y_train, y_test, dataset_dir, dataset_name):
 	"""
 	Trains and evaluates multiple models.
