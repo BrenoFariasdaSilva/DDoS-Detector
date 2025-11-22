@@ -926,47 +926,116 @@ def play_sound():
 	else: # If the sound file does not exist
 		print(f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{SOUND_FILE}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}")
 
-def main():
+def main(use_cv=False, extract_features=True, compare_feature_selection=None):
 	"""
 	Main function to run the machine learning pipeline on multiple datasets.
 
-	:param: None
+	:param use_cv: Boolean flag to indicate whether to use cross-validation instead of train/test split (default is False)
+	:param extract_features: Boolean flag to indicate whether to extract features from FEATURES_FILE (default is True)
+	:param compare_feature_selection: Boolean flag to compare performance with/without feature selection (default is True if extract_features is True)
 	:return: None
 	"""
 
-	print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Starting Machine Learning Pipeline...{Style.RESET_ALL}\n") # Print the start message and clear the terminal
+	print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}DDoS Detector{BackgroundColors.GREEN} program!{Style.RESET_ALL}", end="\n\n")
 
 	sorted_datasets = sorted(DATASETS.items()) # Sort datasets alphabetically by keys
 
-	all_model_scores = [] # List to store all models' performance metrics across all datasets
+	features_to_use = None # Initialize selected features holder
+	features_file_used = None # Initialize features file reference holder
 
-	for index, (dataset_key, (training_file_path, testing_file_path)) in enumerate(sorted_datasets, start=1): # Enumerate through sorted datasets with index starting from 1
-		dataset_name = os.path.basename(dataset_key) # Get the dataset name from the directory path
+	if compare_feature_selection is None: # If compare_feature_selection is not set
+		compare_feature_selection = extract_features # Enable only if extracting features
+
+	all_model_scores = [] # Overall model performance list
+	baseline_metrics = [] # Metrics from baseline (no Feature Selection)
+	feature_selected_metrics = [] # Metrics from Feature Selection-enabled runs
+
+	for index, (dataset_key, dataset_info) in enumerate(sorted_datasets, start=1): # Iterate datasets
+		training_file_path = dataset_info.get("train") # Get train file
+		testing_file_path = dataset_info.get("test") # Get test file
+		feature_files = dataset_info.get("features", []) # Get features list
+
+		dataset_name = os.path.splitext(os.path.basename(str(training_file_path)))[0] # Extract dataset name (casts to str)
 
 		print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset {BackgroundColors.CYAN}{index}/{len(sorted_datasets)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN}{Style.RESET_ALL}")
 
-		if not verify_filepath_exists(training_file_path) or not verify_filepath_exists(testing_file_path): # If either training or testing file does not exist
-			print(f"{BackgroundColors.RED}Missing input files for {dataset_name}. Skipping.{Style.RESET_ALL}")
-			continue # Skip to the next dataset if files are missing
+		if not verify_filepath_exists(training_file_path): # Verify train file
+			print(f"{BackgroundColors.RED}Missing training file for {dataset_name}. Skipping.{Style.RESET_ALL}")
+			continue # Skip dataset if missing train file
 
-		train_df, test_df, split_required = load_and_prepare_data(training_file_path, testing_file_path) # Load and prepare the training and testing data
-		X_train, X_test, y_train, y_test, feature_names = split_data(train_df, test_df, split_required) # Split the data into training and testing sets, and preprocess features
+		if not verify_filepath_exists(testing_file_path): # Verify test file
+			testing_file_path = training_file_path # Fallback to train file
 
-		models, dataset_model_scores = train_and_evaluate_models(X_train, X_test, y_train, y_test, dataset_key, dataset_name) # Train and evaluate models on the dataset, returning trained models and their performance metrics
+		features_to_use = None # Reset feature list per dataset
+		features_file_used = None # Reset last-used features file
 
-		# for model_name, model in models.items(): # Iterate through each trained model
-			# print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Explaining predictions for {model_name} on {dataset_name}...{Style.RESET_ALL}")
-			# explain_with_multiple_methods(model, X_train, X_test, feature_names, model_name=model_name) # Explain model predictions using multiple methods
+		if extract_features and feature_files: # If Feature Selection is enabled and features exist
+			merged_features = [] # Initialize merged features list
+			for feature_file in feature_files: # Loop through all feature files
+				if verify_filepath_exists(feature_file): # Verify file existence
+					feats = get_features_from_file(feature_file) # Load features
+					merged_features.extend(feats) # Add to merge list
+					features_file_used = feature_file # Track last loaded file
+				else: # File not found
+					print(f"{BackgroundColors.RED}Feature file not found: {feature_file}{Style.RESET_ALL}")
+			features_to_use = list(dict.fromkeys(merged_features)) if merged_features else None # Remove duplicates
 
-		all_model_scores.extend(dataset_model_scores) if dataset_model_scores else None # Extend the list of all model scores with the current dataset's scores if available
+			if features_to_use: # Print info if features loaded
+				verbose_output(f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(features_to_use)}{BackgroundColors.GREEN} features from multiple feature files.{Style.RESET_ALL}\n")
 
-		print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Pipeline for {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} finished successfully.{Style.RESET_ALL}\n")
+		train_df, test_df, split_required = load_and_prepare_data(training_file_path, testing_file_path) # Load and preprocess dataset
 
-	generate_overall_performance_summary(all_model_scores) if all_model_scores else None # Generate overall performance summary if there are any model scores
+		label_col = detect_label_column(train_df.columns) # Detect label column automatically
+		if label_col is None: # If not detected
+			print(f"{BackgroundColors.RED}No label column detected in {dataset_name}.{Style.RESET_ALL}")
+			print(f"{BackgroundColors.RED}Available columns: {BackgroundColors.CYAN}{list(train_df.columns)}{BackgroundColors.RED}...{Style.RESET_ALL}")
+			print(f"{BackgroundColors.RED}Total columns: {BackgroundColors.CYAN}{len(train_df.columns)}{Style.RESET_ALL}")
+			label_col = input(f"{BackgroundColors.GREEN}Please enter the label column name for {dataset_name}: {Style.RESET_ALL}").strip() # Ask user for label column
+			if label_col == "": # Skip if empty input
+				continue # Skip dataset
+			while label_col not in train_df.columns: # Validate column name
+				print(f"{BackgroundColors.RED}Invalid label column name. Please try again.{Style.RESET_ALL}")
+				label_col = input(f"{BackgroundColors.GREEN}Please enter the label column name for {dataset_name}: {Style.RESET_ALL}").strip() # Ask again
 
-	print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}All datasets processed. Overall analysis finished.{Style.RESET_ALL}")
+		if compare_feature_selection and features_to_use is not None: # Run baseline if needed
+			verbose_output(f"{BackgroundColors.GREEN}Running baseline (without feature selection)...{Style.RESET_ALL}")
+			X_train_base, X_test_base, y_train_base, y_test_base, feature_names_base = split_data(train_df, test_df, split_required, label_col=label_col, selected_features=None) # Split without Feature Selection
+			verbose_output(f"{BackgroundColors.GREEN}Training baseline models...{Style.RESET_ALL}")
+			_, baseline_scores = train_and_evaluate_models(X_train_base, X_test_base, y_train_base, y_test_base, dataset_key, dataset_name, use_cv=use_cv, selected_features=None, features_file=None, return_metrics_only=True) # Train baseline
+			baseline_metrics.extend(baseline_scores) # Store baseline metrics
 
-	atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None # Register the play_sound function to be called at exit if enabled
+		verbose_output(f"{BackgroundColors.GREEN}Preparing data with feature selection...{Style.RESET_ALL}")
+		X_train, X_test, y_train, y_test, feature_names = split_data(train_df, test_df, split_required, label_col=label_col, selected_features=features_to_use) # Split with Feature Selection
+		verbose_output(f"{BackgroundColors.GREEN}Training models with feature selection...{Style.RESET_ALL}")
+		models, dataset_model_scores = train_and_evaluate_models(X_train, X_test, y_train, y_test, dataset_key, dataset_name, use_cv=use_cv, selected_features=features_to_use, features_file=features_file_used) # Train Feature Selection models
+
+		all_model_scores.extend(dataset_model_scores) if dataset_model_scores else None # Add to overall scores
+
+		if compare_feature_selection and features_to_use is not None: # If comparing Feature Selection is enabled
+			feature_selected_metrics.extend(dataset_model_scores) # Store Feature Selection metrics
+
+	feat_extraction_method = "" # Initialize method tag
+	if features_to_use is not None and features_file_used: # Map features file to method
+		features_basename = os.path.basename(features_file_used) # Extract base filename
+		features_name = os.path.splitext(features_basename)[0] # Remove extension
+		if "Genetic" in features_name or "GA" in features_name: # If Genetic Algorithm indicated
+			feat_extraction_method = "GA" # Genetic Algorithm tag
+		elif "RFE" in features_name:
+			feat_extraction_method = "RFE" # RFE tag
+		elif "PCA" in features_name:
+			feat_extraction_method = "PCA" # PCA tag
+		else: # Generic case
+			feat_extraction_method = f"-{features_name[:15]}" # Generic prefix
+
+	generate_overall_performance_summary(all_model_scores, feat_extraction_method=feat_extraction_method) if all_model_scores else None # Generate overall summary
+
+	if compare_feature_selection and baseline_metrics and feature_selected_metrics: # If comparing Feature Selection is enabled and metrics exist
+		comparison_output_path = os.path.join(os.getcwd(), OUTPUT_DIR) # Path for comparison report
+		generate_feature_selection_comparison(baseline_metrics, feature_selected_metrics, output_path=comparison_output_path, feat_extraction_method=feat_extraction_method) # Generate Feature Selection comparison
+
+	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished!{Style.RESET_ALL}\n")
+
+	atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None # Register sound on exit if enabled
 
 if __name__ == "__main__":
 	"""
