@@ -534,7 +534,7 @@ def print_metrics(metrics):
    print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{fnr:.4f}{Style.RESET_ALL}")
    print(f"   {BackgroundColors.GREEN}Elapsed Time (s): {BackgroundColors.CYAN}{elapsed_time:.2f}{Style.RESET_ALL}")
 
-def write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=None):
+def write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=None, classifier_name="RandomForest", train_test_ratio=None, n_train=None, n_test=None):
    """
    Write the best features and their RFE rankings to a results file.
 
@@ -542,27 +542,47 @@ def write_best_features_to_file(best_features, rfe_ranking, results_file, metric
    :param rfe_ranking: Dictionary of feature names and their RFE rankings.
    :param results_file: Path to the results file for saving outputs.
    :param metrics: Dictionary or tuple containing evaluation metrics.
+   :param classifier_name: String name of the classifier used for these metrics.
    :return: None
    """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Writing best features and RFE rankings to results file: {BackgroundColors.CYAN}{results_file}{Style.RESET_ALL}") # Output the verbose message
 
    with open(results_file, "w") as f: # Open the results file for writing
-      acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics # Unpack metrics
-      f.write("Performance Metrics for the Random Forest Classifier using the best feature subset from the Genetic Algorithm:\n") # Header for metrics section
-      f.write(f"Accuracy: {acc:.4f}\n")
-      f.write(f"Precision: {prec:.4f}\n")
-      f.write(f"Recall: {rec:.4f}\n")
-      f.write(f"F1-Score: {f1:.4f}\n")
-      f.write(f"False Positive Rate (FPR): {fpr:.4f}\n")
-      f.write(f"False Negative Rate (FNR): {fnr:.4f}\n")
-      f.write(f"Elapsed Time (s): {elapsed_time:.2f}\n")
+      if metrics: # If metrics are provided
+         acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics # Unpack metrics
+         f.write(f"Classifier: {classifier_name}\n\n")
+         f.write("Performance Metrics:\n")
+         f.write(f"Accuracy: {acc:.4f}\n")
+         f.write(f"Precision: {prec:.4f}\n")
+         f.write(f"Recall: {rec:.4f}\n")
+         f.write(f"F1-Score: {f1:.4f}\n")
+         f.write(f"False Positive Rate (FPR): {fpr:.4f}\n")
+         f.write(f"False Negative Rate (FNR): {fnr:.4f}\n")
+         f.write(f"Elapsed Time (s): {elapsed_time:.2f}\n\n")
+      else: # If no metrics are provided
+         f.write(f"Classifier: {classifier_name}\n\nNo metrics provided.\n\n")
 
-      f.write("\nBest Feature Subset using Genetic Algorithm:\n") # Write header
+      if n_train is not None and n_test is not None: # If train and test counts are provided
+         try: # Try to calculate the fraction
+            total = int(n_train) + int(n_test) # Calculate total samples
+            frac = float(n_test) / float(total) if total > 0 else None # Calculate test fraction
+            if frac is not None: # If fraction is calculated successfully
+               f.write(f"Train/Test split: test_size={frac:.3f} ({n_train} train / {n_test} test)\n\n") # Write train/test split with fraction
+            else: # If fraction is not calculated
+               f.write(f"Train/Test split: {n_train} train / {n_test} test (fraction unknown)\n\n") # Write train/test split without fraction
+         except Exception: # If an error occurs during calculation
+            f.write(f"Train/Test split: {n_train} train / {n_test} test\n\n") # Write train/test split without fraction
+      elif train_test_ratio is not None: # If only train/test ratio is provided
+         f.write(f"Train/Test split: test_size={train_test_ratio} (counts unknown)\n\n") # Write train/test split with ratio
+
+      f.write("Best Feature Subset using Genetic Algorithm:\n") # Write header
       for i, feat in enumerate(best_features, start=1): # For each best feature
          feat_norm = normalize_feature_name(feat) # Normalize the feature name
          rank_info = f" (RFE ranking {rfe_ranking[feat_norm]})" if feat_norm in rfe_ranking else " (RFE ranking N/A)" # Get RFE ranking info
          f.write(f"{i}. {feat_norm}{rank_info}\n") # Write feature and its RFE ranking
 
-      print(f"\n{BackgroundColors.GREEN}Best features and metrics saved to {BackgroundColors.CYAN}{results_file}{Style.RESET_ALL}") # Notify user
+   print(f"\n{BackgroundColors.GREEN}Saved results for {BackgroundColors.CYAN}{classifier_name}{BackgroundColors.GREEN} to {BackgroundColors.CYAN}{results_file}{Style.RESET_ALL}") # Notify user
 
 def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
    """
