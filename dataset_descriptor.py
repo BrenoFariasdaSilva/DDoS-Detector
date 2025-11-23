@@ -284,7 +284,7 @@ def compute_tsne_separability(df, label_col, random_state=42):
       verbose_output(f"{BackgroundColors.RED}t-SNE separability computation failed: {e}{Style.RESET_ALL}") # Output verbose message
       return "N/A" # Return "N/A" if computation fails
 
-def save_tsne_plot(df, label_col, dataset_name, output_dir="Results", random_state=42):
+def save_tsne_plot(df, label_col, dataset_name, dataset_dir, random_state=42):
    """
    Generates and saves a 3D t-SNE scatter plot colored by class labels.
 
@@ -293,7 +293,7 @@ def save_tsne_plot(df, label_col, dataset_name, output_dir="Results", random_sta
    :param df: pandas DataFrame
    :param label_col: Label column name
    :param dataset_name: Dataset filename (used for naming the PNG)
-   :param output_dir: Directory to save the PNG image (default: "Results")
+   :param dataset_dir: Directory of the dataset
    :param random_state: Random seed for reproducibility
    """
 
@@ -325,6 +325,7 @@ def save_tsne_plot(df, label_col, dataset_name, output_dir="Results", random_sta
       ax.legend(title=label_col, loc="best", fontsize=8) # Add legend
       plt.tight_layout() # Adjust layout
 
+      output_dir = os.path.join(dataset_dir, "Data_Separability") # Set output directory to dataset path with Data_Separability subdir
       os.makedirs(output_dir, exist_ok=True) # Ensure output directory exists
       image_path = os.path.join(output_dir, f"TSNE_3D_{os.path.splitext(dataset_name)[0]}.png") # Image path
       plt.savefig(image_path, dpi=150) # Save the figure
@@ -353,7 +354,7 @@ def get_dataset_info(filepath, low_memory=True):
    missing_summary = summarize_missing_values(df) # Summarize missing values
    classes_str, class_dist_str = summarize_classes(df, label_col) # Summarize classes and distributions
    tsne_separability = compute_tsne_separability(df, label_col) # Compute t-SNE separability score
-   save_tsne_plot(df, label_col, os.path.basename(filepath)) # Generate and save 3D t-SNE visualization
+   save_tsne_plot(df, label_col, os.path.basename(filepath), os.path.dirname(filepath)) # Generate and save 3D t-SNE visualization
 
    return { # Return the dataset information as a dictionary
       "Dataset Name": os.path.basename(filepath),
