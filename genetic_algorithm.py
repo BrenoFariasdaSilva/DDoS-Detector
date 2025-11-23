@@ -739,16 +739,19 @@ def run_population_sweep(csv_path, n_generations=100, min_pop=10, max_pop=30):
    print(f"  {BackgroundColors.GREEN}  Crossover: {BackgroundColors.CYAN}0.5{Style.RESET_ALL}")
    print(f"  {BackgroundColors.GREEN}  Mutation: {BackgroundColors.CYAN}0.2 (individual), 0.05 (gene){Style.RESET_ALL}")
    print(f"  {BackgroundColors.GREEN}  Selection: {BackgroundColors.CYAN}Tournament (tournsize=3){Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}  Dataset: {BackgroundColors.CYAN}{len(y_train)} training / {len(y_test)} testing  (80/20){Style.RESET_ALL}\n")
+   train_count = len(y_train) if y_train is not None else 0 # Number of training samples
+   test_count = len(y_test) if y_test is not None else 0 # Number of testing samples
+   print(f"  {BackgroundColors.GREEN}  Dataset: {BackgroundColors.CYAN}{train_count} training / {test_count} testing  (80/20){Style.RESET_ALL}\n") # Output dataset split
    
    for pop_size in tqdm(range(min_pop, max_pop + 1), desc=f"{BackgroundColors.GREEN}Population Sweep{Style.RESET_ALL}", unit="pop"): # For each population size
-      toolbox, population, hof = setup_genetic_algorithm(len(feature_names), pop_size) # 4.1. Configure the GA for the current population size
+      feature_count = len(feature_names) if feature_names is not None else 0 # Number of features
+      toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # 4.1. Configure the GA for the current population size
       best_ind = run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations) # 4.2. Run the GA loop
 
       if best_ind is None: # If no best individual was found
          continue # Skip to the next population size
 
-      best_features = [f for f, bit in zip(feature_names, best_ind) if bit == 1] # Extract best features
+      best_features = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1] # Extract best features
       results[pop_size] = best_features # Store best features for this population size
 
       metrics = evaluate_individual(best_ind, X_train, y_train, X_test, y_test) # 4.3. Reevaluate the best individual found
