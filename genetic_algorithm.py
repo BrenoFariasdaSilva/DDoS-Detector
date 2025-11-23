@@ -327,77 +327,69 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
    mask = np.array(individual, dtype=bool) # Create boolean mask from individual
    X_train_sel = X_train[:, mask] # Select features based on the mask
 
-   accs, precs, recs, f1s, fprs, fnrs, times = [], [], [], [], [], [], [] # Lists to store metrics for each fold
+   metrics = [] # Will hold metrics for each fold: [acc, prec, rec, f1, fpr, fnr, elapsed] # Comment: Metrics storage
 
-   try: # Try to create StratifiedKFold splits
-      skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42) # 10-fold Stratified CV
-      splits = list(skf.split(X_train_sel, y_train)) # Generate splits
-   except Exception: # If StratifiedKFold fails (e.g., too few samples per class)
-      print(f"{BackgroundColors.YELLOW}Warning: StratifiedKFold failed, falling back to simple train/test split for evaluation due to {str(Exception)}{Style.RESET_ALL}") # Output warning message
-      X_test_sel = X_test[:, mask] # Select features from test set
-      start_time = time.time() # Start timer
-      model = instantiate_estimator(estimator_cls) # Instantiate the model
-      model.fit(X_train_sel, y_train) # Fit the model on the training set
-      y_pred = model.predict(X_test_sel) # Predict on the test set
-      elapsed_time = time.time() - start_time # Calculate elapsed time
+   try: # Try to create StratifiedKFold splits # Comment: Try block for CV
+      skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42) # 10-fold Stratified CV # Comment: StratifiedKFold setup
+      splits = list(skf.split(X_train_sel, y_train)) # Generate splits # Comment: Generate CV splits
+   except Exception: # If StratifiedKFold fails (e.g., too few samples per class) # Comment: Exception block
+      print(f"{BackgroundColors.YELLOW}Warning: StratifiedKFold failed, falling back to simple train/test split for evaluation due to {str(Exception)}{Style.RESET_ALL}") # Output warning message # Comment: Warn user
+      X_test_sel = X_test[:, mask] # Select features from test set # Comment: Select test features
+      start_time = time.time() # Start timer # Comment: Start timing
+      model = instantiate_estimator(estimator_cls) # Instantiate the model # Comment: Model instantiation
+      model.fit(X_train_sel, y_train) # Fit the model on the training set # Comment: Model training
+      y_pred = model.predict(X_test_sel) # Predict on the test set # Comment: Model prediction
+      elapsed_time = time.time() - start_time # Calculate elapsed time # Comment: Timing
 
-      acc = accuracy_score(y_test, y_pred) # Calculate accuracy
-      prec = precision_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate precision
-      rec = recall_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate recall
-      f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate F1-score
+      acc = accuracy_score(y_test, y_pred) # Calculate accuracy # Comment: Accuracy
+      prec = precision_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate precision # Comment: Precision
+      rec = recall_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate recall # Comment: Recall
+      f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate F1-score # Comment: F1-score
 
-      cm = confusion_matrix(y_test, y_pred, labels=np.unique(y_test)) # Confusion matrix
-      tn = cm[0, 0] if cm.shape == (2, 2) else 0 # True negatives
-      fp = cm[0, 1] if cm.shape == (2, 2) else 0 # False positives
-      fn = cm[1, 0] if cm.shape == (2, 2) else 0 # False negatives
-      tp = cm[1, 1] if cm.shape == (2, 2) else 0 # True positives
+      cm = confusion_matrix(y_test, y_pred, labels=np.unique(y_test)) # Confusion matrix # Comment: Confusion matrix
+      tn = cm[0, 0] if cm.shape == (2, 2) else 0 # True negatives # Comment: TN
+      fp = cm[0, 1] if cm.shape == (2, 2) else 0 # False positives # Comment: FP
+      fn = cm[1, 0] if cm.shape == (2, 2) else 0 # False negatives # Comment: FN
+      tp = cm[1, 1] if cm.shape == (2, 2) else 0 # True positives # Comment: TP
 
-      fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # False positive rate
-      fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # False negative rate
+      fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # False positive rate # Comment: FPR
+      fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # False negative rate # Comment: FNR
 
-      return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return metrics
+      return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return metrics # Comment: Return metrics
 
-   y_train_np = np.array(y_train) # Convert y_train to numpy array for fast indexing
-   for train_idx, val_idx in splits: # For each fold
-      start_time = time.time() # Start timer
-      model = instantiate_estimator(estimator_cls) # Instantiate the model
+   y_train_np = np.array(y_train) # Convert y_train to numpy array for fast indexing # Comment: y_train to numpy
+   for train_idx, val_idx in splits: # For each fold # Comment: CV loop
+      start_time = time.time() # Start timer # Comment: Start timing
+      model = instantiate_estimator(estimator_cls) # Instantiate the model # Comment: Model instantiation
+      y_train_fold = y_train_np[train_idx] # Get training fold labels # Comment: Train fold labels
+      y_val_fold = y_train_np[val_idx] # Get validation fold labels # Comment: Val fold labels
+      model.fit(X_train_sel[train_idx], y_train_fold) # Fit the model on the training fold # Comment: Model training
+      y_pred = model.predict(X_train_sel[val_idx]) # Predict on the validation fold # Comment: Model prediction
+      elapsed = time.time() - start_time # Calculate elapsed time # Comment: Timing
 
-      y_train_fold = y_train_np[train_idx] # Get training fold labels
-      y_val_fold = y_train_np[val_idx] # Get validation fold labels
+      acc = accuracy_score(y_val_fold, y_pred) # Calculate accuracy # Comment: Accuracy
+      prec = precision_score(y_val_fold, y_pred, average="weighted", zero_division=0) # Calculate precision # Comment: Precision
+      rec = recall_score(y_val_fold, y_pred, average="weighted", zero_division=0) # Calculate recall # Comment: Recall
+      f1 = f1_score(y_val_fold, y_pred, average="weighted", zero_division=0) # Calculate F1-score # Comment: F1-score
 
-      model.fit(X_train_sel[train_idx], y_train_fold) # Fit the model on the training fold
-      y_pred = model.predict(X_train_sel[val_idx]) # Predict on the validation fold
-      elapsed = time.time() - start_time # Calculate elapsed time
+      cm = confusion_matrix(y_val_fold, y_pred, labels=np.unique(y_val_fold)) # Confusion matrix # Comment: Confusion matrix
+      tn = cm[0, 0] if cm.shape == (2, 2) else 0 # True negatives # Comment: TN
+      fp = cm[0, 1] if cm.shape == (2, 2) else 0 # False positives # Comment: FP
+      fn = cm[1, 0] if cm.shape == (2, 2) else 0 # False negatives # Comment: FN
+      tp = cm[1, 1] if cm.shape == (2, 2) else 0 # True positives # Comment: TP
 
-      acc = accuracy_score(y_val_fold, y_pred) # Calculate accuracy
-      prec = precision_score(y_val_fold, y_pred, average="weighted", zero_division=0) # Calculate precision
-      rec = recall_score(y_val_fold, y_pred, average="weighted", zero_division=0) # Calculate recall
-      f1 = f1_score(y_val_fold, y_pred, average="weighted", zero_division=0) # Calculate F1-score
+      fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # False positive rate # Comment: FPR
+      fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # False negative rate # Comment: FNR
 
-      cm = confusion_matrix(y_val_fold, y_pred, labels=np.unique(y_val_fold)) # Confusion matrix
-      tn = cm[0, 0] if cm.shape == (2, 2) else 0 # True negatives
-      fp = cm[0, 1] if cm.shape == (2, 2) else 0 # False positives
-      fn = cm[1, 0] if cm.shape == (2, 2) else 0 # False negatives
-      tp = cm[1, 1] if cm.shape == (2, 2) else 0 # True positives
+      metrics.append([acc, prec, rec, f1, fpr, fnr, elapsed]) # Vectorized metrics for each fold # Comment: Store metrics
 
-      fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # False positive rate
-      fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # False negative rate
+   metrics_array = np.array(metrics, dtype=float) # Shape: (n_folds, 7) # Comment: Metrics to numpy
+   means = np.mean(metrics_array, axis=0) if metrics_array.shape[0] > 0 else np.zeros(7) # Calculate means for each metric # Comment: Aggregate means
+   acc, prec, rec, f1, fpr, fnr, elapsed_time = means # Unpack mean metrics # Comment: Unpack means
+   if metrics_array.shape[0] == 0: # If no times were recorded # Comment: No folds
+      elapsed_time = float("inf") # Set elapsed_time to infinity if no times recorded # Comment: Set inf
 
-      accs.append(acc) # Store metrics
-      precs.append(prec) # Store metrics
-      recs.append(rec) # Store metrics
-      f1s.append(f1) # Store metrics
-      fprs.append(fpr) # Store metrics
-      fnrs.append(fnr) # Store metrics
-      times.append(elapsed) # Store elapsed time
-
-   metrics_array = np.array([accs, precs, recs, f1s, fprs, fnrs, times], dtype=float) # Convert lists to numpy array
-   means = np.mean(metrics_array, axis=1) if metrics_array.shape[1] > 0 else np.zeros(7) # Calculate means for each metric
-   acc, prec, rec, f1, fpr, fnr, elapsed_time = means # Unpack mean metrics
-   if not times: # If no times were recorded
-      elapsed_time = float("inf") # Set elapsed_time to infinity if no times recorded
-         
-   return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return average metrics
+   return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return vectorized average metrics # Comment: Return vectorized metrics
 
 def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100):
    """
