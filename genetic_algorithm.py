@@ -336,7 +336,7 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
    mask = np.array(individual, dtype=bool) # Create boolean mask from individual
    X_train_sel = X_train[:, mask] # Select features based on the mask
 
-   metrics = [] # Will hold metrics for each fold: [acc, prec, rec, f1, fpr, fnr, elapsed]
+   metrics = np.empty((0, 7), dtype=float) # Will hold metrics for each fold: [acc, prec, rec, f1, fpr, fnr, elapsed]
 
    try: # Try to create StratifiedKFold splits
       skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42) # 10-fold Stratified CV
@@ -392,16 +392,15 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
       fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # False positive rate
       fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # False negative rate
 
-      metrics.append([acc, prec, rec, f1, fpr, fnr, elapsed]) # Vectorized metrics for each fold
+      metrics = np.vstack((metrics, np.array([acc, prec, rec, f1, fpr, fnr, elapsed], dtype=float))) # Append metrics using NumPy
 
       if fold_idx < EARLY_STOP_FOLDS and acc < EARLY_STOP_ACC_THRESHOLD: # Early stopping: If accuracy is below threshold in first few folds, break
          early_stop_triggered = True # Set flag
          break # Stop evaluating further folds for this individual
 
-   metrics_array = np.array(metrics, dtype=float) # Shape: (n_folds, 7)
-   means = np.mean(metrics_array, axis=0) if metrics_array.shape[0] > 0 else np.zeros(7) # Calculate means for each metric
+   means = np.mean(metrics, axis=0) if metrics.shape[0] > 0 else np.zeros(7) # Calculate means for each metric
    acc, prec, rec, f1, fpr, fnr, elapsed_time = means # Unpack mean metrics
-   if metrics_array.shape[0] == 0: # If no times were recorded
+   if metrics.shape[0] == 0: # If no times were recorded
       elapsed_time = float("inf") # Set elapsed_time to infinity if no times recorded
 
    result = acc, prec, rec, f1, fpr, fnr, elapsed_time # Prepare result tuple
