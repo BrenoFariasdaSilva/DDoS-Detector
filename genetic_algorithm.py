@@ -320,15 +320,18 @@ def split_dataset(df, csv_path, test_size=0.2):
    cache_preprocessed_data(result, cache_file, csv_path) # Cache the preprocessed data with size comparison
    return result # Return the splits and feature names
 
-def setup_genetic_algorithm(n_features, population_size=30):
+def setup_genetic_algorithm(n_features, population_size=None):
    """
    Setup DEAP Genetic Algorithm: creator, toolbox, population, and Hall of Fame.
    DEAP is a library for evolutionary algorithms in Python.
 
    :param n_features: Number of features in dataset
-   :param population_size: Size of the population
+   :param population_size: Size of the population (default: n_features // 4, minimum 10)
    :return: toolbox, population, hall_of_fame
    """
+   
+   if population_size is None: # If population_size is not provided
+      population_size = max(n_features // 4, 10) # Default to 1/4 of n_features, but at least 10
    
    verbose_output(f"{BackgroundColors.GREEN}Setting up Genetic Algorithm with {n_features} features and population size {population_size}.{Style.RESET_ALL}") # Output the verbose message
 
