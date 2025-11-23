@@ -77,6 +77,7 @@ import platform # For getting the operating system name
 import random # For random number generation
 import re # For sanitizing filenames
 import seaborn as sns # For enhanced plotting
+import shutil # For checking disk usage
 import time # For measuring execution time
 from colorama import Style # For coloring the terminal
 from deap import base, creator, tools, algorithms # For the genetic algorithm
@@ -242,6 +243,40 @@ def load_dataset(csv_path):
 
    return df # Return the loaded DataFrame
 
+def cache_preprocessed_data(result, cache_file, csv_path):
+   """
+   Cache the preprocessed data to a pickle file, checking disk space first.
+   Also, compare and display size reduction compared to the original CSV.
+
+   :param result: The tuple to cache (X_train_scaled, X_test_scaled, y_train_np, y_test_np, X.columns)
+   :param cache_file: Path to the cache file.
+   :param csv_path: Path to the original CSV file for size comparison.
+   :return: None
+   """
+   
+   X_train_scaled, X_test_scaled, y_train_np, y_test_np, X_columns = result # Unpack the result tuple
+   estimated_size = (X_train_scaled.nbytes + X_test_scaled.nbytes + 
+                     y_train_np.nbytes + y_test_np.nbytes + 
+                     len(pickle.dumps(X_columns))) # Estimate the size of the data to cache
+   cache_dir = os.path.dirname(cache_file) # Get the directory of the cache file
+   total, used, free = shutil.disk_usage(cache_dir) # Get disk usage information
+   if free < estimated_size * 1.1:  # 10% margin
+      print(f"{BackgroundColors.YELLOW}Warning: Insufficient disk space for caching ({estimated_size / (1024**3):.2f} GB needed, {free / (1024**3):.2f} GB free). Skipping cache save.{Style.RESET_ALL}") # Output warning message
+      return # Return without saving
+   else: # If there is enough space
+      with open(cache_file, "wb") as f:  # Open cache file for writing
+         pickle.dump(result, f)  # Dump the result to cache file
+      verbose_output(f"{BackgroundColors.GREEN}Saved preprocessed data to cache {cache_file}.{Style.RESET_ALL}") # Output the verbose message
+
+      # Compare sizes
+      pickle_size = os.path.getsize(cache_file) # Get the size of the pickle file
+      csv_size = os.path.getsize(csv_path) # Get the size of the original CSV file
+      if csv_size > 0: # If CSV size is available
+         reduction = (csv_size - pickle_size) / csv_size * 100 # Calculate reduction percentage
+         print(f"{BackgroundColors.GREEN}Size comparison: CSV {csv_size / (1024**3):.2f} GB, Pickle {pickle_size / (1024**3):.2f} GB. Reduction: {reduction:.1f}%{Style.RESET_ALL}") # Output size comparison
+      else: # If CSV size is not available
+         print(f"{BackgroundColors.YELLOW}Could not compare sizes: CSV size unknown.{Style.RESET_ALL}") # Output warning message
+
 def split_dataset(df, csv_path, test_size=0.2):
    """
    Split dataset into training and testing sets.
@@ -256,7 +291,7 @@ def split_dataset(df, csv_path, test_size=0.2):
 
    cache_file = csv_path.replace(".csv", "_cache.pkl") # Cache file path
    if os.path.exists(cache_file): # If cache exists
-      verbose_output(f"{BackgroundColors.GREEN}Loading cached preprocessed data from {cache_file}.{Style.RESET_ALL}")
+      verbose_output(f"{BackgroundColors.GREEN}Loading cached preprocessed data from {cache_file}.{Style.RESET_ALL}") # Output loading message
       with open(cache_file, "rb") as f: # Open cache file
          return pickle.load(f) # Load and return cached data
 
@@ -282,7 +317,7 @@ def split_dataset(df, csv_path, test_size=0.2):
    y_test_np = np.array(y_test) # Convert y_train and y_test to numpy arrays for fast indexing
 
    result = X_train_scaled, X_test_scaled, y_train_np, y_test_np, X.columns # Prepare result tuple
-   
+   cache_preprocessed_data(result, cache_file, csv_path) # Cache the preprocessed data with size comparison
    return result # Return the splits and feature names
 
 def setup_genetic_algorithm(n_features, population_size=30):
@@ -638,9 +673,9 @@ def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
    :return: None
    """
 
-   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Directory to save outputs
-   os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
-   results_file = f"{output_dir}/Genetic_Algorithm_Results.txt" # Path to save the results file
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/"  # Directory to save outputs
+   os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
+   results_file = f"{output_dir}/Genetic_Algorithm_Results.txt"  # Path to save the results file
 
    write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=metrics) # Delegate writing to helper function
 
