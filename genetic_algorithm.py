@@ -387,15 +387,13 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
       fnrs.append(fnr) # Store metrics
       times.append(elapsed) # Store elapsed time
 
-   acc = float(np.mean(accs)) if accs else 0.0 # Average accuracy
-   prec = float(np.mean(precs)) if precs else 0.0 # Average precision
-   rec = float(np.mean(recs)) if recs else 0.0 # Average recall
-   f1 = float(np.mean(f1s)) if f1s else 0.0 # Average F1-score
-   fpr = float(np.mean(fprs)) if fprs else 0.0 # Average false positive rate
-   fnr = float(np.mean(fnrs)) if fnrs else 0.0 # Average false negative rate
-   elapsed_time = float(np.mean(times)) if times else float("inf") # Average elapsed time in seconds
-
-   return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return metrics
+   metrics_array = np.array([accs, precs, recs, f1s, fprs, fnrs, times], dtype=float) # Convert lists to numpy array
+   means = np.mean(metrics_array, axis=1) if metrics_array.shape[1] > 0 else np.zeros(7) # Calculate means for each metric
+   acc, prec, rec, f1, fpr, fnr, elapsed_time = means # Unpack mean metrics
+   if not times: # If no times were recorded
+      elapsed_time = float("inf") # Set elapsed_time to infinity if no times recorded
+         
+   return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return average metrics
 
 def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100):
    """
