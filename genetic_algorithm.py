@@ -259,12 +259,15 @@ def split_dataset(df, test_size=0.2):
       return None, None, None, None, None # Return None values
 
    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42) # Split the dataset
- 
+
    scaler = StandardScaler() # Initialize the scaler
    X_train_scaled = scaler.fit_transform(X_train) # Fit scaler on training set and transform
    X_test_scaled = scaler.transform(X_test) # Transform test set with the same scaler
 
-   return X_train_scaled, X_test_scaled, y_train, y_test, X.columns # Return the split data and feature names
+   y_train_np = np.array(y_train) # Convert y_train and y_test to numpy arrays for fast indexing
+   y_test_np = np.array(y_test) # Convert y_train and y_test to numpy arrays for fast indexing
+
+   return X_train_scaled, X_test_scaled, y_train_np, y_test_np, X.columns # Return the splits and feature names
 
 def setup_genetic_algorithm(n_features, population_size=30):
    """
@@ -317,9 +320,9 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
    if sum(individual) == 0: # If no features are selected
       return 0, 0, 0, 0, 1, 1, float("inf") # Return worst possible scores
 
-   selected_idx = [i for i, bit in enumerate(individual) if bit == 1] # Get indices of selected features
-   X_train_sel = X_train[:, selected_idx] # Select features from training set
-   
+   mask = np.array(individual, dtype=bool) # Create boolean mask from individual
+   X_train_sel = X_train[:, mask] # Select features based on the mask
+
    accs, precs, recs, f1s, fprs, fnrs, times = [], [], [], [], [], [], [] # Lists to store metrics for each fold
 
    try: # Try to create StratifiedKFold splits
@@ -327,7 +330,7 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
       splits = list(skf.split(X_train_sel, y_train)) # Generate splits
    except Exception: # If StratifiedKFold fails (e.g., too few samples per class)
       print(f"{BackgroundColors.YELLOW}Warning: StratifiedKFold failed, falling back to simple train/test split for evaluation due to {str(Exception)}{Style.RESET_ALL}") # Output warning message
-      X_test_sel = X_test[:, selected_idx] # Select features from test set
+      X_test_sel = X_test[:, mask] # Select features from test set
       start_time = time.time() # Start timer
       model = instantiate_estimator(estimator_cls) # Instantiate the model
       model.fit(X_train_sel, y_train) # Fit the model on the training set
@@ -350,13 +353,14 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
 
       return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return metrics
 
+   y_train_np = np.array(y_train) # Convert y_train to numpy array for fast indexing
    for train_idx, val_idx in splits: # For each fold
       start_time = time.time() # Start timer
       model = instantiate_estimator(estimator_cls) # Instantiate the model
-      
-      y_train_fold = y_train.iloc[train_idx] if hasattr(y_train, 'iloc') else y_train[train_idx] # Training target for the fold
-      y_val_fold = y_train.iloc[val_idx] if hasattr(y_train, 'iloc') else y_train[val_idx] # Validation target for the fold
-      
+
+      y_train_fold = y_train_np[train_idx] # Get training fold labels
+      y_val_fold = y_train_np[val_idx] # Get validation fold labels
+
       model.fit(X_train_sel[train_idx], y_train_fold) # Fit the model on the training fold
       y_pred = model.predict(X_train_sel[val_idx]) # Predict on the validation fold
       elapsed = time.time() - start_time # Calculate elapsed time
