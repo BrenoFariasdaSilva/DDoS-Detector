@@ -631,7 +631,7 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
    :return: List of best features
    """
 
-   best_features = [f for f, bit in zip(feature_names, best_ind) if bit == 1] # Extract best features
+   best_features = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1] # Extract best features
    rfe_ranking = extract_rfe_ranking(csv_path) # Extract RFE rankings
 
    print(f"\n{BackgroundColors.GREEN}Best features subset found: {BackgroundColors.CYAN}{best_features}{Style.RESET_ALL}")
@@ -641,40 +641,41 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
    os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
 
    rf_metrics = metrics # Use provided metrics if available
+   n_train = None # Initialize train sample count
+   n_test = None # Initialize test sample count
+   test_frac = None # Initialize test fraction
    if rf_metrics is None: # If no metrics are provided
       if X_test is not None and y_test is not None: # If test set is available
          rf_metrics = evaluate_individual(best_ind, X, y, X_test, y_test) # Evaluate best individual on test set
-      else: # If test set is not available
+         try: # Try to calculate train/test counts and fraction
+            n_train = len(y) if y is not None else None # Number of training samples
+            n_test = len(y_test) if y_test is not None else None # Number of testing samples
+            if n_train is not None and n_test is not None and (n_train + n_test) > 0: # If both counts are available
+               test_frac = float(n_test) / float(n_train + n_test) # Calculate test fraction
+         except Exception: # If an error occurs during calculation
+            n_train = None # Reset train sample count
+            n_test = None # Reset test sample count
+            test_frac = None # Reset test fraction
+      else: # If no test set is available
          rf_metrics = None # Cannot evaluate metrics
-
-      n_train = None # Initialize train/test counts
-      n_test = None # Initialize train/test counts
-      test_frac = None # Initialize test fraction
-      try: # Try to calculate train/test counts and fraction
          n_train = len(y) if y is not None else None # Number of training samples
-         n_test = len(y_test) if y_test is not None else None # Number of testing samples
-         if n_train is not None and n_test is not None and (n_train + n_test) > 0: # If both counts are available
-            test_frac = float(n_test) / float(n_train + n_test) # Calculate test fraction
-      except Exception: # If an error occurs during calculation
-         n_train = None # Reset train/test counts
-         n_test = None # Reset train/test counts
-         test_frac = None # Reset test fraction
+         n_test = None # No test samples available
+         test_frac = None # No test fraction available
 
       rf_results_file = f"{output_dir}/Genetic_Algorithm_Results_RandomForest.txt"
       write_best_features_to_file(best_features, rfe_ranking, rf_results_file, metrics=rf_metrics, classifier_name="RandomForest", train_test_ratio=test_frac, n_train=n_train, n_test=n_test) # Write Random Forest results
 
    if XGBClassifier is not None: # If XGBoost is available
       xgb_metrics = None # Initialize XGBoost metrics
-      try: # Try to evaluate XGBoost metrics
+      try: # Try to evaluate with XGBoost
          if X_test is not None and y_test is not None: # If test set is available
             xgb_metrics = evaluate_individual(best_ind, X, y, X_test, y_test, estimator_cls=XGBClassifier) # Evaluate best individual with XGBoost
       except Exception: # If evaluation fails
          xgb_metrics = None # Reset XGBoost metrics
-
-         xgb_results_file = f"{output_dir}/Genetic_Algorithm_Results_XGBoost.txt" # Path to save XGBoost results
-         write_best_features_to_file(best_features, rfe_ranking, xgb_results_file, metrics=xgb_metrics, classifier_name="XGBoost", train_test_ratio=test_frac, n_train=n_train, n_test=n_test) # Write XGBoost results
-      else: # If XGBoost is not available
-         print(f"{BackgroundColors.YELLOW}XGBoost not available (xgboost package not installed). Skipping XGBoost evaluation.{Style.RESET_ALL}")
+      xgb_results_file = f"{output_dir}/Genetic_Algorithm_Results_XGBoost.txt" # Path to save XGBoost results
+      write_best_features_to_file(best_features, rfe_ranking, xgb_results_file, metrics=xgb_metrics, classifier_name="XGBoost", train_test_ratio=test_frac, n_train=n_train, n_test=n_test) # Write XGBoost results
+   else: # If XGBoost is not available
+      print(f"{BackgroundColors.YELLOW}XGBoost not available (xgboost package not installed). Skipping XGBoost evaluation.{Style.RESET_ALL}") # Output warning message
 
    if best_features: # If there are best features to analyze
       if not isinstance(X, pd.DataFrame): # If X is not a pandas DataFrame
