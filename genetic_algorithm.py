@@ -98,6 +98,8 @@ class BackgroundColors: # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False # Set to True to output verbose messages
+EARLY_STOP_ACC_THRESHOLD = 0.75 # Minimum acceptable accuracy for an individual
+EARLY_STOP_FOLDS = 3 # Number of folds to check before early stopping
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
@@ -355,10 +357,12 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
       fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # False positive rate # Comment: FPR
       fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # False negative rate # Comment: FNR
 
-      return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return metrics # Comment: Return metrics
+      return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return metrics
 
    y_train_np = np.array(y_train) # Convert y_train to numpy array for fast indexing # Comment: y_train to numpy
-   for train_idx, val_idx in splits: # For each fold # Comment: CV loop
+   early_stop_triggered = False # Flag for early stopping
+
+   for fold_idx, (train_idx, val_idx) in enumerate(splits): # For each fold # Comment: CV loop
       start_time = time.time() # Start timer # Comment: Start timing
       model = instantiate_estimator(estimator_cls) # Instantiate the model # Comment: Model instantiation
       y_train_fold = y_train_np[train_idx] # Get training fold labels # Comment: Train fold labels
@@ -382,6 +386,10 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
       fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # False negative rate # Comment: FNR
 
       metrics.append([acc, prec, rec, f1, fpr, fnr, elapsed]) # Vectorized metrics for each fold # Comment: Store metrics
+
+      if fold_idx < EARLY_STOP_FOLDS and acc < EARLY_STOP_ACC_THRESHOLD: # Early stopping: If accuracy is below threshold in first few folds, break
+         early_stop_triggered = True # Set flag
+         break # Stop evaluating further folds for this individual
 
    metrics_array = np.array(metrics, dtype=float) # Shape: (n_folds, 7) # Comment: Metrics to numpy
    means = np.mean(metrics_array, axis=0) if metrics_array.shape[0] > 0 else np.zeros(7) # Calculate means for each metric # Comment: Aggregate means
