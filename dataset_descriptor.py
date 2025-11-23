@@ -459,7 +459,7 @@ def main():
 
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Dataset Descriptor{BackgroundColors.GREEN}!{Style.RESET_ALL}", end="\n\n") # Output the Welcome message
 
-   input_path = "./Datasets/DDoS/CICDDoS2019/01-12/" # Path to the CSV file
+   input_path = "./Datasets/CICDDoS2019/01-12/" # Path to the CSV file
    if not verify_filepath_exists(input_path): # Verify if the directory exists
       print(f"{BackgroundColors.RED}The specified input path does not exist: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}") # Output the error message
       return # Exit the program

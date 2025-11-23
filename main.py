@@ -96,10 +96,10 @@ VERBOSE = False # Set to True for verbose output
 SAMPLE_SIZE = None # Set to an integer (e.g., 100000) to sample data for faster testing, None to use full dataset
 DATASETS = { # Dictionary containing dataset paths and feature files
 	"CICDDoS2019-Dataset": {
-		"train": "./Datasets/DDoS/CICDDoS2019/01-12/DrDoS_DNS.csv",
-		"test":  "./Datasets/DDoS/CICDDoS2019/01-12/DrDoS_DNS.csv",
+		"train": "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv",
+		"test":  "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv",
 		"features": [
-			"./Datasets/DDoS/CICDDoS2019/01-12/Feature_Analysis/Genetic_Algorithm_Results.txt"
+			"./Datasets/CICDDoS2019/01-12/Feature_Analysis/Genetic_Algorithm_Results.txt"
 		]
 	}
 }

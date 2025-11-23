@@ -865,9 +865,9 @@ def main():
 
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Genetic Algorithm Feature Selection{BackgroundColors.GREEN} program!{Style.RESET_ALL}", end="\n\n") # Output the welcome message
 
-   input_path = "./Datasets/DDoS/CICDDoS2019/01-12/" # Path to the input dataset directory
+   input_path = "./Datasets/CICDDoS2019/01-12/" # Path to the input dataset directory
    files_to_process = get_files_to_process(input_path, file_extension=".csv") # Get list of CSV files to process
-   files_to_process = ["./Datasets/DDoS/CICDDoS2019/01-12/DrDoS_DNS.csv"] # For testing purposes, process only this file
+   files_to_process = ["./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"] # For testing purposes, process only this file
 
    for file in files_to_process: # For each file to process
       sweep_results = run_population_sweep(file, n_generations=100, min_pop=10, max_pop=30) # Run population sweep
