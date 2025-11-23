@@ -68,6 +68,7 @@ Assumptions & Notes:
 
 import atexit # For playing a sound when the program finishes
 import matplotlib.pyplot as plt # For plotting graphs
+import multiprocessing # For parallel fitness evaluation
 import numpy as np # For numerical operations
 import os # For running a command in the terminal
 import pandas as pd # For data manipulation
@@ -296,6 +297,9 @@ def setup_genetic_algorithm(n_features, population_size=30):
    toolbox.register("mutate", tools.mutFlipBit, indpb=0.05) # Mutation operator
    toolbox.register("select", tools.selTournament, tournsize=3) # Selection operator
 
+   pool = multiprocessing.Pool() # Create a multiprocessing pool
+   toolbox.register("map", pool.map) # Register parallel map for fitness evaluation
+
    population = toolbox.population(n=population_size) # Create the initial population
    hof = tools.HallOfFame(1) # Hall of Fame to store the best individual
 
@@ -424,7 +428,7 @@ def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_tes
 
    for gen in range(1, n_generations + 1): # Loop for the specified number of generations
       offspring = algorithms.varAnd(population, toolbox, cxpb=0.5, mutpb=0.2) # Apply crossover and mutation
-      fits = list(map(toolbox.evaluate, offspring)) # Evaluate the offspring
+      fits = list(toolbox.map(toolbox.evaluate, offspring)) # Evaluate the offspring in parallel
 
       for ind, fit in zip(offspring, fits): # Assign fitness values
          ind.fitness.values = fit # Set the fitness value
@@ -442,6 +446,10 @@ def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_tes
       if gens_without_improvement >= early_stop_gens:
          print(f"{BackgroundColors.YELLOW}Early stopping: No improvement in best fitness for {early_stop_gens} generations. Stopping at generation {gen}.{Style.RESET_ALL}")
          break # Stop the loop early
+
+   if hasattr(toolbox, "map") and hasattr(toolbox.map, "close"): # If using multiprocessing pool
+      toolbox.map.close() # Close the pool
+      toolbox.map.join() # Join the pool
 
    return hof[0] # Return the best individual from the Hall of Fame
 
