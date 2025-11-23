@@ -955,6 +955,7 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
 		testing_file_path = dataset_info.get("test") # Get test file
 		feature_files = dataset_info.get("features", []) # Get features list
 
+		dataset_dir = os.path.dirname(training_file_path) # Get the directory of the dataset file
 		dataset_name = os.path.splitext(os.path.basename(str(training_file_path)))[0] # Extract dataset name (casts to str)
 
 		print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset {BackgroundColors.CYAN}{index}/{len(sorted_datasets)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN}{Style.RESET_ALL}")
@@ -1001,13 +1002,13 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
 			verbose_output(f"{BackgroundColors.GREEN}Running baseline (without feature selection)...{Style.RESET_ALL}")
 			X_train_base, X_test_base, y_train_base, y_test_base, feature_names_base = split_data(train_df, test_df, split_required, label_col=label_col, selected_features=None) # Split without Feature Selection
 			verbose_output(f"{BackgroundColors.GREEN}Training baseline models...{Style.RESET_ALL}")
-			_, baseline_scores = train_and_evaluate_models(X_train_base, X_test_base, y_train_base, y_test_base, dataset_key, dataset_name, use_cv=use_cv, selected_features=None, features_file=None, return_metrics_only=True) # Train baseline
+			_, baseline_scores = train_and_evaluate_models(X_train_base, X_test_base, y_train_base, y_test_base, dataset_dir, dataset_name, use_cv=use_cv, selected_features=None, features_file=None, return_metrics_only=True) # Train baseline
 			baseline_metrics.extend(baseline_scores) # Store baseline metrics
 
 		verbose_output(f"{BackgroundColors.GREEN}Preparing data with feature selection...{Style.RESET_ALL}")
 		X_train, X_test, y_train, y_test, feature_names = split_data(train_df, test_df, split_required, label_col=label_col, selected_features=features_to_use) # Split with Feature Selection
 		verbose_output(f"{BackgroundColors.GREEN}Training models with feature selection...{Style.RESET_ALL}")
-		models, dataset_model_scores = train_and_evaluate_models(X_train, X_test, y_train, y_test, dataset_key, dataset_name, use_cv=use_cv, selected_features=features_to_use, features_file=features_file_used) # Train Feature Selection models
+		models, dataset_model_scores = train_and_evaluate_models(X_train, X_test, y_train, y_test, dataset_dir, dataset_name, use_cv=use_cv, selected_features=features_to_use, features_file=features_file_used) # Train Feature Selection models
 
 		all_model_scores.extend(dataset_model_scores) if dataset_model_scores else None # Add to overall scores
 
