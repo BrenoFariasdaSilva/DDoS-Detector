@@ -643,8 +643,8 @@ def generate_overall_performance_summary(all_model_scores, output_path=".", feat
 	formatted_scores = sorted(formatted_scores, key=lambda x: (x["Dataset"], -float(x["F1-Score"]))) # Sort first by Dataset name (alphabetically), then by F1-Score (descending within each dataset)
 
 	output_df = pd.DataFrame(formatted_scores, columns=columns) # Create a DataFrame using the sorted scores and defined column order
-	os.makedirs(os.path.join(output_path, OUTPUT_DIR)) if not os.path.exists(os.path.join(output_path, OUTPUT_DIR)) else None # Ensure the output directory exists
-	output_file = os.path.join(output_path, f"{OUTPUT_DIR}/Overall_Performance{feat_extraction_method}.csv") # Define the output file path with feature suffix
+	os.makedirs(output_path, exist_ok=True) # Ensure the output directory exists
+	output_file = os.path.join(output_path, f"Overall_Performance{feat_extraction_method}.csv") # Define the output file path with feature suffix
 	output_df.to_csv(output_file, index=False) # Save the DataFrame to CSV without including the index
 
 	verbose_output(true_string=f"{BackgroundColors.GREEN}Overall performance summary saved to: {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}") # Print success message with file path
@@ -689,8 +689,8 @@ def generate_feature_selection_comparison(baseline_metrics, feature_selected_met
 	comparison_data = sorted(comparison_data, key=lambda x: (x["Dataset"], -x["Improvement (%)"])) # Sort by improvement (descending)
 	
 	comparison_df = pd.DataFrame(comparison_data) # Create DataFrame from comparison data
-	os.makedirs(os.path.join(output_path, OUTPUT_DIR), exist_ok=True) # Ensure output directory exists
-	output_file = os.path.join(output_path, f"{OUTPUT_DIR}/{feat_extraction_method}-Feature_Selection_Comparison.csv") # Define output file path
+	os.makedirs(output_path, exist_ok=True) # Ensure output directory exists
+	output_file = os.path.join(output_path, f"{feat_extraction_method}-Feature_Selection_Comparison.csv") # Define output file path
 	comparison_df.to_csv(output_file, index=False) # Save comparison DataFrame to CSV
 	
 	print(f"{BackgroundColors.GREEN}Feature selection comparison saved to: {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}")
