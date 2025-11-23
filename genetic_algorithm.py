@@ -289,7 +289,8 @@ def split_dataset(df, csv_path, test_size=0.2):
    
    verbose_output(f"{BackgroundColors.GREEN}Splitting dataset into training and testing sets with test size = {test_size}.{Style.RESET_ALL}") # Output the verbose message
 
-   cache_file = csv_path.replace(".csv", "_cache.pkl") # Cache file path
+   cache_file = csv_path.replace(".csv", f"_cache_test{test_size}.pkl") # Cache file path, including test_size for uniqueness
+
    if os.path.exists(cache_file): # If cache exists
       verbose_output(f"{BackgroundColors.GREEN}Loading cached preprocessed data from {cache_file}.{Style.RESET_ALL}") # Output loading message
       with open(cache_file, "rb") as f: # Open cache file
