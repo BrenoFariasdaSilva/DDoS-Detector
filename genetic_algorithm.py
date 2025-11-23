@@ -101,6 +101,9 @@ VERBOSE = False # Set to True to output verbose messages
 EARLY_STOP_ACC_THRESHOLD = 0.75 # Minimum acceptable accuracy for an individual
 EARLY_STOP_FOLDS = 3 # Number of folds to check before early stopping
 
+# Fitness Cache:
+fitness_cache = {} # Cache for fitness results to avoid re-evaluating same feature masks
+
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
 SOUND_FILE = "./.assets/Sounds/NotificationSound.wav" # The path to the sound file
@@ -326,6 +329,10 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
    if sum(individual) == 0: # If no features are selected
       return 0, 0, 0, 0, 1, 1, float("inf") # Return worst possible scores
 
+   mask_tuple = tuple(individual) # Convert individual to tuple for hashing
+   if mask_tuple in fitness_cache: # Check if already evaluated
+      return fitness_cache[mask_tuple] # Return cached result
+
    mask = np.array(individual, dtype=bool) # Create boolean mask from individual
    X_train_sel = X_train[:, mask] # Select features based on the mask
 
@@ -397,7 +404,9 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
    if metrics_array.shape[0] == 0: # If no times were recorded
       elapsed_time = float("inf") # Set elapsed_time to infinity if no times recorded
 
-   return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return vectorized average metrics
+   result = acc, prec, rec, f1, fpr, fnr, elapsed_time # Prepare result tuple
+   fitness_cache[mask_tuple] = result # Cache the result
+   return result # Return vectorized average metrics
 
 def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100):
    """
