@@ -72,6 +72,7 @@ import multiprocessing # For parallel fitness evaluation
 import numpy as np # For numerical operations
 import os # For running a command in the terminal
 import pandas as pd # For data manipulation
+import pickle # For caching preprocessed data
 import platform # For getting the operating system name
 import random # For random number generation
 import re # For sanitizing filenames
@@ -241,16 +242,23 @@ def load_dataset(csv_path):
 
    return df # Return the loaded DataFrame
 
-def split_dataset(df, test_size=0.2):
+def split_dataset(df, csv_path, test_size=0.2):
    """
    Split dataset into training and testing sets.
 
    :param df: DataFrame to split.
+   :param csv_path: Path to the CSV file for caching.
    :param test_size: Proportion of the dataset to include in the test split.
    :return: X_train, X_test, y_train, y_test
    """
    
    verbose_output(f"{BackgroundColors.GREEN}Splitting dataset into training and testing sets with test size = {test_size}.{Style.RESET_ALL}") # Output the verbose message
+
+   cache_file = csv_path.replace(".csv", "_cache.pkl") # Cache file path
+   if os.path.exists(cache_file): # If cache exists
+      verbose_output(f"{BackgroundColors.GREEN}Loading cached preprocessed data from {cache_file}.{Style.RESET_ALL}")
+      with open(cache_file, "rb") as f: # Open cache file
+         return pickle.load(f) # Load and return cached data
 
    X = df.iloc[:, :-1].select_dtypes(include=["number"]) # Select only numeric features
    y = df.iloc[:, -1] # Target variable
@@ -273,7 +281,9 @@ def split_dataset(df, test_size=0.2):
    y_train_np = np.array(y_train) # Convert y_train and y_test to numpy arrays for fast indexing
    y_test_np = np.array(y_test) # Convert y_train and y_test to numpy arrays for fast indexing
 
-   return X_train_scaled, X_test_scaled, y_train_np, y_test_np, X.columns # Return the splits and feature names
+   result = X_train_scaled, X_test_scaled, y_train_np, y_test_np, X.columns # Prepare result tuple
+   
+   return result # Return the splits and feature names
 
 def setup_genetic_algorithm(n_features, population_size=30):
    """
@@ -628,9 +638,9 @@ def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
    :return: None
    """
 
-   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/"  # Directory to save outputs
-   os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
-   results_file = f"{output_dir}/Genetic_Algorithm_Results.txt"  # Path to save the results file
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Directory to save outputs
+   os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
+   results_file = f"{output_dir}/Genetic_Algorithm_Results.txt" # Path to save the results file
 
    write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=metrics) # Delegate writing to helper function
 
@@ -744,7 +754,7 @@ def run_population_sweep(csv_path, n_generations=100, min_pop=10, max_pop=30):
       print(f"{BackgroundColors.RED}Dataset empty after preprocessing. Exiting.{Style.RESET_ALL}")
       return {} # Return empty dictionary
    
-   X_train, X_test, y_train, y_test, feature_names = split_dataset(cleaned_df) # Apply train/test split and scaling
+   X_train, X_test, y_train, y_test, feature_names = split_dataset(cleaned_df, csv_path) # Apply train/test split and scaling
    if X_train is None: # If splitting failed
       return {} # Return empty dictionary
    
