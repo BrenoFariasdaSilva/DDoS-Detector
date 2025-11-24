@@ -650,7 +650,7 @@ def print_metrics(metrics):
    print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{fnr:.4f}{Style.RESET_ALL}")
    print(f"   {BackgroundColors.GREEN}Elapsed Time (s): {BackgroundColors.CYAN}{elapsed_time:.2f}{Style.RESET_ALL}")
 
-def write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=None, classifier_name="RandomForest", train_test_ratio=None, n_train=None, n_test=None):
+def write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=None, classifier_name="RandomForest", train_test_ratio=None, n_train=None, n_test=None, population_size=None, n_generations=None):
    """
    Write the best features and their RFE rankings to a results file.
 
@@ -659,6 +659,8 @@ def write_best_features_to_file(best_features, rfe_ranking, results_file, metric
    :param results_file: Path to the results file for saving outputs.
    :param metrics: Dictionary or tuple containing evaluation metrics.
    :param classifier_name: String name of the classifier used for these metrics.
+   :param population_size: Population size used in GA.
+   :param n_generations: Number of generations used in GA.
    :return: None
    """
    
@@ -668,6 +670,20 @@ def write_best_features_to_file(best_features, rfe_ranking, results_file, metric
       if metrics: # If metrics are provided
          acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics # Unpack metrics
          f.write(f"Classifier: {classifier_name}\n\n")
+         if population_size is not None and n_generations is not None: # If GA parameters are provided
+            f.write("Genetic Algorithm Parameters:\n")
+            f.write(f"Population Size: {population_size}\n")
+            f.write(f"Generations: {n_generations}\n")
+            f.write(f"Crossover Probability: 0.5\n")
+            f.write(f"Mutation Probability: 0.05\n")
+            f.write(f"Tournament Size: 3\n")
+            f.write(f"Fitness Evaluation: 10-fold Stratified CV on training set\n")
+            f.write(f"Optimization Goal: Maximize F1-Score\n")
+            if classifier_name == "RandomForest":
+               f.write(f"Base Estimator: RandomForestClassifier(n_estimators=100, n_jobs=1, random_state=42)\n")
+            elif classifier_name == "XGBoost":
+               f.write(f"Base Estimator: XGBClassifier(use_label_encoder=False, eval_metric='logloss', n_jobs=1, random_state=42)\n")
+            f.write("\n")
          f.write("Performance Metrics:\n")
          f.write(f"Accuracy: {acc:.4f}\n")
          f.write(f"Precision: {prec:.4f}\n")
@@ -677,7 +693,23 @@ def write_best_features_to_file(best_features, rfe_ranking, results_file, metric
          f.write(f"False Negative Rate (FNR): {fnr:.4f}\n")
          f.write(f"Elapsed Time (s): {elapsed_time:.2f}\n\n")
       else: # If no metrics are provided
-         f.write(f"Classifier: {classifier_name}\n\nNo metrics provided.\n\n")
+         f.write(f"Classifier: {classifier_name}\n\n")
+         if population_size is not None and n_generations is not None: # If GA parameters are provided
+            f.write("Genetic Algorithm Parameters:\n")
+            f.write(f"Population Size: {population_size}\n")
+            f.write(f"Generations: {n_generations}\n")
+            f.write(f"Crossover Probability: 0.5\n")
+            f.write(f"Mutation Probability: 0.05\n")
+            f.write(f"Tournament Size: 3\n")
+            f.write(f"Fitness Evaluation: 10-fold Stratified CV on training set\n")
+            f.write(f"Optimization Goal: Maximize F1-Score\n")
+            if classifier_name == "RandomForest":
+               f.write(f"Base Estimator: RandomForestClassifier(n_estimators=100, n_jobs=1, random_state=42)\n")
+            elif classifier_name == "XGBoost":
+               f.write(f"Base Estimator: XGBClassifier(use_label_encoder=False, eval_metric='logloss', n_jobs=1, random_state=42)\n")
+            f.write("\nNo metrics provided.\n\n")
+         else:
+            f.write("No metrics provided.\n\n")
 
       if n_train is not None and n_test is not None: # If train and test counts are provided
          try: # Try to calculate the fraction
@@ -717,7 +749,7 @@ def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
 
    write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=metrics) # Delegate writing to helper function
 
-def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=None, y_test=None):
+def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=None, y_test=None, n_generations=None, best_pop_size=None):
    """
    Save best feature subset and analyze them.
 
@@ -727,6 +759,8 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
    :param y: Target variable (Series or array).
    :param csv_path: Path to the original CSV file for saving outputs.
    :param metrics: Dictionary or tuple containing evaluation metrics.
+   :param n_generations: Number of generations used in GA.
+   :param best_pop_size: Population size that gave the best result.
    :return: List of best features
    """
 
@@ -762,7 +796,7 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
          test_frac = None # No test fraction available
 
       rf_results_file = f"{output_dir}/Genetic_Algorithm_Results_RandomForest.txt"
-      write_best_features_to_file(best_features, rfe_ranking, rf_results_file, metrics=rf_metrics, classifier_name="RandomForest", train_test_ratio=test_frac, n_train=n_train, n_test=n_test) # Write Random Forest results
+      write_best_features_to_file(best_features, rfe_ranking, rf_results_file, metrics=rf_metrics, classifier_name="RandomForest", train_test_ratio=test_frac, n_train=n_train, n_test=n_test, population_size=best_pop_size, n_generations=n_generations) # Write Random Forest results
 
    if XGBClassifier is not None: # If XGBoost is available
       xgb_metrics = None # Initialize XGBoost metrics
@@ -772,7 +806,7 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
       except Exception: # If evaluation fails
          xgb_metrics = None # Reset XGBoost metrics
       xgb_results_file = f"{output_dir}/Genetic_Algorithm_Results_XGBoost.txt" # Path to save XGBoost results
-      write_best_features_to_file(best_features, rfe_ranking, xgb_results_file, metrics=xgb_metrics, classifier_name="XGBoost", train_test_ratio=test_frac, n_train=n_train, n_test=n_test) # Write XGBoost results
+      write_best_features_to_file(best_features, rfe_ranking, xgb_results_file, metrics=xgb_metrics, classifier_name="XGBoost", train_test_ratio=test_frac, n_train=n_train, n_test=n_test, population_size=best_pop_size, n_generations=n_generations) # Write XGBoost results
    else: # If XGBoost is not available
       print(f"{BackgroundColors.YELLOW}XGBoost not available (xgboost package not installed). Skipping XGBoost evaluation.{Style.RESET_ALL}") # Output warning message
 
@@ -865,13 +899,13 @@ def run_population_sweep(csv_path, n_generations=100, min_pop=20, max_pop=20):
       if f1 > best_score: # 4.4. Check if this is the best global F1-Score
          best_score = f1 # Update best score
          best_metrics = metrics # Update best metrics
-         best_result = (best_ind, feature_names, X_train, X_test, y_train, y_test) # Update best result
+         best_result = (best_ind, feature_names, X_train, X_test, y_train, y_test, pop_size) # Update best result
 
    # 5. After testing all population sizes, select the best global result
    if best_result: # If a best result was found
-      best_ind, feature_names, X_train, X_test, y_train, y_test = best_result # Unpack the best result
+      best_ind, feature_names, X_train, X_test, y_train, y_test, best_pop_size = best_result # Unpack the best result
       print_metrics(best_metrics) if VERBOSE else None # Print metrics if VERBOSE is enabled
-      save_and_analyze_results(best_ind, feature_names, X_train, y_train, csv_path, metrics=best_metrics, X_test=X_test, y_test=y_test) # 6. Save chosen features, metrics, and split data
+      save_and_analyze_results(best_ind, feature_names, X_train, y_train, csv_path, metrics=best_metrics, X_test=X_test, y_test=y_test, n_generations=n_generations, best_pop_size=best_pop_size) # 6. Save chosen features, metrics, and split data
    else: # If no valid result was found
       print(f"{BackgroundColors.RED}No valid results found during the sweep.{Style.RESET_ALL}")
 
