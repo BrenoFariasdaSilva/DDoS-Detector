@@ -798,7 +798,7 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
 
    return best_features # Return the list of best features
 
-def run_population_sweep(csv_path, n_generations=100, min_pop=10, max_pop=30):
+def run_population_sweep(csv_path, n_generations=100, min_pop=20, max_pop=20):
    """
    Executes a genetic algorithm (GA) for feature selection across multiple population sizes.
 
@@ -925,7 +925,7 @@ def main():
    files_to_process = ["./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"] # For testing purposes, process only this file
 
    for file in files_to_process: # For each file to process
-      sweep_results = run_population_sweep(file, n_generations=100, min_pop=10, max_pop=30) # Run population sweep
+      sweep_results = run_population_sweep(file, n_generations=100, min_pop=20, max_pop=20) # Run population sweep
 
       if VERBOSE and sweep_results: # If VERBOSE is True and there are results
          print(f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}") # Print detailed results
