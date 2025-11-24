@@ -806,10 +806,20 @@ def run_population_sweep(csv_path, n_generations=100, min_pop=10, max_pop=30):
    X_train, X_test, y_train, y_test, feature_names = split_dataset(cleaned_df, csv_path) # Apply train/test split and scaling
    if X_train is None: # If splitting failed
       return {} # Return empty dictionary
-
+   
+   parts = csv_path.split("/") # Split the CSV path into parts
+   if "Datasets" in parts: # If "Datasets" is in the path
+      idx = parts.index("Datasets") # Find the index of "Datasets"
+      if idx + 1 < len(parts): # If there is a part after "Datasets"
+         dataset_name = parts[idx + 1] # Use the next part as dataset name
+      else: # If "Datasets" is the last part
+         dataset_name = os.path.basename(csv_path) # Use the base name of the CSV file
+   else: # If "Datasets" is not in the path
+      dataset_name = os.path.basename(csv_path) # Use the base name of the CSV file
+   
    train_count = len(y_train) if y_train is not None else 0 # Number of training samples
    test_count = len(y_test) if y_test is not None else 0 # Number of testing samples
-   print(f"  {BackgroundColors.GREEN}  Dataset: {BackgroundColors.CYAN}{train_count} training / {test_count} testing  (80/20){Style.RESET_ALL}\n") # Output dataset split
+   verbose_output(f"  {BackgroundColors.GREEN}  Dataset: {BackgroundColors.CYAN}{dataset_name} - {train_count} training / {test_count} testing  (80/20){Style.RESET_ALL}\n") # Output dataset split
    
    for pop_size in tqdm(range(min_pop, max_pop + 1), desc=f"{BackgroundColors.GREEN}Population Sweep{Style.RESET_ALL}", unit="pop"): # For each population size
       feature_count = len(feature_names) if feature_names is not None else 0 # Number of features
