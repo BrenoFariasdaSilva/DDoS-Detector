@@ -68,6 +68,7 @@ Assumptions & Notes:
 """
 
 import atexit # For playing a sound when the program finishes
+import datetime # For timestamping
 import matplotlib.pyplot as plt # For plotting graphs
 import multiprocessing # For parallel fitness evaluation
 import numpy as np # For numerical operations
@@ -875,6 +876,20 @@ def run_population_sweep(csv_path, n_generations=100, min_pop=10, max_pop=30):
 
    return results # Return the results dictionary
 
+def calculate_execution_time(start_time, finish_time):
+   """
+   Calculates the execution time between start and finish times and formats it as hh:mm:ss.
+
+   :param start_time: The start datetime object
+   :param finish_time: The finish datetime object
+   :return: String formatted as hh:mm:ss representing the execution time
+   """
+
+   delta = finish_time - start_time # Calculate the time difference
+   hours, remainder = divmod(delta.seconds, 3600) # Calculate the hours, minutes and seconds
+   minutes, seconds = divmod(remainder, 60) # Calculate the minutes and seconds
+   return f"{hours:02d}:{minutes:02d}:{seconds:02d}" # Format the execution time
+
 def play_sound():
    """
    Plays a sound when the program finishes and skips if the operating system is Windows.
@@ -902,6 +917,7 @@ def main():
    """
 
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Genetic Algorithm Feature Selection{BackgroundColors.GREEN} program!{Style.RESET_ALL}", end="\n\n") # Output the welcome message
+   start_time = datetime.datetime.now() # Get the start time of the program
 
    input_path = "./Datasets/CICDDoS2019/01-12/" # Path to the input dataset directory
    files_to_process = get_files_to_process(input_path, file_extension=".csv") # Get list of CSV files to process
@@ -915,6 +931,8 @@ def main():
          for pop_size, features in sweep_results.items(): # For each population size and its best features
             print(f"  Pop {pop_size}: {len(features)} features -> {features}") # Print the population size and the best features
    
+   finish_time = datetime.datetime.now() # Get the finish time of the program
+   print(f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
 
    atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None # Register the play_sound function to be called when the program finishes
