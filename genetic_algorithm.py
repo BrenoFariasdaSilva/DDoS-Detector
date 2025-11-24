@@ -797,14 +797,7 @@ def run_population_sweep(csv_path, n_generations=100, min_pop=10, max_pop=30):
    X_train, X_test, y_train, y_test, feature_names = split_dataset(cleaned_df, csv_path) # Apply train/test split and scaling
    if X_train is None: # If splitting failed
       return {} # Return empty dictionary
-   
-   print(f"\n{BackgroundColors.CYAN}Genetic Algorithm Configuration:{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}  Generations: {BackgroundColors.CYAN}20 fixed{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}  Population: {BackgroundColors.CYAN}{min_pop} to {max_pop} individuals{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}  Evaluation: {BackgroundColors.CYAN}10-fold Stratified CV on training set{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}  Crossover: {BackgroundColors.CYAN}0.5{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}  Mutation: {BackgroundColors.CYAN}0.2 (individual), 0.05 (gene){Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}  Selection: {BackgroundColors.CYAN}Tournament (tournsize=3){Style.RESET_ALL}")
+
    train_count = len(y_train) if y_train is not None else 0 # Number of training samples
    test_count = len(y_test) if y_test is not None else 0 # Number of testing samples
    print(f"  {BackgroundColors.GREEN}  Dataset: {BackgroundColors.CYAN}{train_count} training / {test_count} testing  (80/20){Style.RESET_ALL}\n") # Output dataset split
