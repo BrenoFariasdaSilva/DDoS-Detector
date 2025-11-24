@@ -846,7 +846,7 @@ def run_population_sweep(csv_path, n_generations=100, min_pop=10, max_pop=30):
    train_count = len(y_train) if y_train is not None else 0 # Number of training samples
    test_count = len(y_test) if y_test is not None else 0 # Number of testing samples
    verbose_output(f"  {BackgroundColors.GREEN}  Dataset: {BackgroundColors.CYAN}{dataset_name} - {train_count} training / {test_count} testing  (80/20){Style.RESET_ALL}\n") # Output dataset split
-   for pop_size in tqdm(range(min_pop, max_pop + 1), desc=f"{BackgroundColors.GREEN}Population Sweep ({min_pop}-{max_pop}) for {dataset_name}{Style.RESET_ALL}", unit="pop"): # For each population size
+   for pop_size in tqdm(range(min_pop, max_pop + 1), desc=f"{BackgroundColors.GREEN}Population Sweep ({min_pop}-{max_pop}) for {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}", unit="pop"): # For each population size
       feature_count = len(feature_names) if feature_names is not None else 0 # Number of features
       toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # 4.1. Configure the GA for the current population size
       best_ind = run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations) # 4.2. Run the GA loop
