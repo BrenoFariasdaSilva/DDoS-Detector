@@ -221,6 +221,29 @@ def instantiate_estimator(estimator_cls=None):
    except Exception: # If instantiation fails
       return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1) # Fallback to default RandomForestClassifier
 
+def print_ga_parameters(min_pop, max_pop, n_generations, feature_count):
+   """
+   Print the genetic algorithm parameters in verbose output.
+
+   :param min_pop: Minimum population size.
+   :param max_pop: Maximum population size.
+   :param n_generations: Number of generations per run.
+   :param feature_count: Number of features in the dataset.
+   :return: None
+   """
+   
+   print(f"{BackgroundColors.GREEN}Genetic Algorithm Parameters:{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Population sizes: {BackgroundColors.CYAN}{min_pop} to {max_pop}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Generations per run: {BackgroundColors.CYAN}{n_generations}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Number of features: {BackgroundColors.CYAN}{feature_count}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Crossover probability: {BackgroundColors.CYAN}0.5{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Mutation probability: {BackgroundColors.CYAN}0.05{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Tournament size: {BackgroundColors.CYAN}3{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Fitness evaluation: {BackgroundColors.CYAN}10-fold Stratified CV on training set{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Base estimator: {BackgroundColors.CYAN}RandomForestClassifier (n_estimators=100, n_jobs=1){Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Optimization goal: {BackgroundColors.CYAN}Maximize F1-Score{Style.RESET_ALL}")
+   print("") # Empty line for spacing
+
 def load_dataset(csv_path):
    """
    Load CSV and return DataFrame.
@@ -788,6 +811,9 @@ def run_population_sweep(csv_path, n_generations=100, min_pop=10, max_pop=30):
    :param max_pop: Maximum population size to test.
    :return: Dictionary mapping population sizes to their best feature subsets.
    """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Starting population sweep from size {min_pop} to {max_pop}, running {n_generations} generations each.{Style.RESET_ALL}") # Output the verbose message
+   print_ga_parameters(min_pop, max_pop, n_generations, len(feature_names) if feature_names is not None else 0) if VERBOSE else None # Print GA parameters if VERBOSE is enabled
 
    best_score = -1 # Initialize best score
    best_result = None # Initialize best result
