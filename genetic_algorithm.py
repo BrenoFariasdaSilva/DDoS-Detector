@@ -814,7 +814,6 @@ def run_population_sweep(csv_path, n_generations=100, min_pop=10, max_pop=30):
    """
    
    verbose_output(f"{BackgroundColors.GREEN}Starting population sweep from size {min_pop} to {max_pop}, running {n_generations} generations each.{Style.RESET_ALL}") # Output the verbose message
-   print_ga_parameters(min_pop, max_pop, n_generations, len(feature_names) if feature_names is not None else 0) if VERBOSE else None # Print GA parameters if VERBOSE is enabled
 
    best_score = -1 # Initialize best score
    best_result = None # Initialize best result
@@ -833,6 +832,8 @@ def run_population_sweep(csv_path, n_generations=100, min_pop=10, max_pop=30):
    X_train, X_test, y_train, y_test, feature_names = split_dataset(cleaned_df, csv_path) # Apply train/test split and scaling
    if X_train is None: # If splitting failed
       return {} # Return empty dictionary
+   
+   print_ga_parameters(min_pop, max_pop, n_generations, len(feature_names) if feature_names is not None else 0) if VERBOSE else None # Print GA parameters if VERBOSE is enabled
    
    parts = csv_path.split("/") # Split the CSV path into parts
    if "Datasets" in parts: # If "Datasets" is in the path
