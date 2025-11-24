@@ -374,15 +374,15 @@ def instantiate_estimator(estimator_cls=None):
    verbose_output(f"{BackgroundColors.GREEN}Instantiating the estimator: {BackgroundColors.CYAN}{estimator_cls.__name__ if estimator_cls else 'RandomForestClassifier'}{Style.RESET_ALL}") # Output the verbose message
    
    if estimator_cls is None: # If no estimator class is provided
-      return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1) # Return a default RandomForestClassifier
+      return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=1) # Return a default RandomForestClassifier
 
    if estimator_cls is XGBClassifier and XGBClassifier is not None: # If the estimator class is XGBClassifier
-      return XGBClassifier(use_label_encoder=False, eval_metric="logloss", n_jobs=-1, random_state=42) # Return an XGBClassifier with default params
+      return XGBClassifier(use_label_encoder=False, eval_metric="logloss", n_jobs=1, random_state=42) # Return an XGBClassifier with default params
 
    try: # Try to instantiate the provided estimator class
       return estimator_cls() # Instantiate with default parameters
    except Exception: # If instantiation fails
-      return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1) # Fallback to default RandomForestClassifier
+      return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=1) # Fallback to default RandomForestClassifier
 
 def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_cls=None):
    """
