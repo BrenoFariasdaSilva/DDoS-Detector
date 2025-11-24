@@ -493,7 +493,7 @@ def ga_fitness(ind, fitness_func):
    
    return (fitness_func(ind)[3],) # Return only the F1-score for GA optimization
 
-def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100):
+def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100, show_progress=False):
    """
    Run Genetic Algorithm generations with a tqdm progress bar.
 
@@ -517,7 +517,8 @@ def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_tes
    gens_without_improvement = 0 # Counter for generations with no improvement
    early_stop_gens = 10 # Number of generations to wait for improvement before stopping
 
-   for gen in range(1, n_generations + 1): # Loop for the specified number of generations
+   gen_range = tqdm(range(1, n_generations + 1), desc="Generations") if show_progress else range(1, n_generations + 1)
+   for gen in gen_range: # Loop for the specified number of generations
       offspring = algorithms.varAnd(population, toolbox, cxpb=0.5, mutpb=0.2) # Apply crossover and mutation
       fits = list(toolbox.map(toolbox.evaluate, offspring)) # Evaluate the offspring in parallel
 
@@ -885,7 +886,7 @@ def run_population_sweep(csv_path, n_generations=100, min_pop=20, max_pop=20):
    for pop_size in tqdm(range(min_pop, max_pop + 1), desc=f"{BackgroundColors.GREEN}Population Sweep ({min_pop}-{max_pop}) for {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}", unit="pop"): # For each population size
       feature_count = len(feature_names) if feature_names is not None else 0 # Number of features
       toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # 4.1. Configure the GA for the current population size
-      best_ind = run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations) # 4.2. Run the GA loop
+      best_ind = run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=(min_pop == max_pop)) # 4.2. Run the GA loop
 
       if best_ind is None: # If no best individual was found
          continue # Skip to the next population size
