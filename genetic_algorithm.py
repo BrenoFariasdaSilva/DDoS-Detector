@@ -82,6 +82,7 @@ import shutil # For checking disk usage
 import time # For measuring execution time
 from colorama import Style # For coloring the terminal
 from deap import base, creator, tools, algorithms # For the genetic algorithm
+from functools import partial # For creating partial functions
 from sklearn.ensemble import RandomForestClassifier # For the machine learning model
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix # For model evaluation
 from sklearn.model_selection import train_test_split, StratifiedKFold # For splitting the dataset and cross-validation
@@ -457,6 +458,17 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
    fitness_cache[mask_tuple] = result # Cache the result
    return result # Return vectorized average metrics
 
+def ga_fitness(ind, fitness_func):
+   """
+   Global fitness function for GA evaluation to avoid pickle issues with local functions.
+   
+   :param ind: Individual to evaluate
+   :param fitness_func: Partial function for evaluation
+   :return: Tuple with F1-score
+   """
+   
+   return (fitness_func(ind)[3],) # Return only the F1-score for GA optimization
+
 def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100):
    """
    Run Genetic Algorithm generations with a tqdm progress bar.
@@ -474,11 +486,8 @@ def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_tes
    
    verbose_output(f"{BackgroundColors.GREEN}Running Genetic Algorithm for {n_generations} generations.{Style.RESET_ALL}") # Output the verbose message
 
-   def fitness(ind): # Fitness function for DEAP
-      acc, prec, rec, f1, fpr, fnr, t = evaluate_individual(ind, X_train, y_train, X_test, y_test) # Evaluate the individual
-      return (f1,) # Return F1-score as the fitness value
-
-   toolbox.register("evaluate", fitness) # Register the fitness function
+   fitness_func = partial(evaluate_individual, X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test) # Partial function for evaluation
+   toolbox.register("evaluate", partial(ga_fitness, fitness_func=fitness_func)) # Register the global fitness function
 
    best_fitness = None # Track the best fitness value
    gens_without_improvement = 0 # Counter for generations with no improvement
