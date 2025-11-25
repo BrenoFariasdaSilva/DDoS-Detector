@@ -886,7 +886,7 @@ def run_population_sweep(dataset_name, csv_path, n_generations=100, min_pop=20, 
    bot = TelegramBot() # Initialize Telegram bot for notifications
 
    if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
-      bot.send_messages([f"Starting population sweep for dataset {dataset_name} from size {min_pop} to {max_pop}"]) # Send start message
+      bot.send_messages([f"Starting population sweep for dataset **{dataset_name}** from size **{min_pop}** to **{max_pop}**"]) # Send start message
 
    best_score = -1 # Initialize best score
    best_result = None # Initialize best result
@@ -931,7 +931,7 @@ def run_population_sweep(dataset_name, csv_path, n_generations=100, min_pop=20, 
          best_result = (best_ind, feature_names, X_train, X_test, y_train, y_test, pop_size) # Update best result
 
       if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
-         bot.send_messages([f"Completed GA for population size {pop_size} on {dataset_name}, F1: {f1:.4f}"]) # Send progress message
+         bot.send_messages([f"Completed GA for population size **{pop_size}** on **{dataset_name}** -> **F1: {f1:.4f}**"]) # Send progress message
 
    # 5. After testing all population sizes, select the best global result
    if best_result: # If a best result was found
@@ -942,7 +942,7 @@ def run_population_sweep(dataset_name, csv_path, n_generations=100, min_pop=20, 
       print(f"{BackgroundColors.RED}No valid results found during the sweep.{Style.RESET_ALL}")
 
    if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
-      bot.send_messages([f"Population sweep completed for {dataset_name}"]) # Send completion message
+      bot.send_messages([f"Population sweep completed for **{dataset_name}**"]) # Send completion message
 
    return results # Return the results dictionary
 
