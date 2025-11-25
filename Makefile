@@ -39,8 +39,8 @@ rfe: $(VENV)
 
 # Create virtual environment and install dependencies
 $(VENV):
-	@echo "Using Python at: $(PYTHON)"
-	$(PYTHON) -m venv $(VENV)
+	@echo "Creating virtual environment..."
+	$(PYTHON_CMD) -m venv $(VENV)
 	$(PIP) install --upgrade pip
 	$(PIP) install -r requirements.txt
 
