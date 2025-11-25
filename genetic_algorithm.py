@@ -865,7 +865,7 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
 
    return best_features # Return the list of best features
 
-def run_population_sweep(dataset_name, csv_path, n_generations=100, min_pop=20, max_pop=20):
+def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop=20, max_pop=20):
    """
    Executes a genetic algorithm (GA) for feature selection across multiple population sizes.
 
@@ -873,6 +873,7 @@ def run_population_sweep(dataset_name, csv_path, n_generations=100, min_pop=20, 
    to identify the set of features that maximizes classification performance
    (F1-Score) on the training dataset using 10-fold Stratified Cross-Validation.
 
+   :param bot: TelegramBot instance for sending notifications.
    :param dataset_name: Name of the dataset being processed.
    :param csv_path: Path to the CSV dataset.
    :param n_generations: Number of generations to run the GA for each population size.
@@ -882,8 +883,6 @@ def run_population_sweep(dataset_name, csv_path, n_generations=100, min_pop=20, 
    """
    
    verbose_output(f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {min_pop} to {max_pop}, running {n_generations} generations each.{Style.RESET_ALL}") # Output the verbose message
-
-   bot = TelegramBot() # Initialize Telegram bot for notifications
 
    if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
       bot.send_messages([f"Starting population sweep for dataset **{dataset_name}** from size **{min_pop}** to **{max_pop}**"]) # Send start message
@@ -994,9 +993,11 @@ def main():
    files_to_process = ["./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"] # For testing purposes, process only this file
    
    dataset_name = get_dataset_name(input_path) # Get the dataset name from the input path
+   
+   bot = TelegramBot() # Initialize Telegram bot for notifications
 
    for file in files_to_process: # For each file to process
-      sweep_results = run_population_sweep(dataset_name, file, n_generations=100, min_pop=20, max_pop=20) # Run population sweep
+      sweep_results = run_population_sweep(bot, dataset_name, file, n_generations=100, min_pop=20, max_pop=20) # Run population sweep
 
       if VERBOSE and sweep_results: # If VERBOSE is True and there are results
          print(f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}") # Print detailed results
