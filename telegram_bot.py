@@ -103,6 +103,23 @@ def verbose_output(true_string="", false_string=""):
    elif false_string != "": # If the false_string is set
       print(false_string) # Output the false statement string
 
+async def send_message(text, chat_id):
+   """
+   Sends a message via Telegram bot.
+
+   :param text: The message text to send
+   :param chat_id: The chat ID to send the message to
+   :return: None
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Sending message to chat ID {BackgroundColors.CYAN}{chat_id}{Style.RESET_ALL}") # Output the verbose message
+
+   if bot: # If the bot is initialized
+      async with bot: # Use the bot context
+         await bot.send_message(text=text, chat_id=chat_id) # Send the message
+   else: # If the bot is not initialized
+      print(f"{BackgroundColors.RED}Bot not initialized.{Style.RESET_ALL}")
+
 async def send_long_message(text, chat_id):
    """
    Sends a long message by splitting it into parts if it exceeds 4096 characters.
