@@ -1,55 +1,57 @@
 """
 ================================================================================
-<PROJECT OR SCRIPT TITLE>
+Telegram Bot Notification Script
 ================================================================================
 Author      : Breno Farias da Silva
-Created     : <YYYY-MM-DD>
+Created     : 2025-11-25
 Description :
-   <Provide a concise and complete overview of what this script does.>
-   <Mention its purpose, scope, and relevance to the larger project.>
+   This script sends notifications via a Telegram bot. It loads configuration
+   from a .env file, including the bot token and chat ID. It supports sending
+   multiple messages and handles long messages by splitting them into parts
+   to comply with Telegram's 4096 character limit.
 
    Key features include:
-      - <Feature 1 — e.g., automatic data loading and preprocessing>
-      - <Feature 2 — e.g., model training and evaluation>
-      - <Feature 3 — e.g., visualization or report generation>
-      - <Feature 4 — e.g., logging or notification system>
-      - <Feature 5 — e.g., integration with other modules or datasets>
+      - Loading configuration from .env file
+      - Sending messages to a specified Telegram chat
+      - Handling long messages by splitting into parts
+      - Error handling for message sending failures
+      - Integration with sound notification system
 
 Usage:
-   1. <Explain any configuration steps before running, such as editing variables or paths.>
-   2. <Describe how to execute the script — typically via Makefile or Python.>
-         $ make <target>   or   $ python <script_name>.py
-   3. <List what outputs are expected or where results are saved.>
+   1. Create a .env file in the project root with TELEGRAM_API_KEY and CHAT_ID.
+   2. Install dependencies: pip install python-telegram-bot python-dotenv
+   3. Run the script: $ python telegram_bot.py
+   4. Outputs are sent to the Telegram chat specified in .env.
 
 Outputs:
-   - <Output file or directory 1 — e.g., results.csv>
-   - <Output file or directory 2 — e.g., Feature_Analysis/plots/>
-   - <Output file or directory 3 — e.g., logs/output.txt>
+   - Messages sent to Telegram chat (no local files generated)
 
 TODOs:
-   - <Add a task or improvement — e.g., implement CLI argument parsing.>
-   - <Add another improvement — e.g., extend support to Parquet files.>
-   - <Add optimization — e.g., parallelize evaluation loop.>
-   - <Add robustness — e.g., error handling or data validation.>
+   - Add support for sending images or files
+   - Implement message queuing for batch processing
+   - Add retry mechanism for failed sends
+   - Support multiple chat IDs for different notifications
 
 Dependencies:
-   - Python >= <version>
-   - <Library 1 — e.g., pandas>
-   - <Library 2 — e.g., numpy>
-   - <Library 3 — e.g., scikit-learn>
-   - <Library 4 — e.g., matplotlib, seaborn, tqdm, colorama>
+   - Python >= 3.8
+   - python-telegram-bot
+   - python-dotenv
+   - colorama
 
 Assumptions & Notes:
-   - <List any key assumptions — e.g., last column is the target variable.>
-   - <Mention data format — e.g., CSV files only.>
-   - <Mention platform or OS-specific notes — e.g., sound disabled on Windows.>
-   - <Note on output structure or reusability.>
+   - .env file must be present with TELEGRAM_API_KEY and CHAT_ID
+   - Bot must be added to the chat and have send message permissions
+   - Sound notification is optional and follows project conventions
 """
 
 import atexit # For playing a sound when the program finishes
-import os # For running a command in the terminal
+import asyncio # For asynchronous operations
+import os # For environment variables and file operations
 import platform # For getting the operating system name
 from colorama import Style # For coloring the terminal
+from dotenv import load_dotenv # For loading .env file
+from telegram import Bot # For Telegram bot operations
+from telegram.error import BadRequest # For handling Telegram errors
 
 # Macros:
 class BackgroundColors: # Colors for the terminal
@@ -72,6 +74,18 @@ SOUND_FILE = "./.assets/Sounds/NotificationSound.wav" # The path to the sound fi
 RUN_FUNCTIONS = {
    "Play Sound": True, # Set to True to play a sound when the program finishes
 }
+
+# Load environment variables
+load_dotenv() # Load variables from .env file
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_API_KEY") # Get the Telegram bot token from environment variables
+CHAT_ID = os.getenv("CHAT_ID") # Get the chat ID from environment variables
+
+# Initialize bot
+if TELEGRAM_BOT_TOKEN: # If the Telegram bot token is set
+   bot = Bot(token=TELEGRAM_BOT_TOKEN) # Initialize the Telegram bot
+else: # If the Telegram bot token is not set
+   print(f"{BackgroundColors.RED}TELEGRAM_API_KEY not found in .env file.{Style.RESET_ALL}")
+   bot = None # None
 
 # Functions Definitions:
 
@@ -129,7 +143,19 @@ def main():
    :return: None
    """
 
-   print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Main Template Python{BackgroundColors.GREEN} program!{Style.RESET_ALL}", end="\n\n") # Output the welcome message
+   print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Telegram Bot Notification{BackgroundColors.GREEN} program!{Style.RESET_ALL}", end="\n\n") # Output the welcome message
+
+   if not TELEGRAM_BOT_TOKEN or not CHAT_ID: # If the Telegram bot token or chat ID is not set
+      print(f"{BackgroundColors.RED}TELEGRAM_API_KEY or CHAT_ID not set in .env file.{Style.RESET_ALL}")
+      return # Exit the program
+
+   messages = [ # Test messages
+      "Test message",
+   ]
+
+   if messages: # If there are messages to send
+      asyncio.run(run_bot(messages, CHAT_ID)) # Run the bot to send messages
+      print(f"{BackgroundColors.GREEN}Messages sent to Telegram chat.{Style.RESET_ALL}")
 
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
 
