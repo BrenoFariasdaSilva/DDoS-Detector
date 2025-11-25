@@ -103,6 +103,29 @@ def verbose_output(true_string="", false_string=""):
    elif false_string != "": # If the false_string is set
       print(false_string) # Output the false statement string
 
+async def send_long_message(text, chat_id):
+   """
+   Sends a long message by splitting it into parts if it exceeds 4096 characters.
+
+   :param text: The message text to send
+   :param chat_id: The chat ID to send the message to
+   :return: None
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Sending long message to chat ID {BackgroundColors.CYAN}{chat_id}{Style.RESET_ALL}") # Output the verbose message
+   
+   MAX_MESSAGE_LENGTH = 4096 # Maximum message length for Telegram
+   parts = [text[i:i + MAX_MESSAGE_LENGTH] for i in range(0, len(text), MAX_MESSAGE_LENGTH)] # Split the text into parts
+   if bot: # If the bot is initialized
+      async with bot: # Use the bot context
+         for part in parts: # Send each part
+            try: # Try to send the message part
+               await bot.send_message(chat_id=chat_id, text=part) # Send the message part
+            except BadRequest as e: # Handle BadRequest error
+               print(f"{BackgroundColors.RED}Failed to send message part: {str(e)}{Style.RESET_ALL}")
+   else: # If the bot is not initialized
+      print(f"{BackgroundColors.RED}Bot not initialized.{Style.RESET_ALL}")
+
 async def run_bot(messages, chat_id):
    """
    Runs the bot to send messages.
