@@ -881,12 +881,12 @@ def run_population_sweep(dataset_name, csv_path, n_generations=100, min_pop=20, 
    :return: Dictionary mapping population sizes to their best feature subsets.
    """
    
-   verbose_output(f"{BackgroundColors.GREEN}Starting population sweep from size {min_pop} to {max_pop}, running {n_generations} generations each.{Style.RESET_ALL}") # Output the verbose message
+   verbose_output(f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {min_pop} to {max_pop}, running {n_generations} generations each.{Style.RESET_ALL}") # Output the verbose message
 
    bot = TelegramBot() # Initialize Telegram bot for notifications
 
    if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
-      bot.send_messages([f"Starting population sweep for {dataset_name} from size {min_pop} to {max_pop}"]) # Send start message
+      bot.send_messages([f"Starting population sweep for dataset {dataset_name} from size {min_pop} to {max_pop}"]) # Send start message
 
    best_score = -1 # Initialize best score
    best_result = None # Initialize best result
