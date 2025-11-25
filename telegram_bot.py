@@ -103,6 +103,20 @@ def verbose_output(true_string="", false_string=""):
    elif false_string != "": # If the false_string is set
       print(false_string) # Output the false statement string
 
+async def run_bot(messages, chat_id):
+   """
+   Runs the bot to send messages.
+
+   :param messages: List of message strings
+   :param chat_id: The chat ID to send messages to
+   :return: None
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Running Telegram bot to send messages to chat ID {BackgroundColors.CYAN}{chat_id}{Style.RESET_ALL}") # Output the verbose message
+
+   text = "\n".join(messages) # Join messages into a single string
+   await send_long_message(text, chat_id) # Send the long message
+
 def verify_filepath_exists(filepath):
    """
    Verify if a file or folder exists at the specified path.
