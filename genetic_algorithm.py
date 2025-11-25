@@ -179,6 +179,29 @@ def get_files_to_process(directory_path, file_extension=".csv"):
 
    return sorted(files) # Return sorted list for consistency
 
+def get_dataset_name(input_path):
+   """
+   Extract the dataset name from CSVs path.
+
+   :param input_path: Path to the CSVs files
+   :return: Dataset name
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Extracting dataset name from CSV path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}") # Output the verbose message
+   
+   datasets_pos = input_path.find("/Datasets/") # Find the position of "/Datasets/" in the path
+   if datasets_pos != -1: # If "/Datasets/" is found in the path
+      after_datasets = input_path[datasets_pos + len("/Datasets/"):] # Get the substring after "/Datasets/"
+      next_slash = after_datasets.find("/") # Find the next "/"
+      if next_slash != -1: # If there is another "/"
+         dataset_name = after_datasets[:next_slash] # Take until the next "/"
+      else: # If there is no other "/"
+         dataset_name = after_datasets.split("/")[0] if "/" in after_datasets else after_datasets # No more "/", take the first part if any
+   else: # If "/Datasets/" is not found in the path
+      dataset_name = os.path.basename(input_path) # Fallback to basename if "Datasets" not in path
+
+   return dataset_name # Return the dataset name
+
 def preprocess_dataframe(df, remove_zero_variance=True):
    """
    Preprocess a DataFrame by removing rows with NaN or infinite values and
@@ -883,16 +906,6 @@ def run_population_sweep(csv_path, n_generations=100, min_pop=20, max_pop=20):
       return {} # Return empty dictionary
    
    print_ga_parameters(min_pop, max_pop, n_generations, len(feature_names) if feature_names is not None else 0) if VERBOSE else None # Print GA parameters if VERBOSE is enabled
-   
-   parts = csv_path.split("/") # Split the CSV path into parts
-   if "Datasets" in parts: # If "Datasets" is in the path
-      idx = parts.index("Datasets") # Find the index of "Datasets"
-      if idx + 1 < len(parts): # If there is a part after "Datasets"
-         dataset_name = parts[idx + 1] # Use the next part as dataset name
-      else: # If "Datasets" is the last part
-         dataset_name = os.path.basename(csv_path) # Use the base name of the CSV file
-   else: # If "Datasets" is not in the path
-      dataset_name = os.path.basename(csv_path) # Use the base name of the CSV file
    
    train_count = len(y_train) if y_train is not None else 0 # Number of training samples
    test_count = len(y_test) if y_test is not None else 0 # Number of testing samples
