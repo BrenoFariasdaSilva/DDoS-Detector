@@ -525,10 +525,11 @@ def ga_fitness(ind, fitness_func):
    
    return (fitness_func(ind)[3],) # Return only the F1-score for GA optimization
 
-def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100, show_progress=False):
+def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100, show_progress=False):
    """
    Run Genetic Algorithm generations with a tqdm progress bar.
 
+   :param bot: TelegramBot instance for sending messages.
    :param toolbox: DEAP toolbox with registered functions.
    :param population: Initial population.
    :param hof: Hall of Fame to store the best individual.
@@ -570,6 +571,9 @@ def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_tes
       if gens_without_improvement >= early_stop_gens:
          print(f"{BackgroundColors.YELLOW}Early stopping: No improvement in best fitness for {early_stop_gens} generations. Stopping at generation {gen}.{Style.RESET_ALL}")
          break # Stop the loop early
+
+      if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID and show_progress and gen % max(1, n_generations // 100) == 0: # Send periodic updates to Telegram in every ~1% of generations
+         bot.send_message(f"GA Progress: Generation {gen}/{n_generations}, Best F1-Score: {best_fitness:.4f}") # Send message to Telegram bot
 
    if hasattr(toolbox, "map") and hasattr(toolbox.map, "close"): # If using multiprocessing pool
       toolbox.map.close() # Close the pool
@@ -913,7 +917,7 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
    for pop_size in tqdm(range(min_pop, max_pop + 1), desc=f"{BackgroundColors.GREEN}Population Sweep ({min_pop}-{max_pop}) for {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}", unit="pop"): # For each population size
       feature_count = len(feature_names) if feature_names is not None else 0 # Number of features
       toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # 4.1. Configure the GA for the current population size
-      best_ind = run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=(min_pop == max_pop)) # 4.2. Run the GA loop
+      best_ind = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=(min_pop == max_pop)) # 4.2. Run the GA loop
 
       if best_ind is None: # If no best individual was found
          continue # Skip to the next population size
