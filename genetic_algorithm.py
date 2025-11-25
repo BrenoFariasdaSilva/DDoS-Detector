@@ -517,7 +517,7 @@ def run_genetic_algorithm_loop(toolbox, population, hof, X_train, y_train, X_tes
    gens_without_improvement = 0 # Counter for generations with no improvement
    early_stop_gens = 10 # Number of generations to wait for improvement before stopping
 
-   gen_range = tqdm(range(1, n_generations + 1), desc="Generations") if show_progress else range(1, n_generations + 1)
+   gen_range = tqdm(range(1, n_generations + 1), desc=f"{BackgroundColors.GREEN}Generations{Style.RESET_ALL}") if show_progress else range(1, n_generations + 1)
    for gen in gen_range: # Loop for the specified number of generations
       offspring = algorithms.varAnd(population, toolbox, cxpb=0.5, mutpb=0.2) # Apply crossover and mutation
       fits = list(toolbox.map(toolbox.evaluate, offspring)) # Evaluate the offspring in parallel
