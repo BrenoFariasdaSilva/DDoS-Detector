@@ -21,6 +21,7 @@ Description :
       - Exports: best-subset text file, CSV summaries and per-feature boxplots
       - Progress bars via tqdm and safe filename handling for outputs
       - Cross-platform completion notification (optional sound)
+      - Telegram bot notifications for progress updates
 
 Usage:
    1. Configure the dataset:
@@ -58,6 +59,8 @@ TODOs:
 Dependencies:
    - Python >= 3.9
    - pandas, numpy, scikit-learn, deap, tqdm, matplotlib, seaborn, colorama
+   - python-telegram-bot
+   - python-dotenv
 
 Assumptions & Notes:
    - Dataset format: CSV, last column = target. Only numeric features are used.
@@ -65,6 +68,7 @@ Assumptions & Notes:
    - Sound notification is skipped on Windows by default.
    - The script uses RandomForestClassifier as the default evaluator; change as needed.
    - Inspect output directories (`Feature_Analysis/`) after runs for artifacts.
+   - .env file must be present with TELEGRAM_API_KEY and CHAT_ID for notifications
 """
 
 import atexit # For playing a sound when the program finishes
@@ -88,6 +92,7 @@ from sklearn.ensemble import RandomForestClassifier # For the machine learning m
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix # For model evaluation
 from sklearn.model_selection import train_test_split, StratifiedKFold # For splitting the dataset and cross-validation
 from sklearn.preprocessing import StandardScaler # For feature scaling
+from telegram_bot import TelegramBot # For Telegram notifications
 from tqdm import tqdm # For progress bars
 from xgboost import XGBClassifier # For XGBoost classifier
 
@@ -854,6 +859,11 @@ def run_population_sweep(csv_path, n_generations=100, min_pop=20, max_pop=20):
    
    verbose_output(f"{BackgroundColors.GREEN}Starting population sweep from size {min_pop} to {max_pop}, running {n_generations} generations each.{Style.RESET_ALL}") # Output the verbose message
 
+   bot = TelegramBot() # Initialize Telegram bot for notifications
+
+   if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
+      bot.send_messages([f"Starting population sweep for {dataset_name} from size {min_pop} to {max_pop}"]) # Send start message
+
    best_score = -1 # Initialize best score
    best_result = None # Initialize best result
    best_metrics = None # Initialize best metrics
@@ -906,6 +916,9 @@ def run_population_sweep(csv_path, n_generations=100, min_pop=20, max_pop=20):
          best_metrics = metrics # Update best metrics
          best_result = (best_ind, feature_names, X_train, X_test, y_train, y_test, pop_size) # Update best result
 
+      if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
+         bot.send_messages([f"Completed GA for population size {pop_size} on {dataset_name}, F1: {f1:.4f}"]) # Send progress message
+
    # 5. After testing all population sizes, select the best global result
    if best_result: # If a best result was found
       best_ind, feature_names, X_train, X_test, y_train, y_test, best_pop_size = best_result # Unpack the best result
@@ -913,6 +926,9 @@ def run_population_sweep(csv_path, n_generations=100, min_pop=20, max_pop=20):
       save_and_analyze_results(best_ind, feature_names, X_train, y_train, csv_path, metrics=best_metrics, X_test=X_test, y_test=y_test, n_generations=n_generations, best_pop_size=best_pop_size) # 6. Save chosen features, metrics, and split data
    else: # If no valid result was found
       print(f"{BackgroundColors.RED}No valid results found during the sweep.{Style.RESET_ALL}")
+
+   if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
+      bot.send_messages([f"Population sweep completed for {dataset_name}"]) # Send completion message
 
    return results # Return the results dictionary
 
