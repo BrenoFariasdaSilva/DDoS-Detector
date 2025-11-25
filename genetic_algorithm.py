@@ -105,6 +105,7 @@ class BackgroundColors: # Colors for the terminal
 VERBOSE = False # Set to True to output verbose messages
 EARLY_STOP_ACC_THRESHOLD = 0.75 # Minimum acceptable accuracy for an individual
 EARLY_STOP_FOLDS = 3 # Number of folds to check before early stopping
+CPU_PROCESSES = 2 # Number of CPU processes to use for multiprocessing (None = all available)
 
 # Fitness Cache:
 fitness_cache = {} # Cache for fitness results to avoid re-evaluating same feature masks
@@ -356,7 +357,10 @@ def setup_genetic_algorithm(n_features, population_size=None):
    toolbox.register("mutate", tools.mutFlipBit, indpb=0.05) # Mutation operator
    toolbox.register("select", tools.selTournament, tournsize=3) # Selection operator
 
-   pool = multiprocessing.Pool() # Create a multiprocessing pool
+   if CPU_PROCESSES is None: # If CPU_PROCESSES is not set
+      pool = multiprocessing.Pool() # Create a multiprocessing pool with all available CPUs
+   else: # If CPU_PROCESSES is set
+      pool = multiprocessing.Pool(processes=CPU_PROCESSES) # Create a multiprocessing pool with specified number of CPUs 
    toolbox.register("map", pool.map) # Register parallel map for fitness evaluation
 
    population = toolbox.population(n=population_size) # Create the initial population
