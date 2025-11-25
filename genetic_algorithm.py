@@ -372,7 +372,7 @@ def instantiate_estimator(estimator_cls=None):
    :return: instantiated estimator
    """
    
-   verbose_output(f"{BackgroundColors.GREEN}Instantiating the estimator: {BackgroundColors.CYAN}{estimator_cls.__name__ if estimator_cls else 'RandomForestClassifier'}{Style.RESET_ALL}") # Output the verbose message
+   # verbose_output(f"{BackgroundColors.GREEN}Instantiating the estimator: {BackgroundColors.CYAN}{estimator_cls.__name__ if estimator_cls else 'RandomForestClassifier'}{Style.RESET_ALL}") # Output the verbose message
    
    if estimator_cls is None: # If no estimator class is provided
       return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=1) # Return a default RandomForestClassifier

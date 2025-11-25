@@ -72,7 +72,7 @@ Before running the project, ensure that both **Python** and the **make utility**
 
 ### 1. Install Python
 
-The project requires **Python 3.9 or higher**.
+The project requires **Python 3.12 or higher**.
 
 #### Linux
 On Debian/Ubuntu-based distributions:
