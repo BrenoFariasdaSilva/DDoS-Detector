@@ -121,44 +121,29 @@ def verify_filepath_exists(filepath):
 	verbose_output(f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output the verbose message
 	return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
 
-def load_and_clean_data(csv_path):
-	"""
-	Loads the CSV dataset, selects numeric features, encodes target if necessary,
-	and drops invalid values.
+def load_dataset(csv_path):
+   """
+   Load CSV and return DataFrame.
 
-	:param csv_path: Path to the CSV dataset file
-	:return: X (DataFrame of numeric features), y (target Series)
-	"""
+   :param csv_path: Path to CSV dataset.
+   :return: DataFrame
+   """
 
-	if not verify_filepath_exists(csv_path): # If the CSV file does not exist
-		print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
-		return None, None # Return None if file not found
+   verbose_output(f"\n{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}") # Output the loading dataset message
 
-	print(f"\n{BackgroundColors.GREEN}Loading {BackgroundColors.CYAN}{csv_path}{BackgroundColors.GREEN} CSV dataset file...{Style.RESET_ALL}")
-	df = pd.read_csv(csv_path, low_memory=False) # Load the dataset
+   if not verify_filepath_exists(csv_path): # If the CSV file does not exist
+      print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
+      return None # Return None
 
-	df.columns = df.columns.str.strip() # Clean column names by stripping leading/trailing whitespace
+   df = pd.read_csv(csv_path, low_memory=False) # Load the dataset
 
-	if df.shape[1] < 2: # If there are less than 2 columns
-		print(f"{BackgroundColors.RED}CSV must contain at least one feature column and one target column.{Style.RESET_ALL}")
-		return None, None # Return None if not enough columns
+   df.columns = df.columns.str.strip() # Clean column names by stripping leading/trailing whitespace
 
-	X = df.iloc[:, :-1] # All columns except the last
-	y = df.iloc[:, -1] # Last column as target
+   if df.shape[1] < 2: # If there are less than 2 columns
+      print(f"{BackgroundColors.RED}CSV must have at least 1 feature and 1 target.{Style.RESET_ALL}")
+      return None # Return None
 
-	if y.dtype == object or y.dtype.name == "category": # If target is categorical
-		y, _ = pd.factorize(y) # Encode target labels as integers
-
-	X = X.select_dtypes(include=["number"]).replace([np.inf, -np.inf], np.nan).dropna() # Keep only numeric columns and drop rows with NaN or infinite values
-	y = y[X.index] # Align target with cleaned features
-
-	if X.empty: # If no numeric features remain
-		print(f"{BackgroundColors.RED}No valid numeric features remain after cleaning.{Style.RESET_ALL}")
-		return None, None # Return None if no valid features
-
-	print(f"{BackgroundColors.GREEN}Dataset loaded: {BackgroundColors.CYAN}{X.shape[0]} samples, {X.shape[1]} features{Style.RESET_ALL}")
-	
-	return X, y # Return features and target
+   return df # Return the loaded DataFrame
 
 def scale_and_split(X, y, test_size=0.2, random_state=42):
 	"""
@@ -363,10 +348,9 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48]):
 	:return: None
 	"""
 
-	X, y = load_and_clean_data(csv_path) # Load and clean the dataset
-	
-	if X is None or y is None: # If loading failed
-		return # Exit the function
+	df = load_dataset(csv_path) # Load the dataset
+	if df is None: # If dataset loading failed
+		return {} # Return empty dictionary
 	
 	max_components = min(X.shape[1], max(n_components_list)) # Maximum valid components
 	n_components_list = [n for n in n_components_list if n <= max_components] # Filter valid component counts
