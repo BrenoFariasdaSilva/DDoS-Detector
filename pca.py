@@ -487,7 +487,7 @@ def main():
 	csv_file = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv" # Path to the CSV dataset file
 	n_components_list = [8, 16, 24, 32, 48] # List of PCA component counts to test
 	
-	run_pca_analysis(csv_file, n_components_list) # Run the PCA analysis
+	run_pca_analysis(csv_file, n_components_list, max_workers=2) # Run the PCA analysis
 	
 	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}")
 	
