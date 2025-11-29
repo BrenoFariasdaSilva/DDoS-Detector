@@ -145,6 +145,34 @@ def load_dataset(csv_path):
 
    return df # Return the loaded DataFrame
 
+def preprocess_dataframe(df, remove_zero_variance=True):
+   """
+   Preprocess a DataFrame by removing rows with NaN or infinite values and
+   dropping zero-variance numeric features.
+
+   :param df: pandas DataFrame to preprocess
+   :param remove_zero_variance: whether to drop numeric columns with zero variance
+   :return: cleaned DataFrame
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Preprocessing the DataFrame by removing NaN/infinite values and zero-variance features.{Style.RESET_ALL}") # Output the verbose message
+
+   if df is None: # If the DataFrame is None
+      return df # Return None
+
+   df_clean = df.copy() # Create a copy of the DataFrame to avoid modifying the original
+   df_clean = df_clean.replace([np.inf, -np.inf], np.nan).dropna() # Remove rows with NaN or infinite values
+
+   if remove_zero_variance: # If remove_zero_variance is set to True
+      numeric_cols = df_clean.select_dtypes(include=["number"]).columns # Select only numeric columns
+      if len(numeric_cols) > 0: # If there are numeric columns
+         variances = df_clean[numeric_cols].var(axis=0, ddof=0) # Calculate variances
+         zero_var_cols = variances[variances == 0].index.tolist() # Get columns with zero variance
+         if zero_var_cols: # If there are zero-variance columns
+            df_clean = df_clean.drop(columns=zero_var_cols) # Drop zero-variance columns
+
+   return df_clean # Return the cleaned DataFrame
+
 def scale_and_split(X, y, test_size=0.2, random_state=42):
 	"""
 	Scales numeric features and splits into train/test sets.
@@ -351,6 +379,11 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48]):
 	df = load_dataset(csv_path) # Load the dataset
 	if df is None: # If dataset loading failed
 		return {} # Return empty dictionary
+
+	cleaned_df = preprocess_dataframe(df) # Preprocess the DataFrame
+	
+	X = cleaned_df.select_dtypes(include=["number"]).iloc[:, :-1] # Select numeric features (all columns except last)
+	y = cleaned_df.iloc[:, -1] # Select target variable (last column)
 	
 	max_components = min(X.shape[1], max(n_components_list)) # Maximum valid components
 	n_components_list = [n for n in n_components_list if n <= max_components] # Filter valid component counts
