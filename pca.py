@@ -440,7 +440,11 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
 			results = apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, workers=1) # Apply PCA and evaluate (single worker)
 			all_results.append(results) # Append results to the list
 			print_pca_results(results) if VERBOSE else None
-	
+   
+	if not all_results: # If no results were collected
+		print(f"{BackgroundColors.RED}No results collected from PCA analysis. Check for errors in worker processes.{Style.RESET_ALL}")
+		return # Return
+
 	save_pca_results(csv_path, all_results) # Save all results to files
 	
 	best_result = max(all_results, key=lambda x: x['cv_f1_score']) # Find the best configuration based on CV F1-Score
