@@ -108,6 +108,7 @@ class BackgroundColors: # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False # Set to True to output verbose messages
+RUNS = 5 # Number of runs for Genetic Algorithm analysis
 EARLY_STOP_ACC_THRESHOLD = 0.75 # Minimum acceptable accuracy for an individual
 EARLY_STOP_FOLDS = 3 # Number of folds to check before early stopping
 CPU_PROCESSES = 2 # Number of CPU processes to use for multiprocessing (None = all available)
@@ -1001,7 +1002,7 @@ def main():
    bot = TelegramBot() # Initialize Telegram bot for notifications
 
    for file in files_to_process: # For each file to process
-      sweep_results = run_population_sweep(bot, dataset_name, file, n_generations=100, min_pop=20, max_pop=20) # Run population sweep
+      sweep_results = run_population_sweep(bot, dataset_name, file, n_generations=100, min_pop=20, max_pop=20, runs=RUNS) # Run population sweep
 
       if VERBOSE and sweep_results: # If VERBOSE is True and there are results
          print(f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}") # Print detailed results
