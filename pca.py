@@ -436,7 +436,7 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
 	
 	if not executed_parallel: # If parallel was not executed or failed, run sequential
 		for n_components in tqdm(n_components_list, desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}", unit="config"):
-			print(f"\n{BackgroundColors.BOLD}Testing PCA with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}")
+			print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Testing PCA with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}")
 			results = apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, workers=1) # Apply PCA and evaluate (single worker)
 			all_results.append(results) # Append results to the list
 			print_pca_results(results) if VERBOSE else None
