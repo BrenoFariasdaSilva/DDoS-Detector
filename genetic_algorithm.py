@@ -787,7 +787,7 @@ def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
 
    write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=metrics) # Delegate writing to helper function
 
-def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=None, y_test=None, n_generations=None, best_pop_size=None):
+def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=None, y_test=None, n_generations=None, best_pop_size=None, runs_list=None):
    """
    Save best feature subset and analyze them.
 
@@ -867,6 +867,25 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
          y_series = y.reindex(df_features.index) if not df_features.index.equals(y.index) else y # Align indices if necessary
 
       analyze_top_features(df_features, y_series, best_features, csv_path=csv_path) # Analyze and visualize the top features
+
+   if runs_list: # If runs_list is provided
+      for run_idx, run_data in enumerate(runs_list, start=1): # For each run
+         run_ind = run_data["best_ind"] # Get the best individual for this run
+         run_metrics = run_data["metrics"] # Get the metrics for this run
+         run_features = [f for f, bit in zip(feature_names if feature_names is not None else [], run_ind) if bit == 1] # Extract best features for this run
+         run_output_dir = f"{output_dir}/Run_{run_idx}/" # Directory for this run's outputs
+         os.makedirs(run_output_dir, exist_ok=True) # Create the directory if it doesn't exist
+         
+         run_rf_results_file = f"{run_output_dir}/Genetic_Algorithm_Run_{run_idx}_Results_RandomForest.txt" # Path to save RandomForest results
+         write_best_features_to_file(run_features, rfe_ranking, run_rf_results_file, metrics=run_metrics, classifier_name="RandomForest", train_test_ratio=test_frac, n_train=n_train, n_test=n_test, population_size=best_pop_size, n_generations=n_generations) # Write RandomForest results
+
+         if XGBClassifier is not None: # If XGBoost is available
+            try: # Try to evaluate with XGBoost
+               run_xgb_metrics = evaluate_individual(run_ind, X, y, X_test, y_test, estimator_cls=XGBClassifier) if X_test is not None and y_test is not None else None # Evaluate with XGBoost
+            except Exception: # If evaluation fails
+               run_xgb_metrics = None # Reset XGBoost metrics
+            run_xgb_results_file = f"{run_output_dir}/Genetic_Algorithm_Run_{run_idx}_Results_XGBoost.txt" # Path to save XGBoost results
+            write_best_features_to_file(run_features, rfe_ranking, run_xgb_results_file, metrics=run_xgb_metrics, classifier_name="XGBoost", train_test_ratio=test_frac, n_train=n_train, n_test=n_test, population_size=best_pop_size, n_generations=n_generations) # Write XGBoost results
 
    return best_features # Return the list of best features
 
