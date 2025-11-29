@@ -191,7 +191,7 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
 
 	return X_train, X_test, y_train, y_test, scaler # Return the split data and scaler
 
-def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_folds=10):
+def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_folds=10, workers=1):
 	"""
 	Applies PCA transformation and evaluates performance using 10-fold Stratified Cross-Validation
 	on the training set, then tests on the held-out test set.
@@ -212,7 +212,8 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
  
 	explained_variance = pca.explained_variance_ratio_.sum() # Total explained variance ratio
 	
-	model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=1) # Initialize Random Forest model
+	rf_n_jobs = -1 if workers == 1 else 1 # Set n_jobs for RandomForest based on workers
+	model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=rf_n_jobs) # Initialize Random Forest model
 	
 	print(f"{BackgroundColors.GREEN}  Running 10-fold Stratified CV on training data...{Style.RESET_ALL}")
 	skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42) # Stratified K-Fold cross-validator
@@ -412,7 +413,7 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
 		futures = [] # List to store futures
 		with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor: # Create a process pool executor
 			for n_components in n_components_list: # Loop over each number of components
-				futures.append(executor.submit(apply_pca_and_evaluate, X_train, y_train, X_test, y_test, n_components)) # Submit tasks to the executor
+				futures.append(executor.submit(apply_pca_and_evaluate, X_train, y_train, X_test, y_test, n_components, workers=workers)) # Submit tasks to the executor
 
 			for fut in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}", unit="config", leave=False):
 				try: # Get the result from the future
@@ -428,7 +429,7 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
 	else: # Sequential execution
 		for n_components in tqdm(n_components_list, desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}", unit="config"):
 			print(f"\n{BackgroundColors.BOLD}Testing PCA with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}")
-			results = apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components) # Apply PCA and evaluate
+			results = apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, workers=1) # Apply PCA and evaluate (single worker)
 			all_results.append(results) # Append results to the list
 			print_pca_results(results) if VERBOSE else None
 	
