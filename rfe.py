@@ -256,37 +256,64 @@ def print_top_features(top_features, rfe_ranking):
       rank_info = f" {BackgroundColors.GREEN}(RFE ranking {BackgroundColors.CYAN}{rfe_ranking[feat]}{Style.RESET_ALL})" if feat in rfe_ranking else " (RFE ranking N/A)" # Get ranking info
       print(f"{i}. {feat}{rank_info}") # Print the feature and its ranking
 
-def save_rfe_results(csv_path, top_features, rfe_ranking, metrics, model_name):
+def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
    """
-   Saves top features and optional performance metrics to a structured results file.
+   Saves results from all runs, average metrics, and divergence info to structured files.
 
    :param csv_path: Original CSV file path
-   :param top_features: List of top features
-   :param rfe_ranking: Dict mapping normalized feature names to RFE rankings
-   :param metrics: Performance metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
+   :param all_runs: List of run results
+   :param avg_metrics: Average metrics tuple
    :param model_name: Name of the classifier
    """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Saving RFE results to structured files...{Style.RESET_ALL}") # Output the verbose message
 
-   output_file = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE_Results.txt" # Define output file path
-   os.makedirs(os.path.dirname(output_file), exist_ok=True) # Create directory if it doesn't exist
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Define output directory
+   os.makedirs(output_dir, exist_ok=True) # Create directory if it doesn't exist
 
-   with open(output_file, "w", encoding="utf-8") as f: # Open the output file for writing
-      acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics # Unpack metrics
-      f.write("Performance Metrics for the Random Forest Classifier using the best feature subset from RFE:\n") # Write header
-      f.write(f"Accuracy: {acc:.4f}\n") # Write accuracy
-      f.write(f"Precision: {prec:.4f}\n") # Write precision
-      f.write(f"Recall: {rec:.4f}\n") # Write recall
-      f.write(f"F1-Score: {f1:.4f}\n") # Write F1-score
-      f.write(f"False Positive Rate (FPR): {fpr:.4f}\n") # Write FPR
-      f.write(f"False Negative Rate (FNR): {fnr:.4f}\n") # Write FNR
-      f.write(f"Elapsed Time (s): {elapsed_time:.2f}\n") # Write elapsed time
+   for run_data in all_runs: # Save individual run results
+      run = run_data["run"] # Get the run number
+      output_file = f"{output_dir}/RFE_Results_Run_{run}.txt" # Define output file path
+      with open(output_file, "w", encoding="utf-8") as f: # Open the file for writing
+         f.write(f"Run {run} Results\n") # Write run header
+         f.write("="*50 + "\n") # Write separator
+         acc, prec, rec, f1, fpr, fnr, elapsed_time = run_data["metrics"] # Unpack metrics
+         f.write("Performance Metrics:\n") # Write metrics header
+         f.write(f"Accuracy: {acc:.4f}\n") # Write accuracy
+         f.write(f"Precision: {prec:.4f}\n") # Write precision
+         f.write(f"Recall: {rec:.4f}\n") # Write recall
+         f.write(f"F1-Score: {f1:.4f}\n") # Write F1-score
+         f.write(f"False Positive Rate (FPR): {fpr:.4f}\n") # Write FPR
+         f.write(f"False Negative Rate (FNR): {fnr:.4f}\n") # Write FNR
+         f.write(f"Elapsed Time (s): {elapsed_time:.2f}\n") # Write elapsed time
+         f.write("\nTop Features:\n") # Write top features
+         for i, feat in enumerate(run_data["top_features"], 1): # Write each top feature with its ranking
+            rank = run_data["rfe_ranking"][feat] # Get the ranking
+            f.write(f"{i}. {feat} (RFE ranking {rank})\n") # Write the feature and its ranking
+      print(f"{BackgroundColors.GREEN}Results for run {run} saved to {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}")
 
-      f.write("\nBest Feature Subset using Recursive Feature Elimination (RFE)\n") # Write header for features
-      for i, feat in enumerate(top_features, start=1): # Write each top feature with its ranking
-         rank_info = f" (RFE ranking {rfe_ranking[feat]})" if feat in rfe_ranking else " (RFE ranking N/A)" # Get ranking info
-         f.write(f"{i}. {feat}{rank_info}\n") # Write the feature and its ranking
+   summary_file = f"{output_dir}/RFE_Summary.txt" # Define summary file path
+   with open(summary_file, "w", encoding="utf-8") as f: # Open the summary file for writing
+      f.write(f"Summary of {len(all_runs)} RFE Runs\n") # Write summary header
+      f.write("="*50 + "\n") # Write separator
+      acc, prec, rec, f1, fpr, fnr, elapsed_time = avg_metrics # Unpack average metrics
+      f.write("Average Performance Metrics:\n") # Write average metrics header
+      f.write(f"Accuracy: {acc:.4f}\n") # Write average accuracy
+      f.write(f"Precision: {prec:.4f}\n") # Write average precision
+      f.write(f"Recall: {rec:.4f}\n") # Write average recall
+      f.write(f"F1-Score: {f1:.4f}\n") # Write average F1-score
+      f.write(f"False Positive Rate (FPR): {fpr:.4f}\n") # Write average FPR
+      f.write(f"False Negative Rate (FNR): {fnr:.4f}\n") # Write average FNR
+      f.write(f"Elapsed Time (s): {elapsed_time:.2f}\n") # Write average elapsed time
+      f.write("\nDivergence Analysis:\n") # Write divergence analysis header
+      feature_sets = [set(run['top_features']) for run in all_runs] # Get sets of top features from all runs
+      common_features = set.intersection(*feature_sets) if feature_sets else set() # Find common features across all runs
+      f.write(f"Common features ({len(common_features)}): {sorted(common_features)}\n") # Write common features
+      for run in all_runs: # Write unique features for each run
+         unique = set(run['top_features']) - common_features # Find unique features for this run
+         f.write(f"Run {run['run']} unique features ({len(unique)}): {sorted(unique)}\n") # Write unique features
 
-   print(f"\n{BackgroundColors.GREEN}Best features and metrics saved to {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}")
+   print(f"\n{BackgroundColors.GREEN}Summary saved to {BackgroundColors.CYAN}{summary_file}{Style.RESET_ALL}")
 
 def analyze_top_features(df, y, top_features, csv_path="."):
    """
