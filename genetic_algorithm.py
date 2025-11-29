@@ -870,13 +870,14 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
 
    return best_features # Return the list of best features
 
-def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop=20, max_pop=20):
+def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop=20, max_pop=20, runs=RUNS):
    """
-   Executes a genetic algorithm (GA) for feature selection across multiple population sizes.
+   Executes a genetic algorithm (GA) for feature selection across multiple population sizes and runs.
 
    This function performs a "population sweep," testing different population sizes
    to identify the set of features that maximizes classification performance
    (F1-Score) on the training dataset using 10-fold Stratified Cross-Validation.
+   For each population size, it runs the GA multiple times to check for divergence.
 
    :param bot: TelegramBot instance for sending notifications.
    :param dataset_name: Name of the dataset being processed.
@@ -884,10 +885,11 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
    :param n_generations: Number of generations to run the GA for each population size.
    :param min_pop: Minimum population size to test.
    :param max_pop: Maximum population size to test.
-   :return: Dictionary mapping population sizes to their best feature subsets.
+   :param runs: Number of runs for each population size.
+   :return: Dictionary mapping population sizes to their results including runs and divergence.
    """
    
-   verbose_output(f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {min_pop} to {max_pop}, running {n_generations} generations each.{Style.RESET_ALL}") # Output the verbose message
+   verbose_output(f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {min_pop} to {max_pop}, running {n_generations} generations and {runs} runs each.{Style.RESET_ALL}") # Output the verbose message
 
    if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
       bot.send_messages([f"Starting population sweep for dataset **{dataset_name}** from size **{min_pop}** to **{max_pop}**"]) # Send start message
@@ -917,31 +919,54 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
    verbose_output(f"  {BackgroundColors.GREEN}  Dataset: {BackgroundColors.CYAN}{dataset_name} - {train_count} training / {test_count} testing  (80/20){Style.RESET_ALL}\n") # Output dataset split
    for pop_size in tqdm(range(min_pop, max_pop + 1), desc=f"{BackgroundColors.GREEN}Population Sweep ({min_pop}-{max_pop}) for {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}", unit="pop"): # For each population size
       feature_count = len(feature_names) if feature_names is not None else 0 # Number of features
-      toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # 4.1. Configure the GA for the current population size
-      best_ind = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=(min_pop == max_pop)) # 4.2. Run the GA loop
+      runs_list = [] # List to store results for each run
 
-      if best_ind is None: # If no best individual was found
+      for run in range(runs): # For each run
+         toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # Configure the GA
+         best_ind = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False) # Run the GA loop
+
+         if best_ind is None: # If no best individual was found
+            continue # Skip this run
+
+         metrics = evaluate_individual(best_ind, X_train, y_train, X_test, y_test) # Reevaluate the best individual
+         best_features = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1] # Extract best features
+         runs_list.append({"best_ind": best_ind, "metrics": metrics, "best_features": best_features}) # Store run results
+
+      if not runs_list: # If no runs succeeded
          continue # Skip to the next population size
 
-      best_features = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1] # Extract best features
-      results[pop_size] = best_features # Store best features for this population size
+      all_metrics = [r["metrics"] for r in runs_list] # Collect metrics from all runs
+      avg_metrics = tuple(np.mean(all_metrics, axis=0)) # Calculate average metrics across runs
 
-      metrics = evaluate_individual(best_ind, X_train, y_train, X_test, y_test) # 4.3. Reevaluate the best individual found
-      acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics # Unpack metrics
+      feature_sets = [set(r["best_features"]) for r in runs_list] # Get feature sets for all runs
+      common_features = set.intersection(*feature_sets) if feature_sets else set() # Find common features across all runs
 
-      if f1 > best_score: # 4.4. Check if this is the best global F1-Score
-         best_score = f1 # Update best score
-         best_metrics = metrics # Update best metrics
-         best_result = (best_ind, feature_names, X_train, X_test, y_train, y_test, pop_size) # Update best result
+      results[pop_size] = {"runs": runs_list, "avg_metrics": avg_metrics, "common_features": common_features} # Store results for this population size
+
+      f1_avg = avg_metrics[3] # F1-Score is the 4th metric in the tuple
+      if f1_avg > best_score: # If this is the best score so far
+         best_score = f1_avg # Update best score
+         best_metrics = avg_metrics # Update best metrics
+         best_result = (pop_size, runs_list, common_features) # Update best result
+
+      print(f"Pop {pop_size}: avg F1 {f1_avg:.4f}, common features {len(common_features)}")
+      for i, run in enumerate(runs_list): # For each run
+         unique = set(run["best_features"]) - common_features # Calculate unique features for this run
+         print(f"  Run {i+1}: unique features {len(unique)}") # Print unique features count
 
       if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
-         bot.send_messages([f"Completed GA for population size **{pop_size}** on **{dataset_name}** -> **F1: {f1:.4f}**"]) # Send progress message
+         bot.send_messages([f"Completed {runs} runs for population size **{pop_size}** on **{dataset_name}** -> **Avg F1: {f1_avg:.4f}**"])
 
    # 5. After testing all population sizes, select the best global result
    if best_result: # If a best result was found
-      best_ind, feature_names, X_train, X_test, y_train, y_test, best_pop_size = best_result # Unpack the best result
+      best_pop_size, runs_list, common_features = best_result # Unpack the best result
+      print(f"\n{BackgroundColors.GREEN}Best population size: {BackgroundColors.CYAN}{best_pop_size}{Style.RESET_ALL}")
+      print(f"{BackgroundColors.GREEN}Common features across runs: {BackgroundColors.CYAN}{len(common_features)}{Style.RESET_ALL}")
       print_metrics(best_metrics) if VERBOSE else None # Print metrics if VERBOSE is enabled
-      save_and_analyze_results(best_ind, feature_names, X_train, y_train, csv_path, metrics=best_metrics, X_test=X_test, y_test=y_test, n_generations=n_generations, best_pop_size=best_pop_size) # 6. Save chosen features, metrics, and split data
+      best_run = max(runs_list, key=lambda r: r["metrics"][3]) # Select the run with the best F1-Score
+      best_ind = best_run["best_ind"] # Get the best individual from the best run
+      best_metrics = best_run["metrics"] # Get the metrics from the best run
+      save_and_analyze_results(best_ind, feature_names, X_train, y_train, csv_path, metrics=best_metrics, X_test=X_test, y_test=y_test, n_generations=n_generations, best_pop_size=best_pop_size, runs_list=runs_list) # Save chosen features, metrics, and split data
    else: # If no valid result was found
       print(f"{BackgroundColors.RED}No valid results found during the sweep.{Style.RESET_ALL}")
 
