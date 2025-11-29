@@ -220,7 +220,7 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
 	
 	cv_accs, cv_precs, cv_recs, cv_f1s = [], [], [], [] # Lists to store CV metrics
 	
-	for train_idx, val_idx in tqdm(skf.split(X_train_pca, y_train), total=cv_folds, desc="  CV Folds", leave=False): # Loop over each fold
+	for train_idx, val_idx in skf.split(X_train_pca, y_train): # Loop over each fold
 		X_train_fold = X_train_pca[train_idx] # Training data for this fold
 		X_val_fold = X_train_pca[val_idx] # Validation data for this fold
 		y_train_fold = y_train.iloc[train_idx] if isinstance(y_train, pd.Series) else y_train[train_idx] # Training target for this fold
@@ -404,29 +404,37 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
 	
 	all_results = [] # List to store all results
 	
+	executed_parallel = False # Flag to track if parallel execution was successful
+	
 	if parallel and len(n_components_list) > 1: # If parallel execution is enabled and multiple configurations
-		cpu_count = os.cpu_count() or 1 # Get the number of CPU cores
-		workers = max_workers or min(len(n_components_list), cpu_count) # Determine number of workers
-		print(f"\n{BackgroundColors.GREEN}Running PCA analysis in parallel with {workers} worker(s)...{Style.RESET_ALL}")
+		try: # Attempt parallel execution
+			cpu_count = os.cpu_count() or 1 # Get the number of CPU cores
+			workers = max_workers or min(len(n_components_list), cpu_count) # Determine number of workers
+			print(f"\n{BackgroundColors.GREEN}Running PCA analysis in parallel with {workers} worker(s)...{Style.RESET_ALL}")
 
-		results_map = {} # Map to store results by n_components
-		futures = [] # List to store futures
-		with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor: # Create a process pool executor
-			for n_components in n_components_list: # Loop over each number of components
-				futures.append(executor.submit(apply_pca_and_evaluate, X_train, y_train, X_test, y_test, n_components, workers=workers)) # Submit tasks to the executor
+			results_map = {} # Map to store results by n_components
+			futures = [] # List to store futures
+			with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor: # Create a process pool executor
+				for n_components in n_components_list: # Loop over each number of components
+					futures.append(executor.submit(apply_pca_and_evaluate, X_train, y_train, X_test, y_test, n_components, workers=workers)) # Submit tasks to the executor
 
-			for fut in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}", unit="config", leave=False):
-				try: # Get the result from the future
-					res = fut.result() # Get the result
-					results_map[res["n_components"]] = res # Store result in the map
-					print_pca_results(res) if VERBOSE else None
-				except Exception as e: # Handle exceptions from worker processes
-					print(f"{BackgroundColors.RED}Error in worker: {e}{Style.RESET_ALL}")
+				for fut in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}", unit="config", leave=False):
+					try: # Get the result from the future
+						res = fut.result() # Get the result
+						results_map[res["n_components"]] = res # Store result in the map
+						print_pca_results(res) if VERBOSE else None
+					except Exception as e: # Handle exceptions from worker processes
+						print(f"{BackgroundColors.RED}Error in worker: {e}{Style.RESET_ALL}")
 
-		for n in n_components_list: # Collect results in the original order
-			if n in results_map: # If result exists for this n_components
-				all_results.append(results_map[n]) # Append to all_results
-	else: # Sequential execution
+			for n in n_components_list: # Collect results in the original order
+				if n in results_map: # If result exists for this n_components
+					all_results.append(results_map[n]) # Append to all_results
+			executed_parallel = True # Mark parallel execution as successful
+		except Exception as e: # Handle exceptions during parallel execution
+			print(f"{BackgroundColors.YELLOW}Parallel execution failed: {e}. Falling back to sequential execution.{Style.RESET_ALL}")
+			parallel = False # Disable parallel for fallback
+	
+	if not executed_parallel: # If parallel was not executed or failed, run sequential
 		for n_components in tqdm(n_components_list, desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}", unit="config"):
 			print(f"\n{BackgroundColors.BOLD}Testing PCA with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}")
 			results = apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, workers=1) # Apply PCA and evaluate (single worker)
