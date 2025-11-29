@@ -256,6 +256,23 @@ def print_top_features(top_features, rfe_ranking):
       rank_info = f" {BackgroundColors.GREEN}(RFE ranking {BackgroundColors.CYAN}{rfe_ranking[feat]}{Style.RESET_ALL})" if feat in rfe_ranking else " (RFE ranking N/A)" # Get ranking info
       print(f"{i}. {feat}{rank_info}") # Print the feature and its ranking
 
+def print_average_metrics(avg_metrics, runs):
+   """
+   Prints average metrics across runs to the terminal.
+
+   :param avg_metrics: Tuple of average metrics
+   :param runs: Number of runs
+   """
+
+   print(f"\n{BackgroundColors.BOLD}Average Metrics across {runs} runs:{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{avg_metrics[0]:.4f}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{avg_metrics[1]:.4f}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{avg_metrics[2]:.4f}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{avg_metrics[3]:.4f}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{avg_metrics[4]:.4f}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{avg_metrics[5]:.4f}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{avg_metrics[6]:.2f}s{Style.RESET_ALL}")
+
 def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
    """
    Saves results from all runs, average metrics, and divergence info to structured files.
@@ -389,7 +406,7 @@ def run_rfe(csv_path, runs=5):
          "metrics": metrics # Performance metrics tuple
       })
 
-      print_top_features(top_features, rfe_ranking) # Print top features to terminal
+      print_top_features(top_features, rfe_ranking) if VERBOSE else None # Print top features to terminal
 
    if all_runs: # If there are any runs completed
       feature_sets = [set(run["top_features"]) for run in all_runs] # Get sets of top features from all runs
@@ -407,14 +424,7 @@ def run_rfe(csv_path, runs=5):
       metrics_keys = ["acc", "prec", "rec", "f1", "fpr", "fnr", "elapsed_time"] # Metric keys
       avg_metrics = tuple(np.mean([run["metrics"][i] for run in all_runs]) for i in range(len(metrics_keys))) # Calculate average metrics
 
-      print(f"\n{BackgroundColors.BOLD}Average Metrics across {runs} runs:{Style.RESET_ALL}")
-      print(f"  {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{avg_metrics[0]:.4f}{Style.RESET_ALL}")
-      print(f"  {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{avg_metrics[1]:.4f}{Style.RESET_ALL}")
-      print(f"  {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{avg_metrics[2]:.4f}{Style.RESET_ALL}")
-      print(f"  {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{avg_metrics[3]:.4f}{Style.RESET_ALL}")
-      print(f"  {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{avg_metrics[4]:.4f}{Style.RESET_ALL}")
-      print(f"  {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{avg_metrics[5]:.4f}{Style.RESET_ALL}")
-      print(f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{avg_metrics[6]:.2f}s{Style.RESET_ALL}")
+      print_average_metrics(avg_metrics, runs) if VERBOSE else None # Print average metrics if verbose
 
       save_rfe_results(csv_path, all_runs, avg_metrics, model.__class__.__name__) # Save structured results
 
