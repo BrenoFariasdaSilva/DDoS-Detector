@@ -168,17 +168,18 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
 
    return X_train, X_test, y_train, y_test # Return the split data
 
-def run_rfe_selector(X_train, y_train, n_select=10):
+def run_rfe_selector(X_train, y_train, n_select=10, random_state=42):
    """
    Runs RFE with RandomForestClassifier and returns the selector object.
 
    :param X_train: Training features
    :param y_train: Training target
    :param n_select: Number of features to select
+   :param random_state: Random seed for reproducibility
    :return: selector (fitted RFE object)
    """
 
-   model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1) # Initialize the Random Forest model
+   model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=-1) # Initialize the Random Forest model
    n_features = X_train.shape[1] # Get the number of features
    n_select = n_select if n_features >= n_select else n_features # Adjust n_select if more than available features
 
