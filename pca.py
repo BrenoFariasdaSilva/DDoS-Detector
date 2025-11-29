@@ -354,7 +354,7 @@ def save_pca_results(csv_path, all_results):
 	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}PCA Configuration Comparison:{Style.RESET_ALL}")
 	print(comparison_df.to_string(index=False)) if VERBOSE else None
 
-def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32]):
+def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48]):
 	"""
 	Runs PCA analysis with different numbers of components and evaluates performance.
 
@@ -432,7 +432,7 @@ def main():
 	print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}PCA Feature Extraction{BackgroundColors.GREEN} program!{Style.RESET_ALL}")
 	
 	csv_file = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv" # Path to the CSV dataset file
-	n_components_list = [8, 16, 24, 32] # List of PCA component counts to test
+	n_components_list = [8, 16, 24, 32, 48] # List of PCA component counts to test
 	
 	run_pca_analysis(csv_file, n_components_list) # Run the PCA analysis
 	
