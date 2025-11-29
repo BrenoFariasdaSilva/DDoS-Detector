@@ -81,6 +81,7 @@ class BackgroundColors: # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False # Set to True to output verbose messages
+RUNS = 5 # Number of runs for RFE analysis
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
@@ -396,7 +397,7 @@ def main():
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Recursive Feature Elimination (RFE){BackgroundColors.GREEN} program!{Style.RESET_ALL}") # Output the welcome message
 
    csv_file = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv" # Path to the CSV file
-   run_rfe(csv_file) # Run RFE on the specified CSV file
+   run_rfe(csv_file, runs=RUNS) # Run RFE on the specified CSV file
 
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
 
