@@ -71,6 +71,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score # For splitting and cross-validation
 from sklearn.preprocessing import StandardScaler # For scaling the data (standardization)
 from tqdm import tqdm # For progress bars
+import concurrent.futures
 
 # Macros:
 class BackgroundColors: # Colors for the terminal
@@ -211,7 +212,7 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
  
 	explained_variance = pca.explained_variance_ratio_.sum() # Total explained variance ratio
 	
-	model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1) # Initialize Random Forest model
+	model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=1) # Initialize Random Forest model
 	
 	print(f"{BackgroundColors.GREEN}  Running 10-fold Stratified CV on training data...{Style.RESET_ALL}")
 	skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42) # Stratified K-Fold cross-validator
@@ -367,7 +368,7 @@ def save_pca_results(csv_path, all_results):
 	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}PCA Configuration Comparison:{Style.RESET_ALL}")
 	print(comparison_df.to_string(index=False)) if VERBOSE else None
 
-def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48]):
+def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=True, max_workers=None):
 	"""
 	Runs PCA analysis with different numbers of components and evaluates performance.
 
@@ -402,12 +403,34 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48]):
 	
 	all_results = [] # List to store all results
 	
-	for n_components in tqdm(n_components_list, desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}", unit="config"): # Loop over each number of components
-		print(f"\n{BackgroundColors.BOLD}Testing PCA with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}")
-		
-		results = apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components) # Apply PCA and evaluate
-		all_results.append(results) # Store the results
-		print_pca_results(results) if VERBOSE else None # Print results if VERBOSE is True
+	if parallel and len(n_components_list) > 1: # If parallel execution is enabled and multiple configurations
+		cpu_count = os.cpu_count() or 1 # Get the number of CPU cores
+		workers = max_workers or min(len(n_components_list), cpu_count) # Determine number of workers
+		print(f"\n{BackgroundColors.GREEN}Running PCA analysis in parallel with {workers} worker(s)...{Style.RESET_ALL}")
+
+		results_map = {} # Map to store results by n_components
+		futures = [] # List to store futures
+		with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor: # Create a process pool executor
+			for n_components in n_components_list: # Loop over each number of components
+				futures.append(executor.submit(apply_pca_and_evaluate, X_train, y_train, X_test, y_test, n_components)) # Submit tasks to the executor
+
+			for fut in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}", unit="config", leave=False):
+				try: # Get the result from the future
+					res = fut.result() # Get the result
+					results_map[res["n_components"]] = res # Store result in the map
+					print_pca_results(res) if VERBOSE else None
+				except Exception as e: # Handle exceptions from worker processes
+					print(f"{BackgroundColors.RED}Error in worker: {e}{Style.RESET_ALL}")
+
+		for n in n_components_list: # Collect results in the original order
+			if n in results_map: # If result exists for this n_components
+				all_results.append(results_map[n]) # Append to all_results
+	else: # Sequential execution
+		for n_components in tqdm(n_components_list, desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}", unit="config"):
+			print(f"\n{BackgroundColors.BOLD}Testing PCA with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}")
+			results = apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components) # Apply PCA and evaluate
+			all_results.append(results) # Append results to the list
+			print_pca_results(results) if VERBOSE else None
 	
 	save_pca_results(csv_path, all_results) # Save all results to files
 	
