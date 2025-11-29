@@ -188,21 +188,30 @@ def run_rfe_selector(X_train, y_train, n_select=10, random_state=42):
 
    return selector, model # Return the fitted selector and model
 
-def compute_rfe_metrics(selector, model, X_train, X_test, y_train, y_test):
+def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42):
    """
-   Computes performance metrics using the RFE-selected estimator.
+   Computes performance metrics using the RFE-selected features.
 
    :param selector: Fitted RFE object
-   :param model: Base estimator used in RFE
    :param X_train: Training features
    :param X_test: Testing features
    :param y_train: Training target
    :param y_test: Testing target
+   :param random_state: Random seed for reproducibility
    :return: metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
    """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Computing performance metrics using RFE-selected features...{Style.RESET_ALL}") # Output the verbose message
+
+   support = selector.support_ # Get the mask of selected features
+   X_train_selected = X_train[:, support] # Select training features
+   X_test_selected = X_test[:, support] # Select testing features
+
+   model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=-1) # Initialize the model
 
    start_time = time.time() # Start time measurement
-   y_pred = selector.estimator_.fit(X_train, y_train).predict(X_test) # Fit and predict using the RFE-selected estimator
+   model.fit(X_train_selected, y_train) # Fit the model on selected features
+   y_pred = model.predict(X_test_selected) # Predict on selected test features
    acc = accuracy_score(y_test, y_pred) # Calculate accuracy
    prec = precision_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate precision
    rec = recall_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate recall
