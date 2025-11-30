@@ -72,7 +72,9 @@ Assumptions & Notes:
 """
 
 import atexit # For playing a sound when the program finishes
+import csv # For writing metrics/features CSVs
 import datetime # For timestamping
+import json # For structured JSON output and parsing
 import matplotlib.pyplot as plt # For plotting graphs
 import multiprocessing # For parallel fitness evaluation
 import numpy as np # For numerical operations
@@ -650,21 +652,63 @@ def extract_rfe_ranking(csv_path):
    verbose_output(f"{BackgroundColors.GREEN}Extracting RFE rankings from results file.{Style.RESET_ALL}") # Output the verbose message
 
    rfe_ranking = {} # Dictionary to store feature names and their RFE rankings
-   rfe_file_path = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE_results_RandomForestClassifier.txt" # Path to the RFE results file
+   dir_path = os.path.dirname(csv_path) # Directory that contains Feature_Analysis
+   json_path = f"{dir_path}/Feature_Analysis/RFE_Summary.json" # Path to new JSON summary
+   csv_path_runs = f"{dir_path}/Feature_Analysis/RFE_Runs_Summary.csv" # Path to runs summary CSV
+   legacy_txt = f"{dir_path}/Feature_Analysis/RFE_results_RandomForestClassifier.txt" # Legacy TXT path (fallback)
 
-   if not verify_filepath_exists(rfe_file_path): # If the RFE results file does not exist
-      print(f"{BackgroundColors.YELLOW}RFE results file not found: {rfe_file_path}. Skipping RFE ranking extraction.{Style.RESET_ALL}")
+   if verify_filepath_exists(json_path): # If JSON summary exists
+      try: # Attempt to parse JSON
+         with open(json_path, "r", encoding="utf-8") as jf: # Open JSON file
+            data = json.load(jf) # Load JSON content
+         if isinstance(data, dict): # Ensure data is a dictionary
+            if "rfe_ranking" in data and isinstance(data["rfe_ranking"], dict): # rfe_ranking key
+               rfe_ranking = data["rfe_ranking"] # Use provided ranking
+            elif "per_run" in data and isinstance(data["per_run"], list) and len(data["per_run"])>0: # per_run list exists
+               first = data["per_run"][0] # First run entry
+               if isinstance(first, dict) and "ranking" in first and isinstance(first["ranking"], dict): # ranking dict
+                  rfe_ranking = first["ranking"] # Use ranking
+      except Exception as e: # If parsing JSON fails
+         print(f"{BackgroundColors.YELLOW}Failed to parse RFE JSON summary: {str(e)}. Skipping RFE ranking extraction.{Style.RESET_ALL}") # Warn user
+         return rfe_ranking # Return whatever we have (likely empty)
+      return rfe_ranking # Return ranking extracted from JSON
+
+   if verify_filepath_exists(csv_path_runs): # If CSV summary exists
+      try: # Attempt to parse CSV
+         with open(csv_path_runs, "r", encoding="utf-8") as cf: # Open CSV file
+            reader = csv.DictReader(cf) # Use DictReader to parse headered CSV
+            for row in reader: # Iterate rows
+               for key, val in row.items(): # For each column value
+                  if val and isinstance(val, str) and val.strip().startswith("{"): # Looks like JSON
+                     try: # Try parse JSON string
+                        parsed = json.loads(val) # Parse JSON string
+                        if isinstance(parsed, dict) and all(isinstance(k, str) for k in parsed.keys()): # Likely ranking
+                           rfe_ranking = parsed # Use parsed dict as ranking
+                           return rfe_ranking # Return early
+                     except Exception: # ignore parse errors and continue
+                        pass
+      except Exception as e: # If reading CSV fails
+         print(f"{BackgroundColors.YELLOW}Failed to parse RFE CSV summary: {str(e)}. Skipping RFE ranking extraction.{Style.RESET_ALL}") # Warn user
+
+   if not verify_filepath_exists(legacy_txt): # If no legacy file either
+      print(f"{BackgroundColors.YELLOW}RFE results not found (tried JSON/CSV/TXT). Skipping RFE ranking extraction.{Style.RESET_ALL}") # Notify user
       return rfe_ranking # Return empty dictionary
-   
-   with open(rfe_file_path, "r") as f: # Open the RFE results file
-      lines = f.readlines() # Read all lines
-      for line in lines: # For each line
-         match = re.match(r"\d+\s+-\s+Column\s+\d+:\s+(.+?)\s*:\s+Selected\s+\(Rank\s+(\d+)\)", line) # Match the line with regex
-         if match: # If the line matches the regex
-            feature_name = normalize_feature_name(match.group(1)) # Normalize the feature name
-            rank = int(match.group(2).strip()) # Extract the rank
-            rfe_ranking[feature_name] = rank # Add to the dictionary
-               
+
+   try: # Attempt to parse TXT file
+      with open(legacy_txt, "r", encoding="utf-8") as f: # Open legacy TXT
+         lines = f.readlines() # Read lines
+      for line in lines: # Iterate lines
+         line = line.strip() # Strip whitespace
+         if not line: # Skip empty lines
+            continue # Continue
+         m = re.match(r"^\s*(\d+)\.?\s+(.+?)\s*$", line) # Try numeric prefix
+         if m: # If matched numbered list
+            rank = int(m.group(1)) # Get rank number
+            feat = m.group(2).strip() # Get feature name
+            rfe_ranking[feat] = rank # Store ranking
+   except Exception as e: # If parsing fails
+      print(f"{BackgroundColors.YELLOW}Failed to parse legacy RFE TXT: {str(e)}. Returning empty ranking.{Style.RESET_ALL}") # Notify user
+
    return rfe_ranking # Return the RFE rankings dictionary
 
 def print_metrics(metrics):
@@ -702,73 +746,73 @@ def write_best_features_to_file(best_features, rfe_ranking, results_file, metric
    :return: None
    """
    
-   verbose_output(f"{BackgroundColors.GREEN}Writing best features and RFE rankings to results file: {BackgroundColors.CYAN}{results_file}{Style.RESET_ALL}") # Output the verbose message
+   verbose_output(f"{BackgroundColors.GREEN}Writing best features and RFE rankings to structured outputs based on: {BackgroundColors.CYAN}{results_file}{Style.RESET_ALL}") # Output the verbose message
 
-   with open(results_file, "w") as f: # Open the results file for writing
-      if metrics: # If metrics are provided
-         acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics # Unpack metrics
-         f.write(f"Classifier: {classifier_name}\n\n")
-         if population_size is not None and n_generations is not None: # If GA parameters are provided
-            f.write("Genetic Algorithm Parameters:\n")
-            f.write(f"Population Size: {population_size}\n")
-            f.write(f"Generations: {n_generations}\n")
-            f.write(f"Crossover Probability: 0.5\n")
-            f.write(f"Mutation Probability: 0.05\n")
-            f.write(f"Tournament Size: 3\n")
-            f.write(f"Fitness Evaluation: 10-fold Stratified CV on training set\n")
-            f.write(f"Optimization Goal: Maximize F1-Score\n")
-            if classifier_name == "RandomForest":
-               f.write(f"Base Estimator: RandomForestClassifier(n_estimators=100, n_jobs=1, random_state=42)\n")
-            elif classifier_name == "XGBoost":
-               f.write(f"Base Estimator: XGBClassifier(use_label_encoder=False, eval_metric='logloss', n_jobs=1, random_state=42)\n")
-            f.write("\n")
-         f.write("Performance Metrics:\n")
-         f.write(f"Accuracy: {acc:.4f}\n")
-         f.write(f"Precision: {prec:.4f}\n")
-         f.write(f"Recall: {rec:.4f}\n")
-         f.write(f"F1-Score: {f1:.4f}\n")
-         f.write(f"False Positive Rate (FPR): {fpr:.4f}\n")
-         f.write(f"False Negative Rate (FNR): {fnr:.4f}\n")
-         f.write(f"Elapsed Time (s): {elapsed_time:.2f}\n\n")
-      else: # If no metrics are provided
-         f.write(f"Classifier: {classifier_name}\n\n")
-         if population_size is not None and n_generations is not None: # If GA parameters are provided
-            f.write("Genetic Algorithm Parameters:\n")
-            f.write(f"Population Size: {population_size}\n")
-            f.write(f"Generations: {n_generations}\n")
-            f.write(f"Crossover Probability: 0.5\n")
-            f.write(f"Mutation Probability: 0.05\n")
-            f.write(f"Tournament Size: 3\n")
-            f.write(f"Fitness Evaluation: 10-fold Stratified CV on training set\n")
-            f.write(f"Optimization Goal: Maximize F1-Score\n")
-            if classifier_name == "RandomForest":
-               f.write(f"Base Estimator: RandomForestClassifier(n_estimators=100, n_jobs=1, random_state=42)\n")
-            elif classifier_name == "XGBoost":
-               f.write(f"Base Estimator: XGBClassifier(use_label_encoder=False, eval_metric='logloss', n_jobs=1, random_state=42)\n")
-            f.write("\nNo metrics provided.\n\n")
-         else:
-            f.write("No metrics provided.\n\n")
+   base_info = { # Base information dictionary
+      "classifier": classifier_name, # Classifier name
+      "population_size": population_size, # Population size
+      "n_generations": n_generations, # Number of generations
+      "train_test_ratio": train_test_ratio, # Train/test fraction
+      "n_train": n_train, # Number of training samples
+      "n_test": n_test, # Number of testing samples
+      "metrics": None, # Will hold metrics if provided
+      "best_features": best_features, # List of selected features
+      "rfe_ranking": rfe_ranking, # RFE ranking dict
+   }
 
-      if n_train is not None and n_test is not None: # If train and test counts are provided
-         try: # Try to calculate the fraction
-            total = int(n_train) + int(n_test) # Calculate total samples
-            frac = float(n_test) / float(total) if total > 0 else None # Calculate test fraction
-            if frac is not None: # If fraction is calculated successfully
-               f.write(f"Train/Test split: test_size={frac:.3f} ({n_train} train / {n_test} test)\n\n") # Write train/test split with fraction
-            else: # If fraction is not calculated
-               f.write(f"Train/Test split: {n_train} train / {n_test} test (fraction unknown)\n\n") # Write train/test split without fraction
-         except Exception: # If an error occurs during calculation
-            f.write(f"Train/Test split: {n_train} train / {n_test} test\n\n") # Write train/test split without fraction
-      elif train_test_ratio is not None: # If only train/test ratio is provided
-         f.write(f"Train/Test split: test_size={train_test_ratio} (counts unknown)\n\n") # Write train/test split with ratio
+   if metrics: # If metrics provided
+      try: # Try to unpack metrics tuple
+         acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics # Unpack tuple
+         metrics_dict = { # Create metrics dictionary
+            "accuracy": float(acc), # Accuracy
+            "precision": float(prec), # Precision
+            "recall": float(rec), # Recall
+            "f1_score": float(f1), # F1 Score
+            "fpr": float(fpr), # False Positive Rate
+            "fnr": float(fnr), # False Negative Rate
+            "elapsed_time_s": float(elapsed_time), # Elapsed Time (seconds)
+         }
+      except Exception: # If metrics unpack fails
+         metrics_dict = {"raw": str(metrics)} # Fallback to raw string
+      base_info["metrics"] = metrics_dict # Attach metrics dict
 
-      f.write("Best Feature Subset using Genetic Algorithm:\n") # Write header
-      for i, feat in enumerate(best_features, start=1): # For each best feature
-         feat_norm = normalize_feature_name(feat) # Normalize the feature name
-         rank_info = f" (RFE ranking {rfe_ranking[feat_norm]})" if feat_norm in rfe_ranking else " (RFE ranking N/A)" # Get RFE ranking info
-         f.write(f"{i}. {feat_norm}{rank_info}\n") # Write feature and its RFE ranking
+   results_dir = os.path.dirname(results_file) or "." # Directory for results
+   os.makedirs(results_dir, exist_ok=True) # Ensure directory exists
+   base_name = os.path.splitext(os.path.basename(results_file))[0] # Base filename without extension
 
-   print(f"\n{BackgroundColors.GREEN}Saved results for {BackgroundColors.CYAN}{classifier_name}{BackgroundColors.GREEN} to {BackgroundColors.CYAN}{results_file}{Style.RESET_ALL}") # Notify user
+   json_out = os.path.join(results_dir, f"{base_name}.json") # JSON output path
+   try: # Attempt to write JSON
+      with open(json_out, "w", encoding="utf-8") as jf: # Open JSON output
+         json.dump(base_info, jf, indent=2, ensure_ascii=False) # Dump JSON
+      print(f"\n{BackgroundColors.GREEN}Saved JSON results to {BackgroundColors.CYAN}{json_out}{Style.RESET_ALL}") # Notify user
+   except Exception as e: # If writing JSON fails
+      print(f"{BackgroundColors.RED}Failed to write JSON results: {str(e)}{Style.RESET_ALL}") # Error message
+
+   if base_info.get("metrics"): # If metrics are available
+      metrics_csv = os.path.join(results_dir, f"{base_name}_metrics.csv") # Metrics CSV path
+      try: # Attempt to write metrics CSV
+         with open(metrics_csv, "w", newline="", encoding="utf-8") as mf: # Open metrics CSV
+            writer = csv.writer(mf) # Create CSV writer
+            writer.writerow(["metric", "value"]) # Header row
+            for k, v in base_info["metrics"].items(): # Write each metric
+               writer.writerow([k, v]) # Metric row
+         print(f"{BackgroundColors.GREEN}Saved metrics CSV to {BackgroundColors.CYAN}{metrics_csv}{Style.RESET_ALL}") # Notify user
+      except Exception as e: # If writing fails
+         print(f"{BackgroundColors.RED}Failed to write metrics CSV: {str(e)}{Style.RESET_ALL}") # Error message
+
+   features_csv = os.path.join(results_dir, f"{base_name}_features.csv") # Features CSV path
+   try: # Attempt to write features CSV
+      with open(features_csv, "w", newline="", encoding="utf-8") as ff: # Open features CSV
+         writer = csv.writer(ff) # Create CSV writer
+         writer.writerow(["feature", "rfe_rank"]) # Header row
+         for feat in best_features: # For each feature
+            rank = rfe_ranking.get(feat) if isinstance(rfe_ranking, dict) else None # Lookup rank
+            writer.writerow([feat, rank]) # Write row
+      print(f"{BackgroundColors.GREEN}Saved features CSV to {BackgroundColors.CYAN}{features_csv}{Style.RESET_ALL}") # Notify user
+   except Exception as e: # If writing features fails
+      print(f"{BackgroundColors.RED}Failed to write features CSV: {str(e)}{Style.RESET_ALL}") # Error message
+
+   print(f"\n{BackgroundColors.GREEN}Saved structured results for {BackgroundColors.CYAN}{classifier_name}{BackgroundColors.GREEN} to directory {BackgroundColors.CYAN}{results_dir}{Style.RESET_ALL}") # Notify user
 
 def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
    """
@@ -783,9 +827,10 @@ def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
 
    output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/"  # Directory to save outputs
    os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
-   results_file = f"{output_dir}/Genetic_Algorithm_Results.txt"  # Path to save the results file
+   results_file = f"{output_dir}/Genetic_Algorithm_Results"  # Base path for results (no .txt extension anymore)
 
-   write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=metrics) # Delegate writing to helper function
+   # Delegate writing to helper function which will write JSON and CSV files  # Use structured writer
+   write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=metrics) # Delegate writing
 
 def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=None, y_test=None, n_generations=None, best_pop_size=None, runs_list=None):
    """
@@ -833,7 +878,7 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
          n_test = None # No test samples available
          test_frac = None # No test fraction available
 
-      rf_results_file = f"{output_dir}/Genetic_Algorithm_Results_RandomForest.txt"
+      rf_results_file = f"{output_dir}/Genetic_Algorithm_Results_RandomForest" # Base path for RF results (no .txt)
       write_best_features_to_file(best_features, rfe_ranking, rf_results_file, metrics=rf_metrics, classifier_name="RandomForest", train_test_ratio=test_frac, n_train=n_train, n_test=n_test, population_size=best_pop_size, n_generations=n_generations) # Write Random Forest results
 
    if XGBClassifier is not None: # If XGBoost is available
@@ -843,7 +888,7 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
             xgb_metrics = evaluate_individual(best_ind, X, y, X_test, y_test, estimator_cls=XGBClassifier) # Evaluate best individual with XGBoost
       except Exception: # If evaluation fails
          xgb_metrics = None # Reset XGBoost metrics
-      xgb_results_file = f"{output_dir}/Genetic_Algorithm_Results_XGBoost.txt" # Path to save XGBoost results
+      xgb_results_file = f"{output_dir}/Genetic_Algorithm_Results_XGBoost" # Base path for XGBoost results (no .txt)
       write_best_features_to_file(best_features, rfe_ranking, xgb_results_file, metrics=xgb_metrics, classifier_name="XGBoost", train_test_ratio=test_frac, n_train=n_train, n_test=n_test, population_size=best_pop_size, n_generations=n_generations) # Write XGBoost results
    else: # If XGBoost is not available
       print(f"{BackgroundColors.YELLOW}XGBoost not available (xgboost package not installed). Skipping XGBoost evaluation.{Style.RESET_ALL}") # Output warning message
@@ -876,7 +921,7 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
          run_output_dir = f"{output_dir}/Run_{run_idx}/" # Directory for this run's outputs
          os.makedirs(run_output_dir, exist_ok=True) # Create the directory if it doesn't exist
          
-         run_rf_results_file = f"{run_output_dir}/Genetic_Algorithm_Run_{run_idx}_Results_RandomForest.txt" # Path to save RandomForest results
+         run_rf_results_file = f"{run_output_dir}/Genetic_Algorithm_Run_{run_idx}_Results_RandomForest" # Base path for RandomForest results (no .txt)
          write_best_features_to_file(run_features, rfe_ranking, run_rf_results_file, metrics=run_metrics, classifier_name="RandomForest", train_test_ratio=test_frac, n_train=n_train, n_test=n_test, population_size=best_pop_size, n_generations=n_generations) # Write RandomForest results
 
          if XGBClassifier is not None: # If XGBoost is available
@@ -884,7 +929,7 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
                run_xgb_metrics = evaluate_individual(run_ind, X, y, X_test, y_test, estimator_cls=XGBClassifier) if X_test is not None and y_test is not None else None # Evaluate with XGBoost
             except Exception: # If evaluation fails
                run_xgb_metrics = None # Reset XGBoost metrics
-            run_xgb_results_file = f"{run_output_dir}/Genetic_Algorithm_Run_{run_idx}_Results_XGBoost.txt" # Path to save XGBoost results
+            run_xgb_results_file = f"{run_output_dir}/Genetic_Algorithm_Run_{run_idx}_Results_XGBoost" # Base path for XGBoost results (no .txt)
             write_best_features_to_file(run_features, rfe_ranking, run_xgb_results_file, metrics=run_xgb_metrics, classifier_name="XGBoost", train_test_ratio=test_frac, n_train=n_train, n_test=n_test, population_size=best_pop_size, n_generations=n_generations) # Write XGBoost results
 
    return best_features # Return the list of best features
