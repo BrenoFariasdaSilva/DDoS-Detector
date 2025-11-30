@@ -44,6 +44,7 @@ Output:
 """
 
 import atexit # For playing a sound when the program finishes
+import gc # For explicit garbage collection
 import matplotlib.pyplot as plt # For plotting
 import numpy as np # For numerical operations
 import os # For running a command in the terminal
@@ -364,7 +365,7 @@ def get_dataset_info(filepath, low_memory=False):
    tsne_separability = compute_tsne_separability(df, label_col) # Compute t-SNE separability score
    save_tsne_plot(df, label_col, os.path.basename(filepath), os.path.dirname(filepath)) # Generate and save 3D t-SNE visualization
 
-   return { # Return the dataset information as a dictionary
+   result = { # Return the dataset information as a dictionary
       "Dataset Name": os.path.basename(filepath),
       "Number of Samples": f"{n_samples:,}", # Format with commas for readability
       "Number of Features": f"{n_features:,}", # Format with commas for readability
@@ -375,6 +376,14 @@ def get_dataset_info(filepath, low_memory=False):
       "Class Distribution": class_dist_str,
       "t-SNE Separability Score": tsne_separability,
    }
+
+   try: # Try to delete the DataFrame
+      del df # Delete the DataFrame
+   except Exception: # Ignore any exceptions during deletion
+      pass # Do nothing
+   gc.collect() # Force garbage collection
+
+   return result # Return the dataset information
 
 def write_report(report_rows, base_dir, output_filename):
    """
