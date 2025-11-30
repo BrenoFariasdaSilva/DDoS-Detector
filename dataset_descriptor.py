@@ -52,6 +52,7 @@ import platform # For getting the operating system name
 from colorama import Style # For coloring the terminal
 from itertools import combinations # For computing pairwise combinations
 from sklearn.manifold import TSNE # For data separability analysis
+from tqdm import tqdm # For progress bars
 
 # Macros:
 class BackgroundColors: # Colors for the terminal
@@ -422,8 +423,9 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=False,
       print(f"{BackgroundColors.RED}No matching {file_extension} files found in: {input_path}{Style.RESET_ALL}")
       return False # Exit the function
 
-   for idx, filepath in enumerate(sorted_matching_files, 1): # Process each matching file
-      print(f" {BackgroundColors.GREEN}Processing file {BackgroundColors.CYAN}{idx}/{len(sorted_matching_files)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")
+   progress = tqdm(sorted_matching_files, desc=f"{BackgroundColors.GREEN}Processing files{Style.RESET_ALL}", unit="file") # Create a progress bar
+   for idx, filepath in enumerate(progress, 1): # Process each matching file
+      progress.set_description(f"{BackgroundColors.GREEN}Processing file {BackgroundColors.CYAN}{idx}/{len(sorted_matching_files)}{Style.RESET_ALL}")
       info = get_dataset_info(filepath, low_memory) # Get dataset info
       if info: # If info was successfully retrieved
          relative_path = os.path.relpath(filepath, base_dir) # Get path relative to base_dir
