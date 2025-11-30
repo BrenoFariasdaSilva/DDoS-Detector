@@ -394,6 +394,50 @@ def prepare_tsne_inputs(df, label_col, max_samples=MAX_TSNE_SAMPLES_DEFAULT, ran
    X = scale_features(numeric_df) # Scale and return numpy array
    return X, labels, numeric_df # Return prepared inputs
 
+def compute_tsne_embedding_and_separability(df, label_col, max_samples=MAX_TSNE_SAMPLES_DEFAULT, random_state=42):
+   """
+   Prepare inputs and compute a single 3D t-SNE embedding and separability.
+
+   :param df: pandas DataFrame
+   :param label_col: name of the label column
+   :param max_samples: maximum number of samples to keep for t-SNE
+   :param random_state: random seed for reproducibility
+   :return: tuple (embedding_3d or None, separability (float) or "N/A", labels Series or None)
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Preparing and computing a single 3D t-SNE embedding.{Style.RESET_ALL}") # Output prep message
+
+   X, labels, numeric_df = prepare_tsne_inputs(df, label_col, max_samples, random_state) # Prepare t-SNE inputs
+   if X is None or labels is None: # If preparation failed or not applicable
+      return None, "N/A", None # Nothing to compute
+
+   try: # Try computing a 3D t-SNE embedding and separability
+      n_samples_local = X.shape[0] # Number of samples available for embedding
+      if n_samples_local < 3: # Need at least 3 samples for meaningful embedding
+         return None, "N/A", labels # Not enough samples
+
+      perplexity = max(5, min(30, (n_samples_local - 1) // 3)) # Adaptive perplexity
+      tsne = TSNE(n_components=3, random_state=random_state, init="pca", learning_rate="auto", perplexity=perplexity, n_iter=500) # Configure TSNE
+      embedding_3d = tsne.fit_transform(X) # Compute 3D embedding
+
+      separability = centroid_separability_from_embedding(embedding_3d[:, :2], labels, label_col) # Compute separability using first two dims
+      separability = round(float(separability), 4) if separability is not None else "N/A" # Format separability
+
+      try: # Try to free large temporary variables to reduce memory
+         del numeric_df, X # Delete large arrays and DataFrames
+      except Exception: # Ignore any errors during deletion
+         pass # No-op on cleanup errors
+      gc.collect() # Force garbage collection to free memory
+
+      return embedding_3d, separability, labels # Return embedding, separability and labels
+   except Exception as e: # Handle any exceptions raised during t-SNE computation
+      verbose_output(f"{BackgroundColors.RED}t-SNE embedding failed: {e}{Style.RESET_ALL}") # Verbose error
+      try: # Attempt to run garbage collection before exiting
+         gc.collect() # Force garbage collection in exception path
+      except Exception: # Ignore any errors during garbage collection
+         pass # No-op if gc.collect() fails
+      return None, "N/A", labels # Return failure sentinel
+
 def save_tsne_plot(df, label_col, dataset_name, dataset_dir, random_state=42, embedding=None, labels=None):
    """
    Generates and saves a 3D t-SNE scatter plot colored by class labels.
@@ -419,7 +463,6 @@ def save_tsne_plot(df, label_col, dataset_name, dataset_dir, random_state=42, em
             return # Skip plotting
          tsne = TSNE(n_components=3, random_state=random_state, init="pca", learning_rate="auto") # Initialize t-SNE
          embedding = tsne.fit_transform(numeric_df.fillna(0)) # Compute 3D embedding
-
 
       if embedding.shape[1] == 3: # 3D embedding
          tsne_df = pd.DataFrame(embedding, columns=["TSNE1", "TSNE2", "TSNE3"]) # Create DataFrame with 3D columns
@@ -466,6 +509,8 @@ def get_dataset_info(filepath, low_memory=False):
    :param low_memory: Whether to use low memory mode when loading the CSV (default: False)
    :return: Dictionary containing dataset information
    """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Extracting dataset information from: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output start message for dataset info extraction
 
    df = load_dataset(filepath, low_memory) # Load the dataset
    
@@ -479,21 +524,7 @@ def get_dataset_info(filepath, low_memory=False):
    missing_summary = summarize_missing_values(cleaned_df) # Summarize missing values
    classes_str, class_dist_str = summarize_classes(cleaned_df, label_col) # Summarize classes and distributions
    
-   # Prepare inputs for t-SNE (coercion, cleaning, sampling, scaling)
-   embedding_3d = None # Placeholder for embedding (computed only when inputs are prepared)
-   X, labels, numeric_df = prepare_tsne_inputs(cleaned_df, label_col, MAX_TSNE_SAMPLES_DEFAULT) # Prepare t-SNE inputs
-   if X is None or labels is None: # If preparation failed or not applicable
-      tsne_separability = "N/A" # Mark separability as not applicable
-   else: # Compute a single t-SNE embedding (3D) and reuse for separability and plotting
-      try: # Try computing a single 3D t-SNE embedding to be reused
-         tsne = TSNE(n_components=3, random_state=42, init="pca", learning_rate="auto", perplexity=max(5, min(30, (X.shape[0]-1)//3)), n_iter=500) # Configure TSNE
-         embedding_3d = tsne.fit_transform(X) # Compute 3D embedding
-         tsne_separability = centroid_separability_from_embedding(embedding_3d[:, :2], labels, label_col) # Compute separability using first two dims
-         tsne_separability = round(float(tsne_separability), 4) if tsne_separability is not None else "N/A" # Format separability
-      except Exception as e: # On failure, record N/A and continue
-         verbose_output(f"{BackgroundColors.RED}t-SNE embedding failed in get_dataset_info: {e}{Style.RESET_ALL}") # Verbose error
-         embedding_3d = None # No embedding available
-         tsne_separability = "N/A" # Mark separability as not available
+   embedding_3d, tsne_separability, labels = compute_tsne_embedding_and_separability(cleaned_df, label_col, MAX_TSNE_SAMPLES_DEFAULT) # Compute t-SNE embedding and separability
 
    save_tsne_plot(cleaned_df, label_col, os.path.basename(filepath), os.path.dirname(filepath), embedding=embedding_3d, labels=labels) # Generate and save 3D t-SNE visualization (reuse embedding when available)
 
