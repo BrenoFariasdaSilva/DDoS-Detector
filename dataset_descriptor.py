@@ -665,7 +665,7 @@ def main():
             print(f"{BackgroundColors.RED}The specified input path does not exist: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}")
             continue # Skip to next configured path
 
-         output_filename = f"_{safe_dataset_name}_dataset_descriptor.csv" # Create output filename based on dataset name
+         output_filename = f"_dataset_descriptor.csv" # Create output filename based on dataset name
          
          success = generate_dataset_report(input_path, file_extension=".csv", low_memory=False, output_filename=output_filename) # Generate the dataset report
          if not success: # If the report was not generated successfully
