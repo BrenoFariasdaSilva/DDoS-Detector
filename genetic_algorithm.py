@@ -220,8 +220,7 @@ def preprocess_dataframe(df, remove_zero_variance=True):
    if df is None: # If the DataFrame is None
       return df # Return None
 
-   df_clean = df.copy() # Create a copy of the DataFrame to avoid modifying the original
-   df_clean = df_clean.replace([np.inf, -np.inf], np.nan).dropna() # Remove rows with NaN or infinite values
+   df_clean = df.replace([np.inf, -np.inf], np.nan).dropna() # Remove rows with NaN or infinite values
 
    if remove_zero_variance: # If remove_zero_variance is set to True
       numeric_cols = df_clean.select_dtypes(include=["number"]).columns # Select only numeric columns
