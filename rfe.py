@@ -68,6 +68,7 @@ from sklearn.feature_selection import RFE # For Recursive Feature Elimination
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix # For performance metrics
 from sklearn.model_selection import train_test_split # For splitting the data
 from sklearn.preprocessing import StandardScaler # For scaling the data (standardization)
+from tqdm import tqdm # For progress bars
 
 # Macros:
 class BackgroundColors: # Colors for the terminal
@@ -290,7 +291,7 @@ def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
 
    for run_data in all_runs: # Save individual run results
       run = run_data["run"] # Get the run number
-      output_file = f"{output_dir}/RFE_Results_Run_{run}.txt" # Define output file path
+      output_file = f"{output_dir}RFE_Results_Run_{run}.txt" # Define output file path
       with open(output_file, "w", encoding="utf-8") as f: # Open the file for writing
          f.write(f"Run {run} Results\n") # Write run header
          f.write("="*50 + "\n") # Write separator
@@ -309,7 +310,7 @@ def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
             f.write(f"{i}. {feat} (RFE ranking {rank})\n") # Write the feature and its ranking
       print(f"{BackgroundColors.GREEN}Results for run {run} saved to {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}")
 
-   summary_file = f"{output_dir}/RFE_Summary.txt" # Define summary file path
+   summary_file = f"{output_dir}RFE_Summary.txt" # Define summary file path
    with open(summary_file, "w", encoding="utf-8") as f: # Open the summary file for writing
       f.write(f"Summary of {len(all_runs)} RFE Runs\n") # Write summary header
       f.write("="*50 + "\n") # Write separator
@@ -323,11 +324,11 @@ def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
       f.write(f"False Negative Rate (FNR): {fnr:.4f}\n") # Write average FNR
       f.write(f"Elapsed Time (s): {elapsed_time:.2f}\n") # Write average elapsed time
       f.write("\nDivergence Analysis:\n") # Write divergence analysis header
-      feature_sets = [set(run['top_features']) for run in all_runs] # Get sets of top features from all runs
+      feature_sets = [set(run["top_features"]) for run in all_runs] # Get sets of top features from all runs
       common_features = set.intersection(*feature_sets) if feature_sets else set() # Find common features across all runs
       f.write(f"Common features ({len(common_features)}): {sorted(common_features)}\n") # Write common features
       for run in all_runs: # Write unique features for each run
-         unique = set(run['top_features']) - common_features # Find unique features for this run
+         unique = set(run["top_features"]) - common_features # Find unique features for this run
          f.write(f"Run {run['run']} unique features ({len(unique)}): {sorted(unique)}\n") # Write unique features
 
    print(f"\n{BackgroundColors.GREEN}Summary saved to {BackgroundColors.CYAN}{summary_file}{Style.RESET_ALL}")
@@ -356,7 +357,7 @@ def analyze_top_features(df, y, top_features, csv_path="."):
    summary.columns = [f"{col}_{stat}" for col, stat in summary.columns] # Flatten MultiIndex columns
    summary = summary.round(3) # Round to 3 decimal places
 
-   summary_csv_path = f"{output_dir}/{base_dataset_name}_feature_summary.csv" # Define summary CSV path
+   summary_csv_path = f"{output_dir}{base_dataset_name}_feature_summary.csv" # Define summary CSV path
    summary.to_csv(summary_csv_path, encoding="utf-8") # Save summary to CSV
    print(f"{BackgroundColors.GREEN}Feature summary saved to {BackgroundColors.CYAN}{summary_csv_path}{Style.RESET_ALL}")
 
@@ -391,9 +392,8 @@ def run_rfe(csv_path, runs=5):
 
    all_runs = [] # List to store results from all runs
 
-   for run in range(runs): # Loop over the number of runs
+   for run in tqdm(range(runs), desc=f"{BackgroundColors.GREEN}RFE Runs{Style.RESET_ALL}", unit="run"): # Loop over the number of runs with progress bar
       random_state = 42 + run # Vary random state for each run
-      print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}Run {run + 1}/{runs}:{Style.RESET_ALL}")
 
       selector, model = run_rfe_selector(X_train, y_train, random_state=random_state) # Run RFE to select top features
       metrics = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=random_state) # Compute performance metrics
