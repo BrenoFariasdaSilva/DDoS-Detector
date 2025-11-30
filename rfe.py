@@ -117,42 +117,56 @@ def verify_filepath_exists(filepath):
    verbose_output(f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output the verbose message
    return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
 
-def load_and_clean_data(csv_path):
+def load_dataset(csv_path):
    """
-   Loads the CSV dataset, selects numeric features, encodes target if necessary,
-   and drops invalid values.
+   Load CSV and return DataFrame.
 
-   :param csv_path: Path to the CSV dataset file
-   :return: X (DataFrame of numeric features), y (target Series)
+   :param csv_path: Path to CSV dataset.
+   :return: DataFrame
    """
+
+   verbose_output(f"\n{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}") # Output the loading dataset message
 
    if not verify_filepath_exists(csv_path): # If the CSV file does not exist
       print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
-      return None, None # Return None if file not found
+      return None # Return None
 
-   print(f"\n{BackgroundColors.GREEN}Loading {BackgroundColors.CYAN}{csv_path}{BackgroundColors.GREEN} CSV dataset file...{Style.RESET_ALL}")
    df = pd.read_csv(csv_path, low_memory=False) # Load the dataset
 
    df.columns = df.columns.str.strip() # Clean column names by stripping leading/trailing whitespace
 
    if df.shape[1] < 2: # If there are less than 2 columns
-      print(f"{BackgroundColors.RED}CSV must contain at least one feature column and one target column.{Style.RESET_ALL}")
-      return None, None # Return None if not enough columns
+      print(f"{BackgroundColors.RED}CSV must have at least 1 feature and 1 target.{Style.RESET_ALL}")
+      return None # Return None
 
-   X = df.iloc[:, :-1] # All columns except the last
-   y = df.iloc[:, -1] # Last column as target
+   return df # Return the loaded DataFrame
 
-   if y.dtype == object or y.dtype.name == "category": # If target is categorical
-      y, _ = pd.factorize(y) # Encode target labels as integers
+def preprocess_dataframe(df, remove_zero_variance=True):
+   """
+   Preprocess a DataFrame by removing rows with NaN or infinite values and
+   dropping zero-variance numeric features.
 
-   X = X.select_dtypes(include=["number"]).replace([np.inf, -np.inf], np.nan).dropna() # Keep only numeric columns and drop rows with NaN or infinite values
-   y = y[X.index] # Align target with cleaned features
+   :param df: pandas DataFrame to preprocess
+   :param remove_zero_variance: whether to drop numeric columns with zero variance
+   :return: cleaned DataFrame
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Preprocessing the DataFrame by removing NaN/infinite values and zero-variance features.{Style.RESET_ALL}") # Output the verbose message
 
-   if X.empty: # If no numeric features remain
-      print(f"{BackgroundColors.RED}No valid numeric features remain after cleaning.{Style.RESET_ALL}")
-      return None, None # Return None if no valid features
+   if df is None: # If the DataFrame is None
+      return df # Return None
 
-   return X, y # Return features and target
+   df_clean = df.replace([np.inf, -np.inf], np.nan).dropna() # Remove rows with NaN or infinite values
+
+   if remove_zero_variance: # If remove_zero_variance is set to True
+      numeric_cols = df_clean.select_dtypes(include=["number"]).columns # Select only numeric columns
+      if len(numeric_cols) > 0: # If there are numeric columns
+         variances = df_clean[numeric_cols].var(axis=0, ddof=0) # Calculate variances
+         zero_var_cols = variances[variances == 0].index.tolist() # Get columns with zero variance
+         if zero_var_cols: # If there are zero-variance columns
+            df_clean = df_clean.drop(columns=zero_var_cols) # Drop zero-variance columns
+
+   return df_clean # Return the cleaned DataFrame
 
 def scale_and_split(X, y, test_size=0.2, random_state=42):
    """
@@ -434,7 +448,14 @@ def run_rfe(csv_path, runs=5):
    
    verbose_output(f"{BackgroundColors.GREEN}Starting RFE analysis on dataset: {BackgroundColors.CYAN}{csv_path}{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{runs}{BackgroundColors.GREEN} runs...{Style.RESET_ALL}") # Output the verbose message
 
-   X, y = load_and_clean_data(csv_path) # Load and clean the dataset
+   df = load_dataset(csv_path) # Load the dataset
+   if df is None: # If dataset loading failed
+      return {} # Return empty dictionary
+   
+   cleaned_df = preprocess_dataframe(df) # Preprocess the DataFrame
+   
+   X = cleaned_df.iloc[:, :-1] # Features DataFrame
+   y = cleaned_df.iloc[:, -1] # Target Series
 
    if X is None or y is None: # If loading failed
       return # Exit the function
