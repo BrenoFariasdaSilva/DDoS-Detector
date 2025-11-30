@@ -59,6 +59,7 @@ Notes:
 """
 
 import atexit # For playing a sound when the program finishes
+import json # For structured JSON output
 import numpy as np # For numerical operations
 import os # For file and directory operations
 import pandas as pd # For data manipulation
@@ -308,57 +309,66 @@ def save_pca_results(csv_path, all_results):
 
 	output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Output directory
 	os.makedirs(output_dir, exist_ok=True) # Create output directory if it doesn't exist
-	
-	output_file = f"{output_dir}/PCA_Results.txt" # Output text file path
-	with open(output_file, "w", encoding="utf-8") as f: # Open the output file for writing
-		f.write("="*80 + "\n")
-		f.write("Principal Component Analysis (PCA) Feature Extraction Results\n")
-		f.write("="*80 + "\n\n")
-		f.write("Configuration:\n")
-		f.write("  - Evaluation Method: 10-Fold Stratified Cross-Validation\n")
-		f.write("  - Model: Random Forest Classifier (100 estimators)\n")
-		f.write("  - Train/Test Split: 80/20\n")
-		f.write("  - Scaling: StandardScaler (z-score normalization)\n\n")
-		
-		for i, results in enumerate(all_results, 1): # Loop over each configuration's results
-			f.write(f"\n{'='*80}\n")
-			f.write(f"Configuration {i}: PCA with {results['n_components']} Components\n")
-			f.write(f"{'='*80}\n\n")
-			f.write(f"Explained Variance Ratio: {results['explained_variance']:.4f} ({results['explained_variance']*100:.2f}%)\n\n")
-			
-			f.write("10-Fold Cross-Validation Metrics (Training Set):\n")
-			f.write(f"  Accuracy:  {results['cv_accuracy']:.4f}\n")
-			f.write(f"  Precision: {results['cv_precision']:.4f}\n")
-			f.write(f"  Recall:    {results['cv_recall']:.4f}\n")
-			f.write(f"  F1-Score:  {results['cv_f1_score']:.4f}\n\n")
-			
-			f.write("Test Set Metrics:\n")
-			f.write(f"  Accuracy:  {results['test_accuracy']:.4f}\n")
-			f.write(f"  Precision: {results['test_precision']:.4f}\n")
-			f.write(f"  Recall:    {results['test_recall']:.4f}\n")
-			f.write(f"  F1-Score:  {results['test_f1_score']:.4f}\n")
-			f.write(f"  FPR:       {results['test_fpr']:.4f}\n")
-			f.write(f"  FNR:       {results['test_fnr']:.4f}\n")
-			f.write(f"  Training Time: {results['elapsed_time']:.2f}s\n")
-	
-	print(f"\n{BackgroundColors.GREEN}Detailed results saved to {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}")
+
+	summary = { # Structured summary dictionary
+		"tool": "PCA", # Tool name
+		"description": "Principal Component Analysis (PCA) Feature Extraction Results", # Description
+		"evaluation": { # Evaluation details
+			"method": "10-Fold Stratified Cross-Validation", # CV method
+			"model": "RandomForestClassifier (100 estimators)", # Model used
+			"train_test_split": "80/20", # Train/test split ratio
+			"scaling": "StandardScaler (z-score)" # Feature scaling method
+		},
+		"configurations": [] # List to hold each configuration's results
+	}
+
+	for i, results in enumerate(all_results, 1): # Loop over each configuration's results
+		config_entry = { # Create entry for this configuration
+			"configuration_index": i, # 1-based index for human readability
+			"n_components": results["n_components"], # Number of PCA components
+			"explained_variance": float(results["explained_variance"]), # Explained variance ratio
+			"cv_metrics": { # Cross-validation metrics
+				"accuracy": float(results["cv_accuracy"]), # CV accuracy
+				"precision": float(results["cv_precision"]), # CV precision
+				"recall": float(results["cv_recall"]), # CV recall
+				"f1_score": float(results["cv_f1_score"]) # CV F1-score
+			},
+			"test_metrics": {
+				"accuracy": float(results["test_accuracy"]), # Test accuracy
+				"precision": float(results["test_precision"]), # Test precision
+				"recall": float(results["test_recall"]), # Test recall
+				"f1_score": float(results["test_f1_score"]), # Test F1-score
+				"fpr": float(results["test_fpr"]), # Test false positive rate
+				"fnr": float(results["test_fnr"]) # Test false negative rate
+			},
+			"elapsed_time_s": float(results["elapsed_time"]) # Elapsed time in seconds
+		}
+		summary["configurations"].append(config_entry) # Append this configuration's entry to the summary
+
+	json_output = f"{output_dir}/PCA_Results.json" # Structured JSON output path
+	try: # Attempt to write JSON summary
+		with open(json_output, "w", encoding="utf-8") as jf: # Write structured JSON summary
+			json.dump(summary, jf, ensure_ascii=False, indent=2) # Pretty-printed JSON
+		print(f"\n{BackgroundColors.GREEN}Structured JSON summary saved to {BackgroundColors.CYAN}{json_output}{Style.RESET_ALL}")
+	except Exception as e: # If writing JSON fails
+		print(f"{BackgroundColors.RED}Failed to save JSON summary: {e}{Style.RESET_ALL}")
 	
 	comparison_data = [] # List to store comparison data
 	for results in all_results: # Loop over each configuration's results
 		comparison_data.append({ # Append results to comparison data
-			"n_components": results['n_components'],
-			"explained_variance": round(results['explained_variance'], 4),
-			"cv_accuracy": round(results['cv_accuracy'], 4),
-			"cv_precision": round(results['cv_precision'], 4),
-			"cv_recall": round(results['cv_recall'], 4),
-			"cv_f1_score": round(results['cv_f1_score'], 4),
-			"test_accuracy": round(results['test_accuracy'], 4),
-			"test_precision": round(results['test_precision'], 4),
-			"test_recall": round(results['test_recall'], 4),
-			"test_f1_score": round(results['test_f1_score'], 4),
-			"test_fpr": round(results['test_fpr'], 4),
-			"test_fnr": round(results['test_fnr'], 4),
-			"training_time_s": round(results['elapsed_time'], 2)
+			"n_components": results["n_components"], # Number of PCA components
+			"explained_variance": round(results["explained_variance"], 4), # Explained variance ratio
+			"cv_accuracy": round(results["cv_accuracy"], 4), # CV accuracy
+			"cv_precision": round(results["cv_precision"], 4), # CV precision
+			"cv_recall": round(results["cv_recall"], 4), # CV recall
+			"cv_f1_score": round(results["cv_f1_score"], 4), # CV F1-score
+			"test_accuracy": round(results["test_accuracy"], 4), # Test accuracy
+			"test_precision": round(results["test_precision"], 4), # Test precision
+			"test_recall": round(results["test_recall"], 4), # Test recall
+			"test_f1_score": round(results["test_f1_score"], 4), # Test F1-score
+			"test_fpr": round(results["test_fpr"], 4), # Test false positive rate
+			"test_fnr": round(results["test_fnr"], 4), # Test false negative rate
+			"training_time_s": round(results["elapsed_time"], 2) # Training time in seconds
 		})
 	
 	comparison_df = pd.DataFrame(comparison_data) # Create DataFrame from comparison data
