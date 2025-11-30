@@ -282,6 +282,117 @@ def summarize_classes(df, label_col):
    
    return "None", "None" # Return "None" if no label column
 
+def coerce_numeric_columns(df):
+   """
+   Try to extract numeric columns from `df`. If no numeric columns are
+   present, attempt to coerce object/string columns to numeric values.
+
+   :param df: pandas DataFrame
+   :return: DataFrame with numeric columns (may be empty)
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Extracting or coercing numeric columns from the DataFrame.{Style.RESET_ALL}") # Output the verbose message
+
+   numeric_df = df.select_dtypes(include=["number"]).copy() # Select numeric columns from the DataFrame
+   if numeric_df.empty: # If there are no numeric columns found
+      obj_cols = df.select_dtypes(include=["object", "string"]).columns.tolist() # List object/string columns as candidates
+      for c in obj_cols: # Iterate over candidate object/string columns
+         coerced = pd.to_numeric(df[c], errors="coerce") # Attempt to coerce the column to numeric, invalid -> NaN
+         if coerced.notna().sum() > 0: # If coercion produced any non-NaN values
+            numeric_df[c] = coerced # Add the coerced column to the numeric DataFrame
+
+   return numeric_df # Return the numeric-only DataFrame (may be empty)
+
+def fill_replace_and_drop(numeric_df):
+   """
+   Replace infinities, drop all-NaN columns, and fill remaining NaNs with
+   the column median (or 0 when median is NaN).
+
+   :param numeric_df: DataFrame with numeric columns
+   :return: cleaned DataFrame (may be empty)
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Replacing infinities, dropping all-NaN columns, and filling NaNs with column medians.{Style.RESET_ALL}") # Output the verbose message
+
+   numeric_df = numeric_df.replace([np.inf, -np.inf], np.nan) # Replace +/-infinity with NaN
+   numeric_df = numeric_df.loc[:, numeric_df.notna().any(axis=0)] # Drop columns that are entirely NaN
+   if numeric_df.shape[1] == 0: # If no columns remain after dropping
+      return numeric_df # Return the (empty) DataFrame
+
+   for col in numeric_df.columns: # Iterate over numeric columns
+      med = numeric_df[col].median() # Compute column median
+      numeric_df[col] = numeric_df[col].fillna(0 if pd.isna(med) else med) # Fill NaNs with median or 0
+
+   return numeric_df # Return cleaned numeric DataFrame
+
+def stratified_sample(numeric_df, labels, max_samples, random_state=42):
+   """
+   Downsample `numeric_df` (and `labels`) to at most `max_samples` rows while
+   preserving class proportions when possible. Returns (numeric_df, labels).
+   
+   :param numeric_df: DataFrame with numeric features
+   :param labels: Series
+   :param max_samples: Maximum number of samples after downsampling
+   :param random_state: Random seed for reproducibility (default: 42)
+   :return: Tuple of (downsampled numeric_df, downsampled labels)
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Stratified sampling to a maximum of {max_samples} samples while preserving class proportions.{Style.RESET_ALL}") # Output the verbose message
+
+   n_rows = len(numeric_df) # Count rows in numeric_df
+   if n_rows <= max_samples: # If already within the max_samples limit
+      return numeric_df.reset_index(drop=True), labels.reset_index(drop=True) # Return copies with reset index
+
+   try: # Attempt stratified sampling by group
+      frac = max_samples / float(n_rows) # Fraction to sample per group
+      sampled_idx = numeric_df.groupby(labels).sample(frac=frac, random_state=random_state).index # Stratified indices
+   except Exception: # If stratified grouping fails for any reason
+      sampled_idx = numeric_df.sample(n=max_samples, random_state=random_state).index # Fallback to random sampling
+
+   return numeric_df.loc[sampled_idx].reset_index(drop=True), labels.loc[sampled_idx].reset_index(drop=True) # Return sampled data and labels
+
+def scale_features(numeric_df):
+   """
+   Standardize numeric features to zero mean and unit variance. Fall back to
+   converting to float64 array if scaling fails.
+   
+   :param numeric_df: DataFrame with numeric features
+   :return: Numpy array with scaled features
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Scaling numeric features to zero mean and unit variance.{Style.RESET_ALL}") # Output the verbose message
+
+   try: # Try scaling with sklearn StandardScaler
+      scaler = StandardScaler() # Create scaler instance
+      X_scaled = scaler.fit_transform(numeric_df.values) # Fit and transform numeric values
+   except Exception: # Fallback if scaling fails
+      X_scaled = np.asarray(numeric_df.values, dtype=np.float64) # Convert to a float64 numpy array
+   
+   return X_scaled # Return the scaled array
+
+def centroid_separability_from_embedding(embedding, labels, label_col):
+   """
+   Compute average pairwise Euclidean distance between class centroids in the
+   provided 2D embedding.
+   
+   :param embedding: 2D numpy array with shape (n_samples, 2)
+   :param labels: pandas Series with class labels
+   :param label_col: Name of the label column
+   :return: Float average pairwise centroid distance, or None if not computable
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Computing centroid separability from 2D embedding.{Style.RESET_ALL}") # Output the verbose message
+
+   temp_df = pd.DataFrame(embedding, columns=["TSNE1", "TSNE2"]) # Build a DataFrame from 2D embedding
+   temp_df[label_col] = labels.values # Attach labels to the embedding rows
+   centroids = temp_df.groupby(label_col)[["TSNE1", "TSNE2"]].mean() # Compute class centroids
+   
+   if len(centroids) < 2: # Need at least two classes to compute separability
+      return None # Return None when separability cannot be computed
+   distances = [np.linalg.norm(c1 - c2) for c1, c2 in combinations(centroids.values, 2)] # Pairwise centroid distances
+   
+   return float(np.mean(distances)) # Return mean pairwise distance as separability
+
 def compute_tsne_separability(df, label_col, random_state=42, max_samples=MAX_TSNE_SAMPLES_DEFAULT):
    """
    Computes a basic t-SNE separability score for the dataset.
@@ -296,89 +407,52 @@ def compute_tsne_separability(df, label_col, random_state=42, max_samples=MAX_TS
    :return: Float separability score, or "N/A" if not applicable
    """
 
-   verbose_output(f"{BackgroundColors.GREEN}Computing t-SNE separability score...{Style.RESET_ALL}")
+   verbose_output(f"{BackgroundColors.GREEN}Computing t-SNE separability score...{Style.RESET_ALL}") # Output start message for separability computation
 
-   if label_col is None or label_col not in df.columns: # If no label column exists
-      return "N/A" # Skip t-SNE separability computation
+   if label_col is None or label_col not in df.columns: # If label column is missing or not present in DataFrame
+      return "N/A" # Return N/A when labels are not available
 
-   numeric_df = df.select_dtypes(include=["number"]).copy() # Select numeric columns
-   if numeric_df.empty: # If no numeric columns exist
-      obj_cols = df.select_dtypes(include=["object", "string"]).columns.tolist() # Select object/string columns
-      for c in obj_cols: # Try to coerce each to numeric
-         coerced = pd.to_numeric(df[c], errors="coerce") # Coerce to numeric, setting errors to NaN
-         if coerced.notna().sum() > 0: # If any values were successfully coerced
-            numeric_df[c] = coerced # Add the coerced column to numeric_df
+   numeric_df = coerce_numeric_columns(df) # Extract or coerce numeric columns from df
+   if numeric_df.empty: # If no numeric columns are available after coercion
+      return "N/A" # Return N/A when no numeric data is present
 
-   if numeric_df.empty: # If still no numeric columns after coercion
-      return "N/A" # Skip t-SNE separability computation
+   try: # Begin t-SNE preparation and computation
+      # Step 2 — replace infinities, drop all-NaN cols and fill missing values
+      numeric_df = fill_replace_and_drop(numeric_df) # Replace infinities, drop empty columns, fill NaNs
+      if numeric_df.shape[1] == 0: # If no columns remain after cleaning
+         return "N/A" # Return N/A when there is nothing to embed
 
-   try: # Try to compute t-SNE separability
-      numeric_df = numeric_df.replace([np.inf, -np.inf], np.nan) # Replace infinite values with NaN
-      numeric_df = numeric_df.loc[:, numeric_df.notna().any(axis=0)] # Drop columns that are all NaN
-      
-      if numeric_df.shape[1] == 0: # If no columns remain
-         return "N/A" # Skip t-SNE separability computation
+      labels = df.loc[numeric_df.index, label_col] # Align labels with numeric_df indices for sampling
+      numeric_df, labels = stratified_sample(numeric_df, labels, max_samples, random_state) # Downsample while preserving class proportions
 
-      for col in numeric_df.columns: # For each column
-         med = numeric_df[col].median() # Compute the median
-         if pd.isna(med): # If median is NaN (all values are NaN)
-            numeric_df[col] = numeric_df[col].fillna(0) # Fill NaNs with 0
-         else: # If median is valid
-            numeric_df[col] = numeric_df[col].fillna(med) # Fill NaNs with median
+      X = scale_features(numeric_df) # Standardize features to zero mean and unit variance (numpy array)
 
-      labels = df.loc[numeric_df.index, label_col] # Keep labels aligned with numeric_df's index to allow correct groupby sampling
+      n_samples_local = X.shape[0] # Number of samples available for embedding
+      if n_samples_local < 3: # Need at least 3 samples for t-SNE/perplexity computations
+         return "N/A" # Return N/A if too few samples
 
-      n_rows = len(numeric_df) # Get number of rows
-      if n_rows > max_samples: # If too many samples, downsample
-         try: # Try stratified sampling to preserve class proportions
-            counts = labels.value_counts() # Get class counts
-            frac = max_samples / float(n_rows) # Compute fraction to sample
-            sampled_idx = numeric_df.groupby(labels).sample(frac=frac, random_state=random_state).index # Stratified sample indices
-         except Exception: # Fallback to random sampling if stratified fails
-            sampled_idx = numeric_df.sample(n=max_samples, random_state=random_state).index
+      perplexity = max(5, min(30, (n_samples_local - 1) // 3)) # Adaptive perplexity based on sample size
+      tsne = TSNE(n_components=2, random_state=random_state, init="pca", learning_rate="auto", perplexity=perplexity, n_iter=500) # Initialize TSNE with conservative iterations
+      embedding = tsne.fit_transform(X) # Compute 2D embedding
 
-         numeric_df = numeric_df.loc[sampled_idx].reset_index(drop=True) # Downsample numeric features
-         labels = labels.loc[sampled_idx].reset_index(drop=True) # Downsample labels
+      separability_score = centroid_separability_from_embedding(embedding, labels, label_col) # Compute average centroid distance
+      if separability_score is None: # If separability cannot be computed due to insufficient classes
+         return "N/A" # Return N/A when separability is not applicable
 
-      try: # Try scaling features
-         scaler = StandardScaler() # Initialize StandardScaler
-         X_scaled = scaler.fit_transform(numeric_df.values) # Scale the numeric features
-      except Exception: # Fallback if scaling fails
-         X_scaled = np.asarray(numeric_df.values, dtype=np.float64) # Convert to numpy array without scaling
+      try: # Try to free large temporary variables to reduce memory
+         del numeric_df, X, embedding # Delete large arrays and DataFrames
+      except Exception: # Ignore any errors during deletion
+         pass # No-op on cleanup errors
+      gc.collect() # Force garbage collection to free memory
 
-      n_samples = X.shape[0] # Get number of samples
-      if n_samples < 3: # Need at least 3 samples for t-SNE
-         return "N/A" # Skip t-SNE separability computation
-
-      perplexity = int(max(5, min(30, (n_samples - 1) // 3))) # Set perplexity based on sample size; must be < n_samples
-
-      tsne = TSNE(n_components=2, random_state=random_state, init="pca", learning_rate="auto", perplexity=perplexity, n_iter=500) # Initialize t-SNE
-      tsne_result = tsne.fit_transform(X) # Fit and transform numeric features
-
-      temp_df = pd.DataFrame(tsne_result, columns=["TSNE1", "TSNE2"]) # Create DataFrame with t-SNE results
-      temp_df[label_col] = labels.values # Add label column
-
-      centroids = temp_df.groupby(label_col)[["TSNE1", "TSNE2"]].mean() # Compute class centroids
-      if len(centroids) < 2: # Need at least 2 classes to compute separability
-         return "N/A" # Skip t-SNE separability computation
-
-      distances = [np.linalg.norm(c1 - c2) for c1, c2 in combinations(centroids.values, 2)] # Compute pairwise distances between centroids
-      separability_score = float(np.mean(distances)) # Average distance as separability score
-
-      try: # Try to delete temporary variables to free memory
-         del numeric_df, X_scaled, X, temp_df, tsne_result # Delete temporary variables
-      except Exception: # Ignore errors during cleanup
-         pass # Do nothing
-      gc.collect() # Force garbage collection
-
-      return round(separability_score, 4) # Return the separability score rounded to 4 decimal places
-   except Exception as e: # Handle exceptions gracefully
-      verbose_output(f"{BackgroundColors.RED}t-SNE separability computation failed: {e}{Style.RESET_ALL}")
-      try: # Try to delete temporary variables to free memory
-         gc.collect() # Force garbage collection
-      except Exception: # Ignore errors during cleanup
-         pass # Do nothing
-      return "N/A" # Return "N/A" if computation fails
+      return round(float(separability_score), 4) # Return rounded separability score
+   except Exception as e: # Handle any exceptions raised during t-SNE computation
+      verbose_output(f"{BackgroundColors.RED}t-SNE separability computation failed: {e}{Style.RESET_ALL}") # Output the error message for debugging
+      try: # Attempt to run garbage collection before exiting
+         gc.collect() # Force garbage collection in exception path
+      except Exception: # Ignore any errors during garbage collection
+         pass # No-op if gc.collect() fails
+      return "N/A" # Return N/A when computation fails
 
 def save_tsne_plot(df, label_col, dataset_name, dataset_dir, random_state=42):
    """
