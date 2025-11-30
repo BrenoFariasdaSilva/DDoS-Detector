@@ -407,11 +407,11 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=False,
    sorted_matching_files = [] # List to store matching files
 
    if os.path.isdir(input_path): # If the input path is a directory
-      print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Scanning directory for {file_extension} files...{Style.RESET_ALL}") # Output scanning message
+      print(f"{BackgroundColors.GREEN}Scanning directory {BackgroundColors.CYAN}{input_path}{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files...{Style.RESET_ALL}") # Output scanning message
       sorted_matching_files = collect_matching_files(input_path, file_extension, ignore_files) # Collect matching files
       base_dir = os.path.abspath(input_path) # Get the absolute path of the base directory
    elif os.path.isfile(input_path) and input_path.endswith(file_extension): # If the input path is a file
-      print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing single file...{Style.RESET_ALL}") # Output processing single file message
+      print(f"{BackgroundColors.GREEN}Processing single file...{Style.RESET_ALL}") # Output processing single file message
       sorted_matching_files = [input_path] # Only process this single file
       base_dir = os.path.dirname(os.path.abspath(input_path)) # Get the base directory of the file
    else: # If the input path is neither a directory nor a valid file
