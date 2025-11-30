@@ -69,7 +69,6 @@ class BackgroundColors: # Colors for the terminal
 # Execution Constants:
 VERBOSE = False # Set to True to output verbose messages
 MAX_TSNE_SAMPLES_DEFAULT = 5000 # Default cap for t-SNE samples (can be overridden)
-MAX_PCA_COMPONENTS = 50 # Cap PCA components before t-SNE
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
@@ -393,6 +392,33 @@ def centroid_separability_from_embedding(embedding, labels, label_col):
    
    return float(np.mean(distances)) # Return mean pairwise distance as separability
 
+def prepare_tsne_inputs(df, label_col, max_samples=MAX_TSNE_SAMPLES_DEFAULT, random_state=42):
+   """
+   Prepare and return scaled feature matrix and aligned labels for t-SNE.
+
+   :param df: pandas DataFrame
+   :param label_col: name of label column
+   :param max_samples: maximum rows to keep (will stratified-sample)
+   :param random_state: random seed
+   :return: tuple (X, labels, numeric_df) or (None, None, None) on failure
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Preparing inputs for t-SNE (coercion, cleaning, sampling, scaling).{Style.RESET_ALL}") # Output prep message
+
+   numeric_df = coerce_numeric_columns(df) # Extract or coerce numeric columns
+   if numeric_df.empty: # If still empty after coercion
+      return None, None, None # Nothing to do
+
+   numeric_df = fill_replace_and_drop(numeric_df) # Clean infinities and NaNs
+   if numeric_df.shape[1] == 0: # No columns left
+      return None, None, None # Nothing to do
+
+   labels = df.loc[numeric_df.index, label_col] # Align labels with numeric_df
+   numeric_df, labels = stratified_sample(numeric_df, labels, max_samples, random_state) # Downsample while preserving classes
+
+   X = scale_features(numeric_df) # Scale and return numpy array
+   return X, labels, numeric_df # Return prepared inputs
+
 def compute_tsne_separability(df, label_col, random_state=42, max_samples=MAX_TSNE_SAMPLES_DEFAULT):
    """
    Computes a basic t-SNE separability score for the dataset.
@@ -454,7 +480,7 @@ def compute_tsne_separability(df, label_col, random_state=42, max_samples=MAX_TS
          pass # No-op if gc.collect() fails
       return "N/A" # Return N/A when computation fails
 
-def save_tsne_plot(df, label_col, dataset_name, dataset_dir, random_state=42):
+def save_tsne_plot(df, label_col, dataset_name, dataset_dir, random_state=42, embedding=None, labels=None):
    """
    Generates and saves a 3D t-SNE scatter plot colored by class labels.
 
@@ -466,20 +492,33 @@ def save_tsne_plot(df, label_col, dataset_name, dataset_dir, random_state=42):
    :param dataset_dir: Directory of the dataset
    :param random_state: Random seed for reproducibility
    """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Generating and saving 3D t-SNE plot...{Style.RESET_ALL}") # Output start message for plotting
 
-   if label_col is None or label_col not in df.columns:
-      return # Skip if no labels present
+   if label_col is None or label_col not in df.columns: # If no labels present
+      return # Skip plotting
 
-   numeric_df = df.select_dtypes(include=["float64", "int64", "Int64"]) # Select numeric columns
-   if numeric_df.empty:
-      return # Skip if no numeric features
+   try: # Try to generate t-SNE plot (use precomputed embedding if provided)
+      if embedding is None: # If no embedding passed in, compute one from df
+         numeric_df = df.select_dtypes(include=["float64", "int64", "Int64"]) # Select numeric columns
+         if numeric_df.empty: # If no numeric features found
+            return # Skip plotting
+         tsne = TSNE(n_components=3, random_state=random_state, init="pca", learning_rate="auto") # Initialize t-SNE
+         embedding = tsne.fit_transform(numeric_df.fillna(0)) # Compute 3D embedding
 
-   try: # Try to generate t-SNE plot
-      tsne = TSNE(n_components=3, random_state=random_state, init="pca", learning_rate="auto") # Initialize t-SNE
-      tsne_result = tsne.fit_transform(numeric_df.fillna(0)) # Fit and transform numeric features
 
-      tsne_df = pd.DataFrame(tsne_result, columns=["TSNE1", "TSNE2", "TSNE3"]) # Create DataFrame with t-SNE results
-      tsne_df[label_col] = df[label_col].values # Add label column
+      if embedding.shape[1] == 3: # 3D embedding
+         tsne_df = pd.DataFrame(embedding, columns=["TSNE1", "TSNE2", "TSNE3"]) # Create DataFrame with 3D columns
+      else: # 2D embedding -> add zero third axis for plotting
+         tsne_df = pd.DataFrame(np.column_stack([embedding, np.zeros((embedding.shape[0], 1))]), columns=["TSNE1", "TSNE2", "TSNE3"]) # Pad to 3D
+
+      if labels is not None: # If explicit labels provided
+         tsne_df[label_col] = labels.values # Use provided labels aligned to embedding
+      elif embedding.shape[0] == len(df): # If embedding aligns with df rows
+         tsne_df[label_col] = df[label_col].values # Use labels from original df
+      else: # Cannot align labels reliably
+         verbose_output(f"{BackgroundColors.YELLOW}Warning: t-SNE embedding length does not match DataFrame; skipping label coloring.{Style.RESET_ALL}") # Warn and continue
+         tsne_df[label_col] = ["Unknown"] * embedding.shape[0] # Use placeholder labels
 
       fig = plt.figure(figsize=(8, 6)) # Create figure
       ax = fig.add_subplot(111, projection="3d") # Add 3D subplot
@@ -525,8 +564,24 @@ def get_dataset_info(filepath, low_memory=False):
    n_samples, n_features, n_numeric, n_int, n_categorical, n_other, categorical_cols_str = summarize_features(cleaned_df) # Summarize features
    missing_summary = summarize_missing_values(cleaned_df) # Summarize missing values
    classes_str, class_dist_str = summarize_classes(cleaned_df, label_col) # Summarize classes and distributions
-   tsne_separability = compute_tsne_separability(cleaned_df, label_col) # Compute t-SNE separability score
-   save_tsne_plot(cleaned_df, label_col, os.path.basename(filepath), os.path.dirname(filepath)) # Generate and save 3D t-SNE visualization
+   
+   # Prepare inputs for t-SNE (coercion, cleaning, sampling, scaling)
+   embedding_3d = None # Placeholder for embedding (computed only when inputs are prepared)
+   X, labels, numeric_df = prepare_tsne_inputs(cleaned_df, label_col, MAX_TSNE_SAMPLES_DEFAULT) # Prepare t-SNE inputs
+   if X is None or labels is None: # If preparation failed or not applicable
+      tsne_separability = "N/A" # Mark separability as not applicable
+   else: # Compute a single t-SNE embedding (3D) and reuse for separability and plotting
+      try: # Try computing a single 3D t-SNE embedding to be reused
+         tsne = TSNE(n_components=3, random_state=42, init="pca", learning_rate="auto", perplexity=max(5, min(30, (X.shape[0]-1)//3)), n_iter=500) # Configure TSNE
+         embedding_3d = tsne.fit_transform(X) # Compute 3D embedding
+         tsne_separability = centroid_separability_from_embedding(embedding_3d[:, :2], labels, label_col) # Compute separability using first two dims
+         tsne_separability = round(float(tsne_separability), 4) if tsne_separability is not None else "N/A" # Format separability
+      except Exception as e: # On failure, record N/A and continue
+         verbose_output(f"{BackgroundColors.RED}t-SNE embedding failed in get_dataset_info: {e}{Style.RESET_ALL}") # Verbose error
+         embedding_3d = None # No embedding available
+         tsne_separability = "N/A" # Mark separability as not available
+
+   save_tsne_plot(cleaned_df, label_col, os.path.basename(filepath), os.path.dirname(filepath), embedding=embedding_3d, labels=labels) # Generate and save 3D t-SNE visualization (reuse embedding when available)
 
    result = { # Return the dataset information as a dictionary
       "Dataset Name": os.path.basename(filepath),
