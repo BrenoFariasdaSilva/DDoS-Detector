@@ -425,7 +425,7 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=False,
 
    progress = tqdm(sorted_matching_files, desc=f"{BackgroundColors.GREEN}Processing files{Style.RESET_ALL}", unit="file") # Create a progress bar
    for idx, filepath in enumerate(progress, 1): # Process each matching file
-      progress.set_description(f"{BackgroundColors.GREEN}Processing file {BackgroundColors.CYAN}{idx}/{len(sorted_matching_files)}{Style.RESET_ALL}")
+      progress.set_description(f"{BackgroundColors.GREEN}Processing file {BackgroundColors.CYAN}{idx}/{len(sorted_matching_files)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{os.path.basename(filepath)}{Style.RESET_ALL}") # Update progress bar description
       info = get_dataset_info(filepath, low_memory) # Get dataset info
       if info: # If info was successfully retrieved
          relative_path = os.path.relpath(filepath, base_dir) # Get path relative to base_dir
