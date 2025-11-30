@@ -157,12 +157,12 @@ def collect_matching_files(input_dir, file_format=".csv", ignore_files=None):
    sorted_matching_files = sorted(set(matching_files)) # Remove duplicates and sort the list
    return sorted_matching_files # Return the sorted list of matching files
 
-def load_dataset(filepath, low_memory=True):
+def load_dataset(filepath, low_memory=False):
    """
    Loads a dataset from a CSV file.
    
    :param filepath: Path to the CSV file
-   :param low_memory: Whether to use low memory mode (default: True)
+   :param low_memory: Whether to use low memory mode (default: False)
    :return: Pandas DataFrame
    """
 
@@ -342,12 +342,12 @@ def save_tsne_plot(df, label_col, dataset_name, dataset_dir, random_state=42):
    except Exception as e: # Handle exceptions gracefully
       verbose_output(f"{BackgroundColors.RED}3D t-SNE plot generation failed: {e}{Style.RESET_ALL}")
 
-def get_dataset_info(filepath, low_memory=True):
+def get_dataset_info(filepath, low_memory=False):
    """
    Extracts dataset information from a CSV file and returns it as a dictionary.
 
    :param filepath: Path to the CSV file
-   :param low_memory: Whether to use low memory mode when loading the CSV (default:True)
+   :param low_memory: Whether to use low memory mode when loading the CSV (default: False)
    :return: Dictionary containing dataset information
    """
 
@@ -389,14 +389,14 @@ def write_report(report_rows, base_dir, output_filename):
    report_csv_path = os.path.join(base_dir, output_filename) # Path to save the report CSV
    report_df.to_csv(report_csv_path, index=False) # Save the report to a CSV file
 
-def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename="_dataset_descriptor.csv"):
+def generate_dataset_report(input_path, file_extension=".csv", low_memory=False, output_filename="_dataset_descriptor.csv"):
    """
    Generates a CSV report for the specified input path.
    The Dataset Name column will include subdirectories if present.
 
    :param input_path: Directory or file path containing the dataset
    :param file_extension: File extension to filter (default: .csv)
-   :param low_memory: Whether to use low memory mode when loading CSVs (default: True)
+   :param low_memory: Whether to use low memory mode when loading CSVs (default: False)
    :param output_filename: Name of the CSV file to save the report
    :return: True if the report was generated successfully, False otherwise
    """
@@ -480,7 +480,7 @@ def main():
 
          output_filename = f"_{safe_dataset_name}_dataset_descriptor.csv" # Create output filename based on dataset name
          
-         success = generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=output_filename) # Generate the dataset report
+         success = generate_dataset_report(input_path, file_extension=".csv", low_memory=False, output_filename=output_filename) # Generate the dataset report
          if not success: # If the report was not generated successfully
             print(f"{BackgroundColors.RED}Failed to generate dataset report for: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}")
          else: # If the report was generated successfully
