@@ -394,67 +394,6 @@ def prepare_tsne_inputs(df, label_col, max_samples=MAX_TSNE_SAMPLES_DEFAULT, ran
    X = scale_features(numeric_df) # Scale and return numpy array
    return X, labels, numeric_df # Return prepared inputs
 
-def compute_tsne_separability(df, label_col, random_state=42, max_samples=MAX_TSNE_SAMPLES_DEFAULT):
-   """
-   Computes a basic t-SNE separability score for the dataset.
-
-   The score is based on the average Euclidean distance between class centroids
-   in the 2D t-SNE projection. A higher value indicates better class separability.
-
-   :param df: pandas DataFrame
-   :param label_col: Name of the label column
-   :param random_state: Random seed for reproducibility (default: 42)
-   :param max_samples: Maximum number of samples to use for t-SNE (default: 5000)
-   :return: Float separability score, or "N/A" if not applicable
-   """
-
-   verbose_output(f"{BackgroundColors.GREEN}Computing t-SNE separability score...{Style.RESET_ALL}") # Output start message for separability computation
-
-   if label_col is None or label_col not in df.columns: # If label column is missing or not present in DataFrame
-      return "N/A" # Return N/A when labels are not available
-
-   numeric_df = coerce_numeric_columns(df) # Extract or coerce numeric columns from df
-   if numeric_df.empty: # If no numeric columns are available after coercion
-      return "N/A" # Return N/A when no numeric data is present
-
-   try: # Begin t-SNE preparation and computation
-      # Step 2 — replace infinities, drop all-NaN cols and fill missing values
-      numeric_df = fill_replace_and_drop(numeric_df) # Replace infinities, drop empty columns, fill NaNs
-      if numeric_df.shape[1] == 0: # If no columns remain after cleaning
-         return "N/A" # Return N/A when there is nothing to embed
-
-      labels = df.loc[numeric_df.index, label_col] # Align labels with numeric_df indices for sampling
-      numeric_df, labels = stratified_sample(numeric_df, labels, max_samples, random_state) # Downsample while preserving class proportions
-
-      X = scale_features(numeric_df) # Standardize features to zero mean and unit variance (numpy array)
-
-      n_samples_local = X.shape[0] # Number of samples available for embedding
-      if n_samples_local < 3: # Need at least 3 samples for t-SNE/perplexity computations
-         return "N/A" # Return N/A if too few samples
-
-      perplexity = max(5, min(30, (n_samples_local - 1) // 3)) # Adaptive perplexity based on sample size
-      tsne = TSNE(n_components=2, random_state=random_state, init="pca", learning_rate="auto", perplexity=perplexity, n_iter=500) # Initialize TSNE with conservative iterations
-      embedding = tsne.fit_transform(X) # Compute 2D embedding
-
-      separability_score = centroid_separability_from_embedding(embedding, labels, label_col) # Compute average centroid distance
-      if separability_score is None: # If separability cannot be computed due to insufficient classes
-         return "N/A" # Return N/A when separability is not applicable
-
-      try: # Try to free large temporary variables to reduce memory
-         del numeric_df, X, embedding # Delete large arrays and DataFrames
-      except Exception: # Ignore any errors during deletion
-         pass # No-op on cleanup errors
-      gc.collect() # Force garbage collection to free memory
-
-      return round(float(separability_score), 4) # Return rounded separability score
-   except Exception as e: # Handle any exceptions raised during t-SNE computation
-      verbose_output(f"{BackgroundColors.RED}t-SNE separability computation failed: {e}{Style.RESET_ALL}") # Output the error message for debugging
-      try: # Attempt to run garbage collection before exiting
-         gc.collect() # Force garbage collection in exception path
-      except Exception: # Ignore any errors during garbage collection
-         pass # No-op if gc.collect() fails
-      return "N/A" # Return N/A when computation fails
-
 def save_tsne_plot(df, label_col, dataset_name, dataset_dir, random_state=42, embedding=None, labels=None):
    """
    Generates and saves a 3D t-SNE scatter plot colored by class labels.
