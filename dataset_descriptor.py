@@ -49,6 +49,7 @@ import matplotlib.pyplot as plt # For plotting
 import numpy as np # For numerical operations
 import os # For running a command in the terminal
 import pandas as pd # For data manipulation
+import warnings # For suppressing pandas warnings when requested
 import platform # For getting the operating system name
 from colorama import Style # For coloring the terminal
 from itertools import combinations # For computing pairwise combinations
@@ -146,7 +147,10 @@ def load_dataset(filepath, low_memory=True):
    """
 
    try: # Try to load the dataset
-      df = pd.read_csv(filepath, low_memory=low_memory) # Load the dataset
+      with warnings.catch_warnings(): # Suppress DtypeWarning warnings
+         warnings.simplefilter("ignore", pd.errors.DtypeWarning) # Ignore DtypeWarning warnings
+         df = pd.read_csv(filepath, low_memory=low_memory) # Load the dataset
+
       return df # Return the DataFrame
    except Exception as e: # If an error occurs
       print(f"{BackgroundColors.RED}Error loading {BackgroundColors.GREEN}{filepath}: {e}{Style.RESET_ALL}")
