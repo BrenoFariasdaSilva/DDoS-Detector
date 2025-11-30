@@ -175,6 +175,33 @@ def load_dataset(filepath, low_memory=False):
       print(f"{BackgroundColors.RED}Error loading {BackgroundColors.GREEN}{filepath}: {e}{Style.RESET_ALL}")
       return None # Return None if an error occurs
 
+def preprocess_dataframe(df, remove_zero_variance=True):
+   """
+   Preprocess a DataFrame by removing rows with NaN or infinite values and
+   dropping zero-variance numeric features.
+
+   :param df: pandas DataFrame to preprocess
+   :param remove_zero_variance: whether to drop numeric columns with zero variance
+   :return: cleaned DataFrame
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Preprocessing the DataFrame by removing NaN/infinite values and zero-variance features.{Style.RESET_ALL}") # Output the verbose message
+
+   if df is None: # If the DataFrame is None
+      return df # Return None
+
+   df_clean = df.replace([np.inf, -np.inf], np.nan).dropna() # Remove rows with NaN or infinite values
+
+   if remove_zero_variance: # If remove_zero_variance is set to True
+      numeric_cols = df_clean.select_dtypes(include=["number"]).columns # Select only numeric columns
+      if len(numeric_cols) > 0: # If there are numeric columns
+         variances = df_clean[numeric_cols].var(axis=0, ddof=0) # Calculate variances
+         zero_var_cols = variances[variances == 0].index.tolist() # Get columns with zero variance
+         if zero_var_cols: # If there are zero-variance columns
+            df_clean = df_clean.drop(columns=zero_var_cols) # Drop zero-variance columns
+
+   return df_clean # Return the cleaned DataFrame
+
 def detect_label_column(columns):
    """
    Try to guess the label column based on common naming conventions.
@@ -357,13 +384,15 @@ def get_dataset_info(filepath, low_memory=False):
    
    if df is None: # If the dataset could not be loaded
       return None # Return None
+   
+   cleaned_df = preprocess_dataframe(df) # Preprocess the DataFrame
 
-   label_col = detect_label_column(df.columns) # Try to detect the label column
-   n_samples, n_features, n_numeric, n_int, n_categorical, n_other, categorical_cols_str = summarize_features(df) # Summarize features
-   missing_summary = summarize_missing_values(df) # Summarize missing values
-   classes_str, class_dist_str = summarize_classes(df, label_col) # Summarize classes and distributions
-   tsne_separability = compute_tsne_separability(df, label_col) # Compute t-SNE separability score
-   save_tsne_plot(df, label_col, os.path.basename(filepath), os.path.dirname(filepath)) # Generate and save 3D t-SNE visualization
+   label_col = detect_label_column(cleaned_df.columns) # Try to detect the label column
+   n_samples, n_features, n_numeric, n_int, n_categorical, n_other, categorical_cols_str = summarize_features(cleaned_df) # Summarize features
+   missing_summary = summarize_missing_values(cleaned_df) # Summarize missing values
+   classes_str, class_dist_str = summarize_classes(cleaned_df, label_col) # Summarize classes and distributions
+   tsne_separability = compute_tsne_separability(cleaned_df, label_col) # Compute t-SNE separability score
+   save_tsne_plot(cleaned_df, label_col, os.path.basename(filepath), os.path.dirname(filepath)) # Generate and save 3D t-SNE visualization
 
    result = { # Return the dataset information as a dictionary
       "Dataset Name": os.path.basename(filepath),
