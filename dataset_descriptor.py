@@ -53,6 +53,7 @@ import platform # For getting the operating system name
 from colorama import Style # For coloring the terminal
 from itertools import combinations # For computing pairwise combinations
 from sklearn.manifold import TSNE # For data separability analysis
+from sklearn.preprocessing import StandardScaler # For feature scaling
 from tqdm import tqdm # For progress bars
 
 # Macros:
@@ -67,6 +68,8 @@ class BackgroundColors: # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False # Set to True to output verbose messages
+MAX_TSNE_SAMPLES_DEFAULT = 5000 # Default cap for t-SNE samples (can be overridden)
+MAX_PCA_COMPONENTS = 50 # Cap PCA components before t-SNE
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
@@ -279,7 +282,7 @@ def summarize_classes(df, label_col):
    
    return "None", "None" # Return "None" if no label column
 
-def compute_tsne_separability(df, label_col, random_state=42):
+def compute_tsne_separability(df, label_col, random_state=42, max_samples=MAX_TSNE_SAMPLES_DEFAULT):
    """
    Computes a basic t-SNE separability score for the dataset.
 
@@ -289,35 +292,92 @@ def compute_tsne_separability(df, label_col, random_state=42):
    :param df: pandas DataFrame
    :param label_col: Name of the label column
    :param random_state: Random seed for reproducibility (default: 42)
+   :param max_samples: Maximum number of samples to use for t-SNE (default: 5000)
    :return: Float separability score, or "N/A" if not applicable
    """
 
-   verbose_output(f"{BackgroundColors.GREEN}Computing t-SNE separability score...{Style.RESET_ALL}") # Output verbose message
+   verbose_output(f"{BackgroundColors.GREEN}Computing t-SNE separability score...{Style.RESET_ALL}")
 
-   if label_col is None or label_col not in df.columns: # If no label column is found
-      return "N/A" # Return "N/A"
+   if label_col is None or label_col not in df.columns: # If no label column exists
+      return "N/A" # Skip t-SNE separability computation
 
-   numeric_df = df.select_dtypes(include=["float64", "int64", "Int64"]) # Select numeric columns
-   if numeric_df.empty: # If there are no numeric features
-      return "N/A" # Return "N/A"
+   numeric_df = df.select_dtypes(include=["number"]).copy() # Select numeric columns
+   if numeric_df.empty: # If no numeric columns exist
+      obj_cols = df.select_dtypes(include=["object", "string"]).columns.tolist() # Select object/string columns
+      for c in obj_cols: # Try to coerce each to numeric
+         coerced = pd.to_numeric(df[c], errors="coerce") # Coerce to numeric, setting errors to NaN
+         if coerced.notna().sum() > 0: # If any values were successfully coerced
+            numeric_df[c] = coerced # Add the coerced column to numeric_df
 
-   try: # Try to compute t-SNE
-      tsne = TSNE(n_components=2, random_state=random_state, init="pca", learning_rate="auto") # Initialize t-SNE
-      tsne_result = tsne.fit_transform(numeric_df.fillna(0)) # Fit and transform numeric features
+   if numeric_df.empty: # If still no numeric columns after coercion
+      return "N/A" # Skip t-SNE separability computation
+
+   try: # Try to compute t-SNE separability
+      numeric_df = numeric_df.replace([np.inf, -np.inf], np.nan) # Replace infinite values with NaN
+      numeric_df = numeric_df.loc[:, numeric_df.notna().any(axis=0)] # Drop columns that are all NaN
+      
+      if numeric_df.shape[1] == 0: # If no columns remain
+         return "N/A" # Skip t-SNE separability computation
+
+      for col in numeric_df.columns: # For each column
+         med = numeric_df[col].median() # Compute the median
+         if pd.isna(med): # If median is NaN (all values are NaN)
+            numeric_df[col] = numeric_df[col].fillna(0) # Fill NaNs with 0
+         else: # If median is valid
+            numeric_df[col] = numeric_df[col].fillna(med) # Fill NaNs with median
+
+      labels = df.loc[numeric_df.index, label_col] # Keep labels aligned with numeric_df's index to allow correct groupby sampling
+
+      n_rows = len(numeric_df) # Get number of rows
+      if n_rows > max_samples: # If too many samples, downsample
+         try: # Try stratified sampling to preserve class proportions
+            counts = labels.value_counts() # Get class counts
+            frac = max_samples / float(n_rows) # Compute fraction to sample
+            sampled_idx = numeric_df.groupby(labels).sample(frac=frac, random_state=random_state).index # Stratified sample indices
+         except Exception: # Fallback to random sampling if stratified fails
+            sampled_idx = numeric_df.sample(n=max_samples, random_state=random_state).index
+
+         numeric_df = numeric_df.loc[sampled_idx].reset_index(drop=True) # Downsample numeric features
+         labels = labels.loc[sampled_idx].reset_index(drop=True) # Downsample labels
+
+      try: # Try scaling features
+         scaler = StandardScaler() # Initialize StandardScaler
+         X_scaled = scaler.fit_transform(numeric_df.values) # Scale the numeric features
+      except Exception: # Fallback if scaling fails
+         X_scaled = np.asarray(numeric_df.values, dtype=np.float64) # Convert to numpy array without scaling
+
+      n_samples = X.shape[0] # Get number of samples
+      if n_samples < 3: # Need at least 3 samples for t-SNE
+         return "N/A" # Skip t-SNE separability computation
+
+      perplexity = int(max(5, min(30, (n_samples - 1) // 3))) # Set perplexity based on sample size; must be < n_samples
+
+      tsne = TSNE(n_components=2, random_state=random_state, init="pca", learning_rate="auto", perplexity=perplexity, n_iter=500) # Initialize t-SNE
+      tsne_result = tsne.fit_transform(X) # Fit and transform numeric features
 
       temp_df = pd.DataFrame(tsne_result, columns=["TSNE1", "TSNE2"]) # Create DataFrame with t-SNE results
-      temp_df[label_col] = df[label_col].values # Add label column
+      temp_df[label_col] = labels.values # Add label column
 
       centroids = temp_df.groupby(label_col)[["TSNE1", "TSNE2"]].mean() # Compute class centroids
-      if len(centroids) < 2: # If less than 2 classes exist
-         return "N/A" # Return "N/A"
+      if len(centroids) < 2: # Need at least 2 classes to compute separability
+         return "N/A" # Skip t-SNE separability computation
 
-      distances = [np.linalg.norm(c1 - c2) for c1, c2 in combinations(centroids.values, 2)] # Compute distances
-      separability_score = float(np.mean(distances)) # Average distance as score
+      distances = [np.linalg.norm(c1 - c2) for c1, c2 in combinations(centroids.values, 2)] # Compute pairwise distances between centroids
+      separability_score = float(np.mean(distances)) # Average distance as separability score
 
-      return round(separability_score, 4) # Return rounded score
+      try: # Try to delete temporary variables to free memory
+         del numeric_df, X_scaled, X, temp_df, tsne_result # Delete temporary variables
+      except Exception: # Ignore errors during cleanup
+         pass # Do nothing
+      gc.collect() # Force garbage collection
+
+      return round(separability_score, 4) # Return the separability score rounded to 4 decimal places
    except Exception as e: # Handle exceptions gracefully
-      verbose_output(f"{BackgroundColors.RED}t-SNE separability computation failed: {e}{Style.RESET_ALL}") # Output verbose message
+      verbose_output(f"{BackgroundColors.RED}t-SNE separability computation failed: {e}{Style.RESET_ALL}")
+      try: # Try to delete temporary variables to free memory
+         gc.collect() # Force garbage collection
+      except Exception: # Ignore errors during cleanup
+         pass # Do nothing
       return "N/A" # Return "N/A" if computation fails
 
 def save_tsne_plot(df, label_col, dataset_name, dataset_dir, random_state=42):
