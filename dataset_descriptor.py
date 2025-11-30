@@ -572,10 +572,15 @@ def write_report(report_rows, base_dir, output_filename):
    """
 
    report_df = pd.DataFrame(report_rows) # Create a DataFrame from the report rows
+
+   if "#" in report_df.columns: # If the "#"" column exists
+      cols = ["#"] + [c for c in report_df.columns if c != "#"] # Move "#" to the front
+      report_df = report_df[cols] # Reorder columns
+
    report_csv_path = os.path.join(base_dir, output_filename) # Path to save the report CSV
    report_df.to_csv(report_csv_path, index=False) # Save the report to a CSV file
 
-def generate_dataset_report(input_path, file_extension=".csv", low_memory=False, output_filename="_dataset_descriptor.csv"):
+def generate_dataset_report(input_path, file_extension=".csv", low_memory=False, output_filename="dataset_descriptor.csv"):
    """
    Generates a CSV report for the specified input path.
    The Dataset Name column will include subdirectories if present.
@@ -618,6 +623,9 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=False,
          report_rows.append(info) # Add the info to the report rows
 
    if report_rows: # If there are report rows to write
+      for i, row in enumerate(report_rows, start=1): # For each report row
+         row["#"] = i # Add the counter value
+
       write_report(report_rows, base_dir, output_filename)
       print(f"\n{BackgroundColors.GREEN}Report saved to: {BackgroundColors.CYAN}{output_filename}{Style.RESET_ALL}") # Output the path to the saved report
       return True # Return True indicating success
