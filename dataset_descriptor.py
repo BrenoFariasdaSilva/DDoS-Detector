@@ -358,8 +358,8 @@ def get_dataset_info(filepath, low_memory=True):
 
    return { # Return the dataset information as a dictionary
       "Dataset Name": os.path.basename(filepath),
-      "Number of Samples": n_samples,
-      "Number of Features": n_features,
+      "Number of Samples": f"{n_samples:,}", # Format with commas for readability
+      "Number of Features": f"{n_features:,}", # Format with commas for readability
       "Feature Types": f"{n_numeric} numeric (float64), {n_int} integer (int64), {n_categorical} categorical (object/category/bool/string), {n_other} other",
       "Categorical Features (object/string)": categorical_cols_str,
       "Missing Values": missing_summary,
