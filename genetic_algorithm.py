@@ -779,13 +779,6 @@ def write_best_features_to_file(best_features, rfe_ranking, results_file, metric
    os.makedirs(results_dir, exist_ok=True) # Ensure directory exists
    base_name = os.path.splitext(os.path.basename(results_file))[0] # Base filename without extension
 
-   json_out = os.path.join(results_dir, f"{base_name}.json") # JSON output path
-   try: # Attempt to write JSON
-      with open(json_out, "w", encoding="utf-8") as jf: # Open JSON output
-         json.dump(base_info, jf, indent=2, ensure_ascii=False) # Dump JSON
-      print(f"\n{BackgroundColors.GREEN}Saved JSON results to {BackgroundColors.CYAN}{json_out}{Style.RESET_ALL}") # Notify user
-   except Exception as e: # If writing JSON fails
-      print(f"{BackgroundColors.RED}Failed to write JSON results: {str(e)}{Style.RESET_ALL}") # Error message
 
    if base_info.get("metrics"): # If metrics are available
       metrics_csv = os.path.join(results_dir, f"{base_name}_metrics.csv") # Metrics CSV path
