@@ -304,31 +304,89 @@ def fill_replace_and_drop(numeric_df):
 
    return numeric_df # Return cleaned numeric DataFrame
 
-def stratified_sample(numeric_df, labels, max_samples, random_state=42):
+def stratified_sample(numeric_df, labels, max_samples, random_state=42, min_per_class=50):
    """
-   Downsample `numeric_df` (and `labels`) to at most `max_samples` rows while
-   preserving class proportions when possible. Returns (numeric_df, labels).
-   
+   Downsample numeric features and labels to at most `max_samples` rows while
+   attempting to ensure a minimum number of samples per class.
+
+   The function will try to allocate up to `min_per_class` samples to each
+   class, then distribute remaining capacity proportionally. If the minimum
+   cannot be satisfied for every class the allocation falls back to a
+   proportional distribution.
+
    :param numeric_df: DataFrame with numeric features
-   :param labels: Series
-   :param max_samples: Maximum number of samples after downsampling
-   :param random_state: Random seed for reproducibility (default: 42)
-   :return: Tuple of (downsampled numeric_df, downsampled labels)
+   :param labels: pandas Series aligned with `numeric_df`
+   :param max_samples: Maximum total samples to return
+   :param random_state: Seed for reproducible sampling (default: 42)
+   :param min_per_class: Preferred minimum samples per class (default: 50)
+   :return: Tuple (sampled_numeric_df, sampled_labels)
    """
-   
-   verbose_output(f"{BackgroundColors.GREEN}Stratified sampling to a maximum of {max_samples} samples while preserving class proportions.{Style.RESET_ALL}") # Output the verbose message
 
-   n_rows = len(numeric_df) # Count rows in numeric_df
-   if n_rows <= max_samples: # If already within the max_samples limit
-      return numeric_df.reset_index(drop=True), labels.reset_index(drop=True) # Return copies with reset index
+   verbose_output(f"{BackgroundColors.GREEN}Stratified sampling to a maximum of {max_samples} samples while preserving class proportions and ensuring min {min_per_class} per class when possible.{Style.RESET_ALL}")
 
-   try: # Attempt stratified sampling by group
-      frac = max_samples / float(n_rows) # Fraction to sample per group
-      sampled_idx = numeric_df.groupby(labels).sample(frac=frac, random_state=random_state).index # Stratified indices
-   except Exception: # If stratified grouping fails for any reason
-      sampled_idx = numeric_df.sample(n=max_samples, random_state=random_state).index # Fallback to random sampling
+   n_rows = len(numeric_df) # Total rows available
+   if n_rows <= max_samples: # Nothing to do
+      return numeric_df.reset_index(drop=True), labels.reset_index(drop=True) # Return original DataFrame and labels
 
-   return numeric_df.loc[sampled_idx].reset_index(drop=True), labels.loc[sampled_idx].reset_index(drop=True) # Return sampled data and labels
+   counts = labels.value_counts() # Per-class counts
+   classes = list(counts.index) # List of class labels
+   total = int(counts.sum()) # Total available samples
+
+   initial_alloc = {c: min(int(counts[c]), int(min_per_class)) for c in classes} # Initial allocation per class
+   s_min = sum(initial_alloc.values()) # Sum of initial allocations
+
+   allocations = {c: 0 for c in classes} # Final allocations per class
+
+   if s_min <= max_samples: # Can satisfy minimum for all classes
+      allocations.update(initial_alloc) # Start with initial allocations
+      remaining = max_samples - s_min # Remaining samples to allocate
+      rem_avail = {c: max(0, int(counts[c]) - allocations[c]) for c in classes} # Remaining available samples per class
+      total_rem_avail = sum(rem_avail.values()) # Total remaining available samples
+      if total_rem_avail > 0 and remaining > 0: # If there are remaining samples to allocate
+         float_add = {c: (remaining * rem_avail[c] / total_rem_avail) for c in classes} # Proportional additional allocation
+         add_alloc = {c: int(float_add[c]) for c in classes} # Base additional allocation
+         assigned = sum(add_alloc.values()) # Sum of base additional allocations
+         leftover = remaining - assigned # Leftover samples to allocate
+         remainders = sorted(classes, key=lambda c: (float_add[c] - add_alloc[c]), reverse=True) # Sort classes by remainder
+         for c in remainders: # Distribute leftover samples
+            if leftover <= 0: # If no leftover samples remain
+               break # Exit the loop
+            if add_alloc[c] < rem_avail[c]: # If class can take more samples
+               add_alloc[c] += 1 # Allocate one more sample to the class
+               leftover -= 1 # Decrease leftover count
+         for c in classes: # Finalize allocations
+            allocations[c] += min(add_alloc.get(c, 0), rem_avail[c]) # Update allocation with additional samples
+   else: # Cannot satisfy minimum for all classes; allocate proportionally
+      float_alloc = {c: (max_samples * int(counts[c]) / total) for c in classes} # Proportional allocation
+      base_alloc = {c: int(float_alloc[c]) for c in classes} # Base allocation
+      assigned = sum(base_alloc.values()) # Sum of base allocations
+      leftover = max_samples - assigned # Leftover samples to allocate
+      remainders = sorted(classes, key=lambda c: (float_alloc[c] - base_alloc[c]), reverse=True) # Sort classes by remainder
+      for c in remainders: # Distribute leftover samples
+         if leftover <= 0: # If no leftover samples remain
+            break # Exit the loop
+         if base_alloc[c] < int(counts[c]): # If class can take more samples
+            base_alloc[c] += 1 # Allocate one more sample to the class
+            leftover -= 1 # Decrease leftover count
+      allocations = {c: min(int(counts[c]), base_alloc[c]) for c in classes} # Finalize allocations
+
+   rng = np.random.RandomState(random_state) # Random number generator for reproducibility
+   sampled_idx = [] # List to store sampled indices
+   for c in classes: # For each class
+      cls_idx = labels[labels == c].index.to_list() # Get indices of samples in the class
+      k = allocations.get(c, 0) # Number of samples to draw for the class
+      if k <= 0: # If no samples to draw for the class
+         continue # Skip to the next class
+      if k >= len(cls_idx): # If k exceeds available samples
+         sampled = cls_idx # Take all available samples
+      else: # If k is less than available samples
+         sampled = list(rng.choice(cls_idx, size=k, replace=False)) # Randomly sample k indices without replacement
+      sampled_idx.extend(sampled) # Add sampled indices to the list
+
+   if len(sampled_idx) > max_samples: # Safety check
+      sampled_idx = sampled_idx[:max_samples] # Trim to max_samples if exceeded
+
+   return numeric_df.loc[sampled_idx].reset_index(drop=True), labels.loc[sampled_idx].reset_index(drop=True) # Return sampled DataFrame and labels
 
 def scale_features(numeric_df):
    """
