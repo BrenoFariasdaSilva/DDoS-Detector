@@ -779,7 +779,6 @@ def write_best_features_to_file(best_features, rfe_ranking, results_file, metric
    os.makedirs(results_dir, exist_ok=True) # Ensure directory exists
    base_name = os.path.splitext(os.path.basename(results_file))[0] # Base filename without extension
 
-
    if base_info.get("metrics"): # If metrics are available
       metrics_csv = os.path.join(results_dir, f"{base_name}_metrics.csv") # Metrics CSV path
       try: # Attempt to write metrics CSV
