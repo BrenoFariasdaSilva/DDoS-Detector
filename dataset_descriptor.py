@@ -52,6 +52,7 @@ import pandas as pd # For data manipulation
 import warnings # For suppressing pandas warnings when requested
 import platform # For getting the operating system name
 from colorama import Style # For coloring the terminal
+from inspect import signature as _signature # For inspecting function signatures
 from itertools import combinations # For computing pairwise combinations
 from sklearn.manifold import TSNE # For data separability analysis
 from sklearn.preprocessing import StandardScaler # For feature scaling
@@ -435,7 +436,18 @@ def compute_tsne_embedding_and_separability(df=None, label_col=None, max_samples
          return None, "N/A", labels # Cannot compute embedding
 
       perplexity = max(5, min(30, (n_samples_local - 1) // 3)) # Set perplexity based on sample size
-      tsne = TSNE(n_components=3, random_state=random_state, init="pca", learning_rate="auto", perplexity=perplexity, n_iter=500) # Create t-SNE instance
+
+      tsne_base_kwargs = dict(n_components=3, random_state=random_state, init="pca", learning_rate="auto", perplexity=perplexity) # Base t-SNE parameters
+      try: # Inspect TSNE constructor for compatibility
+         params = _signature(TSNE.__init__).parameters # Inspect TSNE constructor signature
+         if "n_iter" in params: # If n_iter is a parameter
+            tsne_base_kwargs["n_iter"] = 500 # Set n_iter for older scikit-learn versions
+         elif "max_iter" in params: # If max_iter is a parameter
+            tsne_base_kwargs["max_iter"] = 500 # Set max_iter for newer scikit-learn versions
+      except Exception: # Ignore any exceptions during inspection
+         pass # Do nothing
+
+      tsne = TSNE(**tsne_base_kwargs) # Create t-SNE instance compatible with installed scikit-learn
       embedding_3d = tsne.fit_transform(X) # Compute 3D t-SNE embedding
 
       separability = centroid_separability_from_embedding(embedding_3d[:, :2], labels, label_col) # Compute separability from 2D projection
