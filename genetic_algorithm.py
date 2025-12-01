@@ -828,7 +828,6 @@ def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
    os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
    results_file = f"{output_dir}/Genetic_Algorithm_Results"  # Base path for results (no .txt extension anymore)
 
-   # Delegate writing to helper function which will write JSON and CSV files  # Use structured writer
    write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=metrics) # Delegate writing
 
 def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=None, y_test=None, n_generations=None, best_pop_size=None, runs_list=None):
