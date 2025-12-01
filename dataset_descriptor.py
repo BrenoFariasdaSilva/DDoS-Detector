@@ -584,7 +584,7 @@ def write_report(report_rows, base_dir, output_filename):
    report_csv_path = os.path.join(base_dir, output_filename) # Path to save the report CSV
    report_df.to_csv(report_csv_path, index=False) # Save the report to a CSV file
 
-def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename="dataset_descriptor.csv"):
+def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename="_dataset_descriptor.csv"):
    """
    Generates a CSV report for the specified input path.
    The Dataset Name column will include subdirectories if present.
