@@ -328,7 +328,7 @@ def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
       with open(run_json_path, "w", encoding="utf-8") as rf: # Open and write JSON
          json.dump({ # Dump the run data as JSON
             "run": run_index, # Run index
-            "metrics": {
+            "metrics": { # Metrics mapping
                "accuracy": acc, # Accuracy
                "precision": prec, # Precision
                "recall": rec, # Recall
