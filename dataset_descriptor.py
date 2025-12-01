@@ -785,10 +785,8 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
          row["#"] = i # Add the counter value
 
       write_report(report_rows, base_dir, output_filename)
-      print(f"\n{BackgroundColors.GREEN}Report saved to: {BackgroundColors.CYAN}{output_filename}{Style.RESET_ALL}") # Output the path to the saved report
       return True # Return True indicating success
    else: # If no report rows were generated
-      print(f"\n{BackgroundColors.RED}No valid CSV files found in the specified path: {input_path}{Style.RESET_ALL}") # Output the error message
       return False # Return False indicating failure
 
 def play_sound():
