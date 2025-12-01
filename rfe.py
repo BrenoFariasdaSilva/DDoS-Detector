@@ -180,8 +180,23 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
    """
 
    scaler = StandardScaler() # Initialize the scaler
-   X_scaled = scaler.fit_transform(X) # Scale the features
-   X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=test_size, random_state=random_state) # Split into train/test sets
+
+   X_numeric = X.select_dtypes(include=["number"]).copy() # Pick numeric columns first
+   if X_numeric.shape[1] == 0: # No numeric columns detected
+      coerced_cols = {} # Dictionary to hold coerced numeric columns
+      for col in X.columns: # Try coercing each column to numeric
+         coerced = pd.to_numeric(X[col], errors="coerce") # Coerce invalid -> NaN
+         if coerced.notna().sum() > 0: # Keep columns that produced numeric values
+            coerced_cols[col] = coerced
+      if coerced_cols: # Build DataFrame from coerced columns
+         X_numeric = pd.DataFrame(coerced_cols, index=X.index) # Use original index
+      else: # Nothing numeric available -> cannot proceed
+         raise ValueError("No numeric features found after preprocessing. Ensure the dataset contains numeric columns for RFE.")
+
+   X_scaled = scaler.fit_transform(X_numeric.values) # Scale the numeric array
+
+   stratify_param = y if len(np.unique(y)) > 1 else None # Avoid stratify for constant labels
+   X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=test_size, random_state=random_state, stratify=stratify_param) # Split into train/test sets
 
    return X_train, X_test, y_train, y_test # Return the split data
 
@@ -235,11 +250,34 @@ def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state
    f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate F1-score
 
    if len(np.unique(y_test)) == 2: # If binary classification
-      tn, fp, fn, tp = confusion_matrix(y_test, y_pred, labels=[0, 1]).ravel() # Get confusion matrix values
-      fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # Calculate false positive rate
-      fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # Calculate false negative rate
+      cm = confusion_matrix(y_test, y_pred) # Confusion matrix for observed labels
+      if cm.shape == (2, 2): # Expect 2x2 matrix for binary
+         tn, fp, fn, tp = cm.ravel() # Unpack
+         fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # Calculate false positive rate
+         fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # Calculate false negative rate
+      else: # Fallback: compute rates from sums if unexpected shape
+         total = cm.sum() if cm.size > 0 else 1
+         fpr = float(cm.sum() - np.trace(cm)) / float(total) if total > 0 else 0
+         fnr = fpr # Fallback estimate when binary layout is unexpected
    else: # For multi-class classification
-      fpr, fnr = 0, 0 # Set FPR and FNR to 0
+      cm = confusion_matrix(y_test, y_pred) # Confusion matrix for observed labels
+      supports = cm.sum(axis=1) # Support for each class
+      fprs = [] # List to hold per-class FPR
+      fnrs = [] # List to hold per-class FNR
+      for i in range(cm.shape[0]): # For each class
+         tp = cm[i, i] # True positives for class i
+         fn = cm[i, :].sum() - tp # False negatives: actual i but predicted not-i
+         fp = cm[:, i].sum() - tp # False positives: predicted i but actual not-i
+         tn = cm.sum() - (tp + fp + fn) # True negatives: everything else
+         denom_fnr = (tp + fn) if (tp + fn) > 0 else 1 # Denominator for FNR (avoid div0)
+         denom_fpr = (fp + tn) if (fp + tn) > 0 else 1 # Denominator for FPR (avoid div0)
+         fnr_i = fn / denom_fnr # Per-class false negative rate
+         fpr_i = fp / denom_fpr # Per-class false positive rate
+         fprs.append((fpr_i, supports[i])) # Store FPR with class support for weighting
+         fnrs.append((fnr_i, supports[i])) # Store FNR with class support for weighting
+      total_support = float(supports.sum()) if supports.sum() > 0 else 1.0 # Total support across classes
+      fpr = float(sum(v * s for v, s in fprs) / total_support) # Weighted average FPR across classes
+      fnr = float(sum(v * s for v, s in fnrs) / total_support) # Weighted average FNR across classes
 
    elapsed_time = time.time() - start_time # Calculate elapsed time
    return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return the metrics
