@@ -277,7 +277,7 @@ def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state
       fnr = float(sum(v * s for v, s in fnrs) / total_support) # Weighted average FNR across classes
 
    elapsed_time = time.time() - start_time # Calculate elapsed time
-   return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return the metrics
+   return float(acc), float(prec), float(rec), float(f1), float(fpr), float(fnr), float(elapsed_time) # Return the metrics as Python floats
 
 def extract_top_features(selector, X_columns):
    """
@@ -289,6 +289,7 @@ def extract_top_features(selector, X_columns):
    """
 
    rfe_ranking = {f: r for f, r in zip(X_columns, selector.ranking_)} # Map normalized feature names to their RFE rankings
+   rfe_ranking = {k: int(v) for k, v in rfe_ranking.items()} # Convert numpy types to Python int
    top_features = [f for f, s in zip(X_columns, selector.support_) if s] # List of top selected features
 
    return top_features, rfe_ranking # Return the top features and their rankings
