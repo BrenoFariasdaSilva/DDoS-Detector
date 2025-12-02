@@ -44,8 +44,8 @@ Dependencies:
    - telegram_bot (assumed custom module)
 
 Assumptions & Notes:
-   - The script assumes a directory structure like 'Datasets/<DatasetName>/<SubDir>/<File.csv>'.
-   - The GA feature file is located at '<InputFileDir>/Feature_Analysis/Genetic_Algorithm_Results_features.csv'.
+   - The script assumes a directory structure like "Datasets/<DatasetName>/<SubDir>/<File.csv>".
+   - The GA feature file is located at "<InputFileDir>/Feature_Analysis/Genetic_Algorithm_Results_features.csv".
    - CSV files are the primary data format.
    - The `telegram_bot` module is available in the environment.
 """
@@ -161,15 +161,15 @@ def get_dataset_name(input_path):
 def extract_genetic_algorithm_features(file_path):
    """
    Extracts the features selected by the Genetic Algorithm from the corresponding
-   "Genetic_Algorithm_Results_features.csv" file located in the 'Feature_Analysis'
+   "Genetic_Algorithm_Results_features.csv" file located in the "Feature_Analysis"
    subdirectory relative to the input file's directory.
 
-   :param file_path: Full path to the current CSV file being processed (e.g., './Datasets/.../DrDoS_DNS.csv').
+   :param file_path: Full path to the current CSV file being processed (e.g., "./Datasets/.../DrDoS_DNS.csv").
    :return: List of features selected by the GA, or None if the file is not found or fails to load.
    """
    
-   file_dir = os.path.dirname(file_path) # 1. Determine the directory of the input file
-   ga_feature_path = os.path.join(file_dir, "Feature_Analysis", "Genetic_Algorithm_Results_features.csv") # 2. Construct the path to the GA feature file
+   file_dir = os.path.dirname(file_path) # Determine the directory of the input file
+   ga_feature_path = os.path.join(file_dir, "Feature_Analysis", "Genetic_Algorithm_Results_features.csv") # Construct the path to the GA feature file
    
    verbose_output(f"{BackgroundColors.GREEN}Extracting GA features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
 
