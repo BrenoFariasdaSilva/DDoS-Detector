@@ -846,42 +846,94 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
    output_dir = f"{os.path.dirname(csv_path)}/{dataset_name}/" # Directory to save outputs
    os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
 
-   rf_metrics = metrics # Use provided metrics if available
-   n_train = None # Initialize train sample count
-   n_test = None # Initialize test sample count
-   test_frac = None # Initialize test fraction
-   if rf_metrics is None: # If no metrics are provided
-      if X_test is not None and y_test is not None: # If test set is available
-         rf_metrics = evaluate_individual(best_ind, X, y, X_test, y_test) # Evaluate best individual on test set
-         try: # Try to calculate train/test counts and fraction
-            n_train = len(y) if y is not None else None # Number of training samples
-            n_test = len(y_test) if y_test is not None else None # Number of testing samples
-            if n_train is not None and n_test is not None and (n_train + n_test) > 0: # If both counts are available
-               test_frac = float(n_test) / float(n_train + n_test) # Calculate test fraction
-         except Exception: # If an error occurs during calculation
-            n_train = None # Reset train sample count
-            n_test = None # Reset test sample count
-            test_frac = None # Reset test fraction
-      else: # If no test set is available
-         rf_metrics = None # Cannot evaluate metrics
-         n_train = len(y) if y is not None else None # Number of training samples
-         n_test = None # No test samples available
-         test_frac = None # No test fraction available
+   rf_metrics = metrics if metrics is not None else None # Use provided metrics if available
+   n_train = None # Number of training samples
+   n_test = None # Number of testing samples
+   test_frac = None # Train/test fraction
 
-      rf_results_file = f"{output_dir}/Genetic_Algorithm_Results_RandomForest" # Base path for RF results (no .txt)
-      write_best_features_to_file(best_features, rfe_ranking, rf_results_file, metrics=rf_metrics, classifier_name="RandomForest", train_test_ratio=test_frac, n_train=n_train, n_test=n_test, population_size=best_pop_size, n_generations=n_generations) # Write Random Forest results
+   if rf_metrics is None and X_test is not None and y_test is not None: # If no metrics provided, evaluate on test set
+      rf_metrics = evaluate_individual(best_ind, X, y, X_test, y_test) # Evaluate best individual
 
+   try: # Safely get lengths
+      n_train = len(y) if y is not None else None # Number of training samples
+   except Exception: # If length retrieval fails
+      n_train = None # Set to None
+   try: # Safely get lengths
+      n_test = len(y_test) if y_test is not None else None # Number of testing samples
+   except Exception: # If length retrieval fails
+      n_test = None # Set to None
+   if n_train is not None and n_test is not None and (n_train + n_test) > 0: # If both lengths are valid
+      test_frac = float(n_test) / float(n_train + n_test) # Calculate train/test fraction
+   
+   xgb_metrics = None # Initialize XGBoost metrics
    if XGBClassifier is not None: # If XGBoost is available
-      xgb_metrics = None # Initialize XGBoost metrics
-      try: # Try to evaluate with XGBoost
-         if X_test is not None and y_test is not None: # If test set is available
-            xgb_metrics = evaluate_individual(best_ind, X, y, X_test, y_test, estimator_cls=XGBClassifier) # Evaluate best individual with XGBoost
+      try: # Safely evaluate with XGBoost
+         if X_test is not None and y_test is not None: # If test set is provided
+            xgb_metrics = evaluate_individual(best_ind, X, y, X_test, y_test, estimator_cls=XGBClassifier) # Evaluate with XGBoost
       except Exception: # If evaluation fails
-         xgb_metrics = None # Reset XGBoost metrics
-      xgb_results_file = f"{output_dir}/Genetic_Algorithm_Results_XGBoost" # Base path for XGBoost results (no .txt)
-      write_best_features_to_file(best_features, rfe_ranking, xgb_results_file, metrics=xgb_metrics, classifier_name="XGBoost", train_test_ratio=test_frac, n_train=n_train, n_test=n_test, population_size=best_pop_size, n_generations=n_generations) # Write XGBoost results
+         xgb_metrics = None # Set to None
    else: # If XGBoost is not available
-      print(f"{BackgroundColors.YELLOW}XGBoost not available (xgboost package not installed). Skipping XGBoost evaluation.{Style.RESET_ALL}") # Output warning message
+      verbose_output(f"{BackgroundColors.YELLOW}XGBoost not available (xgboost package not installed). Skipping XGBoost evaluation.{Style.RESET_ALL}")
+
+   rows = [] # List to hold CSV rows
+   timestamp = datetime.datetime.now().isoformat() # Current timestamp
+
+   def metrics_to_dict(m): # Convert metrics tuple to dictionary
+      if not m: # If metrics is None
+         return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None, "elapsed_time_s": None}
+      acc, prec, rec, f1, fpr, fnr, elapsed = m # Unpack metrics
+      return {"accuracy": float(acc), "precision": float(prec), "recall": float(rec), "f1_score": float(f1), "fpr": float(fpr), "fnr": float(fnr), "elapsed_time_s": float(elapsed)} # Return as dictionary
+
+   base_row = { # Base row for CSV
+      "dataset": os.path.splitext(os.path.basename(csv_path))[0], # Dataset name
+      "dataset_path": csv_path, # Dataset path
+      "population_size": best_pop_size, # Population size
+      "n_generations": n_generations, # Number of generations
+      "n_train": n_train, # Number of training samples
+      "n_test": n_test, # Number of testing samples
+      "train_test_ratio": test_frac, # Train/test fraction
+      "rfe_ranking": json.dumps(rfe_ranking, ensure_ascii=False), # RFE ranking as JSON
+      "timestamp": timestamp, # Timestamp
+      "run_index": "best" # Indicates best run
+   }
+
+   rf_row = dict(base_row) # Create Random Forest row
+   rf_row.update({ # Update with RF-specific data
+      "classifier": "RandomForest",
+      **metrics_to_dict(rf_metrics),
+      "best_features": json.dumps(best_features, ensure_ascii=False)
+   }) # Update with RF-specific data
+   rows.append(rf_row) # Add RF row to rows
+
+   if xgb_metrics is not None: # If XGBoost metrics are available
+      xgb_row = dict(base_row) # Create XGBoost row
+      xgb_row.update({ # Update with XGBoost-specific data
+         "classifier": "XGBoost",
+         **metrics_to_dict(xgb_metrics),
+         "best_features": json.dumps(best_features, ensure_ascii=False)
+      }) # Update with XGBoost-specific data
+      rows.append(xgb_row) # Add XGBoost row to rows
+
+   if runs_list: # If multiple runs data is provided
+      for idx, run_data in enumerate(runs_list, start=1): # For each run
+         run_metrics = run_data.get("metrics") if run_data.get("metrics") is not None else None
+         run_features = run_data.get("best_features") if run_data.get("best_features") is not None else [f for f, bit in zip(feature_names if feature_names is not None else [], run_data.get("best_ind", [])) if bit == 1] # Extract features for this run
+         run_row = dict(base_row) # Create row for this run
+         run_row.update({ # Update with run-specific data
+            "classifier": "RandomForest",
+            **metrics_to_dict(run_metrics),
+            "best_features": json.dumps(run_features, ensure_ascii=False),
+            "run_index": idx
+         })
+         rows.append(run_row) # Add run row to rows
+
+   try: # Attempt to write consolidated CSV
+      df_out = pd.DataFrame(rows) # Create DataFrame from rows
+      csv_out = os.path.join(output_dir, "Genetic_Algorithm_Results.csv") # Output CSV path
+      df_out.to_csv(csv_out, index=False) # Write to CSV
+      print(f"\n{BackgroundColors.GREEN}Genetic Algorithm consolidated results saved to {BackgroundColors.CYAN}{csv_out}{Style.RESET_ALL}")
+   except Exception as e: # If writing fails
+      print(f"{BackgroundColors.RED}Failed to write consolidated GA CSV: {str(e)}{Style.RESET_ALL}")
 
    if best_features: # If there are best features to analyze
       if not isinstance(X, pd.DataFrame): # If X is not a pandas DataFrame
@@ -902,25 +954,6 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
          y_series = y.reindex(df_features.index) if not df_features.index.equals(y.index) else y # Align indices if necessary
 
       analyze_top_features(df_features, y_series, best_features, csv_path=csv_path) # Analyze and visualize the top features
-
-   if runs_list: # If runs_list is provided
-      for run_idx, run_data in enumerate(runs_list, start=1): # For each run
-         run_ind = run_data["best_ind"] # Get the best individual for this run
-         run_metrics = run_data["metrics"] # Get the metrics for this run
-         run_features = [f for f, bit in zip(feature_names if feature_names is not None else [], run_ind) if bit == 1] # Extract best features for this run
-         run_output_dir = f"{output_dir}/Run_{run_idx}/" # Directory for this run's outputs
-         os.makedirs(run_output_dir, exist_ok=True) # Create the directory if it doesn't exist
-         
-         run_rf_results_file = f"{run_output_dir}/Genetic_Algorithm_Run_{run_idx}_Results_RandomForest" # Base path for RandomForest results (no .txt)
-         write_best_features_to_file(run_features, rfe_ranking, run_rf_results_file, metrics=run_metrics, classifier_name="RandomForest", train_test_ratio=test_frac, n_train=n_train, n_test=n_test, population_size=best_pop_size, n_generations=n_generations) # Write RandomForest results
-
-         if XGBClassifier is not None: # If XGBoost is available
-            try: # Try to evaluate with XGBoost
-               run_xgb_metrics = evaluate_individual(run_ind, X, y, X_test, y_test, estimator_cls=XGBClassifier) if X_test is not None and y_test is not None else None # Evaluate with XGBoost
-            except Exception: # If evaluation fails
-               run_xgb_metrics = None # Reset XGBoost metrics
-            run_xgb_results_file = f"{run_output_dir}/Genetic_Algorithm_Run_{run_idx}_Results_XGBoost" # Base path for XGBoost results (no .txt)
-            write_best_features_to_file(run_features, rfe_ranking, run_xgb_results_file, metrics=run_xgb_metrics, classifier_name="XGBoost", train_test_ratio=test_frac, n_train=n_train, n_test=n_test, population_size=best_pop_size, n_generations=n_generations) # Write XGBoost results
 
    return best_features # Return the list of best features
 
