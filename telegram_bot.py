@@ -162,7 +162,7 @@ class TelegramBot:
 
       if self.bot: # If the bot is initialized
          async with self.bot: # Use the bot context
-            await self.bot.send_message(text=text, chat_id=chat_id, parse_mode='Markdown') # Send the message
+            await self.bot.send_message(text=text, chat_id=chat_id) # Send the message
       else: # If the bot is not initialized
          print(f"{BackgroundColors.RED}Bot not initialized.{Style.RESET_ALL}")
 
@@ -185,7 +185,7 @@ class TelegramBot:
          async with self.bot: # Use the bot context
             for part in parts: # Send each part
                try: # Try to send the message part
-                  await self.bot.send_message(chat_id=chat_id, text=part, parse_mode='Markdown') # Send the message part
+                  await self.bot.send_message(chat_id=chat_id, text=part) # Send the message part
                except BadRequest as e: # Handle BadRequest error
                   print(f"{BackgroundColors.RED}Failed to send message part: {str(e)}{Style.RESET_ALL}")
       else: # If the bot is not initialized
