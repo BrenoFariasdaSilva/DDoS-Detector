@@ -89,6 +89,18 @@ def verbose_output(true_string="", false_string=""):
       print(true_string) # Output the true statement string
    elif false_string != "": # If the false_string is set
       print(false_string) # Output the false statement string
+   
+def verify_filepath_exists(filepath):
+   """
+   Verify if a file or folder exists at the specified path.
+
+   :param filepath: Path to the file or folder
+   :return: True if the file or folder exists, False otherwise
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output the verbose message
+
+   return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise   
       
 def get_files_to_process(directory_path, file_extension=".csv"):
    """
@@ -139,18 +151,6 @@ def get_dataset_name(input_path):
       dataset_name = os.path.basename(input_path) # Fallback to basename if "Datasets" not in path
 
    return dataset_name # Return the dataset name
-
-def verify_filepath_exists(filepath):
-   """
-   Verify if a file or folder exists at the specified path.
-
-   :param filepath: Path to the file or folder
-   :return: True if the file or folder exists, False otherwise
-   """
-
-   verbose_output(f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output the verbose message
-
-   return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
 
 def calculate_execution_time(start_time, finish_time):
    """
