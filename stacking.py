@@ -89,6 +89,45 @@ def verbose_output(true_string="", false_string=""):
       print(true_string) # Output the true statement string
    elif false_string != "": # If the false_string is set
       print(false_string) # Output the false statement string
+      
+def get_files_to_process(directory_path, file_extension=".csv"):
+   """
+   Get all of the specified files in a directory (non-recursive).
+   
+   :param directory_path: Path to the directory to search
+   :param file_extension: File extension to filter (default: .csv)
+   :return: List of files with the specified extension
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Getting all {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files in the directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}") # Output the verbose message
+
+   verify_filepath_exists(directory_path) # Verify if the directory exists
+
+   if not os.path.isdir(directory_path): # If the path is not a directory
+      verbose_output(f"{BackgroundColors.RED}The specified path is not a directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}") # Output the verbose message
+      return [] # Return an empty list
+
+   files = [] # List to store the files
+
+   for item in os.listdir(directory_path): # List all items in the directory
+      item_path = os.path.join(directory_path, item) # Get the full path of the item
+      
+      if os.path.isfile(item_path) and item.lower().endswith(file_extension): # If the item is a file and has the specified extension
+         files.append(item_path) # Add the file to the list
+
+   return sorted(files) # Return sorted list for consistency
+
+def verify_filepath_exists(filepath):
+   """
+   Verify if a file or folder exists at the specified path.
+
+   :param filepath: Path to the file or folder
+   :return: True if the file or folder exists, False otherwise
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output the verbose message
+
+   return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
 
 def calculate_execution_time(start_time, finish_time):
    """
@@ -103,18 +142,6 @@ def calculate_execution_time(start_time, finish_time):
    hours, remainder = divmod(delta.seconds, 3600) # Calculate the hours, minutes and seconds
    minutes, seconds = divmod(remainder, 60) # Calculate the minutes and seconds
    return f"{hours:02d}:{minutes:02d}:{seconds:02d}" # Format the execution time
-
-def verify_filepath_exists(filepath):
-   """
-   Verify if a file or folder exists at the specified path.
-
-   :param filepath: Path to the file or folder
-   :return: True if the file or folder exists, False otherwise
-   """
-
-   verbose_output(f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output the verbose message
-
-   return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
 
 def play_sound():
    """
