@@ -60,6 +60,7 @@ import pandas as pd # Import pandas for data manipulation
 import platform # For getting the operating system name
 import time # For measuring execution time
 from colorama import Style # For terminal text styling
+from sklearn.decomposition import PCA # For Principal Component Analysis
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier # For Gradient Boosting model
 from sklearn.linear_model import LogisticRegression # For logistic regression model
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix # For performance metrics
@@ -611,12 +612,29 @@ def main():
       
       stacking_model = StackingClassifier(estimators=estimators, final_estimator=RandomForestClassifier(n_estimators=50, random_state=42), cv=5, n_jobs=-1) # Define the Stacking Classifier model
       
-      feature_sets = {
+      # 4. PCA Feature Set Preparation
+      
+      X_train_pca = None # Initialize PCA training features
+      X_test_pca = None # Initialize PCA testing features
+
+      if pca_n_components is not None and pca_n_components > 0: # Verify if optimal components were successfully loaded
+         from sklearn.decomposition import PCA # Import the PCA class
+         
+         pca = PCA(n_components=pca_n_components) # Initialize PCA with the optimal number of components
+         X_train_pca = pca.fit_transform(X_train_scaled) # Fit and transform the training data
+         X_test_pca = pca.transform(X_test_scaled) # Transform the testing data
+         
+         verbose_output(f"{BackgroundColors.GREEN}PCA applied. Transformed data shape: {BackgroundColors.CYAN}{X_train_pca.shape}{Style.RESET_ALL}") # Output the transformed shape
+      
+      feature_sets = { # Dictionary of feature sets to evaluate
          "Full Features": (X_train_scaled, X_test_scaled), # All features
          "RFE Features": (get_feature_subset(X_train_scaled, rfe_selected_features, feature_names), get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)), # RFE subset
          "GA Features": (get_feature_subset(X_train_scaled, ga_selected_features, feature_names), get_feature_subset(X_test_scaled, ga_selected_features, feature_names)), # GA subset
       }
       
+      if X_train_pca is not None: # Only add PCA if it was successfully computed
+         feature_sets["PCA Components"] = (X_train_pca, X_test_pca) # Add the PCA transformed components
+         
       all_stacking_results = [] # List to store results for saving
       
       print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}--- Running Stacking Evaluation ---{Style.RESET_ALL}") # Output separator
