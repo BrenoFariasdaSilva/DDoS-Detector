@@ -964,14 +964,9 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
    if rf_metrics is None and X_test is not None and y_test is not None: # If no metrics provided, evaluate on test set
       rf_metrics = evaluate_individual(best_ind, X, y, X_test, y_test) # Evaluate best individual
 
-   try: # Safely get lengths
-      n_train = len(y) if y is not None else None # Number of training samples
-   except Exception: # If length retrieval fails
-      n_train = None # Set to None
-   try: # Safely get lengths
-      n_test = len(y_test) if y_test is not None else None # Number of testing samples
-   except Exception: # If length retrieval fails
-      n_test = None # Set to None
+   n_train = len(y) if y is not None else None # Number of training samples
+   n_test = len(y_test) if y_test is not None else None # Number of testing samples
+   
    if n_train is not None and n_test is not None and (n_train + n_test) > 0: # If both lengths are valid
       test_frac = float(n_test) / float(n_train + n_test) # Calculate train/test fraction
 
