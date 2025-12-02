@@ -1,55 +1,60 @@
 """
 ================================================================================
-<PROJECT OR SCRIPT TITLE>
+Classifiers Stacking
 ================================================================================
 Author      : Breno Farias da Silva
 Created     : <YYYY-MM-DD>
 Description :
-   <Provide a concise and complete overview of what this script does.>
-   <Mention its purpose, scope, and relevance to the larger project.>
+   This script is designed to load and process network traffic data (DDoS datasets)
+   for subsequent analysis using machine learning classifiers, focusing on ensemble
+   methods like stacking. It handles file processing, extracts dataset names, and
+   is intended to integrate feature selection results from a Genetic Algorithm.
 
    Key features include:
-      - <Feature 1 — e.g., automatic data loading and preprocessing>
-      - <Feature 2 — e.g., model training and evaluation>
-      - <Feature 3 — e.g., visualization or report generation>
-      - <Feature 4 — e.g., logging or notification system>
-      - <Feature 5 — e.g., integration with other modules or datasets>
+      - Automatic data loading and preprocessing (planned)
+      - Integration of Genetic Algorithm (GA) feature selection results.
+      - Utilities for path validation and file listing.
+      - Execution time calculation and sound notification upon completion.
+      - Telegram bot integration for notifications.
 
 Usage:
-   1. <Explain any configuration steps before running, such as editing variables or paths.>
-   2. <Describe how to execute the script — typically via Makefile or Python.>
-         $ make <target>   or   $ python <script_name>.py
-   3. <List what outputs are expected or where results are saved.>
+   1. Ensure the dataset path and feature analysis files are correctly structured.
+   2. Execute the script:
+         $ python <script_name>.py
+   3. Check terminal output for processing logs and execution time.
 
 Outputs:
-   - <Output file or directory 1 — e.g., results.csv>
-   - <Output file or directory 2 — e.g., Feature_Analysis/plots/>
-   - <Output file or directory 3 — e.g., logs/output.txt>
+   - Processed data files (planned)
+   - Log messages to the terminal.
+   - Telegram notifications (if configured).
 
 TODOs:
-   - <Add a task or improvement — e.g., implement CLI argument parsing.>
-   - <Add another improvement — e.g., extend support to Parquet files.>
-   - <Add optimization — e.g., parallelize evaluation loop.>
-   - <Add robustness — e.g., error handling or data validation.>
+   - Implement and call function to extract the genetic algorithm features.
+   - Implement data loading and preprocessing logic.
+   - Implement classifier training and evaluation (Stacking, Voting).
+   - Implement CLI argument parsing for paths and parameters.
+   - Extend support to Parquet files.
 
 Dependencies:
-   - Python >= <version>
-   - <Library 1 — e.g., pandas>
-   - <Library 2 — e.g., numpy>
-   - <Library 3 — e.g., scikit-learn>
-   - <Library 4 — e.g., matplotlib, seaborn, tqdm, colorama>
+   - Python >= 3.8
+   - pandas
+   - numpy
+   - scikit-learn
+   - colorama
+   - telegram_bot (assumed custom module)
 
 Assumptions & Notes:
-   - <List any key assumptions — e.g., last column is the target variable.>
-   - <Mention data format — e.g., CSV files only.>
-   - <Mention platform or OS-specific notes — e.g., sound disabled on Windows.>
-   - <Note on output structure or reusability.>
+   - The script assumes a directory structure like 'Datasets/<DatasetName>/<SubDir>/<File.csv>'.
+   - The GA feature file is located at '<InputFileDir>/Feature_Analysis/Genetic_Algorithm_Results_features.csv'.
+   - CSV files are the primary data format.
+   - The `telegram_bot` module is available in the environment.
 """
 
 import atexit # For playing a sound when the program finishes
 import datetime # For getting the current date and time
 import os # For running a command in the terminal
 import platform # For getting the operating system name
+import pandas as pd # Import pandas for data manipulation
 from colorama import Style # For coloring the terminal
 from telegram_bot import TelegramBot # For Telegram notifications
 
@@ -153,6 +158,37 @@ def get_dataset_name(input_path):
 
    return dataset_name # Return the dataset name
 
+def extract_genetic_algorithm_features(file_path):
+   """
+   Extracts the features selected by the Genetic Algorithm from the corresponding
+   "Genetic_Algorithm_Results_features.csv" file located in the 'Feature_Analysis'
+   subdirectory relative to the input file's directory.
+
+   :param file_path: Full path to the current CSV file being processed (e.g., './Datasets/.../DrDoS_DNS.csv').
+   :return: List of features selected by the GA, or None if the file is not found or fails to load.
+   """
+   
+   file_dir = os.path.dirname(file_path) # 1. Determine the directory of the input file
+   ga_feature_path = os.path.join(file_dir, "Feature_Analysis", "Genetic_Algorithm_Results_features.csv") # 2. Construct the path to the GA feature file
+   
+   verbose_output(f"{BackgroundColors.GREEN}Extracting GA features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
+
+   if not verify_filepath_exists(ga_feature_path): # Verify if the GA feature file exists
+      print(f"{BackgroundColors.YELLOW}Warning: GA feature file not found at {BackgroundColors.CYAN}{ga_feature_path}{BackgroundColors.YELLOW}. Skipping GA feature extraction for this file.{Style.RESET_ALL}")
+      return None # Return None if the file does not exist
+
+   try: # Try to load the GA features
+      df = pd.read_csv(ga_feature_path, usecols=[0], header=0, names=["feature"]) # Load the GA feature file, only the first column
+      
+      ga_features = df["feature"].tolist() # Extract the features into a list
+      
+      verbose_output(f"{BackgroundColors.GREEN}Successfully extracted {BackgroundColors.CYAN}{len(ga_features)}{BackgroundColors.GREEN} GA features.{Style.RESET_ALL}") # Output the verbose message
+      
+      return ga_features # Return the list of GA features
+   except Exception as e: # If there is an error loading the file
+      print(f"{BackgroundColors.RED}Error loading GA features from {BackgroundColors.CYAN}{ga_feature_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")
+      return None # Return None if there was an error
+
 def calculate_execution_time(start_time, finish_time):
    """
    Calculates the execution time between start and finish times and formats it as hh:mm:ss.
@@ -208,6 +244,13 @@ def main():
    
    for file in files_to_process: # For each file to process
       print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}") # Output the file being processed
+      
+      ga_selected_features = extract_genetic_algorithm_features(file) # Extract the features selected by the Genetic Algorithm
+      
+      if ga_selected_features: # If GA features were successfully extracted
+         print(f"{BackgroundColors.GREEN}GA Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file)}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(ga_selected_features)}{Style.RESET_ALL}")
+      else: # If GA features were not extracted
+         print(f"{BackgroundColors.YELLOW}Proceeding without GA features for {BackgroundColors.CYAN}{os.path.basename(file)}{Style.RESET_ALL}")
 
    finish_time = datetime.datetime.now() # Get the finish time of the program
    print(f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
