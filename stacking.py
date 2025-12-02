@@ -305,6 +305,30 @@ def load_feature_selection_results(file_path):
 
    return ga_selected_features, pca_n_components, rfe_selected_features # Return the extracted features
 
+def load_dataset(csv_path):
+   """
+   Load CSV and return DataFrame.
+
+   :param csv_path: Path to CSV dataset.
+   :return: DataFrame
+   """
+
+   verbose_output(f"\n{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}") # Output the loading dataset message
+
+   if not verify_filepath_exists(csv_path): # If the CSV file does not exist
+      print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
+      return None # Return None
+
+   df = pd.read_csv(csv_path, low_memory=False) # Load the dataset
+
+   df.columns = df.columns.str.strip() # Clean column names by stripping leading/trailing whitespace
+
+   if df.shape[1] < 2: # If there are less than 2 columns
+      print(f"{BackgroundColors.RED}CSV must have at least 1 feature and 1 target.{Style.RESET_ALL}")
+      return None # Return None
+
+   return df # Return the loaded DataFrame
+
 def calculate_execution_time(start_time, finish_time):
    """
    Calculates the execution time between start and finish times and formats it as hh:mm:ss.
