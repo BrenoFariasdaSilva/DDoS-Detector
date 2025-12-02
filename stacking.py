@@ -62,6 +62,7 @@ Assumptions & Notes:
 
 import ast # For safely evaluating Python literals
 import atexit # For playing a sound when the program finishes
+import concurrent.futures # For parallel execution
 import datetime # For getting the current date and time
 import json # Import json for handling JSON strings within the CSV
 import lightgbm as lgb # For LightGBM model
@@ -96,6 +97,7 @@ class BackgroundColors: # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False # Set to True to output verbose messages
+THREADS_LIMIT = 2 # Number of threads for parallel evaluation of individual classifiers
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
@@ -795,15 +797,18 @@ def main():
          
          features_list = get_features_list_for_feature_set(name, feature_names, ga_selected_features, rfe_selected_features) # Determine the features list for this feature set
          
-         for model_idx, (model_name, model) in enumerate(individual_models.items(), start=1): # Iterate over each model
-            progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating {BackgroundColors.CYAN}{idx}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{len(feature_sets)}{BackgroundColors.GREEN} - {BackgroundColors.CYAN}{name}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{model_idx}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{len(individual_models)}{BackgroundColors.GREEN} - {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}") # Update progress bar description
-            verbose_output(f"{BackgroundColors.GREEN}Evaluating Individual Classifier: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}") # Output the verbose message
-            metrics = evaluate_individual_classifier(model, model_name, X_train_subset, y_train, X_test_subset, y_test) # Evaluate individual model
-            
-            result_entry = { "dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Individual", "model_name": model_name, "n_features": X_train_subset.shape[1], "metrics": metrics, "features_list": features_list} # Prepare result entry
-            all_results.append(result_entry) # Add result to list
-            print(f"    {BackgroundColors.GREEN}{model_name} Accuracy for classifier {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
-            progress_bar.update(1) # Update progress after each model
+         progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating individual classifiers in parallel on {BackgroundColors.CYAN}{name}{Style.RESET_ALL}") # Update progress bar description
+         with concurrent.futures.ThreadPoolExecutor(max_workers=THREADS_LIMIT) as executor: # Create a thread pool executor for parallel evaluation
+            futures = [] # List to hold futures for each model evaluation
+            for model_name, model in individual_models.items(): # Iterate over each individual model
+               future = executor.submit(evaluate_individual_classifier, model, model_name, X_train_subset, y_train, X_test_subset, y_test) # Submit evaluation task to thread pool
+               futures.append((future, model_name)) # Store future and model name for later retrieval
+            for future, model_name in concurrent.futures.as_completed(futures): # As each evaluation completes
+               metrics = future.result() # Get the metrics from the completed future
+               result_entry = { "dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Individual", "model_name": model_name, "n_features": X_train_subset.shape[1], "metrics": metrics, "features_list": features_list} # Prepare result entry
+               all_results.append(result_entry) # Add result to list
+               print(f"    {BackgroundColors.GREEN}{model_name} Accuracy for classifier {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
+               progress_bar.update(1) # Update progress after each model
          
          print(f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}")
          progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating {BackgroundColors.CYAN}{idx}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{len(feature_sets)}{BackgroundColors.GREEN} - {BackgroundColors.CYAN}{name}{BackgroundColors.GREEN}: Stacking{Style.RESET_ALL}") # Update progress bar description for stacking
