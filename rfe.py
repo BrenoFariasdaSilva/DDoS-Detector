@@ -54,7 +54,6 @@ Notes:
 """
 
 import atexit # For playing a sound when the program finishes
-import json # For saving structured results
 import matplotlib.pyplot as plt # For plotting
 import numpy as np # For numerical operations
 import os # For file and directory operations
@@ -69,7 +68,6 @@ from sklearn.feature_selection import RFE # For Recursive Feature Elimination
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix # For performance metrics
 from sklearn.model_selection import train_test_split # For splitting the data
 from sklearn.preprocessing import StandardScaler # For scaling the data (standardization)
-from tqdm import tqdm # For progress bars
 
 # Macros:
 class BackgroundColors: # Colors for the terminal
