@@ -818,6 +818,76 @@ def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
 
    write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=metrics) # Delegate writing
 
+
+def _metrics_to_dict(m): # Convert metrics tuple to dictionary (extracted helper)
+   if not m: # If metrics is None
+      return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None, "elapsed_time_s": None} # Default dict
+   acc, prec, rec, f1, fpr, fnr, elapsed = m # Unpack metrics
+   return {"accuracy": float(acc), "precision": float(prec), "recall": float(rec), "f1_score": float(f1), "fpr": float(fpr), "fnr": float(fnr), "elapsed_time_s": float(elapsed)} # Return as dictionary
+
+
+def _build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking): # Build base CSV row
+   timestamp = datetime.datetime.now().isoformat() # Current timestamp
+   return { # Base row for CSV
+      "dataset": os.path.splitext(os.path.basename(csv_path))[0], # Dataset name
+      "dataset_path": csv_path, # Dataset path
+      "population_size": best_pop_size, # Population size
+      "n_generations": n_generations, # Number of generations
+      "n_train": n_train, # Number of training samples
+      "n_test": n_test, # Number of testing samples
+      "train_test_ratio": test_frac, # Train/test fraction
+      "rfe_ranking": json.dumps(rfe_ranking, ensure_ascii=False), # RFE ranking as JSON
+      "timestamp": timestamp, # Timestamp
+      "run_index": "best" # Indicates best run
+   }
+
+def _build_rows_list(rf_metrics, best_features, runs_list, feature_names, base_row): # Build consolidated rows list
+   rows = [] # List to hold CSV rows
+   rf_row = dict(base_row) # Create Random Forest row
+   rf_row.update({ # Update with RF-specific data
+      "classifier": "RandomForest",
+      **_metrics_to_dict(rf_metrics),
+      "best_features": json.dumps(best_features, ensure_ascii=False)
+   }) # Update with RF-specific data
+   rows.append(rf_row) # Add RF row to rows
+
+   if runs_list: # If multiple runs data is provided
+      for idx, run_data in enumerate(runs_list, start=1): # For each run
+         run_metrics = run_data.get("metrics") if run_data.get("metrics") is not None else None
+         run_features = run_data.get("best_features") if run_data.get("best_features") is not None else [f for f, bit in zip(feature_names if feature_names is not None else [], run_data.get("best_ind", [])) if bit == 1] # Extract features for this run
+         run_row = dict(base_row) # Create row for this run
+         run_row.update({ # Update with run-specific data
+            "classifier": "RandomForest",
+            **_metrics_to_dict(run_metrics),
+            "best_features": json.dumps(run_features, ensure_ascii=False),
+            "run_index": idx
+         })
+         rows.append(run_row) # Add run row to rows
+
+   return rows # Return consolidated rows
+
+
+def _write_consolidated_csv(rows, output_dir): # Write consolidated CSV to disk
+   try: # Attempt to write consolidated CSV
+      df_out = pd.DataFrame(rows) # Create DataFrame from rows
+      csv_out = os.path.join(output_dir, "Genetic_Algorithm_Results.csv") # Output CSV path
+      df_out.to_csv(csv_out, index=False) # Write to CSV
+      print(f"\n{BackgroundColors.GREEN}Genetic Algorithm consolidated results saved to {BackgroundColors.CYAN}{csv_out}{Style.RESET_ALL}")
+   except Exception as e: # If writing fails
+      print(f"{BackgroundColors.RED}Failed to write consolidated GA CSV: {str(e)}{Style.RESET_ALL}")
+
+
+def _prepare_feature_dataframe(X, feature_names): # Prepare DataFrame for analyze_top_features
+   if not isinstance(X, pd.DataFrame): # If X is not a pandas DataFrame
+      try: # Try to create a DataFrame with original feature names
+         df_features = pd.DataFrame(X, columns=list(feature_names)) # Create DataFrame with original feature names
+      except Exception: # If creating DataFrame with original feature names fails
+         df_features = pd.DataFrame(X) # Create DataFrame without original feature names
+         df_features.columns = [f"feature_{i}" for i in range(df_features.shape[1])] # Generic feature names
+   else: # If X is already a pandas DataFrame
+      df_features = X.copy() # Use the DataFrame as is
+   return df_features
+
 def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=None, y_test=None, n_generations=None, best_pop_size=None, runs_list=None):
    """
    Save best feature subset and analyze them.
@@ -861,66 +931,12 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
    if n_train is not None and n_test is not None and (n_train + n_test) > 0: # If both lengths are valid
       test_frac = float(n_test) / float(n_train + n_test) # Calculate train/test fraction
 
-   rows = [] # List to hold CSV rows
-   timestamp = datetime.datetime.now().isoformat() # Current timestamp
-
-   def metrics_to_dict(m): # Convert metrics tuple to dictionary
-      if not m: # If metrics is None
-         return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None, "elapsed_time_s": None}
-      acc, prec, rec, f1, fpr, fnr, elapsed = m # Unpack metrics
-      return {"accuracy": float(acc), "precision": float(prec), "recall": float(rec), "f1_score": float(f1), "fpr": float(fpr), "fnr": float(fnr), "elapsed_time_s": float(elapsed)} # Return as dictionary
-
-   base_row = { # Base row for CSV
-      "dataset": os.path.splitext(os.path.basename(csv_path))[0], # Dataset name
-      "dataset_path": csv_path, # Dataset path
-      "population_size": best_pop_size, # Population size
-      "n_generations": n_generations, # Number of generations
-      "n_train": n_train, # Number of training samples
-      "n_test": n_test, # Number of testing samples
-      "train_test_ratio": test_frac, # Train/test fraction
-      "rfe_ranking": json.dumps(rfe_ranking, ensure_ascii=False), # RFE ranking as JSON
-      "timestamp": timestamp, # Timestamp
-      "run_index": "best" # Indicates best run
-   }
-
-   rf_row = dict(base_row) # Create Random Forest row
-   rf_row.update({ # Update with RF-specific data
-      "classifier": "RandomForest",
-      **metrics_to_dict(rf_metrics),
-      "best_features": json.dumps(best_features, ensure_ascii=False)
-   }) # Update with RF-specific data
-   rows.append(rf_row) # Add RF row to rows
-
-   if runs_list: # If multiple runs data is provided
-      for idx, run_data in enumerate(runs_list, start=1): # For each run
-         run_metrics = run_data.get("metrics") if run_data.get("metrics") is not None else None
-         run_features = run_data.get("best_features") if run_data.get("best_features") is not None else [f for f, bit in zip(feature_names if feature_names is not None else [], run_data.get("best_ind", [])) if bit == 1] # Extract features for this run
-         run_row = dict(base_row) # Create row for this run
-         run_row.update({ # Update with run-specific data
-            "classifier": "RandomForest",
-            **metrics_to_dict(run_metrics),
-            "best_features": json.dumps(run_features, ensure_ascii=False),
-            "run_index": idx
-         })
-         rows.append(run_row) # Add run row to rows
-
-   try: # Attempt to write consolidated CSV
-      df_out = pd.DataFrame(rows) # Create DataFrame from rows
-      csv_out = os.path.join(output_dir, "Genetic_Algorithm_Results.csv") # Output CSV path
-      df_out.to_csv(csv_out, index=False) # Write to CSV
-      print(f"\n{BackgroundColors.GREEN}Genetic Algorithm consolidated results saved to {BackgroundColors.CYAN}{csv_out}{Style.RESET_ALL}")
-   except Exception as e: # If writing fails
-      print(f"{BackgroundColors.RED}Failed to write consolidated GA CSV: {str(e)}{Style.RESET_ALL}")
+   base_row = _build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking) # Base row for CSV
+   rows = _build_rows_list(rf_metrics, best_features, runs_list, feature_names, base_row) # Build rows from metrics and runs
+   _write_consolidated_csv(rows, output_dir) # Persist consolidated CSV
 
    if best_features: # If there are best features to analyze
-      if not isinstance(X, pd.DataFrame): # If X is not a pandas DataFrame
-         try: # Try to create a DataFrame with original feature names
-            df_features = pd.DataFrame(X, columns=list(feature_names)) # Create DataFrame with original feature names
-         except Exception: # If creating DataFrame with original feature names fails
-            df_features = pd.DataFrame(X) # Create DataFrame without original feature names
-            df_features.columns = [f"feature_{i}" for i in range(df_features.shape[1])] # Generic feature names
-      else: # If X is already a pandas DataFrame
-         df_features = X.copy() # Use the DataFrame as is
+      df_features = _prepare_feature_dataframe(X, feature_names) # Prepare DataFrame for analysis
 
       if not isinstance(y, pd.Series): # If y is not a pandas Series
          try: # Try to create a Series with original indices
