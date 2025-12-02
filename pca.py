@@ -366,6 +366,7 @@ def save_pca_results(csv_path, all_results):
 
 	comparison_df = pd.DataFrame(rows) # Create DataFrame from rows
 	csv_output = f"{output_dir}/PCA_Results.csv" # Output CSV path
+
 	try: # Attempt to save the CSV
 		comparison_df.to_csv(csv_output, index=False) # Save the DataFrame to CSV
 		print(f"{BackgroundColors.GREEN}PCA results saved to {BackgroundColors.CYAN}{csv_output}{Style.RESET_ALL}")
@@ -376,7 +377,9 @@ def save_pca_results(csv_path, all_results):
 		n_comp = results["n_components"] # Number of components
 		pca_obj = results.get("pca_object") # Get the PCA object
 		if pca_obj: # If the PCA object exists
-			pca_file = f"{output_dir}/PCA_{n_comp}_components.pkl" # PCA object file path
+			cache_output_dir = f"{os.path.dirname(csv_path)}/Cache/" # Output directory
+			os.makedirs(cache_output_dir, exist_ok=True) # Create cache output directory if it doesn't exist
+			pca_file = f"{cache_output_dir}/PCA_{n_comp}_components.pkl" # PCA object file path
 			try: # Attempt to save the PCA object
 				with open(pca_file, "wb") as f: # Open the file in write-binary mode
 					pickle.dump(pca_obj, f) # Save the PCA object
