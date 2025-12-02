@@ -197,43 +197,6 @@ def extract_genetic_algorithm_features(file_path):
       print(f"{BackgroundColors.RED}Error loading/parsing GA features from {BackgroundColors.CYAN}{ga_results_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")
       return None # Return None if there was an error
 
-def extract_recursive_feature_elimination_features(file_path):
-   """
-   Extracts the "top_features" list (JSON string) from the first row of the
-   "RFE_Run_Results.csv" file located in the "Feature_Analysis" subdirectory
-   relative to the input file's directory.
-
-   :param file_path: Full path to the current CSV file being processed (e.g., "./Datasets/.../DrDoS_DNS.csv").
-   :return: List of top features selected by RFE from the first run, or None if the file is not found or fails to load/parse.
-   """
-   
-   file_dir = os.path.dirname(file_path) # Determine the directory of the input file
-   rfe_runs_path = os.path.join(file_dir, "Feature_Analysis", "RFE_Run_Results.csv") # Construct the path to the RFE runs file
-   
-   verbose_output(f"{BackgroundColors.GREEN}Extracting RFE features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
-
-   if not verify_filepath_exists(rfe_runs_path): # Verify if the RFE runs file exists
-      print(f"{BackgroundColors.YELLOW}Warning: RFE runs file not found at {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.YELLOW}. Skipping RFE feature extraction for this file.{Style.RESET_ALL}")
-      return None # Return None if the file does not exist
-
-   try: # Try to load the RFE runs results
-      df = pd.read_csv(rfe_runs_path, usecols=["top_features"]) # Load only the "top_features" column
-      
-      if not df.empty: # Verify if the DataFrame is not empty
-         top_features_json = df.loc[0, "top_features"] # Get the JSON string from the first row
-         rfe_features = json.loads(top_features_json) # Parse the JSON string into a Python list
-         
-         verbose_output(f"{BackgroundColors.GREEN}Successfully extracted RFE top features from Run 1. Total features: {BackgroundColors.CYAN}{len(rfe_features)}{Style.RESET_ALL}") # Output the verbose message
-         
-         return rfe_features # Return the list of RFE features
-      else: # If the DataFrame is empty
-         print(f"{BackgroundColors.RED}Error: RFE runs file at {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.RED} is empty.{Style.RESET_ALL}")
-         return None # Return None if the file is empty
-         
-   except Exception as e: # If there is an error loading or parsing the file
-      print(f"{BackgroundColors.RED}Error loading/parsing RFE features from {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")
-      return None # Return None if there was an error
-
 def extract_principal_component_analysis_features(file_path):
    """
    Extracts the optimal number of Principal Components (n_components)
@@ -276,13 +239,50 @@ def extract_principal_component_analysis_features(file_path):
       print(f"{BackgroundColors.RED}Error loading/parsing PCA features from {BackgroundColors.CYAN}{pca_results_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")
       return None # Return None if there was an error
 
+def extract_recursive_feature_elimination_features(file_path):
+   """
+   Extracts the "top_features" list (JSON string) from the first row of the
+   "RFE_Run_Results.csv" file located in the "Feature_Analysis" subdirectory
+   relative to the input file's directory.
+
+   :param file_path: Full path to the current CSV file being processed (e.g., "./Datasets/.../DrDoS_DNS.csv").
+   :return: List of top features selected by RFE from the first run, or None if the file is not found or fails to load/parse.
+   """
+   
+   file_dir = os.path.dirname(file_path) # Determine the directory of the input file
+   rfe_runs_path = os.path.join(file_dir, "Feature_Analysis", "RFE_Run_Results.csv") # Construct the path to the RFE runs file
+   
+   verbose_output(f"{BackgroundColors.GREEN}Extracting RFE features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
+
+   if not verify_filepath_exists(rfe_runs_path): # Verify if the RFE runs file exists
+      print(f"{BackgroundColors.YELLOW}Warning: RFE runs file not found at {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.YELLOW}. Skipping RFE feature extraction for this file.{Style.RESET_ALL}")
+      return None # Return None if the file does not exist
+
+   try: # Try to load the RFE runs results
+      df = pd.read_csv(rfe_runs_path, usecols=["top_features"]) # Load only the "top_features" column
+      
+      if not df.empty: # Verify if the DataFrame is not empty
+         top_features_json = df.loc[0, "top_features"] # Get the JSON string from the first row
+         rfe_features = json.loads(top_features_json) # Parse the JSON string into a Python list
+         
+         verbose_output(f"{BackgroundColors.GREEN}Successfully extracted RFE top features from Run 1. Total features: {BackgroundColors.CYAN}{len(rfe_features)}{Style.RESET_ALL}") # Output the verbose message
+         
+         return rfe_features # Return the list of RFE features
+      else: # If the DataFrame is empty
+         print(f"{BackgroundColors.RED}Error: RFE runs file at {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.RED} is empty.{Style.RESET_ALL}")
+         return None # Return None if the file is empty
+         
+   except Exception as e: # If there is an error loading or parsing the file
+      print(f"{BackgroundColors.RED}Error loading/parsing RFE features from {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")
+      return None # Return None if there was an error
+
 def load_feature_selection_results(file_path):
    """
    Load GA, RFE and PCA feature selection artifacts for a given dataset file and
    print concise status messages.
 
    :param file_path: Path to the dataset CSV being processed.
-   :return: Tuple (ga_selected_features, rfe_selected_features, pca_n_components)
+   :return: Tuple (ga_selected_features, pca_n_components, rfe_selected_features)
    """
 
    ga_selected_features = extract_genetic_algorithm_features(file_path) # Extract GA features
@@ -290,6 +290,12 @@ def load_feature_selection_results(file_path):
       print(f"{BackgroundColors.GREEN}GA Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file_path)}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(ga_selected_features)}{Style.RESET_ALL}")
    else: # If GA features were not extracted
       print(f"{BackgroundColors.YELLOW}Proceeding without GA features for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}")
+      
+   pca_n_components = extract_principal_component_analysis_features(file_path) # Extract PCA components
+   if pca_n_components: # If PCA components were successfully extracted
+      print(f"{BackgroundColors.GREEN}PCA optimal components successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file_path)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{pca_n_components}{Style.RESET_ALL}")
+   else: # If PCA components were not extracted
+      print(f"{BackgroundColors.YELLOW}Proceeding without PCA components for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}")
 
    rfe_selected_features = extract_recursive_feature_elimination_features(file_path) # Extract RFE features
    if rfe_selected_features: # If RFE features were successfully extracted
@@ -297,13 +303,7 @@ def load_feature_selection_results(file_path):
    else: # If RFE features were not extracted
       print(f"{BackgroundColors.YELLOW}Proceeding without RFE features for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}")
 
-   pca_n_components = extract_principal_component_analysis_features(file_path) # Extract PCA components
-   if pca_n_components: # If PCA components were successfully extracted
-      print(f"{BackgroundColors.GREEN}PCA optimal components successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file_path)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{pca_n_components}{Style.RESET_ALL}")
-   else: # If PCA components were not extracted
-      print(f"{BackgroundColors.YELLOW}Proceeding without PCA components for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}")
-
-   return ga_selected_features, rfe_selected_features, pca_n_components # Return the extracted features
+   return ga_selected_features, pca_n_components, rfe_selected_features # Return the extracted features
 
 def calculate_execution_time(start_time, finish_time):
    """
@@ -361,7 +361,7 @@ def main():
    for file in files_to_process: # For each file to process
       print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}") # Output the file being processed
       
-      ga_selected_features, rfe_selected_features, pca_n_components = load_feature_selection_results(file) # Load feature selection results
+      ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(file) # Load feature selection results
 
    finish_time = datetime.datetime.now() # Get the finish time of the program
    print(f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
