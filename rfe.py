@@ -82,7 +82,7 @@ class BackgroundColors: # Colors for the terminal
    CLEAR_TERMINAL = "\033[H\033[J" # Clear the terminal
 
 # Execution Constants:
-VERBOSE = True # Set to True to output verbose messages
+VERBOSE = False # Set to True to output verbose messages
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
