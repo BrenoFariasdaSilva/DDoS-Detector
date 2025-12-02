@@ -383,7 +383,7 @@ def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
 
    try: # Try saving CSV
       df_runs = pd.DataFrame(runs_rows) # Create DataFrame
-      runs_csv_path = f"{output_dir}RFE_Runs_Summary.csv" # CSV path
+      runs_csv_path = f"{output_dir}RFE_Runs_Results.csv" # CSV path
       df_runs.to_csv(runs_csv_path, index=False, encoding="utf-8") # Write runs summary CSV
       print(f"{BackgroundColors.GREEN}Runs summary saved to {BackgroundColors.CYAN}{runs_csv_path}{Style.RESET_ALL}") # Notify CSV saved
    except Exception as e: # If saving CSV fails
@@ -406,9 +406,9 @@ def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
          "avg_elapsed_time_s": avg_metrics[6], # Average elapsed time
          "common_features": json.dumps(sorted(list(common_features)), ensure_ascii=False), # JSON-encoded common features
       } # End summary mapping
-      df_summary = pd.DataFrame([summary_row]) # DataFrame with single row
-      summary_csv_path = f"{output_dir}RFE_Summary.csv" # Path for summary CSV
-      df_summary.to_csv(summary_csv_path, index=False, encoding="utf-8") # Save summary CSV
+      df_results = pd.DataFrame([summary_row]) # DataFrame with single row
+      summary_csv_path = f"{output_dir}RFE_Results.csv" # Path for summary CSV
+      df_results.to_csv(summary_csv_path, index=False, encoding="utf-8") # Save summary CSV
       print(f"{BackgroundColors.GREEN}Summary CSV saved to {BackgroundColors.CYAN}{summary_csv_path}{Style.RESET_ALL}") # Notify saved
    except Exception as e: # If summary CSV fails
       print(f"{BackgroundColors.RED}Failed to save summary CSV: {e}{Style.RESET_ALL}") # Print error
@@ -429,7 +429,7 @@ def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
          "common_features": sorted(list(common_features)), # List of common features
          "unique_per_run": unique_per_run, # Unique features per run
       } # End summary JSON
-      summary_json_path = f"{output_dir}RFE_Summary.json" # Path for JSON summary
+      summary_json_path = f"{output_dir}RFE_Results.json" # Path for JSON summary
       with open(summary_json_path, "w", encoding="utf-8") as jf: # Write JSON summary
          json.dump(summary_json, jf, ensure_ascii=False, indent=2) # Dump JSON
       print(f"{BackgroundColors.GREEN}Summary JSON saved to {BackgroundColors.CYAN}{summary_json_path}{Style.RESET_ALL}") # Notify saved
@@ -460,7 +460,7 @@ def analyze_top_features(df, y, top_features, csv_path="."):
    summary.columns = [f"{col}_{stat}" for col, stat in summary.columns] # Flatten MultiIndex columns
    summary = summary.round(3) # Round to 3 decimal places
 
-   summary_csv_path = f"{output_dir}{base_dataset_name}_feature_summary.csv" # Define summary CSV path
+   summary_csv_path = f"{output_dir}{base_dataset_name}_feature_Results.csv" # Define summary CSV path
    summary.to_csv(summary_csv_path, encoding="utf-8") # Save summary to CSV
    print(f"{BackgroundColors.GREEN}Feature summary saved to {BackgroundColors.CYAN}{summary_csv_path}{Style.RESET_ALL}")
 
