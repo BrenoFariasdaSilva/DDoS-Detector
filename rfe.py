@@ -325,48 +325,26 @@ def print_metrics(metrics_tuple):
    print(f"  {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{metrics_tuple[5]:.4f}{Style.RESET_ALL}")
    print(f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{metrics_tuple[6]:.2f}s{Style.RESET_ALL}")
 
-def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
+def save_rfe_results(csv_path, run_results):
    """
-   Saves results from all runs, average metrics, and divergence info to structured files.
+   Saves results from RFE run to a structured CSV file.
 
    :param csv_path: Original CSV file path
-   :param all_runs: List of run results
-   :param avg_metrics: Average metrics tuple
-   :param model_name: Name of the classifier
+   : param run_results: List of dicts containing results from the current run
    """
    
-   verbose_output(f"{BackgroundColors.GREEN}Saving RFE Runs Results to CSV...{Style.RESET_ALL}") # Output the verbose message
+   verbose_output(f"{BackgroundColors.GREEN}Saving RFE Run Results to CSV...{Style.RESET_ALL}") # Output the verbose message
 
    output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Define output directory
    os.makedirs(output_dir, exist_ok=True) # Create directory if it doesn't exist
 
-   runs_rows = [] # List of dicts for DataFrame
-   for run_data in all_runs: # Iterate over collected run results
-      run_index = run_data["run"] # Run number (1-indexed)
-      acc, prec, rec, f1, fpr, fnr, elapsed_time = run_data["metrics"] # Unpack metrics
-      top_features = run_data["top_features"] # Get top features list
-      rfe_ranking = run_data["rfe_ranking"] # Get RFE ranking dict
-
-      runs_rows.append({ # Append mapping for this run
-         "run": run_index, # Run number
-         "accuracy": acc, # Accuracy
-         "precision": prec, # Precision
-         "recall": rec, # Recall
-         "f1_score": f1, # F1 score
-         "fpr": fpr, # False positive rate
-         "fnr": fnr, # False negative rate
-         "elapsed_time_s": elapsed_time, # Elapsed seconds
-         "top_features": json.dumps(top_features, ensure_ascii=False), # JSON-encoded top features
-         "rfe_ranking": json.dumps(rfe_ranking, ensure_ascii=False), # JSON-encoded ranking
-      })
-
    try: # Try saving CSV
-      df_runs = pd.DataFrame(runs_rows) # Create DataFrame
-      runs_csv_path = f"{output_dir}RFE_Runs_Results.csv" # CSV path
-      df_runs.to_csv(runs_csv_path, index=False, encoding="utf-8") # Write runs summary CSV
-      print(f"{BackgroundColors.GREEN}Runs summary saved to {BackgroundColors.CYAN}{runs_csv_path}{Style.RESET_ALL}") # Notify CSV saved
+      df_run = pd.DataFrame(run_results) # Create DataFrame
+      run_csv_path = f"{output_dir}RFE_Run_Results.csv" # CSV path
+      df_run.to_csv(run_csv_path, index=False, encoding="utf-8") # Write run results CSV
+      print(f"{BackgroundColors.GREEN}Run results saved to {BackgroundColors.CYAN}{run_csv_path}{Style.RESET_ALL}") # Notify CSV saved
    except Exception as e: # If saving CSV fails
-      print(f"{BackgroundColors.RED}Failed to save runs CSV: {e}{Style.RESET_ALL}") # Print error
+      print(f"{BackgroundColors.RED}Failed to save run results to CSV: {e}{Style.RESET_ALL}") # Print error
 
 def analyze_top_features(df, y, top_features, csv_path="."):
    """
