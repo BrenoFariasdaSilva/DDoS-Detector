@@ -337,7 +337,7 @@ def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
    :param model_name: Name of the classifier
    """
    
-   verbose_output(f"{BackgroundColors.GREEN}Saving RFE results to structured CSV/JSON files...{Style.RESET_ALL}") # Output the verbose message
+   verbose_output(f"{BackgroundColors.GREEN}Saving RFE Runs Results to CSV...{Style.RESET_ALL}") # Output the verbose message
 
    output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Define output directory
    os.makedirs(output_dir, exist_ok=True) # Create directory if it doesn't exist
@@ -362,25 +362,6 @@ def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
          "rfe_ranking": json.dumps(rfe_ranking, ensure_ascii=False), # JSON-encoded ranking
       })
 
-      run_json_path = f"{output_dir}RFE_Run_{run_index}.json" # Path for per-run JSON
-      with open(run_json_path, "w", encoding="utf-8") as rf: # Open and write JSON
-         json.dump({ # Dump the run data as JSON
-            "run": run_index, # Run index
-            "metrics": { # Metrics mapping
-               "accuracy": acc, # Accuracy
-               "precision": prec, # Precision
-               "recall": rec, # Recall
-               "f1_score": f1, # F1 score
-               "fpr": fpr, # False positive rate
-               "fnr": fnr, # False negative rate
-               "elapsed_time_s": elapsed_time, # Elapsed seconds
-            }, # End metrics
-            "top_features": top_features, # Top features list
-            "rfe_ranking": rfe_ranking, # RFE ranking dict
-         }, rf, ensure_ascii=False, indent=3) # Pretty-print JSON with indentation
-
-      print(f"{BackgroundColors.GREEN}Results for run {run_index} saved to {BackgroundColors.CYAN}{run_json_path}{Style.RESET_ALL}") # Notify per-run JSON saved
-
    try: # Try saving CSV
       df_runs = pd.DataFrame(runs_rows) # Create DataFrame
       runs_csv_path = f"{output_dir}RFE_Runs_Results.csv" # CSV path
@@ -388,53 +369,6 @@ def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
       print(f"{BackgroundColors.GREEN}Runs summary saved to {BackgroundColors.CYAN}{runs_csv_path}{Style.RESET_ALL}") # Notify CSV saved
    except Exception as e: # If saving CSV fails
       print(f"{BackgroundColors.RED}Failed to save runs CSV: {e}{Style.RESET_ALL}") # Print error
-
-   feature_sets = [set(run["top_features"]) for run in all_runs] # Sets of selected features across runs
-   common_features = set.intersection(*feature_sets) if feature_sets else set() # Intersection of features
-   unique_per_run = {str(run["run"]): sorted(list(set(run["top_features"]) - common_features)) for run in all_runs} # Unique per-run
-
-   try: # Try writing summary CSV
-      summary_row = { # Summary mapping
-         "model": model_name, # Classifier name
-         "n_runs": len(all_runs), # Number of runs
-         "avg_accuracy": avg_metrics[0], # Average accuracy
-         "avg_precision": avg_metrics[1], # Average precision
-         "avg_recall": avg_metrics[2], # Average recall
-         "avg_f1": avg_metrics[3], # Average F1
-         "avg_fpr": avg_metrics[4], # Average FPR
-         "avg_fnr": avg_metrics[5], # Average FNR
-         "avg_elapsed_time_s": avg_metrics[6], # Average elapsed time
-         "common_features": json.dumps(sorted(list(common_features)), ensure_ascii=False), # JSON-encoded common features
-      } # End summary mapping
-      df_results = pd.DataFrame([summary_row]) # DataFrame with single row
-      summary_csv_path = f"{output_dir}RFE_Results.csv" # Path for summary CSV
-      df_results.to_csv(summary_csv_path, index=False, encoding="utf-8") # Save summary CSV
-      print(f"{BackgroundColors.GREEN}Summary CSV saved to {BackgroundColors.CYAN}{summary_csv_path}{Style.RESET_ALL}") # Notify saved
-   except Exception as e: # If summary CSV fails
-      print(f"{BackgroundColors.RED}Failed to save summary CSV: {e}{Style.RESET_ALL}") # Print error
-
-   try: # Try writing JSON summary
-      summary_json = { # Structured summary
-         "model": model_name, # Classifier name
-         "n_runs": len(all_runs), # Number of runs
-         "avg_metrics": { # Average metrics across runs
-            "accuracy": avg_metrics[0], # Average accuracy
-            "precision": avg_metrics[1], # Average precision
-            "recall": avg_metrics[2], # Average recall
-            "f1": avg_metrics[3], # Average F1
-            "fpr": avg_metrics[4], # Average FPR
-            "fnr": avg_metrics[5], # Average FNR
-            "elapsed_time_s": avg_metrics[6], # Average elapsed time
-         }, # End avg metrics
-         "common_features": sorted(list(common_features)), # List of common features
-         "unique_per_run": unique_per_run, # Unique features per run
-      } # End summary JSON
-      summary_json_path = f"{output_dir}RFE_Results.json" # Path for JSON summary
-      with open(summary_json_path, "w", encoding="utf-8") as jf: # Write JSON summary
-         json.dump(summary_json, jf, ensure_ascii=False, indent=3) # Dump JSON
-      print(f"{BackgroundColors.GREEN}Summary JSON saved to {BackgroundColors.CYAN}{summary_json_path}{Style.RESET_ALL}") # Notify saved
-   except Exception as e: # If JSON save fails
-      print(f"{BackgroundColors.RED}Failed to save summary JSON: {e}{Style.RESET_ALL}") # Print error
 
 def analyze_top_features(df, y, top_features, csv_path="."):
    """
