@@ -423,13 +423,13 @@ def run_rfe(csv_path):
 
    run_results = [{ # Store results for this run
       "model": model.__class__.__name__, # Model name
-      "accuracy": metrics_tuple[0], # Accuracy
-      "precision": metrics_tuple[1], # Precision
-      "recall": metrics_tuple[2], # Recall
-      "f1_score": metrics_tuple[3], # F1-Score
-      "fpr": metrics_tuple[4], # False Positive Rate
-      "fnr": metrics_tuple[5], # False Negative Rate
-      "elapsed_time_s": metrics_tuple[6], # Elapsed time in seconds
+      "accuracy": round(metrics_tuple[0], 4), # Accuracy
+      "precision": round(metrics_tuple[1], 4), # Precision
+      "recall": round(metrics_tuple[2], 4), # Recall
+      "f1_score": round(metrics_tuple[3], 4), # F1-Score
+      "fpr": round(metrics_tuple[4], 4), # False Positive Rate
+      "fnr": round(metrics_tuple[5], 4), # False Negative Rate
+      "elapsed_time_s": round(metrics_tuple[6], 2), # Elapsed time in seconds (2 decimals for time)
       "top_features": json.dumps(top_features), # List of top features as JSON
       "rfe_ranking": json.dumps(sorted_rfe_ranking) # Sorted RFE rankings list as JSON
    }]
