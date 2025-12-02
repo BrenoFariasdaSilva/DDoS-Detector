@@ -205,6 +205,11 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
 	:return: Dictionary containing metrics, explained variance, and PCA object
 	"""
 
+	if n_components <= 0: # Validate n_components
+		raise ValueError(f"n_components must be positive, got {n_components}")
+	if n_components > X_train.shape[1]: # Validate n_components against number of features
+		raise ValueError(f"n_components ({n_components}) cannot be greater than number of features ({X_train.shape[1]})")
+
 	pca = PCA(n_components=n_components, random_state=42) # Initialize PCA
 	
 	X_train_pca = pca.fit_transform(X_train) # Fit PCA on training data and transform
@@ -381,7 +386,8 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
 	X = cleaned_df.select_dtypes(include=["number"]).iloc[:, :-1] # Select numeric features (all columns except last)
 	y = cleaned_df.iloc[:, -1] # Select target variable (last column)
 	
-	max_components = min(X.shape[1], max(n_components_list)) # Maximum valid components
+	n_components_list = [n for n in n_components_list if n > 0] # Filter out non-positive component counts
+	max_components = min(X.shape[1], max(n_components_list)) if n_components_list else 0 # Maximum valid components
 	n_components_list = [n for n in n_components_list if n <= max_components] # Filter valid component counts
 	
 	if not n_components_list: # If no valid component counts remain
