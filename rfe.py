@@ -377,7 +377,7 @@ def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
             }, # End metrics
             "top_features": top_features, # Top features list
             "rfe_ranking": rfe_ranking, # RFE ranking dict
-         }, rf, ensure_ascii=False, indent=2) # Pretty-print JSON with indentation
+         }, rf, ensure_ascii=False, indent=3) # Pretty-print JSON with indentation
 
       print(f"{BackgroundColors.GREEN}Results for run {run_index} saved to {BackgroundColors.CYAN}{run_json_path}{Style.RESET_ALL}") # Notify per-run JSON saved
 
@@ -431,7 +431,7 @@ def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
       } # End summary JSON
       summary_json_path = f"{output_dir}RFE_Results.json" # Path for JSON summary
       with open(summary_json_path, "w", encoding="utf-8") as jf: # Write JSON summary
-         json.dump(summary_json, jf, ensure_ascii=False, indent=2) # Dump JSON
+         json.dump(summary_json, jf, ensure_ascii=False, indent=3) # Dump JSON
       print(f"{BackgroundColors.GREEN}Summary JSON saved to {BackgroundColors.CYAN}{summary_json_path}{Style.RESET_ALL}") # Notify saved
    except Exception as e: # If JSON save fails
       print(f"{BackgroundColors.RED}Failed to save summary JSON: {e}{Style.RESET_ALL}") # Print error
