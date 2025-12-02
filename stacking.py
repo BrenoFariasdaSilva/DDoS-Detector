@@ -472,12 +472,14 @@ def get_feature_subset(X_scaled, features, feature_names):
    :param X_scaled: Scaled features (numpy array).
    :param features: List of feature names to select.
    :param feature_names: List of all feature names corresponding to columns in X_scaled.
-   :return: Numpy array containing only the selected features.
+   :return: Numpy array containing only the selected features, or an empty array if features is None/empty.
    """
    
-   if not features: # If no features are specified, return the original scaled features
-      indices = [feature_names.index(f) for f in features if f in feature_names] # Get indices of selected features
+   if features: # Only proceed if the list of selected features is NOT empty/None
+      indices = [feature_names.index(f) for f in features if f in feature_names]
       return X_scaled[:, indices] # Return the subset of features
+   else: # If no features are selected (or features is None)
+      return np.empty((X_scaled.shape[0], 0)) # Return an empty array with correct number of rows
 
 def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
    """
