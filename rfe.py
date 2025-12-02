@@ -419,7 +419,7 @@ def run_rfe(csv_path):
    metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=random_state) # Compute performance metrics (returns a tuple)
    top_features, rfe_ranking = extract_top_features(selector, feature_columns) # Extract top features and their rankings
 
-   sorted_rfe_ranking = sorted(rfe_ranking.keys(), key=lambda x: rfe_ranking[x]) # Sort features by ranking (ascending, lower is better)
+   sorted_rfe_ranking = sorted(rfe_ranking.items(), key=lambda x: x[1]) # Sort features by ranking (ascending, lower is better), as list of [feature, ranking]
 
    run_results = [{ # Store results for this run
       "model": model.__class__.__name__, # Model name
