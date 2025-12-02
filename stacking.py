@@ -430,6 +430,20 @@ def get_models():
 		"MLP (Neural Net)": MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=42),
 	}
 
+def get_feature_subset(X_scaled, features, feature_names):
+   """
+   Returns a subset of features from the scaled feature set based on the provided feature names.
+   
+   :param X_scaled: Scaled features (numpy array).
+   :param features: List of feature names to select.
+   :param feature_names: List of all feature names corresponding to columns in X_scaled.
+   :return: Numpy array containing only the selected features.
+   """
+   
+   if not features: # If no features are specified, return the original scaled features
+      indices = [feature_names.index(f) for f in features if f in feature_names] # Get indices of selected features
+      return X_scaled[:, indices] # Return the subset of features
+
 def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
    """
    Trains the StackingClassifier model and evaluates its performance on the test set.
@@ -597,10 +611,6 @@ def main():
       
       stacking_model = StackingClassifier(estimators=estimators, final_estimator=RandomForestClassifier(n_estimators=50, random_state=42), cv=5, n_jobs=-1) # Define the Stacking Classifier model
       
-      def get_feature_subset(X_scaled, features): # Helper function to get subset of features
-         indices = [feature_names.index(f) for f in features if f in feature_names] # Get indices of selected features
-         return X_scaled[:, indices] # Return the subset of features
-
       feature_sets = {
          "Full Features": (X_train_scaled, X_test_scaled), # All features
          "RFE Features": (get_feature_subset(X_train_scaled, rfe_selected_features), 
