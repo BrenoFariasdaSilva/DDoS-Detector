@@ -96,7 +96,6 @@ from sklearn.model_selection import train_test_split, StratifiedKFold # For spli
 from sklearn.preprocessing import StandardScaler # For feature scaling
 from telegram_bot import TelegramBot # For Telegram notifications
 from tqdm import tqdm # For progress bars
-from xgboost import XGBClassifier # For XGBoost classifier
 
 # Macros:
 class BackgroundColors: # Colors for the terminal
@@ -410,9 +409,6 @@ def instantiate_estimator(estimator_cls=None):
    
    if estimator_cls is None: # If no estimator class is provided
       return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=1) # Return a default RandomForestClassifier
-
-   if estimator_cls is XGBClassifier and XGBClassifier is not None: # If the estimator class is XGBClassifier
-      return XGBClassifier(use_label_encoder=False, eval_metric="logloss", n_jobs=1, random_state=42) # Return an XGBClassifier with default params
 
    try: # Try to instantiate the provided estimator class
       return estimator_cls() # Instantiate with default parameters
@@ -816,7 +812,7 @@ def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
    :return: None
    """
 
-   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Directory to save outputs
+      output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis" # Directory to save outputs
    os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
    results_file = f"{output_dir}/Genetic_Algorithm_Results" # Base path for results (no .txt extension anymore)
 
@@ -864,16 +860,6 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
       n_test = None # Set to None
    if n_train is not None and n_test is not None and (n_train + n_test) > 0: # If both lengths are valid
       test_frac = float(n_test) / float(n_train + n_test) # Calculate train/test fraction
-   
-   xgb_metrics = None # Initialize XGBoost metrics
-   if XGBClassifier is not None: # If XGBoost is available
-      try: # Safely evaluate with XGBoost
-         if X_test is not None and y_test is not None: # If test set is provided
-            xgb_metrics = evaluate_individual(best_ind, X, y, X_test, y_test, estimator_cls=XGBClassifier) # Evaluate with XGBoost
-      except Exception: # If evaluation fails
-         xgb_metrics = None # Set to None
-   else: # If XGBoost is not available
-      verbose_output(f"{BackgroundColors.YELLOW}XGBoost not available (xgboost package not installed). Skipping XGBoost evaluation.{Style.RESET_ALL}")
 
    rows = [] # List to hold CSV rows
    timestamp = datetime.datetime.now().isoformat() # Current timestamp
@@ -904,15 +890,6 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
       "best_features": json.dumps(best_features, ensure_ascii=False)
    }) # Update with RF-specific data
    rows.append(rf_row) # Add RF row to rows
-
-   if xgb_metrics is not None: # If XGBoost metrics are available
-      xgb_row = dict(base_row) # Create XGBoost row
-      xgb_row.update({ # Update with XGBoost-specific data
-         "classifier": "XGBoost",
-         **metrics_to_dict(xgb_metrics),
-         "best_features": json.dumps(best_features, ensure_ascii=False)
-      }) # Update with XGBoost-specific data
-      rows.append(xgb_row) # Add XGBoost row to rows
 
    if runs_list: # If multiple runs data is provided
       for idx, run_data in enumerate(runs_list, start=1): # For each run
