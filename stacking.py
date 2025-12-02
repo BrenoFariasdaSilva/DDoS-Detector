@@ -613,11 +613,8 @@ def main():
       
       feature_sets = {
          "Full Features": (X_train_scaled, X_test_scaled), # All features
-         "RFE Features": (get_feature_subset(X_train_scaled, rfe_selected_features), 
-                          get_feature_subset(X_test_scaled, rfe_selected_features)), # RFE subset
-         "GA Features": (get_feature_subset(X_train_scaled, ga_selected_features), 
-                         get_feature_subset(X_test_scaled, ga_selected_features)), # GA subset
-         # PCA needs its own preparation (Skipped for simplicity in this implementation)
+         "RFE Features": (get_feature_subset(X_train_scaled, rfe_selected_features, feature_names), get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)), # RFE subset
+         "GA Features": (get_feature_subset(X_train_scaled, ga_selected_features, feature_names), get_feature_subset(X_test_scaled, ga_selected_features, feature_names)), # GA subset
       }
       
       all_stacking_results = [] # List to store results for saving
