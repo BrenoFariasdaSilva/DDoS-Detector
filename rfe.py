@@ -82,8 +82,7 @@ class BackgroundColors: # Colors for the terminal
    CLEAR_TERMINAL = "\033[H\033[J" # Clear the terminal
 
 # Execution Constants:
-VERBOSE = False # Set to True to output verbose messages
-RUNS = 1 # Number of runs for RFE analysis
+VERBOSE = True # Set to True to output verbose messages
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
@@ -408,21 +407,24 @@ def analyze_top_features(df, y, top_features, csv_path="."):
       plt.savefig(f"{output_dir}/{base_dataset_name}-{safe_filename(feature)}.png") # Save plot
       plt.close() # Close plot to free memory
 
-def run_rfe(csv_path, runs=5):
+def run_rfe(csv_path):
    """
-   Runs Recursive Feature Elimination on the provided dataset multiple times, prints top features,
-   checks for divergence, and saves structured results including performance metrics.
+   Runs Recursive Feature Elimination on the provided dataset, prints the single
+   set of top features selected, computes and prints performance metrics, and
+   saves the structured results.
+
+   Support for multiple runs and divergence checking has been removed.
 
    :param csv_path: Path to the CSV dataset file
-   :param runs: Number of runs to perform
    :return: None
    """
    
-   verbose_output(f"{BackgroundColors.GREEN}Starting RFE analysis on dataset: {BackgroundColors.CYAN}{csv_path}{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{runs}{BackgroundColors.GREEN} runs...{Style.RESET_ALL}") # Output the verbose message
+   verbose_output(f"{BackgroundColors.GREEN}Starting RFE analysis on dataset: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}") # Output the verbose message
 
    df = load_dataset(csv_path) # Load the dataset
+   
    if df is None: # If dataset loading failed
-      return {} # Return empty dictionary
+      return # Return None (no need for empty dict)
    
    cleaned_df = preprocess_dataframe(df) # Preprocess the DataFrame
    
@@ -434,47 +436,29 @@ def run_rfe(csv_path, runs=5):
 
    X_train, X_test, y_train, y_test = scale_and_split(X, y) # Scale and split the data
 
-   all_runs = [] # List to store results from all runs
+   random_state = 42 # Fixed random state for reproducibility
 
-   for run in tqdm(range(runs), desc=f"{BackgroundColors.GREEN}RFE Runs{Style.RESET_ALL}", unit="run"): # Loop over the number of runs with progress bar
-      random_state = 42 + run # Vary random state for each run
+   selector, model = run_rfe_selector(X_train, y_train, random_state=random_state) # Run RFE to select top features
+   metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=random_state) # Compute performance metrics (returns a tuple)
+   top_features, rfe_ranking = extract_top_features(selector, X.columns) # Extract top features and their rankings
 
-      selector, model = run_rfe_selector(X_train, y_train, random_state=random_state) # Run RFE to select top features
-      metrics = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=random_state) # Compute performance metrics
-      top_features, rfe_ranking = extract_top_features(selector, X.columns) # Extract top features and their rankings
+   single_run_results = [{ # Store results for this run
+      "run": 1, # Fixed run number
+      "top_features": top_features, # List of top features
+      "rfe_ranking": rfe_ranking, # RFE rankings dictionary
+      "metrics": metrics_tuple # Performance metrics tuple
+   }]
 
-      all_runs.append({ # Store results for this run
-         "run": run + 1, # Run number (1-indexed)
-         "top_features": top_features, # List of top features
-         "rfe_ranking": rfe_ranking, # RFE rankings dictionary
-         "metrics": metrics # Performance metrics tuple
-      })
+   print_top_features(top_features, rfe_ranking) if VERBOSE else None # Print top features to terminal
 
-      print_top_features(top_features, rfe_ranking) if VERBOSE else None # Print top features to terminal
+   if single_run_results: # If there are results from the single run
+      avg_metrics = metrics_tuple # Average metrics are just the single run's metrics
+      
+      print_average_metrics(avg_metrics, 1) if VERBOSE else None # Print metrics if verbose
+      save_rfe_results(csv_path, single_run_results, avg_metrics, model.__class__.__name__) # Save structured results
 
-   if all_runs: # If there are any runs completed
-      feature_sets = [set(run["top_features"]) for run in all_runs] # Get sets of top features from all runs
-      common_features = set.intersection(*feature_sets) if feature_sets else set() # Find common features across all runs
-
-      if len(common_features) == len(all_runs[0]["top_features"]): # If all runs selected the same features
-         print(f"\n{BackgroundColors.GREEN}No divergence in selected features across {runs} runs.{Style.RESET_ALL}")
-      else: # If there is divergence in selected features
-         print(f"\n{BackgroundColors.YELLOW}Divergence detected in selected features.{Style.RESET_ALL}")
-         print(f"  {BackgroundColors.GREEN}Common features ({len(common_features)}): {sorted(common_features)}{Style.RESET_ALL}")
-         for run in all_runs: # Print unique features for each run
-            unique = set(run["top_features"]) - common_features # Find unique features for this run
-            print(f"  {BackgroundColors.CYAN}Run {run['run']}: unique features ({len(unique)}): {sorted(unique)}{Style.RESET_ALL}")
-
-      metrics_keys = ["acc", "prec", "rec", "f1", "fpr", "fnr", "elapsed_time"] # Metric keys
-      avg_metrics = tuple(np.mean([run["metrics"][i] for run in all_runs]) for i in range(len(metrics_keys))) # Calculate average metrics
-
-      print_average_metrics(avg_metrics, runs) if VERBOSE else None # Print average metrics if verbose
-
-      save_rfe_results(csv_path, all_runs, avg_metrics, model.__class__.__name__) # Save structured results
-
-      features_to_analyze = list(common_features) if common_features else all_runs[0]["top_features"] # Features to analyze
-      if features_to_analyze: # If there are features to analyze
-         analyze_top_features(X, y, features_to_analyze, csv_path=csv_path) # Analyze top features
+      if top_features: # If there are features to analyze
+         analyze_top_features(X, y, top_features, csv_path=csv_path) # Analyze top features
 
 def verbose_output(true_string="", false_string=""):
    """
@@ -521,7 +505,7 @@ def main():
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Recursive Feature Elimination (RFE){BackgroundColors.GREEN} program!{Style.RESET_ALL}") # Output the welcome message
 
    csv_file = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv" # Path to the CSV file
-   run_rfe(csv_file, runs=RUNS) # Run RFE on the specified CSV file
+   run_rfe(csv_file) # Run RFE on the specified CSV file
 
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
 
