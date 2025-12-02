@@ -53,11 +53,19 @@ Assumptions & Notes:
 import atexit # For playing a sound when the program finishes
 import datetime # For getting the current date and time
 import json # Import json for handling JSON strings within the CSV
+import lightgbm as lgb # For LightGBM model
+import numpy as np # Import numpy for numerical operations
 import os # For running a command in the terminal
-import platform # For getting the operating system name
 import pandas as pd # Import pandas for data manipulation
-from colorama import Style # For coloring the terminal
+import platform # For getting the operating system name
+from colorama import Style # For terminal text styling
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier # For Gradient Boosting model
+from sklearn.linear_model import LogisticRegression # For logistic regression model
+from sklearn.neighbors import KNeighborsClassifier, NearestCentroid # For k-nearest neighbors model
+from sklearn.neural_network import MLPClassifier # For neural network model
+from sklearn.svm import SVC # For Support Vector Machine model
 from telegram_bot import TelegramBot # For Telegram notifications
+from xgboost import XGBClassifier # For XGBoost classifier
 
 # Macros:
 class BackgroundColors: # Colors for the terminal
@@ -355,6 +363,28 @@ def preprocess_dataframe(df, remove_zero_variance=True):
             df_clean = df_clean.drop(columns=zero_var_cols) # Drop zero-variance columns
 
    return df_clean # Return the cleaned DataFrame
+
+def get_models():
+	"""
+	Initializes and returns a dictionary of models to train.
+
+	:param: None
+	:return: Dictionary of model name and instance
+	"""
+
+	verbose_output(f"{BackgroundColors.GREEN}Initializing models for training...{Style.RESET_ALL}") # Output the verbose message
+
+	return { # Dictionary of models to train
+		"Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
+		"SVM": SVC(kernel="rbf", probability=True, random_state=42),
+		"XGBoost": XGBClassifier(eval_metric="mlogloss", random_state=42),
+		"Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
+		"KNN": KNeighborsClassifier(n_neighbors=5),
+		"Nearest Centroid": NearestCentroid(),
+		"Gradient Boosting": GradientBoostingClassifier(random_state=42),
+		"LightGBM": lgb.LGBMClassifier(force_row_wise=True, min_gain_to_split=0.01, random_state=42, verbosity=-1),
+		"MLP (Neural Net)": MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=42),
+	}
 
 def calculate_execution_time(start_time, finish_time):
    """
