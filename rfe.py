@@ -413,8 +413,6 @@ def run_rfe(csv_path):
    set of top features selected, computes and prints performance metrics, and
    saves the structured results.
 
-   Support for multiple runs and divergence checking has been removed.
-
    :param csv_path: Path to the CSV dataset file
    :return: None
    """
@@ -442,23 +440,20 @@ def run_rfe(csv_path):
    metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=random_state) # Compute performance metrics (returns a tuple)
    top_features, rfe_ranking = extract_top_features(selector, X.columns) # Extract top features and their rankings
 
-   single_run_results = [{ # Store results for this run
-      "run": 1, # Fixed run number
+   run_results = [{ # Store results for this run
+      "model": model.__class__.__name__, # Model name
+      "metrics": metrics_tuple, # Performance metrics tuple
       "top_features": top_features, # List of top features
-      "rfe_ranking": rfe_ranking, # RFE rankings dictionary
-      "metrics": metrics_tuple # Performance metrics tuple
+      "rfe_ranking": rfe_ranking # RFE rankings dictionary
    }]
 
+   print_metrics(metrics_tuple) if VERBOSE else None # Print metrics to terminal
    print_top_features(top_features, rfe_ranking) if VERBOSE else None # Print top features to terminal
+   
+   save_rfe_results(csv_path, run_results) # Save structured results
 
-   if single_run_results: # If there are results from the single run
-      avg_metrics = metrics_tuple # Average metrics are just the single run's metrics
-      
-      print_average_metrics(avg_metrics, 1) if VERBOSE else None # Print metrics if verbose
-      save_rfe_results(csv_path, single_run_results, avg_metrics, model.__class__.__name__) # Save structured results
-
-      if top_features: # If there are features to analyze
-         analyze_top_features(X, y, top_features, csv_path=csv_path) # Analyze top features
+   if top_features: # If there are features to analyze
+      analyze_top_features(X, y, top_features, csv_path=csv_path) # Analyze top features
 
 def verbose_output(true_string="", false_string=""):
    """
