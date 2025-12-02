@@ -600,7 +600,7 @@ def main():
       y = cleaned_df.iloc[:, -1] # Target
       feature_names = X_full.columns.tolist() # Get the list of feature names
 
-      if len(np.unique(y)) < 2: # Check if there is more than one class
+      if len(np.unique(y)) < 2: # Verify if there is more than one class
          print(f"{BackgroundColors.RED}Target column has only one class. Cannot perform classification. Skipping.{Style.RESET_ALL}") # Output the error message
          bot.send_message(f"Skipping {os.path.basename(file)}: Only one class in target column.") # Send Telegram notification about class issue
          continue # Skip to the next file
@@ -628,6 +628,7 @@ def main():
       
       feature_sets = { # Dictionary of feature sets to evaluate
          "Full Features": (X_train_scaled, X_test_scaled), # All features
+         # Note: get_feature_subset is assumed to be defined elsewhere in the file
          "RFE Features": (get_feature_subset(X_train_scaled, rfe_selected_features, feature_names), get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)), # RFE subset
          "GA Features": (get_feature_subset(X_train_scaled, ga_selected_features, feature_names), get_feature_subset(X_test_scaled, ga_selected_features, feature_names)), # GA subset
       }
@@ -642,7 +643,7 @@ def main():
       
       for name, (X_train_subset, X_test_subset) in feature_sets.items(): # Iterate over feature sets
          
-         if X_train_subset.shape[1] == 0: # Check if the subset is empty
+         if X_train_subset.shape[1] == 0: # Verify if the subset is empty
             print(f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}") # Output warning
             bot.send_message(f"Skipping {name} for {os.path.basename(file)}: No features selected.") # Send Telegram notification
             continue # Skip to the next set
