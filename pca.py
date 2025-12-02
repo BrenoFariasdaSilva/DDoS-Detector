@@ -299,7 +299,10 @@ def print_pca_results(results):
 
 def save_pca_results(csv_path, all_results):
 	"""
-	Saves PCA results to a structured text file and CSV comparison.
+	Saves PCA results to a single CSV file containing evaluation metadata
+	and per-configuration metrics. This replaces separate JSON and CSV
+	outputs with one machine-friendly CSV that includes the evaluation
+	details repeated on each row for easy consumption by downstream tools.
 
 	:param csv_path: Original CSV file path
 	:param all_results: List of result dictionaries from different PCA configurations
@@ -309,52 +312,20 @@ def save_pca_results(csv_path, all_results):
 	output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Output directory
 	os.makedirs(output_dir, exist_ok=True) # Create output directory if it doesn't exist
 
-	summary = { # Structured summary dictionary
-		"tool": "PCA", # Tool name
-		"description": "Principal Component Analysis (PCA) Feature Extraction Results", # Description
-		"evaluation": { # Evaluation details
-			"method": "10-Fold Stratified Cross-Validation", # CV method
-			"model": "RandomForestClassifier (100 estimators)", # Model used
-			"train_test_split": "80/20", # Train/test split ratio
-			"scaling": "StandardScaler (z-score)" # Feature scaling method
-		},
-		"configurations": [] # List to hold each configuration's results
-	}
+	eval_method = "10-Fold Stratified CV" # Evaluation method
+	eval_model = "Random Forest (100 trees)" # Evaluation model
+	train_test_split = "80/20 split" # Train/test split
+	scaling = "StandardScaler" # Scaling method
 
-	for i, results in enumerate(all_results, 1): # Loop over each configuration's results
-		config_entry = { # Create entry for this configuration
-			"configuration_index": i, # 1-based index for human readability
-			"n_components": results["n_components"], # Number of PCA components
-			"explained_variance": float(results["explained_variance"]), # Explained variance ratio
-			"cv_metrics": { # Cross-validation metrics
-				"accuracy": float(results["cv_accuracy"]), # CV accuracy
-				"precision": float(results["cv_precision"]), # CV precision
-				"recall": float(results["cv_recall"]), # CV recall
-				"f1_score": float(results["cv_f1_score"]) # CV F1-score
-			},
-			"test_metrics": {
-				"accuracy": float(results["test_accuracy"]), # Test accuracy
-				"precision": float(results["test_precision"]), # Test precision
-				"recall": float(results["test_recall"]), # Test recall
-				"f1_score": float(results["test_f1_score"]), # Test F1-score
-				"fpr": float(results["test_fpr"]), # Test false positive rate
-				"fnr": float(results["test_fnr"]) # Test false negative rate
-			},
-			"elapsed_time_s": float(results["elapsed_time"]) # Elapsed time in seconds
-		}
-		summary["configurations"].append(config_entry) # Append this configuration's entry to the summary
-
-	json_output = f"{output_dir}/PCA_Results.json" # Structured JSON output path
-	try: # Attempt to write JSON summary
-		with open(json_output, "w", encoding="utf-8") as jf: # Write structured JSON summary
-			json.dump(summary, jf, ensure_ascii=False, indent=3) # Pretty-printed JSON
-		print(f"\n{BackgroundColors.GREEN}Structured JSON summary saved to {BackgroundColors.CYAN}{json_output}{Style.RESET_ALL}")
-	except Exception as e: # If writing JSON fails
-		print(f"{BackgroundColors.RED}Failed to save JSON summary: {e}{Style.RESET_ALL}")
-	
-	comparison_data = [] # List to store comparison data
-	for results in all_results: # Loop over each configuration's results
-		comparison_data.append({ # Append results to comparison data
+	rows = [] # List to store all rows for the CSV
+	for results in all_results: # Flatten each configuration into a CSV row
+		rows.append({ # Create a row dictionary
+			"tool": "PCA", # Tool name
+			"dataset": os.path.basename(csv_path), # Source dataset name
+			"method": eval_method, # CV method
+			"model": eval_model, # Model used for evaluation
+			"train_test_split": train_test_split, # Train/test split
+			"scaling": scaling, # Scaling method
 			"n_components": results["n_components"], # Number of PCA components
 			"explained_variance": round(results["explained_variance"], 4), # Explained variance ratio
 			"cv_accuracy": round(results["cv_accuracy"], 4), # CV accuracy
@@ -369,14 +340,17 @@ def save_pca_results(csv_path, all_results):
 			"test_fnr": round(results["test_fnr"], 4), # Test false negative rate
 			"training_time_s": round(results["elapsed_time"], 2) # Training time in seconds
 		})
-	
-	comparison_df = pd.DataFrame(comparison_data) # Create DataFrame from comparison data
-	csv_output = f"{output_dir}/PCA_Comparison.csv" # Output CSV file path
-	comparison_df.to_csv(csv_output, index=False) # Save comparison DataFrame to CSV
-	print(f"{BackgroundColors.GREEN}Comparison CSV saved to {BackgroundColors.CYAN}{csv_output}{Style.RESET_ALL}")
-	
-	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}PCA Configuration Comparison:{Style.RESET_ALL}")
-	print(comparison_df.to_string(index=False)) if VERBOSE else None
+
+	comparison_df = pd.DataFrame(rows) # Create DataFrame from rows
+	csv_output = f"{output_dir}/PCA_Results.csv" # Output CSV path
+	try: # Attempt to save the CSV
+		comparison_df.to_csv(csv_output, index=False) # Save the DataFrame to CSV
+		print(f"{BackgroundColors.GREEN}PCA results saved to {BackgroundColors.CYAN}{csv_output}{Style.RESET_ALL}")
+	except Exception as e: # Handle exceptions during file saving
+		print(f"{BackgroundColors.RED}Failed to save PCA CSV: {e}{Style.RESET_ALL}")
+
+	verbose_output(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}PCA Configuration Comparison:{Style.RESET_ALL}")
+	verbose_output(comparison_df.to_string(index=False)) # Output the comparison DataFrame
 
 def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=True, max_workers=None):
 	"""
