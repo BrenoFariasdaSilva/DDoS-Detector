@@ -301,6 +301,25 @@ def print_pca_results(results):
 	print(f"  {BackgroundColors.GREEN}Test FNR: {BackgroundColors.CYAN}{results['test_fnr']:.4f}{Style.RESET_ALL}")
 	print(f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{results['elapsed_time']:.2f}s{Style.RESET_ALL}")
 
+def get_file_size_string(file_path):
+	"""
+	Get the file size in human-readable format (KB, MB, GB).
+
+	:param file_path: Path to the file
+	:return: String representing the file size
+	"""
+	
+	file_size = os.path.getsize(file_path) # Get the file size in bytes
+
+	if file_size < 1024 * 1024: # If less than 1 MB
+		size_str = f"{file_size / 1024:.2f} KB" # Size in KB
+	elif file_size < 1024 * 1024 * 1024: # If less than 1 GB
+		size_str = f"{file_size / (1024 * 1024):.2f} MB" # Size in MB
+	else: # Otherwise
+		size_str = f"{file_size / (1024 * 1024 * 1024):.2f} GB" # Size in GB
+  
+	return size_str # Return the size string
+
 def save_pca_results(csv_path, all_results):
 	"""
 	Saves PCA results to a single CSV file containing evaluation metadata
@@ -362,6 +381,7 @@ def save_pca_results(csv_path, all_results):
 				with open(pca_file, "wb") as f: # Open the file in write-binary mode
 					pickle.dump(pca_obj, f) # Save the PCA object
 				verbose_output(f"{BackgroundColors.GREEN}PCA object saved to {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")
+				size_str = get_file_size_string(pca_file) # Get the file size string
 			except Exception as e: # Handle exceptions during PCA object saving
 				print(f"{BackgroundColors.RED}Failed to save PCA object: {e}{Style.RESET_ALL}")
 
