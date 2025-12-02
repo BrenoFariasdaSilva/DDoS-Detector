@@ -820,11 +820,12 @@ def main():
          
          progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating individual classifiers in parallel on {BackgroundColors.CYAN}{name}{Style.RESET_ALL}") # Update progress bar description
          with concurrent.futures.ThreadPoolExecutor(max_workers=THREADS_LIMIT) as executor: # Create a thread pool executor for parallel evaluation
-            futures = [] # List to hold futures for each model evaluation
+            future_to_model = {} # Dictionary to map futures to model names
             for model_name, model in individual_models.items(): # Iterate over each individual model
                future = executor.submit(evaluate_individual_classifier, model, model_name, X_train_subset, y_train, X_test_subset, y_test) # Submit evaluation task to thread pool
-               futures.append((future, model_name)) # Store future and model name for later retrieval
-            for future, model_name in concurrent.futures.as_completed(futures): # As each evaluation completes
+               future_to_model[future] = model_name # Store mapping of future to model name
+            for future in concurrent.futures.as_completed(future_to_model): # As each evaluation completes
+               model_name = future_to_model[future] # Get the model name from the mapping
                metrics = future.result() # Get the metrics from the completed future
                result_entry = { "dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Individual", "model_name": model_name, "n_features": X_train_subset.shape[1], "metrics": metrics, "features_list": features_list} # Prepare result entry
                all_results.append(result_entry) # Add result to list
