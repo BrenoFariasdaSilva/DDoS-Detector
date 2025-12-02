@@ -296,12 +296,12 @@ def cache_preprocessed_data(result, cache_file, csv_path):
                      len(pickle.dumps(X_columns))) # Estimate the size of the data to cache
    cache_dir = os.path.dirname(cache_file) # Get the directory of the cache file
    total, used, free = shutil.disk_usage(cache_dir) # Get disk usage information
-   if free < estimated_size * 1.1:  # 10% margin
+   if free < estimated_size * 1.1: # 10% margin
       print(f"{BackgroundColors.YELLOW}Warning: Insufficient disk space for caching ({estimated_size / (1024**3):.2f} GB needed, {free / (1024**3):.2f} GB free). Skipping cache save.{Style.RESET_ALL}") # Output warning message
       return # Return without saving
    else: # If there is enough space
-      with open(cache_file, "wb") as f:  # Open cache file for writing
-         pickle.dump(result, f)  # Dump the result to cache file
+      with open(cache_file, "wb") as f: # Open cache file for writing
+         pickle.dump(result, f) # Dump the result to cache file
       verbose_output(f"{BackgroundColors.GREEN}Saved preprocessed data to cache {cache_file}.{Style.RESET_ALL}") # Output the verbose message
 
       # Compare sizes
@@ -816,9 +816,9 @@ def save_best_features(best_features, rfe_ranking, csv_path, metrics=None):
    :return: None
    """
 
-   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/"  # Directory to save outputs
-   os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
-   results_file = f"{output_dir}/Genetic_Algorithm_Results"  # Base path for results (no .txt extension anymore)
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Directory to save outputs
+   os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
+   results_file = f"{output_dir}/Genetic_Algorithm_Results" # Base path for results (no .txt extension anymore)
 
    write_best_features_to_file(best_features, rfe_ranking, results_file, metrics=metrics) # Delegate writing
 
@@ -1011,7 +1011,6 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
       if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
          bot.send_messages([f"Completed {runs} runs for population size **{pop_size}** on **{dataset_name}** -> **Avg F1: {f1_avg:.4f}**"])
 
-   # 5. After testing all population sizes, select the best global result
    if best_result: # If a best result was found
       best_pop_size, runs_list, common_features = best_result # Unpack the best result
       print(f"\n{BackgroundColors.GREEN}Best population size: {BackgroundColors.CYAN}{best_pop_size}{Style.RESET_ALL}")
