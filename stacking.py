@@ -62,6 +62,7 @@ Assumptions & Notes:
 
 import atexit # For playing a sound when the program finishes
 import ast # For safely evaluating Python literals
+import asyncio # For running async functions
 import datetime # For getting the current date and time
 import json # Import json for handling JSON strings within the CSV
 import lightgbm as lgb # For LightGBM model
@@ -706,14 +707,14 @@ def main():
       
       if df is None: # If the dataset failed to load
          verbose_output(f"{BackgroundColors.RED}Failed to load dataset from: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}") # Output the failure message
-         bot.send_message(f"Failed to load dataset: {os.path.basename(file)}") # Send Telegram notification about failure
+         asyncio.run(bot.send_message(f"Failed to load dataset: {os.path.basename(file)}")) # Send Telegram notification
          continue # Skip to the next file if loading failed
       
       cleaned_df = preprocess_dataframe(df) # Preprocess the DataFrame
       
       if cleaned_df is None or cleaned_df.empty: # If the DataFrame is None or empty after preprocessing
          print(f"{BackgroundColors.RED}Dataset {BackgroundColors.CYAN}{file}{BackgroundColors.RED} empty after preprocessing. Skipping.{Style.RESET_ALL}")
-         bot.send_message(f"Dataset empty after preprocessing: {os.path.basename(file)}") # Send Telegram notification about empty dataset
+         asyncio.run(bot.send_message(f"Dataset empty after preprocessing: {os.path.basename(file)}")) # Send Telegram notification
          continue # Skip to the next file if preprocessing failed
       
       X_full = cleaned_df.select_dtypes(include=np.number).iloc[:, :-1] # Features (numeric only)
@@ -722,7 +723,7 @@ def main():
 
       if len(np.unique(y)) < 2: # Verify if there is more than one class
          print(f"{BackgroundColors.RED}Target column has only one class. Cannot perform classification. Skipping.{Style.RESET_ALL}") # Output the error message
-         bot.send_message(f"Skipping {os.path.basename(file)}: Only one class in target column.") # Send Telegram notification about class issue
+         asyncio.run(bot.send_message(f"Skipping {os.path.basename(file)}: Only one class in target column.")) # Send Telegram notification
          continue # Skip to the next file
       
       X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X_full, y) # Scale and split the data
@@ -735,7 +736,7 @@ def main():
       X_train_pca, X_test_pca = apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components) # Apply PCA transformation if applicable
       
       feature_sets = { # Dictionary of feature sets to evaluate
-         "Full Features": (X_train_scaled, X_test_scaled), # All features
+         # "Full Features": (X_train_scaled, X_test_scaled), # All features
          "GA Features": (get_feature_subset(X_train_scaled, ga_selected_features, feature_names), get_feature_subset(X_test_scaled, ga_selected_features, feature_names)), # GA subset
          "PCA Components": (X_train_pca, X_test_pca) if X_train_pca is not None else None, # PCA components (only if PCA was applied)
          "RFE Features": (get_feature_subset(X_train_scaled, rfe_selected_features, feature_names), get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)) # RFE subset
@@ -751,12 +752,12 @@ def main():
       all_results = [] # List to store results for saving (individual + stacking)
       
       print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}--- Running Classifier Evaluation (Individual + Stacking) ---{Style.RESET_ALL}") # Output separator
-      bot.send_message(f"Starting Classifiers Evaluation for {os.path.basename(file)}...") # Send Telegram notification
+      asyncio.run(bot.send_message(f"Starting Classifiers Evaluation for {os.path.basename(file)}...")) # Send Telegram notification
       
       for idx, (name, (X_train_subset, X_test_subset)) in enumerate(feature_sets.items(), start=1):
          if X_train_subset.shape[1] == 0: # Verify if the subset is empty
             print(f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}") # Output warning
-            bot.send_message(f"Skipping {name} for {os.path.basename(file)}: No features selected.") # Send Telegram notification
+            asyncio.run(bot.send_message(f"Skipping {name} for {os.path.basename(file)}: No features selected.")) # Send Telegram notification
             progress_bar.update(len(individual_models) + 1) # Skip all steps for this feature set
             continue # Skip to the next set
              
@@ -781,7 +782,7 @@ def main():
          stacking_result_entry = {"dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Stacking", "model_name": "StackingClassifier", "n_features": X_train_subset.shape[1], "metrics": stacking_metrics, "features_list": features_list} # Prepare stacking result entry
          all_results.append(stacking_result_entry) # Add stacking result
          print(f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{stacking_metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
-         bot.send_message(f"{os.path.basename(file)} - {name} - Best Stacking Accuracy: {stacking_metrics[0]:.4f}") # Send Telegram notification
+         asyncio.run(bot.send_message(f"{os.path.basename(file)} - {name} - Best Stacking Accuracy: {stacking_metrics[0]:.4f}")) # Send Telegram notification
          progress_bar.update(1) # Update progress after stacking
       
       save_stacking_results(file, all_results) # Save consolidated results to CSV
