@@ -3,37 +3,42 @@
 Classifiers Stacking
 ================================================================================
 Author      : Breno Farias da Silva
-Created     : <YYYY-MM-DD>
+Created     : 2025-12-02
 Description :
-   This script is designed to load and process network traffic data (DDoS datasets)
-   for subsequent analysis using machine learning classifiers, focusing on ensemble
-   methods like stacking. It handles file processing, extracts dataset names, and
-   is intended to integrate feature selection results from a Genetic Algorithm.
+   This script loads and processes network traffic data from DDoS datasets for
+   machine learning analysis using ensemble methods like stacking. It integrates
+   feature selection results from Genetic Algorithm (GA), Recursive Feature
+   Elimination (RFE), and Principal Component Analysis (PCA). The script evaluates
+   multiple classifiers (individual and stacking) on different feature sets and
+   saves comprehensive results to CSV files.
 
    Key features include:
-      - Automatic data loading and preprocessing (planned)
-      - Integration of Genetic Algorithm (GA) feature selection results.
-      - Utilities for path validation and file listing.
-      - Execution time calculation and sound notification upon completion.
-      - Telegram bot integration for notifications.
+      - Automatic data loading and preprocessing (NaN removal, zero-variance filtering)
+      - Integration of GA, RFE, and PCA feature selection results
+      - Evaluation on multiple feature sets: Full Features, RFE Features, GA Features, PCA Components
+      - Training and evaluation of individual classifiers and stacking ensemble
+      - Comprehensive metrics calculation (accuracy, precision, recall, F1, FPR, FNR)
+      - CSV output with features_list column containing selected features per method
+      - Utilities for path validation, file listing, and dataset name extraction
+      - Execution time calculation and sound notification upon completion
+      - Telegram bot integration for real-time notifications
 
 Usage:
    1. Ensure the dataset path and feature analysis files are correctly structured.
    2. Execute the script:
-         $ python <script_name>.py
+         $ python stacking.py
    3. Check terminal output for processing logs and execution time.
 
 Outputs:
-   - Processed data files (planned)
-   - Log messages to the terminal.
-   - Telegram notifications (if configured).
+   - Stacking_Classifier_Results.csv: Detailed results with metrics and features list
+   - Log messages to the terminal
+   - Telegram notifications (if configured)
+   - Sound notification upon completion
 
 TODOs:
-   - Implement and call function to extract the genetic algorithm features.
-   - Implement data loading and preprocessing logic.
-   - Implement classifier training and evaluation (Stacking, Voting).
-   - Implement CLI argument parsing for paths and parameters.
-   - Extend support to Parquet files.
+   - Implement CLI argument parsing for paths and parameters
+   - Extend support to Parquet files
+   - Add voting classifier evaluation
 
 Dependencies:
    - Python >= 3.8
@@ -42,12 +47,17 @@ Dependencies:
    - scikit-learn
    - colorama
    - telegram_bot (assumed custom module)
+   - lightgbm
+   - xgboost
 
 Assumptions & Notes:
-   - The script assumes a directory structure like "Datasets/<DatasetName>/<SubDir>/<File.csv>".
-   - The GA feature file is located at "<InputFileDir>/Feature_Analysis/Genetic_Algorithm_Results_features.csv".
-   - CSV files are the primary data format.
-   - The `telegram_bot` module is available in the environment.
+   - Directory structure: Datasets/<DatasetName>/<SubDir>/<File.csv>
+   - Feature analysis files in <DatasetDir>/Feature_Analysis/:
+     * Genetic_Algorithm_Results.csv (GA features)
+     * RFE_Run_Results.csv (RFE features)
+     * PCA_Results.csv (PCA components)
+   - CSV files are the primary data format
+   - The `telegram_bot` module is available in the environment
 """
 
 import atexit # For playing a sound when the program finishes
