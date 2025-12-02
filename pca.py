@@ -382,6 +382,7 @@ def save_pca_results(csv_path, all_results):
 					pickle.dump(pca_obj, f) # Save the PCA object
 				verbose_output(f"{BackgroundColors.GREEN}PCA object saved to {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")
 				size_str = get_file_size_string(pca_file) # Get the file size string
+				verbose_output(f"{BackgroundColors.GREEN}PCA object size: {BackgroundColors.CYAN}{size_str}{Style.RESET_ALL}")
 			except Exception as e: # Handle exceptions during PCA object saving
 				print(f"{BackgroundColors.RED}Failed to save PCA object: {e}{Style.RESET_ALL}")
 
