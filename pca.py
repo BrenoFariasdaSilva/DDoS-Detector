@@ -64,6 +64,7 @@ import json # For structured JSON output
 import numpy as np # For numerical operations
 import os # For file and directory operations
 import pandas as pd # For data manipulation
+import pickle # For serializing PCA objects
 import platform # For getting the operating system name
 import time # For measuring elapsed time
 from colorama import Style # For coloring the terminal
@@ -347,6 +348,18 @@ def save_pca_results(csv_path, all_results):
 		print(f"{BackgroundColors.GREEN}PCA results saved to {BackgroundColors.CYAN}{csv_output}{Style.RESET_ALL}")
 	except Exception as e: # Handle exceptions during file saving
 		print(f"{BackgroundColors.RED}Failed to save PCA CSV: {e}{Style.RESET_ALL}")
+
+	for results in all_results: # Save PCA objects for each configuration
+		n_comp = results["n_components"] # Number of components
+		pca_obj = results.get("pca_object") # Get the PCA object
+		if pca_obj: # If the PCA object exists
+			pca_file = f"{output_dir}/PCA_{n_comp}_components.pkl" # PCA object file path
+			try: # Attempt to save the PCA object
+				with open(pca_file, "wb") as f: # Open the file in write-binary mode
+					pickle.dump(pca_obj, f) # Save the PCA object
+				verbose_output(f"{BackgroundColors.GREEN}PCA object saved to {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")
+			except Exception as e: # Handle exceptions during PCA object saving
+				print(f"{BackgroundColors.RED}Failed to save PCA object: {e}{Style.RESET_ALL}")
 
 	verbose_output(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}PCA Configuration Comparison:{Style.RESET_ALL}")
 	verbose_output(comparison_df.to_string(index=False)) # Output the comparison DataFrame
