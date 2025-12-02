@@ -71,6 +71,7 @@ Assumptions & Notes:
    - .env file must be present with TELEGRAM_API_KEY and CHAT_ID for notifications
 """
 
+import asyncio # For running async functions
 import atexit # For playing a sound when the program finishes
 import csv # For writing metrics/features CSVs
 import datetime # For timestamping
@@ -571,7 +572,7 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
          break # Stop the loop early
 
       if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID and show_progress and gen % max(1, n_generations // 100) == 0: # Send periodic updates to Telegram in every ~1% of generations
-         bot.send_message(f"GA Progress: Generation {gen}/{n_generations}, Best F1-Score: {best_fitness:.4f}") # Send message to Telegram bot
+         asyncio.run(bot.send_message(f"GA Progress: Generation {gen}/{n_generations}, Best F1-Score: {best_fitness:.4f}")) # Send message to Telegram bot
 
    if hasattr(toolbox, "map") and hasattr(toolbox.map, "close"): # If using multiprocessing pool
       toolbox.map.close() # Close the pool
@@ -968,7 +969,7 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
    verbose_output(f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {min_pop} to {max_pop}, running {n_generations} generations and {runs} runs each.{Style.RESET_ALL}") # Output the verbose message
 
    if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
-      bot.send_messages([f"Starting population sweep for dataset **{dataset_name}** from size **{min_pop}** to **{max_pop}**"]) # Send start message
+      asyncio.run(bot.send_messages([f"Starting population sweep for dataset **{dataset_name}** from size **{min_pop}** to **{max_pop}**"])) # Send start message
 
    best_score = -1 # Initialize best score
    best_result = None # Initialize best result
@@ -1031,7 +1032,7 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
          print(f"  Run {i+1}: unique features {len(unique)}") # Print unique features count
 
       if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
-         bot.send_messages([f"Completed {runs} runs for population size **{pop_size}** on **{dataset_name}** -> **Avg F1: {f1_avg:.4f}**"])
+         asyncio.run(bot.send_messages([f"Completed {runs} runs for population size **{pop_size}** on **{dataset_name}** -> **Avg F1: {f1_avg:.4f}**"]))
 
    if best_result: # If a best result was found
       best_pop_size, runs_list, common_features = best_result # Unpack the best result
@@ -1047,7 +1048,7 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
       print(f"{BackgroundColors.RED}No valid results found during the sweep.{Style.RESET_ALL}")
 
    if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
-      bot.send_messages([f"Population sweep completed for **{dataset_name}**"]) # Send completion message
+      asyncio.run(bot.send_messages([f"Population sweep completed for **{dataset_name}**"])) # Send completion message
 
    return results # Return the results dictionary
 
