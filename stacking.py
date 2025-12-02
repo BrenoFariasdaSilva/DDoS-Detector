@@ -68,6 +68,7 @@ import lightgbm as lgb # For LightGBM model
 import numpy as np # Import numpy for numerical operations
 import os # For running a command in the terminal
 import pandas as pd # Import pandas for data manipulation
+import pickle # For loading PCA objects
 import platform # For getting the operating system name
 import time # For measuring execution time
 from colorama import Style # For terminal text styling
@@ -446,16 +447,43 @@ def get_models():
 		"MLP (Neural Net)": MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=42),
 	}
 
-def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components):
+def load_pca_object(file_path, pca_n_components):
+   """
+   Loads a pre-fitted PCA object from a pickle file.
+
+   :param file_path: Path to the dataset CSV file.
+   :param pca_n_components: Number of PCA components to load.
+   :return: PCA object if found, None otherwise.
+   """
+   
+   file_dir = os.path.dirname(file_path) # Get the directory of the dataset
+   pca_file = os.path.join(file_dir, "Feature_Analysis", f"PCA_{pca_n_components}_components.pkl") # Construct the path to the PCA pickle file
+   
+   if not verify_filepath_exists(pca_file): # Check if the PCA file exists
+      verbose_output(f"{BackgroundColors.YELLOW}PCA object file not found at {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")
+      return None # Return None if the file doesn't exist
+   
+   try: # Try to load the PCA object
+      with open(pca_file, "rb") as f: # Open the PCA pickle file
+         pca = pickle.load(f) # Load the PCA object
+      verbose_output(f"{BackgroundColors.GREEN}Successfully loaded PCA object from {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")
+      return pca # Return the loaded PCA object
+   except Exception as e: # Handle any errors during loading
+      print(f"{BackgroundColors.RED}Error loading PCA object from {BackgroundColors.CYAN}{pca_file}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")
+      return None # Return None if there was an error
+
+def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file_path=None):
    """
    Applies Principal Component Analysis (PCA) transformation to the scaled training
    and testing datasets using the optimal number of components.
 
-   The PCA model is fitted exclusively on the training data to prevent data leakage.
+   First attempts to load a pre-fitted PCA object from disk. If not found,
+   fits a new PCA model on the training data.
 
    :param X_train_scaled: Scaled training features (numpy array).
    :param X_test_scaled: Scaled testing features (numpy array).
    :param pca_n_components: Optimal number of components (integer), or None/0 if PCA is skipped.
+   :param file_path: Path to the dataset CSV file (optional, for loading pre-fitted PCA).
    :return: Tuple (X_train_pca, X_test_pca) - Transformed features, or (None, None).
    """
    
@@ -470,10 +498,19 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components):
       
       if n_components < pca_n_components: # Verify if the component count was reduced
          print(f"{BackgroundColors.YELLOW}Warning: Reduced PCA components from {pca_n_components} to {n_components} due to limited features ({n_features}).{Style.RESET_ALL}")
-         
-      pca = PCA(n_components=n_components) # Initialize PCA with the effective number of components
       
-      X_train_pca = pca.fit_transform(X_train_scaled) # Fit and transform the training data
+      pca = None # Initialize PCA object as None
+      if file_path: # Only attempt to load if file_path is provided
+         pca = load_pca_object(file_path, n_components) # Load pre-fitted PCA object
+      
+      if pca is None: # If PCA object wasn't loaded, fit a new one
+         verbose_output(f"{BackgroundColors.GREEN}Fitting new PCA model with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}")
+         pca = PCA(n_components=n_components) # Initialize PCA with the effective number of components
+         X_train_pca = pca.fit_transform(X_train_scaled) # Fit and transform the training data
+      else: # PCA object was loaded successfully
+         print(f"{BackgroundColors.GREEN}Using pre-fitted PCA model with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components{Style.RESET_ALL}")
+         X_train_pca = pca.transform(X_train_scaled) # Only transform the training data
+      
       X_test_pca = pca.transform(X_test_scaled) # Transform the testing data
       
       verbose_output(f"{BackgroundColors.GREEN}PCA applied successfully. Transformed data shape: {BackgroundColors.CYAN}{X_train_pca.shape}{Style.RESET_ALL}") # Output the transformed shape
@@ -732,7 +769,7 @@ def main():
       
       stacking_model = StackingClassifier(estimators=estimators, final_estimator=RandomForestClassifier(n_estimators=50, random_state=42), cv=5, n_jobs=-1) # Define the Stacking Classifier model
       
-      X_train_pca, X_test_pca = apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components) # Apply PCA transformation if applicable
+      X_train_pca, X_test_pca = apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file) # Apply PCA transformation if applicable
       
       feature_sets = { # Dictionary of feature sets to evaluate
          "Full Features": (X_train_scaled, X_test_scaled), # All features
