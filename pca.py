@@ -347,7 +347,7 @@ def save_pca_results(csv_path, all_results):
 	json_output = f"{output_dir}/PCA_Results.json" # Structured JSON output path
 	try: # Attempt to write JSON summary
 		with open(json_output, "w", encoding="utf-8") as jf: # Write structured JSON summary
-			json.dump(summary, jf, ensure_ascii=False, indent=2) # Pretty-printed JSON
+			json.dump(summary, jf, ensure_ascii=False, indent=3) # Pretty-printed JSON
 		print(f"\n{BackgroundColors.GREEN}Structured JSON summary saved to {BackgroundColors.CYAN}{json_output}{Style.RESET_ALL}")
 	except Exception as e: # If writing JSON fails
 		print(f"{BackgroundColors.RED}Failed to save JSON summary: {e}{Style.RESET_ALL}")
