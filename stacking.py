@@ -589,7 +589,7 @@ def save_stacking_results(csv_path, results_list):
 
    :param csv_path: Original CSV file path (used for determining output directory).
    :param results_list: List of dictionaries, each containing results for a feature set.
-                        Expected keys: 'dataset', 'feature_set', 'n_features', 'metrics' (tuple).
+                        Expected keys: 'dataset', 'feature_set', 'n_features', 'metrics' (tuple), 'features_list' (list).
    :return: None
    """
    
@@ -613,10 +613,11 @@ def save_stacking_results(csv_path, results_list):
       row = res.copy() # Start with the base keys ("dataset", "feature_set", etc.)
       row.pop("metrics", None) # Remove metrics from the row copy (not from original)
       row.update({"accuracy": round(metrics[0], 4), "precision": round(metrics[1], 4), "recall": round(metrics[2], 4), "f1_score": round(metrics[3], 4), "fpr": round(metrics[4], 4), "fnr": round(metrics[5], 4), "elapsed_time_s": round(metrics[6], 2)})
+      row["features_list"] = json.dumps(res.get("features_list", [])) # Serialize features list as JSON string
       flat_rows.append(row) # Add the flattened row
 
    df_out = pd.DataFrame(flat_rows) # Create DataFrame from flattened rows
-   columns_order = ["dataset", "feature_set", "classifier_type", "model_name", "n_features", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s"] # Define desired column order
+   columns_order = ["dataset", "feature_set", "classifier_type", "model_name", "n_features", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s", "features_list"] # Define desired column order
    for col in columns_order: # Ensure all columns exist
       if col not in df_out.columns: # If column is missing
          df_out[col] = None # Add missing columns with None
@@ -748,14 +749,14 @@ def main():
             verbose_output(f"{BackgroundColors.GREEN}Evaluating Individual Classifier: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}") # Output the verbose message
             metrics = evaluate_individual_classifier(model, model_name, X_train_subset, y_train, X_test_subset, y_test) # Evaluate individual model
             
-            result_entry = { "dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Individual", "model_name": model_name, "n_features": X_train_subset.shape[1], "metrics": metrics} # Prepare result entry
+            result_entry = { "dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Individual", "model_name": model_name, "n_features": X_train_subset.shape[1], "metrics": metrics, "features_list": features_list} # Prepare result entry
             all_results.append(result_entry) # Add result to list
             print(f"    {BackgroundColors.GREEN}{model_name} Accuracy for classifier {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
          
          print(f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}")
          stacking_metrics = evaluate_stacking_classifier(stacking_model, X_train_subset, y_train, X_test_subset, y_test) # Evaluate stacking model
          
-         stacking_result_entry = {"dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Stacking", "model_name": "StackingClassifier", "n_features": X_train_subset.shape[1], "metrics": stacking_metrics} # Prepare stacking result entry
+         stacking_result_entry = {"dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Stacking", "model_name": "StackingClassifier", "n_features": X_train_subset.shape[1], "metrics": stacking_metrics, "features_list": features_list} # Prepare stacking result entry
          all_results.append(stacking_result_entry) # Add stacking result
          print(f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{stacking_metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
          bot.send_message(f"{os.path.basename(file)} - {name} - Best Stacking Accuracy: {stacking_metrics[0]:.4f}") # Send Telegram notification
