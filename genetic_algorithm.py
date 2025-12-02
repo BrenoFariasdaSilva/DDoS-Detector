@@ -932,19 +932,38 @@ def prepare_feature_dataframe(X, feature_names):
       df_features = X.copy() # Use the DataFrame as is
    return df_features
 
-def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=None, y_test=None, n_generations=None, best_pop_size=None, runs_list=None):
+def save_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=None, y_test=None, n_generations=None, best_pop_size=None, runs_list=None):
    """
-   Save best feature subset and analyze them.
+   Persist the GA best-result information to disk (consolidated CSV and auxiliary files).
 
-   :param best_ind: Best individual from the Genetic Algorithm.
-   :param feature_names: List of feature names.
-   :param X: Feature set (DataFrame or numpy array).
-   :param y: Target variable (Series or array).
+   This function performs the saving responsibilities previously embedded inside
+   `save_and_analyze_results`: it determines the selected features, extracts RFE
+   rankings, optionally re-evaluates the best individual on a provided test set,
+   builds the consolidated CSV rows and writes them to disk.
+
+   :param best_ind: Best individual from the Genetic Algorithm (binary mask/list).
+   :param feature_names: List of feature names corresponding to bits in `best_ind`.
+   :param X: Feature set (DataFrame or numpy array) used during GA/training.
+   :param y: Target variable (Series or array) used during GA/training.
    :param csv_path: Path to the original CSV file for saving outputs.
-   :param metrics: Dictionary or tuple containing evaluation metrics.
-   :param n_generations: Number of generations used in GA.
-   :param best_pop_size: Population size that gave the best result.
-   :return: List of best features
+   :param metrics: Optional precomputed metrics tuple for the best individual.
+   :param X_test: Optional test features to evaluate the best individual if `metrics` is None.
+   :param y_test: Optional test labels to evaluate the best individual if `metrics` is None.
+   :param n_generations: Number of GA generations used (for metadata only).
+   :param best_pop_size: Population size that yielded the best result (for metadata only).
+   :param runs_list: Optional list of per-run results (each a dict with keys 'metrics','best_features' or 'best_ind').
+   :return: Dictionary with saved metadata: {
+               "best_features": list,
+               "rf_metrics": tuple or None,
+               "output_dir": str,
+               "rfe_ranking": dict,
+               "n_train": int or None,
+               "n_test": int or None,
+               "test_frac": float or None,
+               "n_generations": int or None,
+               "best_pop_size": int or None,
+               "runs_list": list or None
+            }
    """
 
    best_features = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1] # Extract best features
@@ -957,16 +976,14 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
    os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
 
    rf_metrics = metrics if metrics is not None else None # Use provided metrics if available
-   n_train = None # Number of training samples
-   n_test = None # Number of testing samples
-   test_frac = None # Train/test fraction
 
    if rf_metrics is None and X_test is not None and y_test is not None: # If no metrics provided, evaluate on test set
       rf_metrics = evaluate_individual(best_ind, X, y, X_test, y_test) # Evaluate best individual
 
    n_train = len(y) if y is not None else None # Number of training samples
    n_test = len(y_test) if y_test is not None else None # Number of testing samples
-   
+
+   test_frac = None # Initialize train/test fraction
    if n_train is not None and n_test is not None and (n_train + n_test) > 0: # If both lengths are valid
       test_frac = float(n_test) / float(n_train + n_test) # Calculate train/test fraction
 
@@ -974,20 +991,48 @@ def save_and_analyze_results(best_ind, feature_names, X, y, csv_path, metrics=No
    rows = build_rows_list(rf_metrics, best_features, runs_list, feature_names, base_row) # Build rows from metrics and runs
    write_consolidated_csv(rows, output_dir) # Persist consolidated CSV
 
-   if best_features: # If there are best features to analyze
-      df_features = prepare_feature_dataframe(X, feature_names) # Prepare DataFrame for analysis
+   return { # Return saved metadata
+      "best_features": best_features,
+      "rf_metrics": rf_metrics,
+      "output_dir": output_dir,
+      "rfe_ranking": rfe_ranking,
+      "n_train": n_train,
+      "n_test": n_test,
+      "test_frac": test_frac,
+      "n_generations": n_generations,
+      "best_pop_size": best_pop_size,
+      "runs_list": runs_list,
+   }
 
-      if not isinstance(y, pd.Series): # If y is not a pandas Series
-         try: # Try to create a Series with original indices
-            y_series = pd.Series(y, index=df_features.index) # Create Series with original indices
-         except Exception: # If creating Series with original indices fails
-            y_series = pd.Series(y) # Create Series without original indices
-      else: # If y is already a pandas Series
-         y_series = y.reindex(df_features.index) if not df_features.index.equals(y.index) else y # Align indices if necessary
+def analyze_results(saved_info, X, y, feature_names, csv_path):
+   """
+   Analyze and visualize results that were previously saved by `save_results`.
 
-      analyze_top_features(df_features, y_series, best_features, csv_path=csv_path) # Analyze and visualize the top features
+   :param saved_info: Dictionary returned from `save_results` (must contain key "best_features").
+   :param X: Feature set (DataFrame or numpy array) used during GA/training.
+   :param y: Target variable (Series or array) used during GA/training.
+   :param feature_names: List of original feature names used to construct the DataFrame.
+   :param csv_path: Path to the original CSV file for saving outputs (used by analyzers).
+   :return: None
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Analyzing saved results from Genetic Algorithm feature selection.{Style.RESET_ALL}") # Output the verbose message
 
-   return best_features # Return the list of best features
+   best_features = saved_info.get("best_features", []) if isinstance(saved_info, dict) else [] # Extract best features
+   if not best_features: # Nothing to analyze
+      return # Exit early
+
+   df_features = prepare_feature_dataframe(X, feature_names) # Prepare DataFrame for analysis
+
+   if not isinstance(y, pd.Series): # If y is not a pandas Series
+      try: # Try to create a Series with original indices
+         y_series = pd.Series(y, index=df_features.index) # Create Series with original indices
+      except Exception: # If creating Series with original indices fails
+         y_series = pd.Series(y) # Create Series without original indices
+   else: # If y is already a pandas Series
+      y_series = y.reindex(df_features.index) if not df_features.index.equals(y.index) else y # Align indices if necessary
+
+   analyze_top_features(df_features, y_series, best_features, csv_path=csv_path) # Analyze and visualize the top features
 
 def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop=20, max_pop=20, runs=RUNS):
    """
@@ -1084,7 +1129,8 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
       best_run = max(runs_list, key=lambda r: r["metrics"][3]) # Select the run with the best F1-Score
       best_ind = best_run["best_ind"] # Get the best individual from the best run
       best_metrics = best_run["metrics"] # Get the metrics from the best run
-      save_and_analyze_results(best_ind, feature_names, X_train, y_train, csv_path, metrics=best_metrics, X_test=X_test, y_test=y_test, n_generations=n_generations, best_pop_size=best_pop_size, runs_list=runs_list) # Save chosen features, metrics, and split data
+      saved = save_results(best_ind, feature_names, X, y, csv_path, metrics=metrics, X_test=X_test, y_test=y_test, n_generations=n_generations, best_pop_size=best_pop_size, runs_list=runs_list)
+      analyze_results(saved, X, y, feature_names, csv_path)
    else: # If no valid result was found
       print(f"{BackgroundColors.RED}No valid results found during the sweep.{Style.RESET_ALL}")
 
