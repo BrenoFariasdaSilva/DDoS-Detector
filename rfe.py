@@ -9,14 +9,13 @@ Description :
    This script automates the process of performing Recursive Feature Elimination (RFE)
    on structured datasets to identify the most relevant features for classification tasks.
    It provides a fully integrated pipeline — from dataset loading and preprocessing
-   to feature ranking, visualization, and export of analysis reports.
+   to feature ranking and export of analysis results.
 
    Core functionalities include:
       - Dataset validation and safe file handling
       - Standardization of numeric features using z-score normalization
       - Recursive Feature Elimination (RFE) with Random Forest as the base estimator
-      - Generation of ranked feature lists with visual and statistical summaries
-      - Boxplot-based visualization of top features by class distribution
+      - Generation of ranked feature lists
       - Cross-platform sound notification upon completion
 
 Usage:
@@ -26,13 +25,11 @@ Usage:
    3. The program will automatically:
       - Load and clean the dataset
       - Run RFE to select the most relevant features
-      - Save results and visualizations to the `Feature_Analysis/` directory
+      - Save results to the `Feature_Analysis/` directory
       - Optionally play a notification sound when finished
 
 Output:
-   - Text report (`RFE_results_<Model>.txt`) summarizing feature rankings.
-   - CSV summary of top features with mean and standard deviation per class.
-   - Boxplot visualizations for each selected feature stored in `Feature_Analysis/`.
+   - CSV file with RFE run results, including metrics and selected features.
 
 TODOs:
    - Add support for additional estimators (e.g., SVM, Gradient Boosting).
@@ -348,44 +345,6 @@ def save_rfe_results(csv_path, run_results):
    except Exception as e: # If saving CSV fails
       print(f"{BackgroundColors.RED}Failed to save run results to CSV: {e}{Style.RESET_ALL}") # Print error
 
-def analyze_top_features(df, y, top_features, csv_path="."):
-   """
-   Analyze distribution of top features for each class and save plots + CSV summary.
-   Numeric values are rounded to 3 decimal places.
-
-   :param df: The DataFrame containing the features
-   :param y: The target variable (class labels)
-   :param top_features: List of top feature names to analyze
-   :param csv_path: Path to the original CSV file (used for naming output files)
-   :return: None
-   """
-
-   df_analysis = df[top_features].copy() # Create a copy of the DataFrame with only the top features
-   df_analysis["Target"] = pd.Series(y, index=df_analysis.index).astype(str) # Add the target column as string for better plotting
-
-   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Define output directory
-   os.makedirs(output_dir, exist_ok=True) # Create directory if it doesn't exist
-
-   base_dataset_name = os.path.splitext(os.path.basename(csv_path))[0] # Base name of the dataset without extension
-
-   summary = df_analysis.groupby("Target")[top_features].agg(["mean", "std"]) # Group by target and calculate mean and std
-   summary.columns = [f"{col}_{stat}" for col, stat in summary.columns] # Flatten MultiIndex columns
-   summary = summary.round(3) # Round to 3 decimal places
-
-   summary_csv_path = f"{output_dir}{base_dataset_name}_feature_Results.csv" # Define summary CSV path
-   summary.to_csv(summary_csv_path, encoding="utf-8") # Save summary to CSV
-   print(f"{BackgroundColors.GREEN}Feature summary saved to {BackgroundColors.CYAN}{summary_csv_path}{Style.RESET_ALL}")
-
-   for feature in top_features: # Plot distribution for each top feature
-      plt.figure(figsize=(8, 5)) # Set figure size
-      sns.boxplot(x="Target", y=feature, data=df_analysis, hue="Target", palette="Set2", dodge=False) # Boxplot
-      plt.title(f"Distribution of '{feature}' by class") # Set title
-      plt.xlabel("Traffic Type") # Set x-axis label
-      plt.ylabel(feature) # Set y-axis label
-      plt.tight_layout() # Adjust layout
-      plt.savefig(f"{output_dir}/{base_dataset_name}-{safe_filename(feature)}.png") # Save plot
-      plt.close() # Close plot to free memory
-
 def run_rfe(csv_path):
    """
    Runs Recursive Feature Elimination on the provided dataset, prints the single
@@ -438,9 +397,6 @@ def run_rfe(csv_path):
    print_top_features(top_features, rfe_ranking) if VERBOSE else None # Print top features to terminal
    
    save_rfe_results(csv_path, run_results) # Save structured results
-
-   if top_features: # If there are features to analyze
-      analyze_top_features(X, y, top_features, csv_path=csv_path) # Analyze top features
 
 def verbose_output(true_string="", false_string=""):
    """
