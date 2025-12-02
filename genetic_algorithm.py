@@ -204,6 +204,30 @@ def get_dataset_name(input_path):
 
    return dataset_name # Return the dataset name
 
+def load_dataset(csv_path):
+   """
+   Load CSV and return DataFrame.
+
+   :param csv_path: Path to CSV dataset.
+   :return: DataFrame
+   """
+
+   verbose_output(f"\n{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}") # Output the loading dataset message
+
+   if not verify_filepath_exists(csv_path): # If the CSV file does not exist
+      print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
+      return None # Return None
+
+   df = pd.read_csv(csv_path, low_memory=False) # Load the dataset
+
+   df.columns = df.columns.str.strip() # Clean column names by stripping leading/trailing whitespace
+
+   if df.shape[1] < 2: # If there are less than 2 columns
+      print(f"{BackgroundColors.RED}CSV must have at least 1 feature and 1 target.{Style.RESET_ALL}")
+      return None # Return None
+
+   return df # Return the loaded DataFrame
+
 def preprocess_dataframe(df, remove_zero_variance=True):
    """
    Preprocess a DataFrame by removing rows with NaN or infinite values and
@@ -230,53 +254,6 @@ def preprocess_dataframe(df, remove_zero_variance=True):
             df_clean = df_clean.drop(columns=zero_var_cols) # Drop zero-variance columns
 
    return df_clean # Return the cleaned DataFrame
-
-def print_ga_parameters(min_pop, max_pop, n_generations, feature_count):
-   """
-   Print the genetic algorithm parameters in verbose output.
-
-   :param min_pop: Minimum population size.
-   :param max_pop: Maximum population size.
-   :param n_generations: Number of generations per run.
-   :param feature_count: Number of features in the dataset.
-   :return: None
-   """
-   
-   print(f"{BackgroundColors.GREEN}Genetic Algorithm Parameters:{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}Population sizes: {BackgroundColors.CYAN}{min_pop} to {max_pop}{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}Generations per run: {BackgroundColors.CYAN}{n_generations}{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}Number of features: {BackgroundColors.CYAN}{feature_count}{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}Crossover probability: {BackgroundColors.CYAN}0.5{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}Mutation probability: {BackgroundColors.CYAN}0.05{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}Tournament size: {BackgroundColors.CYAN}3{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}Fitness evaluation: {BackgroundColors.CYAN}10-fold Stratified CV on training set{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}Base estimator: {BackgroundColors.CYAN}RandomForestClassifier (n_estimators=100, n_jobs=1){Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}Optimization goal: {BackgroundColors.CYAN}Maximize F1-Score{Style.RESET_ALL}")
-   print("") # Empty line for spacing
-
-def load_dataset(csv_path):
-   """
-   Load CSV and return DataFrame.
-
-   :param csv_path: Path to CSV dataset.
-   :return: DataFrame
-   """
-
-   verbose_output(f"\n{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}") # Output the loading dataset message
-
-   if not verify_filepath_exists(csv_path): # If the CSV file does not exist
-      print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
-      return None # Return None
-
-   df = pd.read_csv(csv_path, low_memory=False) # Load the dataset
-
-   df.columns = df.columns.str.strip() # Clean column names by stripping leading/trailing whitespace
-
-   if df.shape[1] < 2: # If there are less than 2 columns
-      print(f"{BackgroundColors.RED}CSV must have at least 1 feature and 1 target.{Style.RESET_ALL}")
-      return None # Return None
-
-   return df # Return the loaded DataFrame
 
 def cache_preprocessed_data(result, cache_file, csv_path):
    """
@@ -355,6 +332,29 @@ def split_dataset(df, csv_path, test_size=0.2):
    result = X_train_scaled, X_test_scaled, y_train_np, y_test_np, X.columns # Prepare result tuple
    cache_preprocessed_data(result, cache_file, csv_path) # Cache the preprocessed data with size comparison
    return result # Return the splits and feature names
+
+def print_ga_parameters(min_pop, max_pop, n_generations, feature_count):
+   """
+   Print the genetic algorithm parameters in verbose output.
+
+   :param min_pop: Minimum population size.
+   :param max_pop: Maximum population size.
+   :param n_generations: Number of generations per run.
+   :param feature_count: Number of features in the dataset.
+   :return: None
+   """
+   
+   print(f"{BackgroundColors.GREEN}Genetic Algorithm Parameters:{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Population sizes: {BackgroundColors.CYAN}{min_pop} to {max_pop}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Generations per run: {BackgroundColors.CYAN}{n_generations}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Number of features: {BackgroundColors.CYAN}{feature_count}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Crossover probability: {BackgroundColors.CYAN}0.5{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Mutation probability: {BackgroundColors.CYAN}0.05{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Tournament size: {BackgroundColors.CYAN}3{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Fitness evaluation: {BackgroundColors.CYAN}10-fold Stratified CV on training set{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Base estimator: {BackgroundColors.CYAN}RandomForestClassifier (n_estimators=100, n_jobs=1){Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Optimization goal: {BackgroundColors.CYAN}Maximize F1-Score{Style.RESET_ALL}")
+   print("") # Empty line for spacing
 
 def setup_genetic_algorithm(n_features, population_size=None):
    """
