@@ -61,6 +61,7 @@ Assumptions & Notes:
 """
 
 import atexit # For playing a sound when the program finishes
+import ast # For safely evaluating Python literals
 import datetime # For getting the current date and time
 import json # Import json for handling JSON strings within the CSV
 import lightgbm as lgb # For LightGBM model
@@ -264,7 +265,7 @@ def extract_principal_component_analysis_features(file_path):
 
 def extract_recursive_feature_elimination_features(file_path):
    """
-   Extracts the "top_features" list (JSON string) from the first row of the
+   Extracts the "top_features" list (Python literal string) from the first row of the
    "RFE_Run_Results.csv" file located in the "Feature_Analysis" subdirectory
    relative to the input file's directory.
 
@@ -285,8 +286,8 @@ def extract_recursive_feature_elimination_features(file_path):
       df = pd.read_csv(rfe_runs_path, usecols=["top_features"]) # Load only the "top_features" column
       
       if not df.empty: # Verify if the DataFrame is not empty
-         top_features_json = df.loc[0, "top_features"] # Get the JSON string from the first row
-         rfe_features = json.loads(top_features_json) # Parse the JSON string into a Python list
+         top_features_str = df.loc[0, "top_features"] # Get the Python literal string from the first row
+         rfe_features = ast.literal_eval(top_features_str) # Parse the Python literal string into a Python list
          
          verbose_output(f"{BackgroundColors.GREEN}Successfully extracted RFE top features from Run 1. Total features: {BackgroundColors.CYAN}{len(rfe_features)}{Style.RESET_ALL}") # Output the verbose message
          
