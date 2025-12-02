@@ -309,22 +309,21 @@ def print_top_features(top_features, rfe_ranking):
       rank_info = f" {BackgroundColors.GREEN}(RFE ranking {BackgroundColors.CYAN}{rfe_ranking[feat]}{Style.RESET_ALL})" if feat in rfe_ranking else " (RFE ranking N/A)" # Get ranking info
       print(f"{i}. {feat}{rank_info}") # Print the feature and its ranking
 
-def print_average_metrics(avg_metrics, runs):
+def print_metrics(metrics_tuple):
    """
-   Prints average metrics across runs to the terminal.
+   Prints metrics for the current run to the terminal.
 
-   :param avg_metrics: Tuple of average metrics
-   :param runs: Number of runs
+   :param metrics_tuple: Tuple of average metrics
    """
 
-   print(f"\n{BackgroundColors.BOLD}Average Metrics across {runs} runs:{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{avg_metrics[0]:.4f}{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{avg_metrics[1]:.4f}{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{avg_metrics[2]:.4f}{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{avg_metrics[3]:.4f}{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{avg_metrics[4]:.4f}{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{avg_metrics[5]:.4f}{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{avg_metrics[6]:.2f}s{Style.RESET_ALL}")
+   print(f"\n{BackgroundColors.BOLD}Average Metrics:{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{metrics_tuple[0]:.4f}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{metrics_tuple[1]:.4f}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{metrics_tuple[2]:.4f}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{metrics_tuple[3]:.4f}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{metrics_tuple[4]:.4f}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{metrics_tuple[5]:.4f}{Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{metrics_tuple[6]:.2f}s{Style.RESET_ALL}")
 
 def save_rfe_results(csv_path, all_runs, avg_metrics, model_name):
    """
