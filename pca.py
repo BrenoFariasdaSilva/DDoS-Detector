@@ -215,7 +215,6 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
 	rf_n_jobs = -1 if workers == 1 else 1 # Set n_jobs for RandomForest based on workers
 	model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=rf_n_jobs) # Initialize Random Forest model
 	
-	print(f"{BackgroundColors.GREEN}  Running 10-fold Stratified CV on training data...{Style.RESET_ALL}")
 	skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42) # Stratified K-Fold cross-validator
 	
 	cv_accs, cv_precs, cv_recs, cv_f1s = [], [], [], [] # Lists to store CV metrics
