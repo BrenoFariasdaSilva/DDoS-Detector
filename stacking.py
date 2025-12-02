@@ -58,11 +58,15 @@ import numpy as np # Import numpy for numerical operations
 import os # For running a command in the terminal
 import pandas as pd # Import pandas for data manipulation
 import platform # For getting the operating system name
+import time # For measuring execution time
 from colorama import Style # For terminal text styling
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier # For Gradient Boosting model
 from sklearn.linear_model import LogisticRegression # For logistic regression model
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix # For performance metrics
+from sklearn.model_selection import train_test_split # For splitting the dataset
 from sklearn.neighbors import KNeighborsClassifier, NearestCentroid # For k-nearest neighbors model
 from sklearn.neural_network import MLPClassifier # For neural network model
+from sklearn.preprocessing import LabelEncoder, StandardScaler # For label encoding and feature scaling
 from sklearn.svm import SVC # For Support Vector Machine model
 from telegram_bot import TelegramBot # For Telegram notifications
 from xgboost import XGBClassifier # For XGBoost classifier
@@ -385,6 +389,46 @@ def get_models():
 		"LightGBM": lgb.LGBMClassifier(force_row_wise=True, min_gain_to_split=0.01, random_state=42, verbosity=-1),
 		"MLP (Neural Net)": MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=42),
 	}
+
+def scale_and_split(X, y, test_size=0.2, random_state=42):
+   """
+   Scales the numeric features using StandardScaler and splits the data
+   into training and testing sets.
+
+   Note: The target variable 'y' is label-encoded before splitting.
+
+   :param X: Features DataFrame (must contain numeric features).
+   :param y: Target Series or array.
+   :param test_size: Fraction of the data to reserve for the test set.
+   :param random_state: Seed for the random split for reproducibility.
+   :return: Tuple (X_train_scaled, X_test_scaled, y_train, y_test, scaler)
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Scaling features and splitting data (train/test ratio: {BackgroundColors.CYAN}{1-test_size}/{test_size}{BackgroundColors.GREEN})...{Style.RESET_ALL}") # Output the verbose message
+   
+   le = LabelEncoder() # Initialize a LabelEncoder
+   y_encoded = pd.Series(le.fit_transform(y), index=y.index) # Encode the target variable (essential for stratification)
+
+   numeric_X = X.select_dtypes(include=np.number) # Select only numeric columns for scaling
+   non_numeric_X = X.select_dtypes(exclude=np.number) # Identify non-numeric columns (to be dropped)
+   
+   if not non_numeric_X.empty: # If non-numeric columns were found
+      print(f"{BackgroundColors.YELLOW}Warning: Dropping non-numeric feature columns for scaling: {BackgroundColors.CYAN}{list(non_numeric_X.columns)}{Style.RESET_ALL}") # Warn about dropped columns
+       
+   if numeric_X.empty: # If no numeric features remain
+      raise ValueError(f"{BackgroundColors.RED}No numeric features found in X after filtering.{Style.RESET_ALL}") # Raise an error if X is empty
+
+   X_train, X_test, y_train, y_test = train_test_split(numeric_X, y_encoded, test_size=test_size, random_state=random_state, stratify=y_encoded) # Split the data into training and testing sets with stratification
+   
+   scaler = StandardScaler() # Initialize the StandardScaler
+   
+   X_train_scaled = scaler.fit_transform(X_train) # Fit and transform the training features
+   
+   X_test_scaled = scaler.transform(X_test) # Transform the testing features
+
+   verbose_output(f"{BackgroundColors.GREEN}Data split successful. Training set shape: {BackgroundColors.CYAN}{X_train_scaled.shape}{BackgroundColors.GREEN}. Testing set shape: {BackgroundColors.CYAN}{X_test_scaled.shape}{Style.RESET_ALL}") # Output the successful split message
+   
+   return X_train_scaled, X_test_scaled, y_train, y_test, scaler # Return scaled features, target, and the fitted scaler
 
 def calculate_execution_time(start_time, finish_time):
    """
