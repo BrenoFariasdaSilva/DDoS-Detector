@@ -60,7 +60,6 @@ Notes:
 
 import atexit # For playing a sound when the program finishes
 import concurrent.futures # For parallel execution
-import json # For structured JSON output
 import numpy as np # For numerical operations
 import os # For file and directory operations
 import pandas as pd # For data manipulation
