@@ -617,7 +617,7 @@ def save_stacking_results(csv_path, results_list):
    dataset_name = os.path.splitext(os.path.basename(csv_path))[0] # Get base dataset name
    output_dir = f"{os.path.dirname(csv_path)}/{dataset_name}/" # Directory relative to the dataset
    os.makedirs(output_dir, exist_ok=True) # Ensure the directory exists
-   csv_output_path = f"{output_dir}Stacking_Classifier_Results.csv" # Define the final CSV path
+   csv_output_path = f"{output_dir}Stacking_Classifiers_Results.csv" # Define the final CSV path
 
    flat_rows = [] # List to hold flattened dictionaries
    for res in results_list: # For each result entry
