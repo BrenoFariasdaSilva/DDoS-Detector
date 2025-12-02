@@ -766,7 +766,7 @@ def main():
          features_list = get_features_list_for_feature_set(name, feature_names, ga_selected_features, rfe_selected_features) # Determine the features list for this feature set
          
          for model_idx, (model_name, model) in enumerate(individual_models.items(), start=1): # Iterate over each model
-            progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating {idx}/{len(feature_sets)} - {name}: {model_idx}/{len(individual_models)} - {model_name}{Style.RESET_ALL}")
+            progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating {BackgroundColors.CYAN}{idx}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{len(feature_sets)}{BackgroundColors.GREEN} - {BackgroundColors.CYAN}{name}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{model_idx}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{len(individual_models)}{BackgroundColors.GREEN} - {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}") # Update progress bar description
             verbose_output(f"{BackgroundColors.GREEN}Evaluating Individual Classifier: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}") # Output the verbose message
             metrics = evaluate_individual_classifier(model, model_name, X_train_subset, y_train, X_test_subset, y_test) # Evaluate individual model
             
@@ -776,7 +776,7 @@ def main():
             progress_bar.update(1) # Update progress after each model
          
          print(f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}")
-         progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating {idx}/{len(feature_sets)} - {name}: Stacking{Style.RESET_ALL}")
+         progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating {BackgroundColors.CYAN}{idx}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{len(feature_sets)}{BackgroundColors.GREEN} - {BackgroundColors.CYAN}{name}{BackgroundColors.GREEN}: Stacking{Style.RESET_ALL}") # Update progress bar description for stacking
          stacking_metrics = evaluate_stacking_classifier(stacking_model, X_train_subset, y_train, X_test_subset, y_test) # Evaluate stacking model
          
          stacking_result_entry = {"dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Stacking", "model_name": "StackingClassifier", "n_features": X_train_subset.shape[1], "metrics": stacking_metrics, "features_list": features_list} # Prepare stacking result entry
