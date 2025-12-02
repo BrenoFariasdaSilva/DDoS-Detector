@@ -425,12 +425,12 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
 			print_pca_results(results) if VERBOSE else None
    
 	if not all_results: # If no results were collected
-		print(f"{BackgroundColors.RED}No results collected from PCA analysis. Check for errors in worker processes.{Style.RESET_ALL}")
+		print(f"{BackgroundColors.RED}No results collected from PCA analysis. Verify for errors in worker processes.{Style.RESET_ALL}")
 		return # Return
 
 	save_pca_results(csv_path, all_results) # Save all results to files
 	
-	best_result = max(all_results, key=lambda x: x['cv_f1_score']) # Find the best configuration based on CV F1-Score
+	best_result = max(all_results, key=lambda x: x["cv_f1_score"]) # Find the best configuration based on CV F1-Score
  
 	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Best Configuration:{Style.RESET_ALL}")
 	print(f"  {BackgroundColors.GREEN}n_components = {BackgroundColors.CYAN}{best_result['n_components']}{Style.RESET_ALL}")
