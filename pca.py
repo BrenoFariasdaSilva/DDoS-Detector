@@ -59,6 +59,7 @@ Notes:
 """
 
 import atexit # For playing a sound when the program finishes
+import concurrent.futures # For parallel execution
 import json # For structured JSON output
 import numpy as np # For numerical operations
 import os # For file and directory operations
@@ -69,10 +70,9 @@ from colorama import Style # For coloring the terminal
 from sklearn.decomposition import PCA # For Principal Component Analysis
 from sklearn.ensemble import RandomForestClassifier # For the Random Forest model
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix # For performance metrics
-from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score # For splitting and cross-validation
+from sklearn.model_selection import train_test_split, StratifiedKFold # For splitting and cross-validation
 from sklearn.preprocessing import StandardScaler # For scaling the data (standardization)
 from tqdm import tqdm # For progress bars
-import concurrent.futures
 
 # Macros:
 class BackgroundColors: # Colors for the terminal
