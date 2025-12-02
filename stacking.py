@@ -61,7 +61,7 @@ import platform # For getting the operating system name
 import time # For measuring execution time
 from colorama import Style # For terminal text styling
 from sklearn.decomposition import PCA # For Principal Component Analysis
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier # For Gradient Boosting model
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, StackingClassifier # For ensemble models
 from sklearn.linear_model import LogisticRegression # For logistic regression model
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix # For performance metrics
 from sklearn.model_selection import train_test_split # For splitting the dataset
