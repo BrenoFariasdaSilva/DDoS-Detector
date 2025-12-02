@@ -174,6 +174,10 @@ def main():
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Classifiers Stacking{BackgroundColors.GREEN} program!{Style.RESET_ALL}\n") # Output the welcome message 
    start_time = datetime.datetime.now() # Get the start time of the program
    
+   input_path = "./Datasets/CICDDoS2019/01-12/" # Path to the input dataset directory
+   files_to_process = get_files_to_process(input_path, file_extension=".csv") # Get list of CSV files to process
+   files_to_process = ["./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"] # For testing purposes, process only this file
+   
    # Your code goes here
 
    finish_time = datetime.datetime.now() # Get the finish time of the program
