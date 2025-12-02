@@ -94,19 +94,32 @@ class TelegramBot:
       :param env_file: Path to the .env file (optional, defaults to .env in current directory)
       """
       
-      if env_file: # If an env_file is specified
-         load_dotenv(env_file) # Load variables from specified .env file
-      else: # If no env_file is specified
-         load_dotenv() # Load variables from .env file
+      env_path = env_file if env_file else ".env" # Determine the .env file path
+      
+      if not os.path.exists(env_path): # Verify if the .env file exists
+         print(f"{BackgroundColors.RED}Error: {BackgroundColors.CYAN}.env{BackgroundColors.RED} file not found at {env_path}.{Style.RESET_ALL}")
+         self.bot = None # Set bot to None if .env file is missing
+         return # Exit the constructor
+      
+      load_dotenv(env_path) # Load environment variables from .env file
 
-      self.TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_API_KEY") # Get the Telegram bot token from environment variables
-      self.CHAT_ID = os.getenv("CHAT_ID") # Get the chat ID from environment variables
+      self.TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_API_KEY") # Get the Telegram bot token
+      self.CHAT_ID = os.getenv("CHAT_ID") # Get the chat ID
 
-      if self.TELEGRAM_BOT_TOKEN: # If the Telegram bot token is set
+      missing_vars = [] # List to track missing variables
+      if not self.TELEGRAM_BOT_TOKEN: # If TELEGRAM_API_KEY is missing
+         missing_vars.append("TELEGRAM_API_KEY") # Add to missing variables list
+      if not self.CHAT_ID: # If CHAT_ID is missing
+         missing_vars.append("CHAT_ID") # Add to missing variables list
+
+      if missing_vars: # If there are missing variables
+         print(f"{BackgroundColors.RED}Error: The following required variables were not found in {env_path}: {BackgroundColors.CYAN}{', '.join(missing_vars)}{BackgroundColors.RED}.{Style.RESET_ALL}")
+         self.bot = None # Set bot to None if tokens are missing
+      elif self.TELEGRAM_BOT_TOKEN and self.CHAT_ID: # If both tokens are present
          self.bot = Bot(token=self.TELEGRAM_BOT_TOKEN) # Initialize the Telegram bot
-      else: # If the Telegram bot token is not set
-         print(f"{BackgroundColors.RED}TELEGRAM_API_KEY not found in .env file.{Style.RESET_ALL}")
-         self.bot = None # None
+      else: # If tokens are missing but no specific missing_vars identified (unlikely)
+         print(f"{BackgroundColors.RED}Bot initialization failed due to configuration errors.{Style.RESET_ALL}")
+         self.bot = None # Set bot to None
 
    def _get_chat_id(self, chat_id):
       """
