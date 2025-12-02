@@ -81,7 +81,6 @@ from sklearn.neighbors import KNeighborsClassifier, NearestCentroid # For k-near
 from sklearn.neural_network import MLPClassifier # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler # For label encoding and feature scaling
 from sklearn.svm import SVC # For Support Vector Machine model
-from telegram_bot import TelegramBot # For Telegram notifications
 from tqdm import tqdm # For progress bars
 from xgboost import XGBClassifier # For XGBoost classifier
 
@@ -734,8 +733,6 @@ def main():
    
    dataset_name = get_dataset_name(input_path) # Get the dataset name from the input path
    
-   bot = TelegramBot() # Initialize Telegram bot for notifications
-   
    for file in files_to_process: # For each file to process
       print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}") # Output the file being processed
       
@@ -745,14 +742,12 @@ def main():
       
       if df is None: # If the dataset failed to load
          verbose_output(f"{BackgroundColors.RED}Failed to load dataset from: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}") # Output the failure message
-         bot.send_messages([f"Failed to load dataset: {os.path.basename(file)}"]) # Send Telegram notification
          continue # Skip to the next file if loading failed
       
       cleaned_df = preprocess_dataframe(df) # Preprocess the DataFrame
       
       if cleaned_df is None or cleaned_df.empty: # If the DataFrame is None or empty after preprocessing
          print(f"{BackgroundColors.RED}Dataset {BackgroundColors.CYAN}{file}{BackgroundColors.RED} empty after preprocessing. Skipping.{Style.RESET_ALL}")
-         bot.send_messages([f"Dataset empty after preprocessing: {os.path.basename(file)}"]) # Send Telegram notification
          continue # Skip to the next file if preprocessing failed
       
       X_full = cleaned_df.select_dtypes(include=np.number).iloc[:, :-1] # Features (numeric only)
@@ -761,7 +756,6 @@ def main():
 
       if len(np.unique(y)) < 2: # Verify if there is more than one class
          print(f"{BackgroundColors.RED}Target column has only one class. Cannot perform classification. Skipping.{Style.RESET_ALL}") # Output the error message
-         bot.send_messages([f"Skipping {os.path.basename(file)}: Only one class in target column."]) # Send Telegram notification
          continue # Skip to the next file
       
       X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X_full, y) # Scale and split the data
@@ -790,12 +784,10 @@ def main():
       all_results = [] # List to store results for saving (individual + stacking)
       
       print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}--- Running Classifier Evaluation (Individual + Stacking) ---{Style.RESET_ALL}") # Output separator
-      bot.send_messages([f"Starting Classifiers Evaluation for {os.path.basename(file)}..."]) # Send Telegram notification
       
       for idx, (name, (X_train_subset, X_test_subset)) in enumerate(feature_sets.items(), start=1):
          if X_train_subset.shape[1] == 0: # Verify if the subset is empty
             print(f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}") # Output warning
-            bot.send_messages([f"Skipping {name} for {os.path.basename(file)}: No features selected."]) # Send Telegram notification
             progress_bar.update(len(individual_models) + 1) # Skip all steps for this feature set
             continue # Skip to the next set
              
@@ -820,7 +812,6 @@ def main():
          stacking_result_entry = {"dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Stacking", "model_name": "StackingClassifier", "n_features": X_train_subset.shape[1], "metrics": stacking_metrics, "features_list": features_list} # Prepare stacking result entry
          all_results.append(stacking_result_entry) # Add stacking result
          print(f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{stacking_metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
-         bot.send_messages([f"{os.path.basename(file)} - {name} - Best Stacking Accuracy: {stacking_metrics[0]:.4f}"]) # Send Telegram notification
          progress_bar.update(1) # Update progress after stacking
       
       save_stacking_results(file, all_results) # Save consolidated results to CSV
