@@ -1129,8 +1129,8 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
       best_run = max(runs_list, key=lambda r: r["metrics"][3]) # Select the run with the best F1-Score
       best_ind = best_run["best_ind"] # Get the best individual from the best run
       best_metrics = best_run["metrics"] # Get the metrics from the best run
-      saved = save_results(best_ind, feature_names, X, y, csv_path, metrics=metrics, X_test=X_test, y_test=y_test, n_generations=n_generations, best_pop_size=best_pop_size, runs_list=runs_list)
-      analyze_results(saved, X, y, feature_names, csv_path)
+      saved = save_results(best_ind, feature_names, X_train, y_train, csv_path, metrics=best_metrics, X_test=X_test, y_test=y_test, n_generations=n_generations, best_pop_size=best_pop_size, runs_list=runs_list) # Save the best results
+      analyze_results(saved, X_train, y_train, feature_names, csv_path) # Analyze the saved results
    else: # If no valid result was found
       print(f"{BackgroundColors.RED}No valid results found during the sweep.{Style.RESET_ALL}")
 
