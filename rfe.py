@@ -54,6 +54,7 @@ Notes:
 """
 
 import atexit # For playing a sound when the program finishes
+import json # For saving lists and dicts as JSON strings
 import matplotlib.pyplot as plt # For plotting
 import numpy as np # For numerical operations
 import os # For file and directory operations
@@ -339,6 +340,8 @@ def save_rfe_results(csv_path, run_results):
 
    try: # Try saving CSV
       df_run = pd.DataFrame(run_results) # Create DataFrame
+      columns_order = ["model", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s", "top_features", "rfe_ranking"] # Define column order
+      df_run = df_run.reindex(columns=columns_order) # Reorder columns
       run_csv_path = f"{output_dir}RFE_Run_Results.csv" # CSV path
       df_run.to_csv(run_csv_path, index=False, encoding="utf-8") # Write run results CSV
       print(f"{BackgroundColors.GREEN}Run results saved to {BackgroundColors.CYAN}{run_csv_path}{Style.RESET_ALL}") # Notify CSV saved
@@ -418,7 +421,13 @@ def run_rfe(csv_path):
 
    run_results = [{ # Store results for this run
       "model": model.__class__.__name__, # Model name
-      "metrics": metrics_tuple, # Performance metrics tuple
+      "accuracy": metrics_tuple[0], # Accuracy
+      "precision": metrics_tuple[1], # Precision
+      "recall": metrics_tuple[2], # Recall
+      "f1_score": metrics_tuple[3], # F1-Score
+      "fpr": metrics_tuple[4], # False Positive Rate
+      "fnr": metrics_tuple[5], # False Negative Rate
+      "elapsed_time_s": metrics_tuple[6], # Elapsed time in seconds
       "top_features": top_features, # List of top features
       "rfe_ranking": rfe_ranking # RFE rankings dictionary
    }]
