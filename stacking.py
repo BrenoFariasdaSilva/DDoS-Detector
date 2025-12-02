@@ -722,11 +722,12 @@ def main():
       feature_sets = { # Dictionary of feature sets to evaluate
          "Full Features": (X_train_scaled, X_test_scaled), # All features
          "GA Features": (get_feature_subset(X_train_scaled, ga_selected_features, feature_names), get_feature_subset(X_test_scaled, ga_selected_features, feature_names)), # GA subset
-         "RFE Features": (get_feature_subset(X_train_scaled, rfe_selected_features, feature_names), get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)), # RFE subset
-         "PCA Components": (X_train_pca, X_test_pca) if X_train_pca is not None else None # PCA components (only if PCA was applied)
+         "PCA Components": (X_train_pca, X_test_pca) if X_train_pca is not None else None, # PCA components (only if PCA was applied)
+         "RFE Features": (get_feature_subset(X_train_scaled, rfe_selected_features, feature_names), get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)) # RFE subset
       }
       
       feature_sets = {k: v for k, v in feature_sets.items() if v is not None} # Remove any None entries (e.g., PCA if not applied)
+      feature_sets = dict(sorted(feature_sets.items())) # Sort the feature sets by name
 
       all_results = [] # List to store results for saving (individual + stacking)
       
