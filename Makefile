@@ -49,6 +49,10 @@ telegram: $(VENV)
 	$(CLEAR_CMD)
 	$(TIME_CMD) $(PYTHON) ./telegram_bot.py
 
+wgangp: $(VENV)
+	$(CLEAR_CMD)
+	$(TIME_CMD) $(PYTHON) ./wgangp.py
+
 # Create virtual environment and install dependencies
 $(VENV):
 	@echo "Creating virtual environment..."
@@ -69,4 +73,4 @@ clean:
 	find . -type f -name '*.pyc' -delete || del /S /Q *.pyc 2>nul
 	find . -type d -name '__pycache__' -delete || rmdir /S /Q __pycache__ 2>nul
 
-.PHONY: all main clean dependencies generate_requirements dataset_descriptor genetic_algorithm pca rfe stacking telegram
+.PHONY: all main clean dependencies generate_requirements dataset_descriptor genetic_algorithm pca rfe stacking telegram wgan_gp
