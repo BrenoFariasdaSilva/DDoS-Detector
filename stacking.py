@@ -544,14 +544,20 @@ def save_stacking_results(csv_path, results_list):
 
    flat_rows = [] # List to hold flattened dictionaries
    for res in results_list: # For each result entry
-      metrics = res.pop("metrics") # Extract the metrics tuple and remove it from the dict
+      metrics = res.get("metrics") # Extract the metrics tuple without removing it
+      if metrics is None: # Handle missing metrics defensively
+         metrics = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0) # Default metrics tuple
       
       row = res.copy() # Start with the base keys ("dataset", "feature_set", etc.)
+      row.pop("metrics", None) # Remove metrics from the row copy (not from original)
       row.update({"accuracy": round(metrics[0], 4), "precision": round(metrics[1], 4), "recall": round(metrics[2], 4), "f1_score": round(metrics[3], 4), "fpr": round(metrics[4], 4), "fnr": round(metrics[5], 4), "elapsed_time_s": round(metrics[6], 2)})
       flat_rows.append(row) # Add the flattened row
 
    df_out = pd.DataFrame(flat_rows) # Create DataFrame from flattened rows
-   columns_order = ["dataset", "feature_set", "n_features", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s"] # Define desired column order
+   columns_order = ["dataset", "feature_set", "classifier_type", "model_name", "n_features", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s"] # Define desired column order
+   for col in columns_order: # Ensure all columns exist
+      if col not in df_out.columns: # If column is missing
+         df_out[col] = None # Add missing columns with None
    df_out = df_out.reindex(columns=columns_order) # Reindex/reorder the columns
 
    try: # Attempt to save the DataFrame to CSV
