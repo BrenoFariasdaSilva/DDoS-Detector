@@ -162,32 +162,39 @@ def get_dataset_name(input_path):
 def extract_genetic_algorithm_features(file_path):
    """
    Extracts the features selected by the Genetic Algorithm from the corresponding
-   "Genetic_Algorithm_Results_features.csv" file located in the "Feature_Analysis"
+   "Genetic_Algorithm_Results.csv" file located in the "Feature_Analysis"
    subdirectory relative to the input file's directory.
 
+   It specifically retrieves the 'best_features' (a JSON string) from the row
+   where the 'run_index' is 'best', and returns it as a Python list.
+
    :param file_path: Full path to the current CSV file being processed (e.g., "./Datasets/.../DrDoS_DNS.csv").
-   :return: List of features selected by the GA, or None if the file is not found or fails to load.
+   :return: List of features selected by the GA, or None if the file is not found or fails to load/parse.
    """
    
    file_dir = os.path.dirname(file_path) # Determine the directory of the input file
-   ga_feature_path = os.path.join(file_dir, "Feature_Analysis", "Genetic_Algorithm_Results_features.csv") # Construct the path to the GA feature file
+   ga_results_path = os.path.join(file_dir, "Feature_Analysis", "Genetic_Algorithm_Results.csv") # Construct the path to the consolidated GA results file
    
    verbose_output(f"{BackgroundColors.GREEN}Extracting GA features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
 
-   if not verify_filepath_exists(ga_feature_path): # Verify if the GA feature file exists
-      print(f"{BackgroundColors.YELLOW}Warning: GA feature file not found at {BackgroundColors.CYAN}{ga_feature_path}{BackgroundColors.YELLOW}. Skipping GA feature extraction for this file.{Style.RESET_ALL}")
+   if not verify_filepath_exists(ga_results_path): # Verify if the GA results file exists
+      print(f"{BackgroundColors.YELLOW}Warning: GA results file not found at {BackgroundColors.CYAN}{ga_results_path}{BackgroundColors.YELLOW}. Skipping GA feature extraction for this file.{Style.RESET_ALL}")
       return None # Return None if the file does not exist
 
-   try: # Try to load the GA features
-      df = pd.read_csv(ga_feature_path, usecols=[0], header=0, names=["feature"]) # Load the GA feature file, only the first column
+   try: # Try to load the GA results
+      df = pd.read_csv(ga_results_path, usecols=["best_features", "run_index"]) # Load only the necessary columns
+      best_row = df[df["run_index"] == "best"].iloc[0] # Get the row where run_index is 'best'
+      best_features_json = best_row["best_features"] # Get the JSON string of best features
+      ga_features = json.loads(best_features_json) # Parse the JSON string into a Python list
       
-      ga_features = df["feature"].tolist() # Extract the features into a list
-      
-      verbose_output(f"{BackgroundColors.GREEN}Successfully extracted {BackgroundColors.CYAN}{len(ga_features)}{BackgroundColors.GREEN} GA features.{Style.RESET_ALL}") # Output the verbose message
+      verbose_output(f"{BackgroundColors.GREEN}Successfully extracted {BackgroundColors.CYAN}{len(ga_features)}{BackgroundColors.GREEN} GA features from the 'best' run.{Style.RESET_ALL}") # Output the verbose message
       
       return ga_features # Return the list of GA features
-   except Exception as e: # If there is an error loading the file
-      print(f"{BackgroundColors.RED}Error loading GA features from {BackgroundColors.CYAN}{ga_feature_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")
+   except IndexError: # If there is no 'best' run_index
+      print(f"{BackgroundColors.RED}Error: 'best' run_index not found in GA results file at {BackgroundColors.CYAN}{ga_results_path}{Style.RESET_ALL}")
+      return None # Return None if 'best' run_index is not found
+   except Exception as e: # If there is an error loading or parsing the file
+      print(f"{BackgroundColors.RED}Error loading/parsing GA features from {BackgroundColors.CYAN}{ga_results_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")
       return None # Return None if there was an error
 
 def extract_recursive_feature_elimination_features(file_path):
