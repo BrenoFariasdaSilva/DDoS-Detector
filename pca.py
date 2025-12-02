@@ -405,7 +405,7 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
 				try: # Handle completion of futures
 					for fut in concurrent.futures.as_completed(future_to_ncomp): # As each future completes
 						n = future_to_ncomp.get(fut) # Get the corresponding n_components
-						pbar.set_description(f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL} (n_components={n})")
+						pbar.set_description(f"{BackgroundColors.GREEN}PCA Analysis {BackgroundColors.CYAN}(n_components={n}){Style.RESET_ALL}")
 						try: # Get the result from the future
 							res = fut.result() # Get the result
 							results_map[res["n_components"]] = res # Store result in the map
