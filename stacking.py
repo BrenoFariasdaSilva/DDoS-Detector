@@ -71,6 +71,7 @@ import os # For running a command in the terminal
 import pandas as pd # Import pandas for data manipulation
 import pickle # For loading PCA objects
 import platform # For getting the operating system name
+import psutil # For checking system RAM
 import time # For measuring execution time
 from colorama import Style # For terminal text styling
 from sklearn.decomposition import PCA # For Principal Component Analysis
@@ -123,7 +124,25 @@ def verbose_output(true_string="", false_string=""):
       print(true_string) # Output the true statement string
    elif false_string != "": # If the false_string is set
       print(false_string) # Output the false statement string
+
+def set_threads_limit_based_on_ram():
+   """
+   Sets THREADS_LIMIT to 1 if system RAM is <= 16GB to avoid memory issues.
+
+   :param: None
+   :return: None
+   """
    
+   verbose_output(f"{BackgroundColors.GREEN}Verifying system RAM to set THREADS_LIMIT...{Style.RESET_ALL}") # Output the verbose message
+   
+   global THREADS_LIMIT # Use the global THREADS_LIMIT variable
+   
+   ram_gb = psutil.virtual_memory().total / (1024 ** 3) # Get total system RAM in GB
+   
+   if ram_gb <= 16: # If RAM is less than or equal to 16GB
+      THREADS_LIMIT = 1 # Set THREADS_LIMIT to 1
+      verbose_output(f"{BackgroundColors.YELLOW}System RAM is {ram_gb:.1f}GB (<=16GB). Setting THREADS_LIMIT to 1.{Style.RESET_ALL}")   
+
 def verify_filepath_exists(filepath):
    """
    Verify if a file or folder exists at the specified path.
@@ -728,6 +747,8 @@ def main():
 
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Classifiers Stacking{BackgroundColors.GREEN} program!{Style.RESET_ALL}\n") # Output the welcome message 
    start_time = datetime.datetime.now() # Get the start time of the program
+   
+   set_threads_limit_based_on_ram() # Adjust THREADS_LIMIT based on system RAM
    
    input_path = "./Datasets/CICDDoS2019/01-12/" # Path to the input dataset directory
    files_to_process = get_files_to_process(input_path, file_extension=".csv") # Get list of CSV files to process
