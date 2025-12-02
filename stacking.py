@@ -51,6 +51,7 @@ import datetime # For getting the current date and time
 import os # For running a command in the terminal
 import platform # For getting the operating system name
 from colorama import Style # For coloring the terminal
+from telegram_bot import TelegramBot # For Telegram notifications
 
 # Macros:
 class BackgroundColors: # Colors for the terminal
