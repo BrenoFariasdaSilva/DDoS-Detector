@@ -234,6 +234,48 @@ def extract_recursive_feature_elimination_features(file_path):
       print(f"{BackgroundColors.RED}Error loading/parsing RFE features from {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")
       return None # Return None if there was an error
 
+def extract_principal_component_analysis_features(file_path):
+   """
+   Extracts the optimal number of Principal Components (n_components)
+   from the "PCA_Results.csv" file located in the "Feature_Analysis"
+   subdirectory relative to the input file's directory.
+
+   The best result is determined by the highest 'cv_f1_score'.
+
+   :param file_path: Full path to the current CSV file being processed (e.g., "./Datasets/.../DrDoS_DNS.csv").
+   :return: Integer representing the optimal number of components (n_components), or None if the file is not found or fails to load/parse.
+   """
+   
+   file_dir = os.path.dirname(file_path) # Determine the directory of the input file
+   pca_results_path = os.path.join(file_dir, "Feature_Analysis", "PCA_Results.csv") # Construct the path to the PCA results file
+   
+   verbose_output(f"{BackgroundColors.GREEN}Extracting PCA features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
+
+   if not verify_filepath_exists(pca_results_path): # Verify if the PCA results file exists
+      print(f"{BackgroundColors.YELLOW}Warning: PCA results file not found at {BackgroundColors.CYAN}{pca_results_path}{BackgroundColors.YELLOW}. Skipping PCA feature extraction for this file.{Style.RESET_ALL}")
+      return None # Return None if the file does not exist
+
+   try: # Try to load the PCA results
+      df = pd.read_csv(pca_results_path, usecols=["n_components", "cv_f1_score"]) # Load only the necessary columns
+      
+      if df.empty: # Verify if the DataFrame is empty
+         print(f"{BackgroundColors.RED}Error: PCA results file at {BackgroundColors.CYAN}{pca_results_path}{BackgroundColors.RED} is empty.{Style.RESET_ALL}")
+         return None # Return None if the file is empty
+          
+      best_row_index = df["cv_f1_score"].idxmax() # Get the index of the row with the highest CV F1-Score
+      best_n_components = df.loc[best_row_index, "n_components"] # Get the optimal number of components
+      
+      verbose_output(f"{BackgroundColors.GREEN}Successfully extracted best PCA configuration. Optimal components: {BackgroundColors.CYAN}{best_n_components}{Style.RESET_ALL}") # Output the verbose message
+      
+      return int(best_n_components) # Return the optimal number of principal components
+      
+   except KeyError as e: # Handle missing columns
+      print(f"{BackgroundColors.RED}Error: Required column {e} not found in PCA results file at {BackgroundColors.CYAN}{pca_results_path}{Style.RESET_ALL}")
+      return None # Return None if required column is missing
+   except Exception as e: # Handle other errors (loading, parsing, etc.)
+      print(f"{BackgroundColors.RED}Error loading/parsing PCA features from {BackgroundColors.CYAN}{pca_results_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")
+      return None # Return None if there was an error
+
 def calculate_execution_time(start_time, finish_time):
    """
    Calculates the execution time between start and finish times and formats it as hh:mm:ss.
@@ -303,6 +345,13 @@ def main():
          print(f"{BackgroundColors.GREEN}RFE Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file)}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(rfe_selected_features)}{Style.RESET_ALL}")
       else: # If RFE features were not extracted
          print(f"{BackgroundColors.YELLOW}Proceeding without RFE features for {BackgroundColors.CYAN}{os.path.basename(file)}{Style.RESET_ALL}")
+         
+      pca_n_components = extract_principal_component_analysis_features(file) # Extract the optimal number of PCA components
+      
+      if pca_n_components: # If PCA components were successfully extracted
+         print(f"{BackgroundColors.GREEN}PCA optimal components successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{pca_n_components}{Style.RESET_ALL}")
+      else: # If PCA components were not extracted
+         print(f"{BackgroundColors.YELLOW}Proceeding without PCA components for {BackgroundColors.CYAN}{os.path.basename(file)}{Style.RESET_ALL}")
 
    finish_time = datetime.datetime.now() # Get the finish time of the program
    print(f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
