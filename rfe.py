@@ -173,7 +173,7 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
    :param y: Target Series
    :param test_size: Proportion of the dataset to include in the test split
    :param random_state: Random seed for reproducibility
-   :return: X_train, X_test, y_train, y_test
+   :return: X_train, X_test, y_train, y_test, feature_columns
    """
 
    scaler = StandardScaler() # Initialize the scaler
@@ -195,7 +195,7 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
    stratify_param = y if len(np.unique(y)) > 1 else None # Avoid stratify for constant labels
    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=test_size, random_state=random_state, stratify=stratify_param) # Split into train/test sets
 
-   return X_train, X_test, y_train, y_test # Return the split data
+   return X_train, X_test, y_train, y_test, X_numeric.columns # Return the split data and feature columns
 
 def run_rfe_selector(X_train, y_train, n_select=10, random_state=42):
    """
@@ -407,13 +407,13 @@ def run_rfe(csv_path):
    if X is None or y is None: # If loading failed
       return # Exit the function
 
-   X_train, X_test, y_train, y_test = scale_and_split(X, y) # Scale and split the data
+   X_train, X_test, y_train, y_test, feature_columns = scale_and_split(X, y) # Scale and split the data
 
    random_state = 42 # Fixed random state for reproducibility
 
    selector, model = run_rfe_selector(X_train, y_train, random_state=random_state) # Run RFE to select top features
    metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=random_state) # Compute performance metrics (returns a tuple)
-   top_features, rfe_ranking = extract_top_features(selector, X.columns) # Extract top features and their rankings
+   top_features, rfe_ranking = extract_top_features(selector, feature_columns) # Extract top features and their rankings
 
    run_results = [{ # Store results for this run
       "model": model.__class__.__name__, # Model name
