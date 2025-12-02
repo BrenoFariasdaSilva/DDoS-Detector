@@ -414,7 +414,16 @@ def main():
       
       ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(file) # Load feature selection results
       
-      # TODO: Implement data loading and preprocessing logic here
+      df = load_dataset(file) # Load the dataset
+      
+      if df is None: # If the dataset failed to load
+         continue # Skip to the next file if loading failed
+      
+      cleaned_df = preprocess_dataframe(df) # Preprocess the DataFrame
+      
+      if cleaned_df is None or cleaned_df.empty: # If the DataFrame is None or empty after preprocessing
+         print(f"{BackgroundColors.RED}Dataset {BackgroundColors.CYAN}{file}{BackgroundColors.RED} empty after preprocessing. Skipping.{Style.RESET_ALL}")
+         continue # Skip to the next file if preprocessing failed
       
       # TODO: Implement classifiers stacking and evaluation logic here
       
