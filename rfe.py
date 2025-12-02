@@ -419,6 +419,8 @@ def run_rfe(csv_path):
    metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=random_state) # Compute performance metrics (returns a tuple)
    top_features, rfe_ranking = extract_top_features(selector, feature_columns) # Extract top features and their rankings
 
+   sorted_rfe_ranking = sorted(rfe_ranking.keys(), key=lambda x: rfe_ranking[x]) # Sort features by ranking (ascending, lower is better)
+
    run_results = [{ # Store results for this run
       "model": model.__class__.__name__, # Model name
       "accuracy": metrics_tuple[0], # Accuracy
@@ -428,8 +430,8 @@ def run_rfe(csv_path):
       "fpr": metrics_tuple[4], # False Positive Rate
       "fnr": metrics_tuple[5], # False Negative Rate
       "elapsed_time_s": metrics_tuple[6], # Elapsed time in seconds
-      "top_features": top_features, # List of top features
-      "rfe_ranking": rfe_ranking # RFE rankings dictionary
+      "top_features": json.dumps(top_features), # List of top features as JSON
+      "rfe_ranking": json.dumps(sorted_rfe_ranking) # Sorted RFE rankings list as JSON
    }]
 
    print_metrics(metrics_tuple) if VERBOSE else None # Print metrics to terminal
