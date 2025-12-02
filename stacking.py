@@ -456,6 +456,8 @@ def load_pca_object(file_path, pca_n_components):
    :return: PCA object if found, None otherwise.
    """
    
+   verbose_output(f"{BackgroundColors.GREEN}Loading the PCA Cache object with {BackgroundColors.CYAN}{pca_n_components}{BackgroundColors.GREEN} components from file {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
+   
    file_dir = os.path.dirname(file_path) # Get the directory of the dataset
    pca_file = os.path.join(file_dir, "Cache", f"PCA_{pca_n_components}_components.pkl") # Construct the path to the PCA pickle file
    
