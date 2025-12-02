@@ -194,7 +194,7 @@ class TelegramBot:
       text = "\n".join(messages) # Join messages into a single string
       await self.send_long_message(text, chat_id) # Send the long message
 
-   def send_messages(self, messages, chat_id=None):
+   async def send_messages(self, messages, chat_id=None):
       """
       Synchronous wrapper to send messages.
 
