@@ -392,7 +392,7 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
 		try: # Attempt parallel execution
 			cpu_count = os.cpu_count() or 1 # Get the number of CPU cores
 			workers = max_workers or min(len(n_components_list), cpu_count) # Determine number of workers
-			print(f"\n{BackgroundColors.GREEN}Running {BackgroundColors.CYAN}PCA Analysis{BackgroundColors.GREEN} in Parallel with {BackgroundColors.CYAN}{workers}{BackgroundColors.GREEN} Worker(s)...{Style.RESET_ALL}")
+			print(f"{BackgroundColors.GREEN}Running {BackgroundColors.CYAN}PCA Analysis{BackgroundColors.GREEN} in Parallel with {BackgroundColors.CYAN}{workers}{BackgroundColors.GREEN} Worker(s)...{Style.RESET_ALL}")
 
 			results_map = {} # Map to store results by n_components
 			future_to_ncomp = {} # Map each future to its n_components value
