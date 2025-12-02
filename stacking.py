@@ -117,6 +117,29 @@ def get_files_to_process(directory_path, file_extension=".csv"):
 
    return sorted(files) # Return sorted list for consistency
 
+def get_dataset_name(input_path):
+   """
+   Extract the dataset name from CSVs path.
+
+   :param input_path: Path to the CSVs files
+   :return: Dataset name
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Extracting dataset name from CSV path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}") # Output the verbose message
+   
+   datasets_pos = input_path.find("/Datasets/") # Find the position of "/Datasets/" in the path
+   if datasets_pos != -1: # If "/Datasets/" is found in the path
+      after_datasets = input_path[datasets_pos + len("/Datasets/"):] # Get the substring after "/Datasets/"
+      next_slash = after_datasets.find("/") # Find the next "/"
+      if next_slash != -1: # If there is another "/"
+         dataset_name = after_datasets[:next_slash] # Take until the next "/"
+      else: # If there is no other "/"
+         dataset_name = after_datasets.split("/")[0] if "/" in after_datasets else after_datasets # No more "/", take the first part if any
+   else: # If "/Datasets/" is not found in the path
+      dataset_name = os.path.basename(input_path) # Fallback to basename if "Datasets" not in path
+
+   return dataset_name # Return the dataset name
+
 def verify_filepath_exists(filepath):
    """
    Verify if a file or folder exists at the specified path.
@@ -177,6 +200,10 @@ def main():
    input_path = "./Datasets/CICDDoS2019/01-12/" # Path to the input dataset directory
    files_to_process = get_files_to_process(input_path, file_extension=".csv") # Get list of CSV files to process
    files_to_process = ["./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"] # For testing purposes, process only this file
+   
+   dataset_name = get_dataset_name(input_path) # Get the dataset name from the input path
+   
+   bot = TelegramBot() # Initialize Telegram bot for notifications
    
    # Your code goes here
 
