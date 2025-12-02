@@ -392,21 +392,30 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
 		try: # Attempt parallel execution
 			cpu_count = os.cpu_count() or 1 # Get the number of CPU cores
 			workers = max_workers or min(len(n_components_list), cpu_count) # Determine number of workers
-			print(f"\n{BackgroundColors.GREEN}Running {BackgroundColors.CYAN}PCA analysis{BackgroundColors.GREEN} in parallel with {BackgroundColors.CYAN}{workers}{BackgroundColors.GREEN} worker(s)...{Style.RESET_ALL}")
+			print(f"\n{BackgroundColors.GREEN}Running {BackgroundColors.CYAN}PCA Analysis{BackgroundColors.GREEN} in Parallel with {BackgroundColors.CYAN}{workers}{BackgroundColors.GREEN} Worker(s)...{Style.RESET_ALL}")
 
 			results_map = {} # Map to store results by n_components
-			futures = [] # List to store futures
+			future_to_ncomp = {} # Map each future to its n_components value
 			with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor: # Create a process pool executor
 				for n_components in n_components_list: # Loop over each number of components
-					futures.append(executor.submit(apply_pca_and_evaluate, X_train, y_train, X_test, y_test, n_components, workers=workers)) # Submit tasks to the executor
+					fut = executor.submit(apply_pca_and_evaluate, X_train, y_train, X_test, y_test, n_components, workers=workers) # Submit task to the executor
+					future_to_ncomp[fut] = n_components # Map future to n_components
 
-				for fut in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}", unit="config", leave=False):
-					try: # Get the result from the future
-						res = fut.result() # Get the result
-						results_map[res["n_components"]] = res # Store result in the map
-						print_pca_results(res) if VERBOSE else None
-					except Exception as e: # Handle exceptions from worker processes
-						print(f"{BackgroundColors.RED}Error in worker: {e}{Style.RESET_ALL}")
+				pbar = tqdm(total=len(future_to_ncomp), desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}", unit="config", leave=False) # Progress bar for tracking completion
+				try: # Handle completion of futures
+					for fut in concurrent.futures.as_completed(future_to_ncomp): # As each future completes
+						n = future_to_ncomp.get(fut) # Get the corresponding n_components
+						pbar.set_description(f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL} (n_components={n})")
+						try: # Get the result from the future
+							res = fut.result() # Get the result
+							results_map[res["n_components"]] = res # Store result in the map
+							print_pca_results(res) if VERBOSE else None
+						except Exception as e: # Handle exceptions from worker processes
+							print(f"{BackgroundColors.RED}Error in worker: {e}{Style.RESET_ALL}")
+						finally: # Update the progress bar
+							pbar.update(1) # Update progress bar
+				finally: # Ensure progress bar is closed
+					pbar.close() # Close the progress bar
 
 			for n in n_components_list: # Collect results in the original order
 				if n in results_map: # If result exists for this n_components
