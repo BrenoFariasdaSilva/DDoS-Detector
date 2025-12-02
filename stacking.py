@@ -200,7 +200,7 @@ def extract_genetic_algorithm_features(file_path):
 def extract_recursive_feature_elimination_features(file_path):
    """
    Extracts the "top_features" list (JSON string) from the first row of the
-   "RFE_Runs_Results.csv" file located in the "Feature_Analysis" subdirectory
+   "RFE_Run_Results.csv" file located in the "Feature_Analysis" subdirectory
    relative to the input file's directory.
 
    :param file_path: Full path to the current CSV file being processed (e.g., "./Datasets/.../DrDoS_DNS.csv").
@@ -208,7 +208,7 @@ def extract_recursive_feature_elimination_features(file_path):
    """
    
    file_dir = os.path.dirname(file_path) # Determine the directory of the input file
-   rfe_runs_path = os.path.join(file_dir, "Feature_Analysis", "RFE_Runs_Results.csv") # Construct the path to the RFE runs file
+   rfe_runs_path = os.path.join(file_dir, "Feature_Analysis", "RFE_Run_Results.csv") # Construct the path to the RFE runs file
    
    verbose_output(f"{BackgroundColors.GREEN}Extracting RFE features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
 
