@@ -276,6 +276,35 @@ def extract_principal_component_analysis_features(file_path):
       print(f"{BackgroundColors.RED}Error loading/parsing PCA features from {BackgroundColors.CYAN}{pca_results_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")
       return None # Return None if there was an error
 
+def load_feature_selection_results(file_path):
+   """
+   Load GA, RFE and PCA feature selection artifacts for a given dataset file and
+   print concise status messages.
+
+   :param file_path: Path to the dataset CSV being processed.
+   :return: Tuple (ga_selected_features, rfe_selected_features, pca_n_components)
+   """
+
+   ga_selected_features = extract_genetic_algorithm_features(file_path) # Extract GA features
+   if ga_selected_features: # If GA features were successfully extracted
+      print(f"{BackgroundColors.GREEN}GA Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file_path)}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(ga_selected_features)}{Style.RESET_ALL}")
+   else: # If GA features were not extracted
+      print(f"{BackgroundColors.YELLOW}Proceeding without GA features for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}")
+
+   rfe_selected_features = extract_recursive_feature_elimination_features(file_path) # Extract RFE features
+   if rfe_selected_features: # If RFE features were successfully extracted
+      print(f"{BackgroundColors.GREEN}RFE Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file_path)}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(rfe_selected_features)}{Style.RESET_ALL}")
+   else: # If RFE features were not extracted
+      print(f"{BackgroundColors.YELLOW}Proceeding without RFE features for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}")
+
+   pca_n_components = extract_principal_component_analysis_features(file_path) # Extract PCA components
+   if pca_n_components: # If PCA components were successfully extracted
+      print(f"{BackgroundColors.GREEN}PCA optimal components successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file_path)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{pca_n_components}{Style.RESET_ALL}")
+   else: # If PCA components were not extracted
+      print(f"{BackgroundColors.YELLOW}Proceeding without PCA components for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}")
+
+   return ga_selected_features, rfe_selected_features, pca_n_components # Return the extracted features
+
 def calculate_execution_time(start_time, finish_time):
    """
    Calculates the execution time between start and finish times and formats it as hh:mm:ss.
@@ -332,26 +361,7 @@ def main():
    for file in files_to_process: # For each file to process
       print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}") # Output the file being processed
       
-      ga_selected_features = extract_genetic_algorithm_features(file) # Extract the features selected by the Genetic Algorithm
-      
-      if ga_selected_features: # If GA features were successfully extracted
-         print(f"{BackgroundColors.GREEN}GA Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file)}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(ga_selected_features)}{Style.RESET_ALL}")
-      else: # If GA features were not extracted
-         print(f"{BackgroundColors.YELLOW}Proceeding without GA features for {BackgroundColors.CYAN}{os.path.basename(file)}{Style.RESET_ALL}")
-         
-      rfe_selected_features = extract_recursive_feature_elimination_features(file) # Extract the features selected by RFE
-
-      if rfe_selected_features: # If RFE features were successfully extracted
-         print(f"{BackgroundColors.GREEN}RFE Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file)}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(rfe_selected_features)}{Style.RESET_ALL}")
-      else: # If RFE features were not extracted
-         print(f"{BackgroundColors.YELLOW}Proceeding without RFE features for {BackgroundColors.CYAN}{os.path.basename(file)}{Style.RESET_ALL}")
-         
-      pca_n_components = extract_principal_component_analysis_features(file) # Extract the optimal number of PCA components
-      
-      if pca_n_components: # If PCA components were successfully extracted
-         print(f"{BackgroundColors.GREEN}PCA optimal components successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{pca_n_components}{Style.RESET_ALL}")
-      else: # If PCA components were not extracted
-         print(f"{BackgroundColors.YELLOW}Proceeding without PCA components for {BackgroundColors.CYAN}{os.path.basename(file)}{Style.RESET_ALL}")
+      ga_selected_features, rfe_selected_features, pca_n_components = load_feature_selection_results(file) # Load feature selection results
 
    finish_time = datetime.datetime.now() # Get the finish time of the program
    print(f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
