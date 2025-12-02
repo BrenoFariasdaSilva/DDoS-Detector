@@ -481,6 +481,28 @@ def get_feature_subset(X_scaled, features, feature_names):
    else: # If no features are selected (or features is None)
       return np.empty((X_scaled.shape[0], 0)) # Return an empty array with correct number of rows
 
+def get_features_list_for_feature_set(feature_set_name, feature_names, ga_selected_features, rfe_selected_features):
+   """
+   Determines the list of features used for a given feature set.
+
+   :param feature_set_name: Name of the feature set (e.g., "Full Features", "GA Features")
+   :param feature_names: List of all feature names
+   :param ga_selected_features: List of GA selected features or None
+   :param rfe_selected_features: List of RFE selected features or None
+   :return: List of features for the feature set
+   """
+   
+   if feature_set_name == "Full Features": # If the feature set is "Full Features"
+      return feature_names # Return all feature names
+   elif feature_set_name == "RFE Features": # If the feature set is "RFE Features"
+      return rfe_selected_features if rfe_selected_features else [] # Return RFE selected features or empty list
+   elif feature_set_name == "GA Features": # If the feature set is "GA Features"
+      return ga_selected_features if ga_selected_features else [] # Return GA selected features or empty list
+   elif feature_set_name == "PCA Components": # If the feature set is "PCA Components"
+      return feature_names # Original features used for PCA
+   else: # Unknown feature set
+      return [] # Default empty list
+
 def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test):
    """
    Trains an individual classifier and evaluates its performance on the test set.
@@ -712,13 +734,14 @@ def main():
       bot.send_message(f"Starting Classifiers Evaluation for {os.path.basename(file)}...") # Send Telegram notification
       
       for name, (X_train_subset, X_test_subset) in feature_sets.items(): # Iterate over feature sets
-         
          if X_train_subset.shape[1] == 0: # Verify if the subset is empty
             print(f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}") # Output warning
             bot.send_message(f"Skipping {name} for {os.path.basename(file)}: No features selected.") # Send Telegram notification
             continue # Skip to the next set
              
          print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating models on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}") # Output evaluation status
+         
+         features_list = get_features_list_for_feature_set(name, feature_names, ga_selected_features, rfe_selected_features) # Determine the features list for this feature set
          
          individual_models = get_models() # Get all individual models
          for model_name, model in individual_models.items(): # Iterate over each model
