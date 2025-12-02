@@ -59,3 +59,4 @@ tzdata==2025.2
 urllib3==2.5.0
 xgboost==3.0.2
 yarg==0.1.10
+psutil==6.1.1
