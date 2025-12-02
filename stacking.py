@@ -457,7 +457,7 @@ def load_pca_object(file_path, pca_n_components):
    """
    
    file_dir = os.path.dirname(file_path) # Get the directory of the dataset
-   pca_file = os.path.join(file_dir, "Feature_Analysis", f"PCA_{pca_n_components}_components.pkl") # Construct the path to the PCA pickle file
+   pca_file = os.path.join(file_dir, "Cache", f"PCA_{pca_n_components}_components.pkl") # Construct the path to the PCA pickle file
    
    if not verify_filepath_exists(pca_file): # Check if the PCA file exists
       verbose_output(f"{BackgroundColors.YELLOW}PCA object file not found at {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")
