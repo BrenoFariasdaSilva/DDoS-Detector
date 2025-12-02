@@ -666,10 +666,10 @@ def main():
       if X_train_pca is not None: # Only add PCA if it was successfully computed
          feature_sets["PCA Components"] = (X_train_pca, X_test_pca) # Add the PCA transformed components
          
-      all_stacking_results = [] # List to store results for saving
+      all_results = [] # List to store results for saving (individual + stacking)
       
-      print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}--- Running Stacking Evaluation ---{Style.RESET_ALL}") # Output separator
-      bot.send_message(f" Starting Stacking Evaluation for {os.path.basename(file)}...") # Send Telegram notification
+      print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}--- Running Classifier Evaluation (Individual + Stacking) ---{Style.RESET_ALL}") # Output separator
+      bot.send_message(f"Starting Classifiers Evaluation for {os.path.basename(file)}...") # Send Telegram notification
       
       for name, (X_train_subset, X_test_subset) in feature_sets.items(): # Iterate over feature sets
          
@@ -678,18 +678,26 @@ def main():
             bot.send_message(f"Skipping {name} for {os.path.basename(file)}: No features selected.") # Send Telegram notification
             continue # Skip to the next set
              
-         print(f"{BackgroundColors.GREEN}Evaluating Stacking Model on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}") # Output evaluation status
+         print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating models on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}") # Output evaluation status
          
-         metrics = evaluate_stacking_classifier(stacking_model, X_train_subset, y_train, X_test_subset, y_test) # Evaluate the stacking model
+         individual_models = get_models() # Get all individual models
+         for model_name, model in individual_models.items(): # Iterate over each model
+            verbose_output(f"{BackgroundColors.GREEN}Evaluating Individual Classifier: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}") # Output the verbose message
+            metrics = evaluate_individual_classifier(model, model_name, X_train_subset, y_train, X_test_subset, y_test) # Evaluate individual model
+            
+            result_entry = { "dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Individual", "model_name": model_name, "n_features": X_train_subset.shape[1], "metrics": metrics} # Prepare result entry
+            all_results.append(result_entry) # Add result to list
+            print(f"    {BackgroundColors.GREEN}{model_name} Accuracy for classifier {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
          
-         result_entry = {"dataset": os.path.basename(file), "feature_set": name, "n_features": X_train_subset.shape[1], "metrics": metrics} # Prepare result entry
+         print(f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}")
+         stacking_metrics = evaluate_stacking_classifier(stacking_model, X_train_subset, y_train, X_test_subset, y_test) # Evaluate stacking model
          
-         all_stacking_results.append(result_entry) # Add result to list
-         
-         print(f"  {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
-         bot.send_message(f"📊 {os.path.basename(file)} - {name} Accuracy: {metrics[0]:.4f} (Time: {metrics[6]:.2f}s)") # Send Telegram notification with results
+         stacking_result_entry = {"dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Stacking", "model_name": "StackingClassifier", "n_features": X_train_subset.shape[1], "metrics": stacking_metrics} # Prepare stacking result entry
+         all_results.append(stacking_result_entry) # Add stacking result
+         print(f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{stacking_metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
+         bot.send_message(f"{os.path.basename(file)} - {name} - Best Stacking Accuracy: {stacking_metrics[0]:.4f}") # Send Telegram notification
       
-      save_stacking_results(file, all_stacking_results) # Save consolidated results to CSV
+      save_stacking_results(file, all_results) # Save consolidated results to CSV
 
    finish_time = datetime.datetime.now() # Get the finish time of the program
    print(f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
