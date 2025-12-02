@@ -368,28 +368,6 @@ def preprocess_dataframe(df, remove_zero_variance=True):
 
    return df_clean # Return the cleaned DataFrame
 
-def get_models():
-	"""
-	Initializes and returns a dictionary of models to train.
-
-	:param: None
-	:return: Dictionary of model name and instance
-	"""
-
-	verbose_output(f"{BackgroundColors.GREEN}Initializing models for training...{Style.RESET_ALL}") # Output the verbose message
-
-	return { # Dictionary of models to train
-		"Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
-		"SVM": SVC(kernel="rbf", probability=True, random_state=42),
-		"XGBoost": XGBClassifier(eval_metric="mlogloss", random_state=42),
-		"Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
-		"KNN": KNeighborsClassifier(n_neighbors=5),
-		"Nearest Centroid": NearestCentroid(),
-		"Gradient Boosting": GradientBoostingClassifier(random_state=42),
-		"LightGBM": lgb.LGBMClassifier(force_row_wise=True, min_gain_to_split=0.01, random_state=42, verbosity=-1),
-		"MLP (Neural Net)": MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=42),
-	}
-
 def scale_and_split(X, y, test_size=0.2, random_state=42):
    """
    Scales the numeric features using StandardScaler and splits the data
@@ -429,6 +407,28 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
    verbose_output(f"{BackgroundColors.GREEN}Data split successful. Training set shape: {BackgroundColors.CYAN}{X_train_scaled.shape}{BackgroundColors.GREEN}. Testing set shape: {BackgroundColors.CYAN}{X_test_scaled.shape}{Style.RESET_ALL}") # Output the successful split message
    
    return X_train_scaled, X_test_scaled, y_train, y_test, scaler # Return scaled features, target, and the fitted scaler
+
+def get_models():
+	"""
+	Initializes and returns a dictionary of models to train.
+
+	:param: None
+	:return: Dictionary of model name and instance
+	"""
+
+	verbose_output(f"{BackgroundColors.GREEN}Initializing models for training...{Style.RESET_ALL}") # Output the verbose message
+
+	return { # Dictionary of models to train
+		"Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
+		"SVM": SVC(kernel="rbf", probability=True, random_state=42),
+		"XGBoost": XGBClassifier(eval_metric="mlogloss", random_state=42),
+		"Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
+		"KNN": KNeighborsClassifier(n_neighbors=5),
+		"Nearest Centroid": NearestCentroid(),
+		"Gradient Boosting": GradientBoostingClassifier(random_state=42),
+		"LightGBM": lgb.LGBMClassifier(force_row_wise=True, min_gain_to_split=0.01, random_state=42, verbosity=-1),
+		"MLP (Neural Net)": MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=42),
+	}
 
 def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
    """
