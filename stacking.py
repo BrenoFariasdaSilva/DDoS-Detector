@@ -81,6 +81,7 @@ from sklearn.neural_network import MLPClassifier # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler # For label encoding and feature scaling
 from sklearn.svm import SVC # For Support Vector Machine model
 from telegram_bot import TelegramBot # For Telegram notifications
+from tqdm import tqdm # For progress bars
 from xgboost import XGBClassifier # For XGBoost classifier
 
 # Macros:
@@ -743,37 +744,45 @@ def main():
       feature_sets = {k: v for k, v in feature_sets.items() if v is not None} # Remove any None entries (e.g., PCA if not applied)
       feature_sets = dict(sorted(feature_sets.items())) # Sort the feature sets by name
 
+      individual_models = get_models() # Get all individual models
+      total_steps = len(feature_sets) * (len(individual_models) + 1) # Total steps: models + stacking per feature set
+      progress_bar = tqdm(total=total_steps) # Progress bar for all evaluations
+
       all_results = [] # List to store results for saving (individual + stacking)
       
       print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}--- Running Classifier Evaluation (Individual + Stacking) ---{Style.RESET_ALL}") # Output separator
       bot.send_message(f"Starting Classifiers Evaluation for {os.path.basename(file)}...") # Send Telegram notification
       
-      for name, (X_train_subset, X_test_subset) in feature_sets.items(): # Iterate over feature sets
+      for idx, (name, (X_train_subset, X_test_subset)) in enumerate(feature_sets.items(), start=1):
          if X_train_subset.shape[1] == 0: # Verify if the subset is empty
             print(f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}") # Output warning
             bot.send_message(f"Skipping {name} for {os.path.basename(file)}: No features selected.") # Send Telegram notification
+            progress_bar.update(len(individual_models) + 1) # Skip all steps for this feature set
             continue # Skip to the next set
              
          print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating models on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}") # Output evaluation status
          
          features_list = get_features_list_for_feature_set(name, feature_names, ga_selected_features, rfe_selected_features) # Determine the features list for this feature set
          
-         individual_models = get_models() # Get all individual models
-         for model_name, model in individual_models.items(): # Iterate over each model
+         for model_idx, (model_name, model) in enumerate(individual_models.items(), start=1): # Iterate over each model
+            progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating {idx}/{len(feature_sets)} - {name}: {model_idx}/{len(individual_models)} - {model_name}{Style.RESET_ALL}")
             verbose_output(f"{BackgroundColors.GREEN}Evaluating Individual Classifier: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}") # Output the verbose message
             metrics = evaluate_individual_classifier(model, model_name, X_train_subset, y_train, X_test_subset, y_test) # Evaluate individual model
             
             result_entry = { "dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Individual", "model_name": model_name, "n_features": X_train_subset.shape[1], "metrics": metrics, "features_list": features_list} # Prepare result entry
             all_results.append(result_entry) # Add result to list
             print(f"    {BackgroundColors.GREEN}{model_name} Accuracy for classifier {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
+            progress_bar.update(1) # Update progress after each model
          
          print(f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}")
+         progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating {idx}/{len(feature_sets)} - {name}: Stacking{Style.RESET_ALL}")
          stacking_metrics = evaluate_stacking_classifier(stacking_model, X_train_subset, y_train, X_test_subset, y_test) # Evaluate stacking model
          
          stacking_result_entry = {"dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Stacking", "model_name": "StackingClassifier", "n_features": X_train_subset.shape[1], "metrics": stacking_metrics, "features_list": features_list} # Prepare stacking result entry
          all_results.append(stacking_result_entry) # Add stacking result
          print(f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{stacking_metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
          bot.send_message(f"{os.path.basename(file)} - {name} - Best Stacking Accuracy: {stacking_metrics[0]:.4f}") # Send Telegram notification
+         progress_bar.update(1) # Update progress after stacking
       
       save_stacking_results(file, all_results) # Save consolidated results to CSV
 
