@@ -570,19 +570,70 @@ def main():
       df = load_dataset(file) # Load the dataset
       
       if df is None: # If the dataset failed to load
+         verbose_output(f"{BackgroundColors.RED}Failed to load dataset from: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}") # Output the failure message
+         bot.send_message(f"Failed to load dataset: {os.path.basename(file)}") # Send Telegram notification about failure
          continue # Skip to the next file if loading failed
       
       cleaned_df = preprocess_dataframe(df) # Preprocess the DataFrame
       
       if cleaned_df is None or cleaned_df.empty: # If the DataFrame is None or empty after preprocessing
          print(f"{BackgroundColors.RED}Dataset {BackgroundColors.CYAN}{file}{BackgroundColors.RED} empty after preprocessing. Skipping.{Style.RESET_ALL}")
+         bot.send_message(f"Dataset empty after preprocessing: {os.path.basename(file)}") # Send Telegram notification about empty dataset
          continue # Skip to the next file if preprocessing failed
       
-      # TODO: Implement classifiers stacking and evaluation logic here
+      X_full = cleaned_df.select_dtypes(include=np.number).iloc[:, :-1] # Features (numeric only)
+      y = cleaned_df.iloc[:, -1] # Target
+      feature_names = X_full.columns.tolist() # Get the list of feature names
+
+      if len(np.unique(y)) < 2: # Check if there is more than one class
+         print(f"{BackgroundColors.RED}Target column has only one class. Cannot perform classification. Skipping.{Style.RESET_ALL}") # Output the error message
+         bot.send_message(f"Skipping {os.path.basename(file)}: Only one class in target column.") # Send Telegram notification about class issue
+         continue # Skip to the next file
       
-      # TODO: Send Telegram notification about the processing status for every loop/iteration
+      X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X_full, y) # Scale and split the data
       
-      # TODO: Implement saving of results in a CSV file.
+      base_models = get_models() # Get the base models
+      estimators = [(name, model) for name, model in base_models.items() if name != "SVM"] # Define estimators (excluding SVM)
+      
+      stacking_model = StackingClassifier(estimators=estimators, final_estimator=RandomForestClassifier(n_estimators=50, random_state=42), cv=5, n_jobs=-1) # Define the Stacking Classifier model
+      
+      def get_feature_subset(X_scaled, features): # Helper function to get subset of features
+         indices = [feature_names.index(f) for f in features if f in feature_names] # Get indices of selected features
+         return X_scaled[:, indices] # Return the subset of features
+
+      feature_sets = {
+         "Full Features": (X_train_scaled, X_test_scaled), # All features
+         "RFE Features": (get_feature_subset(X_train_scaled, rfe_selected_features), 
+                          get_feature_subset(X_test_scaled, rfe_selected_features)), # RFE subset
+         "GA Features": (get_feature_subset(X_train_scaled, ga_selected_features), 
+                         get_feature_subset(X_test_scaled, ga_selected_features)), # GA subset
+         # PCA needs its own preparation (Skipped for simplicity in this implementation)
+      }
+      
+      all_stacking_results = [] # List to store results for saving
+      
+      print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}--- Running Stacking Evaluation ---{Style.RESET_ALL}") # Output separator
+      bot.send_message(f" Starting Stacking Evaluation for {os.path.basename(file)}...") # Send Telegram notification
+      
+      for name, (X_train_subset, X_test_subset) in feature_sets.items(): # Iterate over feature sets
+         
+         if X_train_subset.shape[1] == 0: # Check if the subset is empty
+            print(f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}") # Output warning
+            bot.send_message(f"Skipping {name} for {os.path.basename(file)}: No features selected.") # Send Telegram notification
+            continue # Skip to the next set
+             
+         print(f"{BackgroundColors.GREEN}Evaluating Stacking Model on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}") # Output evaluation status
+         
+         metrics = evaluate_stacking_classifier(stacking_model, X_train_subset, y_train, X_test_subset, y_test) # Evaluate the stacking model
+         
+         result_entry = {"dataset": os.path.basename(file), "feature_set": name, "n_features": X_train_subset.shape[1], "metrics": metrics} # Prepare result entry
+         
+         all_stacking_results.append(result_entry) # Add result to list
+         
+         print(f"  {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
+         bot.send_message(f"📊 {os.path.basename(file)} - {name} Accuracy: {metrics[0]:.4f} (Time: {metrics[6]:.2f}s)") # Send Telegram notification with results
+      
+      save_stacking_results(file, all_stacking_results) # Save consolidated results to CSV
 
    finish_time = datetime.datetime.now() # Get the finish time of the program
    print(f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
