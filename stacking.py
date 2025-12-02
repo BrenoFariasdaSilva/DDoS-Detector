@@ -481,6 +481,46 @@ def get_feature_subset(X_scaled, features, feature_names):
    else: # If no features are selected (or features is None)
       return np.empty((X_scaled.shape[0], 0)) # Return an empty array with correct number of rows
 
+def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test):
+   """
+   Trains an individual classifier and evaluates its performance on the test set.
+
+   :param model: The classifier model object to train.
+   :param model_name: Name of the classifier (for logging).
+   :param X_train: Training features (scaled numpy array).
+   :param y_train: Training target labels (encoded Series/array).
+   :param X_test: Testing features (scaled numpy array).
+   :param y_test: Testing target labels (encoded Series/array).
+   :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Training {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}...{Style.RESET_ALL}") # Output the verbose message
+   
+   start_time = time.time() # Record the start time
+   
+   model.fit(X_train, y_train) # Fit the model on the training data
+   
+   y_pred = model.predict(X_test) # Predict the labels for the test set
+   
+   elapsed_time = time.time() - start_time # Calculate the total time elapsed
+   
+   acc = accuracy_score(y_test, y_pred) # Calculate Accuracy
+   prec = precision_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate Precision
+   rec = recall_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate Recall
+   f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate F1-Score
+
+   if len(np.unique(y_test)) == 2: # Binary classification
+      tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel() # Get confusion matrix components
+      fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0 # Calculate FPR
+      fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0 # Calculate FNR
+   else: # Multi-class
+      fpr = 0.0 # Placeholder
+      fnr = 0.0 # Placeholder
+
+   verbose_output(f"{BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{acc:.4f}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{elapsed_time:.2f}s{Style.RESET_ALL}") # Output result
+   
+   return (acc, prec, rec, f1, fpr, fnr, elapsed_time) # Return the metrics tuple
+
 def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
    """
    Trains the StackingClassifier model and evaluates its performance on the test set.
