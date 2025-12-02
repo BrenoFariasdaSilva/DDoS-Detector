@@ -83,7 +83,7 @@ class BackgroundColors: # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False # Set to True to output verbose messages
-RUNS = 5 # Number of runs for RFE analysis
+RUNS = 1 # Number of runs for RFE analysis
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
