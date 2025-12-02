@@ -435,7 +435,7 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
       return 0, 0, 0, 0, 1, 1, float("inf") # Return worst possible scores
 
    mask_tuple = tuple(individual) # Convert individual to tuple for hashing
-   if mask_tuple in fitness_cache: # Check if already evaluated
+   if mask_tuple in fitness_cache: # Verify if already evaluated
       return fitness_cache[mask_tuple] # Return cached result
 
    mask = np.array(individual, dtype=bool) # Create boolean mask from individual
@@ -953,7 +953,7 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
    This function performs a "population sweep," testing different population sizes
    to identify the set of features that maximizes classification performance
    (F1-Score) on the training dataset using 10-fold Stratified Cross-Validation.
-   For each population size, it runs the GA multiple times to check for divergence.
+   For each population size, it runs the GA multiple times to verify for divergence.
 
    :param bot: TelegramBot instance for sending notifications.
    :param dataset_name: Name of the dataset being processed.
