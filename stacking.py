@@ -470,6 +470,45 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
    
    return (acc, prec, rec, f1, fpr, fnr, elapsed_time) # Return the metrics tuple
 
+def save_stacking_results(csv_path, results_list):
+   """
+   Saves the results of the stacking classifier evaluations to a structured CSV file.
+
+   :param csv_path: Original CSV file path (used for determining output directory).
+   :param results_list: List of dictionaries, each containing results for a feature set.
+                        Expected keys: 'dataset', 'feature_set', 'n_features', 'metrics' (tuple).
+   :return: None
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Preparing to save {BackgroundColors.CYAN}{len(results_list)}{BackgroundColors.GREEN} stacking results to CSV...{Style.RESET_ALL}") # Output the verbose message
+
+   if not results_list: # Verify if the list of results is empty
+      print(f"{BackgroundColors.YELLOW}Warning: No results provided to save.{Style.RESET_ALL}")
+      return # Exit if nothing to save
+
+   dataset_name = os.path.splitext(os.path.basename(csv_path))[0] # Get base dataset name
+   output_dir = f"{os.path.dirname(csv_path)}/{dataset_name}/" # Directory relative to the dataset
+   os.makedirs(output_dir, exist_ok=True) # Ensure the directory exists
+   csv_output_path = f"{output_dir}Stacking_Classifier_Results.csv" # Define the final CSV path
+
+   flat_rows = [] # List to hold flattened dictionaries
+   for res in results_list: # For each result entry
+      metrics = res.pop("metrics") # Extract the metrics tuple and remove it from the dict
+      
+      row = res.copy() # Start with the base keys ("dataset", "feature_set", etc.)
+      row.update({"accuracy": round(metrics[0], 4), "precision": round(metrics[1], 4), "recall": round(metrics[2], 4), "f1_score": round(metrics[3], 4), "fpr": round(metrics[4], 4), "fnr": round(metrics[5], 4), "elapsed_time_s": round(metrics[6], 2)})
+      flat_rows.append(row) # Add the flattened row
+
+   df_out = pd.DataFrame(flat_rows) # Create DataFrame from flattened rows
+   columns_order = ["dataset", "feature_set", "n_features", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s"] # Define desired column order
+   df_out = df_out.reindex(columns=columns_order) # Reindex/reorder the columns
+
+   try: # Attempt to save the DataFrame to CSV
+      df_out.to_csv(csv_output_path, index=False, encoding="utf-8") # Write to CSV without index
+      print(f"\n{BackgroundColors.GREEN}Stacking classifier results successfully saved to {BackgroundColors.CYAN}{csv_output_path}{Style.RESET_ALL}") # Notify successful save
+   except Exception as e: # Catch any file writing errors
+      print(f"{BackgroundColors.RED}Failed to write Stacking Classifier CSV to {BackgroundColors.CYAN}{csv_output_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}") # Print error message
+
 def calculate_execution_time(start_time, finish_time):
    """
    Calculates the execution time between start and finish times and formats it as hh:mm:ss.
