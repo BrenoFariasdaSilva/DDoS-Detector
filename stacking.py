@@ -362,6 +362,14 @@ def main():
       print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}") # Output the file being processed
       
       ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(file) # Load feature selection results
+      
+      # TODO: Implement data loading and preprocessing logic here
+      
+      # TODO: Implement classifiers stacking and evaluation logic here
+      
+      # TODO: Send Telegram notification about the processing status for every loop/iteration
+      
+      # TODO: Implement saving of results in a CSV file.
 
    finish_time = datetime.datetime.now() # Get the finish time of the program
    print(f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
