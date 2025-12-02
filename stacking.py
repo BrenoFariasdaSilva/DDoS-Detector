@@ -60,9 +60,9 @@ Assumptions & Notes:
    - The `telegram_bot` module is available in the environment
 """
 
-import atexit # For playing a sound when the program finishes
 import ast # For safely evaluating Python literals
 import asyncio # For running async functions
+import atexit # For playing a sound when the program finishes
 import datetime # For getting the current date and time
 import json # Import json for handling JSON strings within the CSV
 import lightgbm as lgb # For LightGBM model
