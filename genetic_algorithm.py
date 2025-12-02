@@ -727,19 +727,19 @@ def print_metrics(metrics):
    print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{fnr:.4f}{Style.RESET_ALL}")
    print(f"   {BackgroundColors.GREEN}Elapsed Time (s): {BackgroundColors.CYAN}{elapsed_time:.2f}{Style.RESET_ALL}")
 
-def metrics_to_dict(m):
+def metrics_to_dict(metrics):
    """
    Convert a metrics tuple to a standardized dictionary.
 
-   :param m: Metrics tuple in the form (accuracy, precision, recall, f1, fpr, fnr, elapsed_time)
+   :param metrics: Metrics tuple in the form (accuracy, precision, recall, f1, fpr, fnr, elapsed_time)
              or None.
    :return: Dictionary with float values for each metric or None when input is falsy.
    """
    
-   if not m: # If metrics is None
-      return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None, "elapsed_time_s": None} # Default dict
-   acc, prec, rec, f1, fpr, fnr, elapsed = m # Unpack metrics
-   return {"accuracy": float(acc), "precision": float(prec), "recall": float(rec), "f1_score": float(f1), "fpr": float(fpr), "fnr": float(fnr), "elapsed_time_s": float(elapsed)} # Return as dictionary
+   if not metrics: # If metrics is None or falsy, return explicit keys with None
+      return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None, "elapsed_time_s": None}
+   acc, prec, rec, f1, fpr, fnr, elapsed = metrics # Unpack metrics
+   return {"accuracy": float(acc), "precision": float(prec), "recall": float(rec), "f1_score": float(f1), "fpr": float(fpr), "fnr": float(fnr), "elapsed_time_s": float(elapsed)}
 
 def build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking):
    """
@@ -764,9 +764,9 @@ def build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test
       "n_train": n_train, # Number of training samples
       "n_test": n_test, # Number of testing samples
       "train_test_ratio": test_frac, # Train/test fraction
-      "rfe_ranking": json.dumps(rfe_ranking, ensure_ascii=False), # RFE ranking as JSON
       "timestamp": timestamp, # Timestamp
-      "run_index": "best" # Indicates best run
+      "run_index": "best", # Indicates best run
+      "rfe_ranking": json.dumps(rfe_ranking, ensure_ascii=False) # RFE ranking as JSON string
    }
 
 def build_rows_list(rf_metrics, best_features, runs_list, feature_names, base_row):
@@ -783,11 +783,9 @@ def build_rows_list(rf_metrics, best_features, runs_list, feature_names, base_ro
    
    rows = [] # List to hold CSV rows
    rf_row = dict(base_row) # Create Random Forest row
-   rf_row.update({ # Update with RF-specific data
-      "classifier": "RandomForest",
-      **metrics_to_dict(rf_metrics),
-      "best_features": json.dumps(best_features, ensure_ascii=False)
-   }) # Update with RF-specific data
+   rf_row.update({"classifier": "RandomForest",}) # Set classifier
+   rf_row.update(metrics_to_dict(rf_metrics)) # Add RF metrics
+   rf_row.update({"best_features": json.dumps(best_features, ensure_ascii=False),}) # Add best features as JSON string
    rows.append(rf_row) # Add RF row to rows
 
    if runs_list: # If multiple runs data is provided
@@ -795,12 +793,10 @@ def build_rows_list(rf_metrics, best_features, runs_list, feature_names, base_ro
          run_metrics = run_data.get("metrics") if run_data.get("metrics") is not None else None
          run_features = run_data.get("best_features") if run_data.get("best_features") is not None else [f for f, bit in zip(feature_names if feature_names is not None else [], run_data.get("best_ind", [])) if bit == 1] # Extract features for this run
          run_row = dict(base_row) # Create row for this run
-         run_row.update({ # Update with run-specific data
-            "classifier": "RandomForest",
-            **metrics_to_dict(run_metrics),
-            "best_features": json.dumps(run_features, ensure_ascii=False),
-            "run_index": idx
-         })
+
+         run_row.update({"classifier": "RandomForest"}) # Set classifier
+         run_row.update(metrics_to_dict(run_metrics)) # Add run metrics
+         run_row.update({"best_features": json.dumps(run_features, ensure_ascii=False), "run_index": idx}) # Add best features and run index
          rows.append(run_row) # Add run row to rows
 
    return rows # Return consolidated rows
@@ -816,8 +812,15 @@ def write_consolidated_csv(rows, output_dir):
    
    try: # Attempt to write consolidated CSV
       df_out = pd.DataFrame(rows) # Create DataFrame from rows
+      columns = ["dataset","dataset_path","population_size","n_generations","n_train","n_test","train_test_ratio","timestamp","run_index","classifier","accuracy","precision","recall","f1_score","fpr","fnr","elapsed_time_s","best_features","rfe_ranking"]
+
+      for column in columns: # For each expected column
+         if column not in df_out.columns: # If column is missing
+            df_out[column] = None # Add it with None values
+            
+      df_out = df_out[columns] # Reorder
       csv_out = os.path.join(output_dir, "Genetic_Algorithm_Results.csv") # Output CSV path
-      df_out.to_csv(csv_out, index=False) # Write to CSV
+      df_out.to_csv(csv_out, index=False, encoding="utf-8") # Write to CSV
       print(f"\n{BackgroundColors.GREEN}Genetic Algorithm consolidated results saved to {BackgroundColors.CYAN}{csv_out}{Style.RESET_ALL}")
    except Exception as e: # If writing fails
       print(f"{BackgroundColors.RED}Failed to write consolidated GA CSV: {str(e)}{Style.RESET_ALL}")
