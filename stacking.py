@@ -52,6 +52,7 @@ Assumptions & Notes:
 
 import atexit # For playing a sound when the program finishes
 import datetime # For getting the current date and time
+import json # Import json for handling JSON strings within the CSV
 import os # For running a command in the terminal
 import platform # For getting the operating system name
 import pandas as pd # Import pandas for data manipulation
@@ -189,6 +190,43 @@ def extract_genetic_algorithm_features(file_path):
       print(f"{BackgroundColors.RED}Error loading GA features from {BackgroundColors.CYAN}{ga_feature_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")
       return None # Return None if there was an error
 
+def extract_recursive_feature_elimination_features(file_path):
+   """
+   Extracts the "top_features" list (JSON string) from the first row of the
+   "RFE_Runs_Results.csv" file located in the "Feature_Analysis" subdirectory
+   relative to the input file's directory.
+
+   :param file_path: Full path to the current CSV file being processed (e.g., "./Datasets/.../DrDoS_DNS.csv").
+   :return: List of top features selected by RFE from the first run, or None if the file is not found or fails to load/parse.
+   """
+   
+   file_dir = os.path.dirname(file_path) # Determine the directory of the input file
+   rfe_runs_path = os.path.join(file_dir, "Feature_Analysis", "RFE_Runs_Results.csv") # Construct the path to the RFE runs file
+   
+   verbose_output(f"{BackgroundColors.GREEN}Extracting RFE features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
+
+   if not verify_filepath_exists(rfe_runs_path): # Verify if the RFE runs file exists
+      print(f"{BackgroundColors.YELLOW}Warning: RFE runs file not found at {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.YELLOW}. Skipping RFE feature extraction for this file.{Style.RESET_ALL}")
+      return None # Return None if the file does not exist
+
+   try: # Try to load the RFE runs results
+      df = pd.read_csv(rfe_runs_path, usecols=["top_features"]) # Load only the "top_features" column
+      
+      if not df.empty: # Verify if the DataFrame is not empty
+         top_features_json = df.loc[0, "top_features"] # Get the JSON string from the first row
+         rfe_features = json.loads(top_features_json) # Parse the JSON string into a Python list
+         
+         verbose_output(f"{BackgroundColors.GREEN}Successfully extracted RFE top features from Run 1. Total features: {BackgroundColors.CYAN}{len(rfe_features)}{Style.RESET_ALL}") # Output the verbose message
+         
+         return rfe_features # Return the list of RFE features
+      else: # If the DataFrame is empty
+         print(f"{BackgroundColors.RED}Error: RFE runs file at {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.RED} is empty.{Style.RESET_ALL}")
+         return None # Return None if the file is empty
+         
+   except Exception as e: # If there is an error loading or parsing the file
+      print(f"{BackgroundColors.RED}Error loading/parsing RFE features from {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")
+      return None # Return None if there was an error
+
 def calculate_execution_time(start_time, finish_time):
    """
    Calculates the execution time between start and finish times and formats it as hh:mm:ss.
@@ -251,6 +289,13 @@ def main():
          print(f"{BackgroundColors.GREEN}GA Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file)}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(ga_selected_features)}{Style.RESET_ALL}")
       else: # If GA features were not extracted
          print(f"{BackgroundColors.YELLOW}Proceeding without GA features for {BackgroundColors.CYAN}{os.path.basename(file)}{Style.RESET_ALL}")
+         
+      rfe_selected_features = extract_recursive_feature_elimination_features(file) # Extract the features selected by RFE
+
+      if rfe_selected_features: # If RFE features were successfully extracted
+         print(f"{BackgroundColors.GREEN}RFE Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file)}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(rfe_selected_features)}{Style.RESET_ALL}")
+      else: # If RFE features were not extracted
+         print(f"{BackgroundColors.YELLOW}Proceeding without RFE features for {BackgroundColors.CYAN}{os.path.basename(file)}{Style.RESET_ALL}")
 
    finish_time = datetime.datetime.now() # Get the finish time of the program
    print(f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
