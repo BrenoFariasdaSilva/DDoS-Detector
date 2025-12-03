@@ -21,47 +21,47 @@ endif
 all: main
 
 # Run main scripts
-main: $(VENV)
+main: dependencies
 	$(CLEAR_CMD)
 	$(TIME_CMD) $(PYTHON) ./main.py
 
-dataset_descriptor: $(VENV)
+dataset_descriptor: dependencies
 	$(CLEAR_CMD)
 	$(TIME_CMD) $(PYTHON) ./dataset_descriptor.py
 
-genetic_algorithm: $(VENV)
+genetic_algorithm: dependencies
 	$(CLEAR_CMD)
 	$(TIME_CMD) $(PYTHON) ./genetic_algorithm.py
 
-pca: $(VENV)
+pca: dependencies
 	$(CLEAR_CMD)
 	$(TIME_CMD) $(PYTHON) ./pca.py
 
-rfe: $(VENV)
+rfe: dependencies
 	$(CLEAR_CMD)
 	$(TIME_CMD) $(PYTHON) ./rfe.py
 
-stacking: $(VENV)
+stacking: dependencies
 	$(CLEAR_CMD)
 	$(TIME_CMD) $(PYTHON) ./stacking.py
 
-telegram: $(VENV)
+telegram: dependencies
 	$(CLEAR_CMD)
 	$(TIME_CMD) $(PYTHON) ./telegram_bot.py
 
-wgangp: $(VENV)
+wgangp: dependencies
 	$(CLEAR_CMD)
 	$(TIME_CMD) $(PYTHON) ./wgangp.py
 
-# Create virtual environment and install dependencies
+# Create virtual environment if missing
 $(VENV):
 	@echo "Creating virtual environment..."
 	$(PYTHON_CMD) -m venv $(VENV)
 	$(PIP) install --upgrade pip
-	$(PIP) install -r requirements.txt
 
-# Install dependencies
 dependencies: $(VENV)
+	@echo "Installing/Updating Python dependencies..."
+	$(PIP) install -r requirements.txt
 
 # Generate requirements.txt from current venv
 generate_requirements: $(VENV)
