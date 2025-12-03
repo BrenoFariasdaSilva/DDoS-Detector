@@ -786,7 +786,7 @@ def main():
       base_models = get_models() # Get the base models
       estimators = [(name, model) for name, model in base_models.items() if name != "SVM"] # Define estimators (excluding SVM)
       
-      stacking_model = StackingClassifier(estimators=estimators, final_estimator=RandomForestClassifier(n_estimators=50, random_state=42), cv=5, n_jobs=-1) # Define the Stacking Classifier model
+      stacking_model = StackingClassifier(estimators=estimators, final_estimator=RandomForestClassifier(n_estimators=50, random_state=42), cv=5, n_jobs=1) # Define the Stacking Classifier model
       
       X_train_pca, X_test_pca = apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file) # Apply PCA transformation if applicable
       
