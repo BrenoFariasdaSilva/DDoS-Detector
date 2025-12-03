@@ -508,9 +508,17 @@ def get_dataset_file_info(filepath, low_memory=True):
    n_samples, n_features, n_numeric, n_int, n_categorical, n_other, categorical_cols_str = summarize_features(cleaned_df) # Summarize features
    missing_summary = summarize_missing_values(cleaned_df) # Summarize missing values
    classes_str, class_dist_str = summarize_classes(cleaned_df, label_col) # Summarize classes and distributions
+   
+   try: # Try to get file size in GB
+      size_bytes = os.path.getsize(filepath) # Get file size in bytes
+      size_gb = size_bytes / (1024 ** 3) # Convert bytes to gigabytes
+      size_gb_str = f"{size_gb:.3f}" # Format size to 3 decimal places
+   except Exception: # If an error occurs
+      size_gb_str = "N/A" # Set size to N/A if error occurs
 
    result = { # Return the dataset information as a dictionary
       "Dataset Name": os.path.basename(filepath),
+      "Size (GB)": size_gb_str,
       "Number of Samples": f"{n_samples:,}", # Format with commas for readability
       "Number of Features": f"{n_features:,}", # Format with commas for readability
       "Feature Types": f"{n_numeric} numeric (float64), {n_int} integer (int64), {n_categorical} categorical (object/category/bool/string), {n_other} other",
