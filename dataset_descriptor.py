@@ -485,9 +485,6 @@ def scale_features(numeric_df):
       X_scaled = np.asarray(numeric_df.values, dtype=np.float64) # Convert to a float64 numpy array
    
    return X_scaled # Return the scaled array
-# t-SNE related functionality removed. We no longer compute embeddings or
-# separability scores; related plotting and preprocessing helpers were removed
-# to simplify the dataset descriptor output.
 
 def get_dataset_info(filepath, low_memory=True):
    """
@@ -511,8 +508,6 @@ def get_dataset_info(filepath, low_memory=True):
    n_samples, n_features, n_numeric, n_int, n_categorical, n_other, categorical_cols_str = summarize_features(cleaned_df) # Summarize features
    missing_summary = summarize_missing_values(cleaned_df) # Summarize missing values
    classes_str, class_dist_str = summarize_classes(cleaned_df, label_col) # Summarize classes and distributions
-   
-   # t-SNE embedding and separability computation removed.
 
    result = { # Return the dataset information as a dictionary
       "Dataset Name": os.path.basename(filepath),
