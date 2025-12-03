@@ -622,9 +622,9 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
    Trains the StackingClassifier model and evaluates its performance on the test set.
 
    :param model: The fitted StackingClassifier model object.
-   :param X_train: Training features (scaled numpy array).
+   :param X_train: Training features (pandas DataFrame or numpy array with feature names).
    :param y_train: Training target labels (encoded Series/array).
-   :param X_test: Testing features (scaled numpy array).
+   :param X_test: Testing features (pandas DataFrame or numpy array with feature names).
    :param y_test: Testing target labels (encoded Series/array).
    :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
    """
@@ -633,7 +633,7 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
    
    start_time = time.time() # Record the start time for timing training and prediction
    
-   model.fit(X_train, y_train) # Fit the stacking model on the training data
+   model.fit(X_train, y_train) # Fit the stacking model on the training data (accepts DataFrame or array)
    
    y_pred = model.predict(X_test) # Predict the labels for the test set
    
@@ -818,11 +818,19 @@ def main():
          
          features_list = get_features_list_for_feature_set(name, feature_names, ga_selected_features, rfe_selected_features) # Determine the features list for this feature set
          
+         if name == "PCA Components": # If the feature set is PCA Components
+            subset_feature_names = [f"PC{i+1}" for i in range(X_train_subset.shape[1])] # Generate PCA component names
+         else: # For other feature sets
+            subset_feature_names = features_list if features_list else [f"feature_{i}" for i in range(X_train_subset.shape[1])] # Use actual feature names or generate generic ones
+         
+         X_train_df = pd.DataFrame(X_train_subset, columns=subset_feature_names) # Convert training features to DataFrame
+         X_test_df = pd.DataFrame(X_test_subset, columns=subset_feature_names) # Convert test features to DataFrame
+         
          progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating individual classifiers in parallel on {BackgroundColors.CYAN}{name}{Style.RESET_ALL}") # Update progress bar description
          with concurrent.futures.ThreadPoolExecutor(max_workers=THREADS_LIMIT) as executor: # Create a thread pool executor for parallel evaluation
             future_to_model = {} # Dictionary to map futures to model names
             for model_name, model in individual_models.items(): # Iterate over each individual model
-               future = executor.submit(evaluate_individual_classifier, model, model_name, X_train_subset, y_train, X_test_subset, y_test) # Submit evaluation task to thread pool
+               future = executor.submit(evaluate_individual_classifier, model, model_name, X_train_df.values, y_train, X_test_df.values, y_test) # Submit evaluation task to thread pool (using .values for numpy arrays)
                future_to_model[future] = model_name # Store mapping of future to model name
             for future in concurrent.futures.as_completed(future_to_model): # As each evaluation completes
                model_name = future_to_model[future] # Get the model name from the mapping
@@ -834,7 +842,7 @@ def main():
          
          print(f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}")
          progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating {BackgroundColors.CYAN}{idx}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{len(feature_sets)}{BackgroundColors.GREEN} - {BackgroundColors.CYAN}{name}{BackgroundColors.GREEN}: Stacking{Style.RESET_ALL}") # Update progress bar description for stacking
-         stacking_metrics = evaluate_stacking_classifier(stacking_model, X_train_subset, y_train, X_test_subset, y_test) # Evaluate stacking model
+         stacking_metrics = evaluate_stacking_classifier(stacking_model, X_train_df, y_train, X_test_df, y_test) # Evaluate stacking model with DataFrames
          
          stacking_result_entry = {"dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Stacking", "model_name": "StackingClassifier", "n_features": X_train_subset.shape[1], "metrics": stacking_metrics, "features_list": features_list} # Prepare stacking result entry
          all_results.append(stacking_result_entry) # Add stacking result
