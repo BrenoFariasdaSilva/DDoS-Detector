@@ -1094,7 +1094,6 @@ def main():
 
    input_path = "./Datasets/CICDDoS2019/01-12/" # Path to the input dataset directory
    files_to_process = get_files_to_process(input_path, file_extension=".csv") # Get list of CSV files to process
-   files_to_process = ["./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"] # For testing purposes, process only this file
    
    dataset_name = get_dataset_name(input_path) # Get the dataset name from the input path
    
