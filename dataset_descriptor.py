@@ -83,6 +83,8 @@ DATASETS = { # Dictionary containing dataset paths and feature files
    ]
 }
 
+RESULTS_DIR = "./Dataset_Description/" # Directory to save the results
+
 # Functions Definitions:
 
 def verbose_output(true_string="", false_string=""):
@@ -552,10 +554,12 @@ def write_report(report_rows, base_dir, output_filename):
       cols = ["#"] + [c for c in report_df.columns if c != "#"] # Move "#" to the front
       report_df = report_df[cols] # Reorder columns
 
-   report_csv_path = os.path.join(base_dir, output_filename) # Path to save the report CSV
+   results_dir = os.path.join(base_dir, RESULTS_DIR) # Create results directory path
+   os.makedirs(results_dir, exist_ok=True) # Create results directory if it doesn't exist
+   report_csv_path = os.path.join(results_dir, output_filename) # Path to save the report CSV
    report_df.to_csv(report_csv_path, index=False) # Save the report to a CSV file
 
-def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename="_dataset_descriptor.csv"):
+def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename="Dataset_descriptor.csv"):
    """
    Generates a CSV report for the specified input path.
    The Dataset Name column will include subdirectories if present.
@@ -646,7 +650,7 @@ def main():
             print(f"{BackgroundColors.RED}The specified input path does not exist: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}")
             continue # Skip to next configured path
 
-         output_filename = f"_dataset_descriptor.csv" # Create output filename based on dataset name
+         output_filename = f"Dataset_descriptor.csv" # Create output filename based on dataset name
          
          success = generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=output_filename) # Generate the dataset report
          if not success: # If the report was not generated successfully
