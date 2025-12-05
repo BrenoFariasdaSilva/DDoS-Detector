@@ -87,6 +87,7 @@ import re # For sanitizing filenames
 import seaborn as sns # For enhanced plotting
 import shutil # For checking disk usage
 import time # For measuring execution time
+import warnings # For suppressing warnings
 from colorama import Style # For coloring the terminal
 from deap import base, creator, tools, algorithms # For the genetic algorithm
 from functools import partial # For creating partial functions
@@ -1199,7 +1200,7 @@ def aggregate_sweep_results(results, min_pop, max_pop, bot, dataset_name):
       if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
          try: # Try to send message
             bot.send_messages([f"Completed {len(runs_list)} runs for population size **{pop_size}** on **{dataset_name}** -> **Avg F1: {f1_avg:.4f}**"]) # Send progress message
-         except Exception: # Silently ignore Telegram errors
+         except (Exception, RuntimeWarning): # Silently ignore Telegram errors and warnings
             pass # Do nothing
    
    return best_score, best_result, best_metrics, results # Return aggregated results
@@ -1229,7 +1230,7 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
    if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
       try: # Try to send message
          bot.send_messages([f"Starting population sweep for dataset **{dataset_name}** from size **{min_pop}** to **{max_pop}**"]) # Send start message
-      except Exception: # Silently ignore Telegram errors
+      except (Exception, RuntimeWarning): # Silently ignore Telegram errors and warnings
          pass # Do nothing
 
    data = prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations) # Prepare dataset
@@ -1269,7 +1270,7 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
    if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
       try: # Try to send message
          bot.send_messages([f"Population sweep completed for **{dataset_name}**"]) # Send completion message
-      except Exception: # Silently ignore Telegram errors
+      except (Exception, RuntimeWarning): # Silently ignore Telegram errors and warnings
          pass # Do nothing
 
    return results # Return the results dictionary
@@ -1313,6 +1314,9 @@ def main():
    :return: None
    :return: None
    """
+
+   # Suppress RuntimeWarning for unawaited coroutines from Telegram bot
+   warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited.*")
 
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Genetic Algorithm Feature Selection{BackgroundColors.GREEN} program!{Style.RESET_ALL}", end="\n\n") # Output the welcome message
    start_time = datetime.datetime.now() # Get the start time of the program
