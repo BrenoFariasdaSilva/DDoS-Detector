@@ -228,7 +228,7 @@ def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max
    if progress_bar is None: # If no progress bar is provided
       return # Do nothing
    try: # Try to update the progress bar
-      base = f"{BackgroundColors.GREEN}{dataset_name}/{BackgroundColors.CYAN}{os.path.basename(csv_path)}{Style.RESET_ALL}" # Base description
+      base = f"{BackgroundColors.CYAN}{dataset_name}/{os.path.basename(csv_path)}{Style.RESET_ALL}" # Base description
       details = [] # List to hold detail strings
       if pop_size is not None: # If population size is provided
          if max_pop is not None: # If maximum population size is also provided
