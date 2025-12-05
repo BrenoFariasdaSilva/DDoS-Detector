@@ -86,6 +86,9 @@ DATASETS = { # Dictionary containing dataset paths and feature files
 RESULTS_DIR = "./Dataset_Description/" # Directory to save the results
 RESULTS_FILENAME = "Dataset_descriptor.csv" # Filename for the results CSV
 
+IGNORE_FILES = [RESULTS_FILENAME] # List of filenames to ignore when searching for datasets
+IGNORE_DIRS = ["Cache", "Data_Separability", "Dataset_Description", "Feature_Analysis"] # List of directory names to ignore when searching for datasets
+
 # Functions Definitions:
 
 def verbose_output(true_string="", false_string=""):
@@ -114,7 +117,7 @@ def verify_filepath_exists(filepath):
 
    return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
 
-def collect_matching_files(input_dir, file_format=".csv", ignore_files=None):
+def collect_matching_files(input_dir, file_format=".csv", ignore_files=IGNORE_FILES, ignore_dirs=IGNORE_DIRS,):
    """
    Recursively collects all files in the specified directory and subdirectories
    that match the given file format and are not in the ignore list.
@@ -122,18 +125,39 @@ def collect_matching_files(input_dir, file_format=".csv", ignore_files=None):
    :param input_dir: Directory to search
    :param file_format: File format to include (default: .csv)
    :param ignore_files: List of filenames to ignore
+   :param ignore_dirs: List of directory names to ignore
    :return: Sorted list of matching file paths
    """
 
-   ignore_files = ignore_files or [] # Default to empty list if None
+   verbose_output(f"{BackgroundColors.GREEN}Collecting all files with format {BackgroundColors.CYAN}{file_format}{BackgroundColors.GREEN} in directory: {BackgroundColors.CYAN}{input_dir}{Style.RESET_ALL}") # Output the verbose message
+
+   ignore_files = set(os.path.normcase(f) for f in (ignore_files or [])) # Normalize ignore files for case-insensitive comparison
+   ignore_dirs = set(os.path.normcase(d) for d in (ignore_dirs or [])) # Normalize ignore directories for case-insensitive comparison
+
    matching_files = [] # List to store matching file paths
-   
-   for root, _, files in os.walk(input_dir): # Walk through the directory
+
+   for root, dirs, files in os.walk(input_dir): # Walk through the directory
+      try: # Try to filter out ignored directories
+         dirs[:] = [d for d in dirs if os.path.normcase(d) not in ignore_dirs] # Modify dirs in-place to skip ignored directories
+      except Exception: # If an error occurs while filtering directories
+         pass # Ignore the error and continue
+
       for file in files: # For each file
-         if file.endswith(file_format) and file not in ignore_files: # Verify if it matches the format and is not ignored
-            matching_files.append(os.path.join(root, file)) # Add the full file path to the list
-   
+         if not file.endswith(file_format): # Skip files that do not match the specified format
+            continue # Continue to the next file
+
+         basename_norm = os.path.normcase(file) # Normalize the basename for case-insensitive comparison
+         fullpath = os.path.join(root, file) # Get the full file path
+         fullpath_norm = os.path.normcase(fullpath) # Normalize the full file path for case-insensitive comparison
+
+         if basename_norm in ignore_files or fullpath_norm in ignore_files: # If the file is in the ignore list
+            verbose_output(f"Skipping ignored file: {fullpath}") # Output verbose message for ignored file
+            continue # Continue to the next file
+
+         matching_files.append(fullpath) # Add the full file path to the list
+
    sorted_matching_files = sorted(set(matching_files)) # Remove duplicates and sort the list
+   
    return sorted_matching_files # Return the sorted list of matching files
 
 def load_dataset(filepath, low_memory=True):
@@ -573,12 +597,11 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
    """
 
    report_rows = [] # List to store report rows
-   ignore_files = [output_filename] # Ignore the output CSV itself
    sorted_matching_files = [] # List to store matching files
 
    if os.path.isdir(input_path): # If the input path is a directory
       print(f"{BackgroundColors.GREEN}Scanning directory {BackgroundColors.CYAN}{input_path}{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files...{Style.RESET_ALL}") # Output scanning message
-      sorted_matching_files = collect_matching_files(input_path, file_extension, ignore_files) # Collect matching files
+      sorted_matching_files = collect_matching_files(input_path, file_extension) # Collect matching files
       base_dir = os.path.abspath(input_path) # Get the absolute path of the base directory
    elif os.path.isfile(input_path) and input_path.endswith(file_extension): # If the input path is a file
       print(f"{BackgroundColors.GREEN}Processing single file...{Style.RESET_ALL}") # Output processing single file message
