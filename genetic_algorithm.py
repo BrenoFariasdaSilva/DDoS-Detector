@@ -529,13 +529,13 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
    :param X_test: Testing feature set (unused during CV, but kept for compatibility).
    :param y_test: Testing target variable (unused during CV, but kept for compatibility).
    :param estimator_cls: Classifier class to use (default: RandomForestClassifier).
-   :return: Tuple containing accuracy, precision, recall, F1-score, FPR, FNR, elapsed_time
+   :return: Tuple containing accuracy, precision, recall, F1-score, FPR, FNR
    """
 
    verbose_output(f"{BackgroundColors.GREEN}Evaluating individual: {BackgroundColors.CYAN}{individual}{Style.RESET_ALL}") # Output the verbose message
 
    if sum(individual) == 0: # If no features are selected
-      return 0, 0, 0, 0, 1, 1, float("inf") # Return worst possible scores
+      return 0, 0, 0, 0, 1, 1 # Return worst possible scores
 
    mask_tuple = tuple(individual) # Convert individual to tuple for hashing
    if mask_tuple in fitness_cache: # Verify if already evaluated
@@ -544,7 +544,7 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
    mask = np.array(individual, dtype=bool) # Create boolean mask from individual
    X_train_sel = X_train[:, mask] # Select features based on the mask
 
-   metrics = np.empty((0, 7), dtype=float) # Will hold metrics for each fold: [acc, prec, rec, f1, fpr, fnr, elapsed]
+   metrics = np.empty((0, 6), dtype=float) # Will hold metrics for each fold: [acc, prec, rec, f1, fpr, fnr]
 
    try: # Try to create StratifiedKFold splits
       skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42) # 10-fold Stratified CV
@@ -552,11 +552,9 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
    except Exception: # If StratifiedKFold fails (e.g., too few samples per class)
       print(f"{BackgroundColors.YELLOW}Warning: StratifiedKFold failed, falling back to simple train/test split for evaluation due to {str(Exception)}{Style.RESET_ALL}") # Output warning message
       X_test_sel = X_test[:, mask] # Select features from test set
-      start_time = time.time() # Start timer
       model = instantiate_estimator(estimator_cls) # Instantiate the model
       model.fit(X_train_sel, y_train) # Fit the model on the training set
       y_pred = model.predict(X_test_sel) # Predict on the test set
-      elapsed_time = time.time() - start_time # Calculate elapsed time
 
       acc = accuracy_score(y_test, y_pred) # Calculate accuracy
       prec = precision_score(y_test, y_pred, average="weighted", zero_division=0) # Calculate precision
@@ -572,19 +570,17 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
       fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # False positive rate
       fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # False negative rate
 
-      return acc, prec, rec, f1, fpr, fnr, elapsed_time # Return metrics
+      return acc, prec, rec, f1, fpr, fnr # Return metrics
 
    y_train_np = np.array(y_train) # Convert y_train to numpy array for fast indexing
    early_stop_triggered = False # Flag for early stopping
 
    for fold_idx, (train_idx, val_idx) in enumerate(splits): # For each fold
-      start_time = time.time() # Start timer
       model = instantiate_estimator(estimator_cls) # Instantiate the model
       y_train_fold = y_train_np[train_idx] # Get training fold labels
       y_val_fold = y_train_np[val_idx] # Get validation fold labels
       model.fit(X_train_sel[train_idx], y_train_fold) # Fit the model on the training fold
       y_pred = model.predict(X_train_sel[val_idx]) # Predict on the validation fold
-      elapsed = time.time() - start_time # Calculate elapsed time
 
       acc = accuracy_score(y_val_fold, y_pred) # Calculate accuracy
       prec = precision_score(y_val_fold, y_pred, average="weighted", zero_division=0) # Calculate precision
@@ -600,18 +596,16 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
       fpr = fp / (fp + tn) if (fp + tn) > 0 else 0 # False positive rate
       fnr = fn / (fn + tp) if (fn + tp) > 0 else 0 # False negative rate
 
-      metrics = np.vstack((metrics, np.array([acc, prec, rec, f1, fpr, fnr, elapsed], dtype=float))) # Append metrics using NumPy
+      metrics = np.vstack((metrics, np.array([acc, prec, rec, f1, fpr, fnr], dtype=float))) # Append metrics using NumPy
 
       if fold_idx < EARLY_STOP_FOLDS and acc < EARLY_STOP_ACC_THRESHOLD: # Early stopping: If accuracy is below threshold in first few folds, break
          early_stop_triggered = True # Set flag
          break # Stop evaluating further folds for this individual
 
-   means = np.mean(metrics, axis=0) if metrics.shape[0] > 0 else np.zeros(7) # Calculate means for each metric
-   acc, prec, rec, f1, fpr, fnr, elapsed_time = means # Unpack mean metrics
-   if metrics.shape[0] == 0: # If no times were recorded
-      elapsed_time = float("inf") # Set elapsed_time to infinity if no times recorded
+   means = np.mean(metrics, axis=0) if metrics.shape[0] > 0 else np.zeros(6) # Calculate means for each metric
+   acc, prec, rec, f1, fpr, fnr = means # Unpack mean metrics
 
-   result = acc, prec, rec, f1, fpr, fnr, elapsed_time # Prepare result tuple
+   result = acc, prec, rec, f1, fpr, fnr # Prepare result tuple
    fitness_cache[mask_tuple] = result # Cache the result
    return result # Return vectorized average metrics
 
