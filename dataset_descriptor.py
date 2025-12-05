@@ -84,6 +84,7 @@ DATASETS = { # Dictionary containing dataset paths and feature files
 }
 
 RESULTS_DIR = "./Dataset_Description/" # Directory to save the results
+RESULTS_FILENAME = "Dataset_descriptor.csv" # Filename for the results CSV
 
 # Functions Definitions:
 
@@ -559,7 +560,7 @@ def write_report(report_rows, base_dir, output_filename):
    report_csv_path = os.path.join(results_dir, output_filename) # Path to save the report CSV
    report_df.to_csv(report_csv_path, index=False) # Save the report to a CSV file
 
-def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename="Dataset_descriptor.csv"):
+def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME):
    """
    Generates a CSV report for the specified input path.
    The Dataset Name column will include subdirectories if present.
@@ -649,15 +650,12 @@ def main():
          if not verify_filepath_exists(input_path): # Verify path exists
             print(f"{BackgroundColors.RED}The specified input path does not exist: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}")
             continue # Skip to next configured path
-
-         output_filename = f"Dataset_descriptor.csv" # Create output filename based on dataset name
          
-         success = generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=output_filename) # Generate the dataset report
+         success = generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME) # Generate the dataset report
          if not success: # If the report was not generated successfully
             print(f"{BackgroundColors.RED}Failed to generate dataset report for: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}")
          else: # If the report was generated successfully
-            print(f"{BackgroundColors.GREEN}Report saved for {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} -> {BackgroundColors.CYAN}{output_filename}{Style.RESET_ALL}")
-
+            print(f"{BackgroundColors.GREEN}Report saved for {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} -> {BackgroundColors.CYAN}{RESULTS_FILENAME}{Style.RESET_ALL}")
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
 
    atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None # Register the play_sound function to be called when the program finishes
