@@ -210,7 +210,7 @@ def get_dataset_name(input_path):
 
    return dataset_name # Return the dataset name
 
-def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max_pop=None, n_generations=None, run=None, runs=None):
+def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max_pop=None, gen=None, n_generations=None, run=None, runs=None):
    """
    Update a tqdm `progress_bar` description and postfix consistently.
 
@@ -235,16 +235,20 @@ def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max
             details.append(f"pop {pop_size}/{max_pop}") # Show current/max population
          else: # If only current population size is provided
             details.append(f"pop {pop_size}") # Show current population only
-      
-      if n_generations is not None: # If number of generations is provided
-         details.append(f"gen {n_generations}") # Show number of generations
+
+      if gen is not None and n_generations is not None: # If generation and total generations are provided
+         details.append(f"gen {gen}/{n_generations}") # Show current/total generations
+      elif gen is not None: # If only generation is provided
+         details.append(f"gen {gen}") # Show current generation only
+      elif n_generations is not None: # If only total generations is provided
+         details.append(f"gen {n_generations}") # Show total generations only
 
       if details: # If there are any details to show
          detail_str = ", ".join(details) # Join details with commas
          desc = f"{BackgroundColors.GREEN}{dataset_name}/{BackgroundColors.CYAN}{os.path.basename(csv_path)}: {BackgroundColors.GREEN}{detail_str}{Style.RESET_ALL}"
       else: # If no details
          desc = base # Just use the base description
-         
+      
       progress_bar.set_description(desc) # Update the progress bar description
       if run is not None and runs is not None: # If run and runs are provided
          progress_bar.set_postfix_str(f"run {run}/{runs}") # Update the postfix with run info
@@ -569,7 +573,7 @@ def ga_fitness(ind, fitness_func):
    
    return (fitness_func(ind)[3],) # Return only the F1-score for GA optimization
 
-def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100, show_progress=False):
+def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100, show_progress=False, progress_bar=None, dataset_name=None, csv_path=None, pop_size=None, max_pop=None, run=None, runs=None):
    """
    Run Genetic Algorithm generations with a tqdm progress bar.
 
@@ -596,6 +600,8 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
 
    gen_range = tqdm(range(1, n_generations + 1), desc=f"{BackgroundColors.GREEN}Generations{Style.RESET_ALL}") if show_progress else range(1, n_generations + 1)
    for gen in gen_range: # Loop for the specified number of generations
+      update_progress_bar(progress_bar, dataset_name or "", csv_path or "", pop_size=pop_size, max_pop=max_pop, gen=gen, n_generations=n_generations, run=run, runs=runs) if progress_bar else None # Update progress bar if provided
+
       offspring = algorithms.varAnd(population, toolbox, cxpb=0.5, mutpb=0.2) # Apply crossover and mutation
       fits = list(toolbox.map(toolbox.evaluate, offspring)) # Evaluate the offspring in parallel
 
@@ -1044,13 +1050,13 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
       feature_count = len(feature_names) if feature_names is not None else 0 # Number of features
       runs_list = [] # List to store results for each run
 
-      update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations) # Update progress bar postfix with current population size
+      update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations) if progress_bar else None # Update progress bar for new population size
 
       for run in range(runs): # For each run
-         update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run+1, runs=runs) # Update progress bar postfix with current run number
+         update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run+1, runs=runs) if progress_bar else None # Update progress bar postfix with current run number
 
          toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # Configure the GA
-         best_ind = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False) # Run the GA loop
+         best_ind = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, run=run+1, runs=runs) # Run the GA loop with external progress updates
 
          if best_ind is None: # If no best individual was found
             continue # Skip this run
