@@ -617,37 +617,18 @@ def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_
 
    result = acc, prec, rec, f1, fpr, fnr # Prepare result tuple
    fitness_cache[mask_tuple] = result # Cache the result
-   
-   if progress_state and isinstance(progress_state, dict): # If progress_state dict is provided
-      try: # Try to update the progress state
-         folds = 10 # Number of folds per evaluation
-         progress_state["current_it"] = int(progress_state.get("current_it", 0)) + folds # Increment current_it by number of folds
-         update_progress_bar(progress_bar, dataset_name or "", csv_path or "", pop_size=pop_size, max_pop=max_pop, gen=gen, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
-      except Exception: # Silently ignore progress update failures
-         pass # Do nothing
-   
    return result # Return vectorized average metrics
 
-def ga_fitness(ind, fitness_func, progress_bar=None, dataset_name=None, csv_path=None, pop_size=None, max_pop=None, gen=None, n_generations=None, run=None, runs=None, progress_state=None):
+def ga_fitness(ind, fitness_func):
    """
    Global fitness function for GA evaluation to avoid pickle issues with local functions.
    
    :param ind: Individual to evaluate
    :param fitness_func: Partial function for evaluation
-   :param progress_bar: Optional progress bar instance
-   :param dataset_name: Optional dataset name
-   :param csv_path: Optional CSV path
-   :param pop_size: Optional population size
-   :param max_pop: Optional maximum population size
-   :param gen: Optional current generation
-   :param n_generations: Optional total generations
-   :param run: Optional current run
-   :param runs: Optional total runs
-   :param progress_state: Optional progress state dict
    :return: Tuple with F1-score
    """
    
-   return (fitness_func(ind, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, gen=gen, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state)[3],) # Return only the F1-score for GA optimization
+   return (fitness_func(ind)[3],) # Return only the F1-score for GA optimization
 
 def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100, show_progress=False, progress_bar=None, dataset_name=None, csv_path=None, pop_size=None, max_pop=None, run=None, runs=None, progress_state=None):
    """
@@ -668,22 +649,26 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
    verbose_output(f"{BackgroundColors.GREEN}Running Genetic Algorithm for {n_generations} generations.{Style.RESET_ALL}") # Output the verbose message
 
    fitness_func = partial(evaluate_individual, X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test) # Partial function for evaluation
-   toolbox.register("evaluate", partial(ga_fitness, fitness_func=fitness_func, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state)) # Register the global fitness function with progress tracking
+   toolbox.register("evaluate", partial(ga_fitness, fitness_func=fitness_func)) # Register the global fitness function
 
    best_fitness = None # Track the best fitness value
    gens_without_improvement = 0 # Counter for generations with no improvement
    early_stop_gens = 10 # Number of generations to wait for improvement before stopping
 
+   folds = 10 # Number of folds used in cross-validation
    gen_range = tqdm(range(1, n_generations + 1), desc=f"{BackgroundColors.GREEN}Generations{Style.RESET_ALL}") if show_progress else range(1, n_generations + 1)
    for gen in gen_range: # Loop for the specified number of generations
       update_progress_bar(progress_bar, dataset_name or "", csv_path or "", pop_size=pop_size, max_pop=max_pop, gen=gen, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
 
       offspring = algorithms.varAnd(population, toolbox, cxpb=0.5, mutpb=0.2) # Apply crossover and mutation
+      fits = list(toolbox.map(toolbox.evaluate, offspring)) # Evaluate the offspring in parallel
       
-      toolbox.unregister("evaluate") # Unregister previous evaluate to avoid conflicts
-      toolbox.register("evaluate", partial(ga_fitness, fitness_func=fitness_func, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, gen=gen, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state)) # Re-register evaluate with current generation info
-      
-      fits = list(toolbox.map(toolbox.evaluate, offspring)) # Evaluate the offspring in parallel (progress updated per individual)
+      if progress_state and isinstance(progress_state, dict): # Update progress state if provided
+         try: # Try to update progress state
+            progress_state["current_it"] = int(progress_state.get("current_it", 0)) + len(offspring) * folds
+            update_progress_bar(progress_bar, dataset_name or "", csv_path or "", pop_size=pop_size, max_pop=max_pop, gen=gen, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
+         except Exception: # Silently ignore progress update errors
+            pass # Do nothing
 
       for ind, fit in zip(offspring, fits): # Assign fitness values
          ind.fitness.values = fit # Set the fitness value
@@ -703,7 +688,10 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
          break # Stop the loop early
 
       if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID and show_progress and gen % max(1, n_generations // 100) == 0: # Send periodic updates to Telegram in every ~1% of generations
-         bot.send_messages([f"GA Progress: Generation {gen}/{n_generations}, Best F1-Score: {best_fitness:.4f}"]) # Send message to Telegram bot
+         try: # Try to send message
+            bot.send_messages([f"GA Progress: Generation {gen}/{n_generations}, Best F1-Score: {best_fitness:.4f}"]) # Send message to Telegram bot
+         except Exception: # Silently ignore Telegram errors
+            pass # Do nothing
 
    if hasattr(toolbox, "map") and hasattr(toolbox.map, "close"): # If using multiprocessing pool
       toolbox.map.close() # Close the pool
@@ -1136,7 +1124,7 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    :param folds: Number of CV folds.
    :return: Dict with best_ind, metrics, best_features or None if failed.
    """
-   
+
    iteration_start_time = time.time() # Start tracking total iteration time
    
    feature_count = len(feature_names) if feature_names is not None else 0 # Count of features
@@ -1149,9 +1137,9 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    if best_ind is None: # If GA failed
       return None # Exit early
    
-   metrics = evaluate_individual(best_ind, X_train, y_train, X_test, y_test, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) # Evaluate best individual with progress tracking
+   metrics = evaluate_individual(best_ind, X_train, y_train, X_test, y_test) # Evaluate best individual
    
-   if progress_state and isinstance(progress_state, dict): 
+   if progress_state and isinstance(progress_state, dict):  # If progress_state is valid
       try: # Try to update current_it
          progress_state["current_it"] = int(progress_state.get("current_it", 0)) + folds # Increment by number of evaluations done
       except Exception: # Silently ignore failures
@@ -1209,7 +1197,10 @@ def aggregate_sweep_results(results, min_pop, max_pop, bot, dataset_name):
          print(f"  Run {i+1}: unique features {len(unique)}") # Print unique features count
       
       if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
-         bot.send_messages([f"Completed {len(runs_list)} runs for population size **{pop_size}** on **{dataset_name}** -> **Avg F1: {f1_avg:.4f}**"]) # Send progress message
+         try: # Try to send message
+            bot.send_messages([f"Completed {len(runs_list)} runs for population size **{pop_size}** on **{dataset_name}** -> **Avg F1: {f1_avg:.4f}**"]) # Send progress message
+         except Exception: # Silently ignore Telegram errors
+            pass # Do nothing
    
    return best_score, best_result, best_metrics, results # Return aggregated results
 
@@ -1236,7 +1227,10 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
    verbose_output(f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {min_pop} to {max_pop}, running {n_generations} generations and {runs} runs each.{Style.RESET_ALL}")
 
    if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
-      bot.send_messages([f"Starting population sweep for dataset **{dataset_name}** from size **{min_pop}** to **{max_pop}**"]) # Send start message
+      try: # Try to send message
+         bot.send_messages([f"Starting population sweep for dataset **{dataset_name}** from size **{min_pop}** to **{max_pop}**"]) # Send start message
+      except Exception: # Silently ignore Telegram errors
+         pass # Do nothing
 
    data = prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations) # Prepare dataset
    if data is None: # If preparation failed
@@ -1273,7 +1267,10 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
       print(f"{BackgroundColors.RED}No valid results found during the sweep.{Style.RESET_ALL}")
 
    if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
-      bot.send_messages([f"Population sweep completed for **{dataset_name}**"]) # Send completion message
+      try: # Try to send message
+         bot.send_messages([f"Population sweep completed for **{dataset_name}**"]) # Send completion message
+      except Exception: # Silently ignore Telegram errors
+         pass # Do nothing
 
    return results # Return the results dictionary
 
