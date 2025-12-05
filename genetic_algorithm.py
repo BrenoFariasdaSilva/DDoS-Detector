@@ -246,9 +246,9 @@ def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max
       details = [] # List to hold detail strings (pop, gen)
       if pop_size is not None: # If population size is provided
          if max_pop is not None: # If maximum population size is also provided
-            details.append(f"Pop {pop_size}/{max_pop}") # Show current/max population
+            details.append(f"{BackgroundColors.GREEN}Pop {BackgroundColors.CYAN}{pop_size}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{max_pop}") # Show current/max population
          else: # If only current population size is provided
-            details.append(f"Pop {pop_size}") # Show current population only
+            details.append(f"{BackgroundColors.GREEN}Pop {BackgroundColors.CYAN}{pop_size}") # Show current population only
 
       if gen is not None and n_generations is not None: # If generation and total generations are provided
          details.append(f"{BackgroundColors.GREEN}Gen {BackgroundColors.CYAN}{gen}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{n_generations}") # Show current/total generations
