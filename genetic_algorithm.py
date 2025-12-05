@@ -228,8 +228,15 @@ def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max
    if progress_bar is None: # If no progress bar is provided
       return # Do nothing
    try: # Try to update the progress bar
-      base = f"{BackgroundColors.CYAN}{dataset_name}/{os.path.basename(csv_path)}{Style.RESET_ALL}" # Base description
-      details = [] # List to hold detail strings
+      # Build run info as part of description (not postfix)
+      run_str = f"{BackgroundColors.GREEN}run {BackgroundColors.CYAN}{run}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{runs}" if run is not None and runs is not None else None
+      
+      if run_str: # If run string is provided
+         base = f"{BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{os.path.basename(csv_path)}{BackgroundColors.GREEN}: {run_str}{Style.RESET_ALL}" # Base description with run info
+      else: # If no run string
+         base = f"{BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{os.path.basename(csv_path)}{Style.RESET_ALL}" # Base description without run info
+      
+      details = [] # List to hold detail strings (pop, gen)
       if pop_size is not None: # If population size is provided
          if max_pop is not None: # If maximum population size is also provided
             details.append(f"pop {pop_size}/{max_pop}") # Show current/max population
@@ -237,21 +244,19 @@ def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max
             details.append(f"pop {pop_size}") # Show current population only
 
       if gen is not None and n_generations is not None: # If generation and total generations are provided
-         details.append(f"gen {gen}/{n_generations}") # Show current/total generations
+         details.append(f"{BackgroundColors.GREEN}gen {BackgroundColors.CYAN}{gen}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{n_generations}") # Show current/total generations
       elif gen is not None: # If only generation is provided
-         details.append(f"gen {gen}") # Show current generation only
+         details.append(f"{BackgroundColors.GREEN}gen {BackgroundColors.CYAN}{gen}") # Show current generation only
       elif n_generations is not None: # If only total generations is provided
-         details.append(f"gen {n_generations}") # Show total generations only
+         details.append(f"{BackgroundColors.GREEN}gen {BackgroundColors.CYAN}{n_generations}") # Show total generations only
 
       if details: # If there are any details to show
          detail_str = ", ".join(details) # Join details with commas
-         desc = f"{BackgroundColors.GREEN}{dataset_name}/{BackgroundColors.CYAN}{os.path.basename(csv_path)}: {BackgroundColors.GREEN}{detail_str}{Style.RESET_ALL}"
+         desc = f"{base} - {BackgroundColors.GREEN}{detail_str}{Style.RESET_ALL}"
       else: # If no details
          desc = base # Just use the base description
       
       progress_bar.set_description(desc) # Update the progress bar description
-      if run is not None and runs is not None: # If run and runs are provided
-         progress_bar.set_postfix_str(f"run {run}/{runs}") # Update the postfix with run info
       progress_bar.refresh() # Refresh the progress bar display
    except Exception: # Silently ignore progress bar update failures
       pass # Do nothing
