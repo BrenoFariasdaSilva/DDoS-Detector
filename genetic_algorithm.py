@@ -1060,6 +1060,136 @@ def analyze_results(saved_info, X, y, feature_names, csv_path):
 
    analyze_top_features(df_features, y_series, best_features, csv_path=csv_path) # Analyze and visualize the top features
 
+def prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations):
+   """
+   Load and preprocess dataset for GA sweep.
+   
+   :param csv_path: Path to the CSV dataset.
+   :param dataset_name: Name of the dataset.
+   :param min_pop: Minimum population size.
+   :param max_pop: Maximum population size.
+   :param n_generations: Number of generations.
+   :return: Tuple (X_train, X_test, y_train, y_test, feature_names) or None if failed.
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Preparing dataset '{dataset_name}' for Genetic Algorithm sweep.{Style.RESET_ALL}") # Output the verbose message
+   
+   df = load_dataset(csv_path) # Load dataset
+   if df is None: # If loading failed
+      return None # Exit early
+   
+   cleaned_df = preprocess_dataframe(df) # Preprocess dataset
+   
+   if cleaned_df is None or cleaned_df.empty: # If preprocessing failed or dataset is empty
+      print(f"{BackgroundColors.RED}Dataset empty after preprocessing. Exiting.{Style.RESET_ALL}")
+      return None # Exit early
+   
+   X_train, X_test, y_train, y_test, feature_names = split_dataset(cleaned_df, csv_path) # Split dataset
+   if X_train is None: # If splitting failed
+      return None # Exit early
+   
+   print_ga_parameters(min_pop, max_pop, n_generations, len(feature_names) if feature_names is not None else 0) if VERBOSE else None # Print GA parameters if verbose
+   
+   train_count = len(y_train) if y_train is not None else 0 # Count training samples
+   test_count = len(y_test) if y_test is not None else 0 # Count testing samples
+   verbose_output(f"  {BackgroundColors.GREEN}  Dataset: {BackgroundColors.CYAN}{dataset_name} - {train_count} training / {test_count} testing  (80/20){Style.RESET_ALL}\n")
+   
+   return X_train, X_test, y_train, y_test, feature_names # Return prepared data
+
+def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names, pop_size, n_generations, run, runs, dataset_name, csv_path, max_pop, progress_bar, progress_state, folds):
+   """
+   Execute one GA run for a specific population size.
+   
+   :param bot: TelegramBot instance.
+   :param X_train: Training features.
+   :param y_train: Training labels.
+   :param X_test: Test features.
+   :param y_test: Test labels.
+   :param feature_names: List of feature names.
+   :param pop_size: Population size for this iteration.
+   :param n_generations: Number of generations.
+   :param run: Current run number (1-based).
+   :param runs: Total number of runs.
+   :param dataset_name: Dataset name.
+   :param csv_path: Path to CSV.
+   :param max_pop: Maximum population size.
+   :param progress_bar: Progress bar instance.
+   :param progress_state: Progress state dict.
+   :param folds: Number of CV folds.
+   :return: Dict with best_ind, metrics, best_features or None if failed.
+   """
+   
+   feature_count = len(feature_names) if feature_names is not None else 0 # Count of features
+   
+   update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
+   
+   toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # Setup GA components
+   best_ind = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, run=run, runs=runs, progress_state=progress_state) # Run GA loop
+   
+   if best_ind is None: # If GA failed
+      return None # Exit early
+   
+   metrics = evaluate_individual(best_ind, X_train, y_train, X_test, y_test) # Evaluate best individual
+   
+   if progress_state and isinstance(progress_state, dict): 
+      try: # Try to update current_it
+         progress_state["current_it"] = int(progress_state.get("current_it", 0)) + folds # Increment by number of evaluations done
+      except Exception: # Silently ignore failures
+         pass # Do nothing
+   
+   update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar
+   
+   best_features = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1] # Extract best features
+   
+   return {"best_ind": best_ind, "metrics": metrics, "best_features": best_features} # Return results
+
+def aggregate_sweep_results(results, min_pop, max_pop, bot, dataset_name):
+   """
+   Aggregate results per population size and find best.
+   
+   :param results: Dict mapping pop_size to runs list.
+   :param min_pop: Minimum population size.
+   :param max_pop: Maximum population size.
+   :param bot: TelegramBot instance.
+   :param dataset_name: Dataset name.
+   :return: Tuple (best_score, best_result, best_metrics, results_dict).
+   """
+   
+   best_score = -1 # Initialize best score
+   best_result = None # Initialize best result
+   best_metrics = None # Initialize best metrics
+   
+   for pop_size in range(min_pop, max_pop + 1): # For each population size
+      runs_list = results[pop_size]["runs"] # Get runs list
+      if not runs_list: # If no runs
+         results.pop(pop_size, None) # Remove entry
+         continue # Skip to next population size
+      
+      all_metrics = [r["metrics"] for r in runs_list] # Collect all metrics
+      avg_metrics = tuple(np.mean(all_metrics, axis=0)) # Compute average metrics
+      
+      feature_sets = [set(r["best_features"]) for r in runs_list] # Collect feature sets
+      common_features = set.intersection(*feature_sets) if feature_sets else set() # Find common features
+      
+      results[pop_size]["avg_metrics"] = avg_metrics # Store average metrics
+      results[pop_size]["common_features"] = common_features # Store common features
+      
+      f1_avg = avg_metrics[3] # Average F1-Score
+      if f1_avg > best_score: # If this is the best score so far
+         best_score = f1_avg # Update best score
+         best_metrics = avg_metrics # Update best metrics
+         best_result = (pop_size, runs_list, common_features) # Update best result
+      
+      print(f"Pop {pop_size}: avg F1 {f1_avg:.4f}, common features {len(common_features)}") # Print summary
+      for i, run_data in enumerate(runs_list): # For each run
+         unique = set(run_data["best_features"]) - common_features # Unique features
+         print(f"  Run {i+1}: unique features {len(unique)}") # Print unique features count
+      
+      if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
+         bot.send_messages([f"Completed {len(runs_list)} runs for population size **{pop_size}** on **{dataset_name}** -> **Avg F1: {f1_avg:.4f}**"]) # Send progress message
+   
+   return best_score, best_result, best_metrics, results # Return aggregated results
+
 def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop=20, max_pop=20, runs=RUNS, progress_bar=None):
    """
    Executes a genetic algorithm (GA) for feature selection across multiple population sizes and runs.
@@ -1080,89 +1210,31 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
    :return: Dictionary mapping population sizes to their results including runs and divergence.
    """
    
-   verbose_output(f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {min_pop} to {max_pop}, running {n_generations} generations and {runs} runs each.{Style.RESET_ALL}") # Output the verbose message
+   verbose_output(f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {min_pop} to {max_pop}, running {n_generations} generations and {runs} runs each.{Style.RESET_ALL}")
 
    if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
       bot.send_messages([f"Starting population sweep for dataset **{dataset_name}** from size **{min_pop}** to **{max_pop}**"]) # Send start message
 
-   best_score = -1 # Initialize best score
-   best_result = None # Initialize best result
-   best_metrics = None # Initialize best metrics
-   results = {} # Dictionary to store results for each population size
-
-   df = load_dataset(csv_path) # Load the dataset
-   if df is None: # If dataset loading failed
-      return {} # Return empty dictionary
+   data = prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations) # Prepare dataset
+   if data is None: # If preparation failed
+      return {} # Exit early
    
-   cleaned_df = preprocess_dataframe(df) # Preprocess the DataFrame
-   if cleaned_df is None or cleaned_df.empty: # If preprocessing failed or resulted in an empty DataFrame
-      print(f"{BackgroundColors.RED}Dataset empty after preprocessing. Exiting.{Style.RESET_ALL}")
-      return {} # Return empty dictionary
+   X_train, X_test, y_train, y_test, feature_names = data # Unpack prepared data
    
-   X_train, X_test, y_train, y_test, feature_names = split_dataset(cleaned_df, csv_path) # Apply train/test split and scaling
-   if X_train is None: # If splitting failed
-      return {} # Return empty dictionary
+   folds = 10 # Number of CV folds
+   progress_state = compute_progress_state(min_pop, max_pop, n_generations, runs, progress_bar, folds=folds) # Compute progress state for tracking
    
-   print_ga_parameters(min_pop, max_pop, n_generations, len(feature_names) if feature_names is not None else 0) if VERBOSE else None # Print GA parameters if VERBOSE is enabled
+   results = {} # Dictionary to hold results per population size
+   for p in range(min_pop, max_pop + 1): # For each population size
+      results[p] = {"runs": [], "avg_metrics": None, "common_features": set()} # Initialize results entry
    
-   train_count = len(y_train) if y_train is not None else 0 # Number of training samples
-   test_count = len(y_test) if y_test is not None else 0 # Number of testing samples
-   verbose_output(f"  {BackgroundColors.GREEN}  Dataset: {BackgroundColors.CYAN}{dataset_name} - {train_count} training / {test_count} testing  (80/20){Style.RESET_ALL}\n") # Output dataset split
-
-   folds = 10 # Number of folds for cross-validation
-   progress_state = compute_progress_state(min_pop, max_pop, n_generations, runs, progress_bar, folds=folds) # Compute progress state for external updates
-
-   for pop_size in range(min_pop, max_pop + 1): # For each population size
-      feature_count = len(feature_names) if feature_names is not None else 0 # Number of features
-      runs_list = [] # List to store results for each run
-
-      update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, progress_state=progress_state) if progress_bar else None # Update progress bar for new population size
-
-      for run in range(runs): # For each run
-         update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run+1, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar postfix with current run number
-
-         toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # Configure the GA
-         best_ind = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, run=run+1, runs=runs, progress_state=progress_state) # Run the GA loop with external progress updates
-
-         if best_ind is None: # If no best individual was found
-            continue # Skip this run
-
-         metrics = evaluate_individual(best_ind, X_train, y_train, X_test, y_test) # Reevaluate the best individual
-
-         if progress_state and isinstance(progress_state, dict): # Update progress state
-            try: # Attempt to update current iteration count for the single reevaluation
-               progress_state["current_it"] = int(progress_state.get("current_it", 0)) + folds
-            except Exception: # Silently ignore failures
-               pass # Do nothing
-         
-         update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run+1, runs=runs, progress_state=progress_state) if progress_bar else None
-         best_features = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1] # Extract best features
-         runs_list.append({"best_ind": best_ind, "metrics": metrics, "best_features": best_features}) # Store run results
-
-      if not runs_list: # If no runs succeeded
-         continue # Skip to the next population size
-
-      all_metrics = [r["metrics"] for r in runs_list] # Collect metrics from all runs
-      avg_metrics = tuple(np.mean(all_metrics, axis=0)) # Calculate average metrics across runs
-
-      feature_sets = [set(r["best_features"]) for r in runs_list] # Get feature sets for all runs
-      common_features = set.intersection(*feature_sets) if feature_sets else set() # Find common features across all runs
-
-      results[pop_size] = {"runs": runs_list, "avg_metrics": avg_metrics, "common_features": common_features} # Store results for this population size
-
-      f1_avg = avg_metrics[3] # F1-Score is the 4th metric in the tuple
-      if f1_avg > best_score: # If this is the best score so far
-         best_score = f1_avg # Update best score
-         best_metrics = avg_metrics # Update best metrics
-         best_result = (pop_size, runs_list, common_features) # Update best result
-
-      print(f"Pop {pop_size}: avg F1 {f1_avg:.4f}, common features {len(common_features)}")
-      for i, run in enumerate(runs_list): # For each run
-         unique = set(run["best_features"]) - common_features # Calculate unique features for this run
-         print(f"  Run {i+1}: unique features {len(unique)}") # Print unique features count
-
-      if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
-         bot.send_messages([f"Completed {runs} runs for population size **{pop_size}** on **{dataset_name}** -> **Avg F1: {f1_avg:.4f}**"])
+   for run in range(runs): # For each run
+      for pop_size in range(min_pop, max_pop + 1): # For each population size
+         result = run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names, pop_size, n_generations, run+1, runs, dataset_name, csv_path, max_pop, progress_bar, progress_state, folds) # Run GA iteration
+         if result: # If result is valid
+            results[pop_size]["runs"].append(result) # Append result to runs list
+   
+   best_score, best_result, best_metrics, results = aggregate_sweep_results(results, min_pop, max_pop, bot, dataset_name) # Aggregate results and find best
 
    if best_result: # If a best result was found
       best_pop_size, runs_list, common_features = best_result # Unpack the best result
