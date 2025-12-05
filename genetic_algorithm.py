@@ -258,7 +258,7 @@ def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max
          details.append(f"{BackgroundColors.GREEN}Gen {BackgroundColors.CYAN}{n_generations}") # Show total generations only
       if details: # If there are any details to show
          detail_str = ", ".join(details) # Join details with commas
-         desc = f"{base} - {BackgroundColors.GREEN}{detail_str}{Style.RESET_ALL}"
+         desc = f"{base}{BackgroundColors.GREEN} - {detail_str}{Style.RESET_ALL}"
       else: # If no details
          desc = base # Just use the base description
       
