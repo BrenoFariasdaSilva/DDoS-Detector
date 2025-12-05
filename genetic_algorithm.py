@@ -210,7 +210,7 @@ def get_dataset_name(input_path):
 
    return dataset_name # Return the dataset name
 
-def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max_pop=None, gen=None, n_generations=None, run=None, runs=None):
+def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max_pop=None, gen=None, n_generations=None, run=None, runs=None, progress_state=None):
    """
    Update a tqdm `progress_bar` description and postfix consistently.
 
@@ -222,9 +222,10 @@ def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max
    :param n_generations: Number of generations (optional)
    :param run: Current run index (1-based) (optional)
    :param runs: Total runs (optional)
+   :param progress_state: Optional dict with keys "current_it" and "total_it" to show iterations
    :return: None
    """
-   
+
    if progress_bar is None: # If no progress bar is provided
       return # Do nothing
    try: # Try to update the progress bar
@@ -233,7 +234,7 @@ def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max
       
       csv_basename = os.path.basename(csv_path) # Get the CSV filename
       parent_dir = os.path.basename(os.path.dirname(csv_path)) # Get parent directory name
-      if parent_dir.lower() != dataset_name.lower(): # If parent directory differs from dataset_name (case-insensitive)
+      if parent_dir.lower() != (dataset_name or "").lower(): # If parent directory differs from dataset_name (case-insensitive)
          csv_filename = f"{BackgroundColors.CYAN}{parent_dir}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{csv_basename}" # Include parent directory
       else: # If parent directory is same as dataset_name
          csv_filename = csv_basename # Use only basename
@@ -261,7 +262,15 @@ def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max
          desc = f"{base}{BackgroundColors.GREEN} - {detail_str}{Style.RESET_ALL}"
       else: # If no details
          desc = base # Just use the base description
-      
+
+      if progress_state and isinstance(progress_state, dict): # If progress_state dict is provided
+         try: # Try to extract iteration info
+            current_it = int(progress_state.get("current_it", 0)) # Current iteration
+            total_it = int(progress_state.get("total_it", 0)) # Total iterations
+            desc = f"{desc} [{BackgroundColors.CYAN}{current_it}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{total_it}{BackgroundColors.GREEN} iterations]{Style.RESET_ALL}" # Append iteration info
+         except Exception: # Silently ignore iteration info extraction failures
+            pass # Do nothing
+
       progress_bar.set_description(desc) # Update the progress bar description
       progress_bar.refresh() # Refresh the progress bar display
    except Exception: # Silently ignore progress bar update failures
@@ -418,6 +427,39 @@ def print_ga_parameters(min_pop, max_pop, n_generations, feature_count):
    print(f"  {BackgroundColors.GREEN}Base estimator: {BackgroundColors.CYAN}RandomForestClassifier (n_estimators=100, n_jobs=1){Style.RESET_ALL}")
    print(f"  {BackgroundColors.GREEN}Optimization goal: {BackgroundColors.CYAN}Maximize F1-Score{Style.RESET_ALL}")
    print("") # Empty line for spacing
+
+def compute_progress_state(min_pop, max_pop, n_generations, runs, progress_bar, folds=10):
+   """
+   Compute an estimated progress_state dictionary for the population sweep.
+
+   The function returns a dict with keys:
+     - current_it: starting at 0
+     - total_it: estimated total number of classifier instantiations
+
+   The estimation assumes each individual evaluation runs `folds` classifier
+   instantiations (10-fold CV by default) and includes one re-evaluation of
+   the best individual per run.
+
+   :param min_pop: minimum population size
+   :param max_pop: maximum population size
+   :param n_generations: number of generations per run
+   :param runs: number of runs per population size
+   :param progress_bar: if falsy, function returns None
+   :param folds: CV folds per evaluation (default 10)
+   :return: dict or None
+   """
+   
+   if not progress_bar: # If no progress bar is provided
+      return None # Return None
+
+   try: # Try to compute the progress state
+      n_pop_values = (max_pop - min_pop + 1) # Number of population sizes to evaluate
+      sum_pop_sizes = (min_pop + max_pop) * n_pop_values // 2 # Sum of population sizes (arithmetic series)
+      total_individual_evals = runs * (n_generations * sum_pop_sizes + n_pop_values * 1) # Total individual evaluations including best re-evaluations
+      total_it = int(total_individual_evals * folds) # Total classifier instantiations
+      return {"current_it": 0, "total_it": total_it} # Return the progress state dictionary
+   except Exception: # If any error occurs
+      return {"current_it": 0, "total_it": 0} # Return a default progress state
 
 def setup_genetic_algorithm(n_features, population_size=None):
    """
@@ -584,7 +626,7 @@ def ga_fitness(ind, fitness_func):
    
    return (fitness_func(ind)[3],) # Return only the F1-score for GA optimization
 
-def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100, show_progress=False, progress_bar=None, dataset_name=None, csv_path=None, pop_size=None, max_pop=None, run=None, runs=None):
+def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100, show_progress=False, progress_bar=None, dataset_name=None, csv_path=None, pop_size=None, max_pop=None, run=None, runs=None, progress_state=None):
    """
    Run Genetic Algorithm generations with a tqdm progress bar.
 
@@ -609,12 +651,21 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
    gens_without_improvement = 0 # Counter for generations with no improvement
    early_stop_gens = 10 # Number of generations to wait for improvement before stopping
 
+   folds = 10 # Number of folds used in cross-validation
    gen_range = tqdm(range(1, n_generations + 1), desc=f"{BackgroundColors.GREEN}Generations{Style.RESET_ALL}") if show_progress else range(1, n_generations + 1)
    for gen in gen_range: # Loop for the specified number of generations
-      update_progress_bar(progress_bar, dataset_name or "", csv_path or "", pop_size=pop_size, max_pop=max_pop, gen=gen, n_generations=n_generations, run=run, runs=runs) if progress_bar else None # Update progress bar if provided
+      update_progress_bar(progress_bar, dataset_name or "", csv_path or "", pop_size=pop_size, max_pop=max_pop, gen=gen, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
 
       offspring = algorithms.varAnd(population, toolbox, cxpb=0.5, mutpb=0.2) # Apply crossover and mutation
       fits = list(toolbox.map(toolbox.evaluate, offspring)) # Evaluate the offspring in parallel
+
+      if progress_state and isinstance(progress_state, dict): # Update current iteration count in progress_state
+         try: # Try to update current_it
+            progress_state["current_it"] = int(progress_state.get("current_it", 0)) + len(offspring) * folds # Increment by number of evaluations done
+         except Exception: # Silently ignore failures
+            pass # Do nothing
+
+      update_progress_bar(progress_bar, dataset_name or "", csv_path or "", pop_size=pop_size, max_pop=max_pop, gen=gen, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar
 
       for ind, fit in zip(offspring, fits): # Assign fitness values
          ind.fitness.values = fit # Set the fitness value
@@ -1057,22 +1108,34 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
    train_count = len(y_train) if y_train is not None else 0 # Number of training samples
    test_count = len(y_test) if y_test is not None else 0 # Number of testing samples
    verbose_output(f"  {BackgroundColors.GREEN}  Dataset: {BackgroundColors.CYAN}{dataset_name} - {train_count} training / {test_count} testing  (80/20){Style.RESET_ALL}\n") # Output dataset split
+
+   folds = 10 # Number of folds for cross-validation
+   progress_state = compute_progress_state(min_pop, max_pop, n_generations, runs, progress_bar, folds=folds) # Compute progress state for external updates
+
    for pop_size in range(min_pop, max_pop + 1): # For each population size
       feature_count = len(feature_names) if feature_names is not None else 0 # Number of features
       runs_list = [] # List to store results for each run
 
-      update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations) if progress_bar else None # Update progress bar for new population size
+      update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, progress_state=progress_state) if progress_bar else None # Update progress bar for new population size
 
       for run in range(runs): # For each run
-         update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run+1, runs=runs) if progress_bar else None # Update progress bar postfix with current run number
+         update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run+1, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar postfix with current run number
 
          toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # Configure the GA
-         best_ind = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, run=run+1, runs=runs) # Run the GA loop with external progress updates
+         best_ind = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, run=run+1, runs=runs, progress_state=progress_state) # Run the GA loop with external progress updates
 
          if best_ind is None: # If no best individual was found
             continue # Skip this run
 
          metrics = evaluate_individual(best_ind, X_train, y_train, X_test, y_test) # Reevaluate the best individual
+
+         if progress_state and isinstance(progress_state, dict): # Update progress state
+            try: # Attempt to update current iteration count for the single reevaluation
+               progress_state["current_it"] = int(progress_state.get("current_it", 0)) + folds
+            except Exception: # Silently ignore failures
+               pass # Do nothing
+         
+         update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run+1, runs=runs, progress_state=progress_state) if progress_bar else None
          best_features = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1] # Extract best features
          runs_list.append({"best_ind": best_ind, "metrics": metrics, "best_features": best_features}) # Store run results
 
