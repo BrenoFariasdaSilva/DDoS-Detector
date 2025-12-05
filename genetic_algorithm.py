@@ -229,7 +229,7 @@ def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max
       return # Do nothing
    try: # Try to update the progress bar
       # Build run info as part of description (not postfix)
-      run_str = f"{BackgroundColors.GREEN}Run {BackgroundColors.CYAN}{run}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{runs}" if run is not None and runs is not None else None
+      run_str = f"{BackgroundColors.GREEN}Run {BackgroundColors.CYAN}{run}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{runs}{BackgroundColors.GREEN}" if run is not None and runs is not None else None
       
       csv_basename = os.path.basename(csv_path) # Get the CSV filename
       parent_dir = os.path.basename(os.path.dirname(csv_path)) # Get parent directory name
@@ -239,9 +239,9 @@ def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max
          csv_filename = csv_basename # Use only basename
       
       if run_str: # If run string is provided
-         base = f"{BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} - {BackgroundColors.CYAN}{csv_filename}{BackgroundColors.GREEN}: {run_str}{Style.RESET_ALL}" # Base description with run info
+         base = f"{BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} Dataset - {BackgroundColors.CYAN}{csv_filename}{BackgroundColors.GREEN}: {run_str}{Style.RESET_ALL}" # Base description with run info
       else: # If no run string
-         base = f"{BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} - {BackgroundColors.CYAN}{csv_filename}{Style.RESET_ALL}" # Base description without run info
+         base = f"{BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} Dataset - {BackgroundColors.CYAN}{csv_filename}{Style.RESET_ALL}" # Base description without run info
       
       details = [] # List to hold detail strings (pop, gen)
       if pop_size is not None: # If population size is provided
