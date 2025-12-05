@@ -210,6 +210,48 @@ def get_dataset_name(input_path):
 
    return dataset_name # Return the dataset name
 
+def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max_pop=None, n_generations=None, run=None, runs=None):
+   """
+   Update a tqdm `progress_bar` description and postfix consistently.
+
+   :param progress_bar: tqdm progress bar instance (or None)
+   :param dataset_name: Name of the dataset
+   :param csv_path: Path to the CSV file
+   :param pop_size: Current population size (optional)
+   :param max_pop: Maximum population size (optional)
+   :param n_generations: Number of generations (optional)
+   :param run: Current run index (1-based) (optional)
+   :param runs: Total runs (optional)
+   :return: None
+   """
+   
+   if progress_bar is None: # If no progress bar is provided
+      return # Do nothing
+   try: # Try to update the progress bar
+      base = f"{BackgroundColors.GREEN}{dataset_name}/{BackgroundColors.CYAN}{os.path.basename(csv_path)}{Style.RESET_ALL}" # Base description
+      details = [] # List to hold detail strings
+      if pop_size is not None: # If population size is provided
+         if max_pop is not None: # If maximum population size is also provided
+            details.append(f"pop {pop_size}/{max_pop}") # Show current/max population
+         else: # If only current population size is provided
+            details.append(f"pop {pop_size}") # Show current population only
+      
+      if n_generations is not None: # If number of generations is provided
+         details.append(f"gen {n_generations}") # Show number of generations
+
+      if details: # If there are any details to show
+         detail_str = ", ".join(details) # Join details with commas
+         desc = f"{BackgroundColors.GREEN}{dataset_name}/{BackgroundColors.CYAN}{os.path.basename(csv_path)}: {BackgroundColors.GREEN}{detail_str}{Style.RESET_ALL}"
+      else: # If no details
+         desc = base # Just use the base description
+         
+      progress_bar.set_description(desc) # Update the progress bar description
+      if run is not None and runs is not None: # If run and runs are provided
+         progress_bar.set_postfix_str(f"run {run}/{runs}") # Update the postfix with run info
+      progress_bar.refresh() # Refresh the progress bar display
+   except Exception: # Silently ignore progress bar update failures
+      pass # Do nothing
+
 def load_dataset(csv_path):
    """
    Load CSV and return DataFrame.
@@ -950,7 +992,7 @@ def analyze_results(saved_info, X, y, feature_names, csv_path):
 
    analyze_top_features(df_features, y_series, best_features, csv_path=csv_path) # Analyze and visualize the top features
 
-def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop=20, max_pop=20, runs=RUNS):
+def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop=20, max_pop=20, runs=RUNS, progress_bar=None):
    """
    Executes a genetic algorithm (GA) for feature selection across multiple population sizes and runs.
 
@@ -966,6 +1008,7 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
    :param min_pop: Minimum population size to test.
    :param max_pop: Maximum population size to test.
    :param runs: Number of runs for each population size.
+   :param progress_bar: Optional tqdm progress bar instance to update with progress.
    :return: Dictionary mapping population sizes to their results including runs and divergence.
    """
    
@@ -997,11 +1040,15 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop
    train_count = len(y_train) if y_train is not None else 0 # Number of training samples
    test_count = len(y_test) if y_test is not None else 0 # Number of testing samples
    verbose_output(f"  {BackgroundColors.GREEN}  Dataset: {BackgroundColors.CYAN}{dataset_name} - {train_count} training / {test_count} testing  (80/20){Style.RESET_ALL}\n") # Output dataset split
-   for pop_size in tqdm(range(min_pop, max_pop + 1), desc=f"{BackgroundColors.GREEN}Population Sweep ({min_pop}-{max_pop}) for {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}", unit="pop"): # For each population size
+   for pop_size in range(min_pop, max_pop + 1): # For each population size
       feature_count = len(feature_names) if feature_names is not None else 0 # Number of features
       runs_list = [] # List to store results for each run
 
+      update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations) # Update progress bar postfix with current population size
+
       for run in range(runs): # For each run
+         update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run+1, runs=runs) # Update progress bar postfix with current run number
+
          toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # Configure the GA
          best_ind = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False) # Run the GA loop
 
@@ -1105,8 +1152,11 @@ def main():
    
    bot = TelegramBot() # Initialize Telegram bot for notifications
 
-   for file in files_to_process: # For each file to process
-      sweep_results = run_population_sweep(bot, dataset_name, file, n_generations=100, min_pop=20, max_pop=20, runs=RUNS) # Run population sweep
+   progress_bar = tqdm(files_to_process, desc=f"{BackgroundColors.GREEN}Datasets{Style.RESET_ALL}", unit="file") # Progress bar for files to process
+   for file in progress_bar: # For each file to process
+      update_progress_bar(progress_bar, dataset_name, file) # Update the description to show the dataset and filename consistently
+
+      sweep_results = run_population_sweep(bot, dataset_name, file, n_generations=100, min_pop=20, max_pop=20, runs=RUNS, progress_bar=progress_bar) # Run population sweep
 
       if VERBOSE and sweep_results: # If VERBOSE is True and there are results
          print(f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}") # Print detailed results
