@@ -1113,6 +1113,8 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    :return: Dict with best_ind, metrics, best_features or None if failed.
    """
    
+   iteration_start_time = time.time() # Start tracking total iteration time
+   
    feature_count = len(feature_names) if feature_names is not None else 0 # Count of features
    
    update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
@@ -1135,7 +1137,10 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    
    best_features = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1] # Extract best features
    
-   return {"best_ind": best_ind, "metrics": metrics, "best_features": best_features} # Return results
+   iteration_elapsed_time = time.time() - iteration_start_time # Calculate total iteration time
+   metrics_with_iteration_time = metrics + (iteration_elapsed_time,) # Add total iteration time as 7th element
+   
+   return {"best_ind": best_ind, "metrics": metrics_with_iteration_time, "best_features": best_features} # Return results
 
 def aggregate_sweep_results(results, min_pop, max_pop, bot, dataset_name):
    """
