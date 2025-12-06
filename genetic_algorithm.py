@@ -1192,10 +1192,10 @@ def aggregate_sweep_results(results, min_pop, max_pop, bot, dataset_name):
          best_metrics = avg_metrics # Update best metrics
          best_result = (pop_size, runs_list, common_features) # Update best result
       
-      print(f"Pop {pop_size}: avg F1 {f1_avg:.4f}, common features {len(common_features)}") # Print summary
+      print(f"{BackgroundColors.GREEN}Pop {BackgroundColors.CYAN}{pop_size}{BackgroundColors.GREEN}: AVG F1 {BackgroundColors.GREEN}{f1_avg:.4f}{BackgroundColors.GREEN}, Common Features {BackgroundColors.CYAN}{len(common_features)}{Style.RESET_ALL}") # Print summary
       for i, run_data in enumerate(runs_list): # For each run
          unique = set(run_data["best_features"]) - common_features # Unique features
-         print(f"  Run {i+1}: unique features {len(unique)}") # Print unique features count
+         print(f"  {BackgroundColors.GREEN}Run {BackgroundColors.CYAN}{i+1}{BackgroundColors.GREEN}: {BackgroundColors.GREEN}unique features {BackgroundColors.CYAN}{len(unique)}{Style.RESET_ALL}") # Print unique features count
       
       if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID: # If Telegram is configured
          try: # Try to send message
