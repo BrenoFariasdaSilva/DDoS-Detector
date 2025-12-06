@@ -933,6 +933,91 @@ def build_rows_list(rf_metrics, best_features, runs_list, feature_names, base_ro
 
    return rows # Return consolidated rows
 
+def normalize_elapsed_column_df(df):
+   """
+   Normalize elapsed time column name to `elapsed_time_s` if the legacy
+   `elapsed_time` column is present.
+
+   :param df: pandas DataFrame
+   :return: DataFrame with `elapsed_time_s` column
+   """
+   
+   if "elapsed_time" in df.columns and "elapsed_time_s" not in df.columns: # If legacy column present and new column missing
+      df["elapsed_time_s"] = df["elapsed_time"] # Copy legacy elapsed_time into the new elapsed_time_s column
+      df.drop(columns=["elapsed_time"], inplace=True) # Remove the legacy elapsed_time column to avoid duplication
+   return df # Return DataFrame with normalized elapsed time column
+
+def load_existing_results(csv_out):
+   """
+   Load an existing consolidated CSV if present, returning an empty
+   DataFrame on error or when file is missing.
+
+   :param csv_out: path to consolidated CSV
+   :return: pandas.DataFrame
+   """
+   
+   if os.path.exists(csv_out): # If the consolidated CSV exists
+      try: # Try to read the file into a DataFrame
+         return pd.read_csv(csv_out, dtype=object) # Read CSV preserving types as object
+      except Exception: # On any read error
+         return pd.DataFrame() # Return empty DataFrame as a fallback
+   return pd.DataFrame() # File not present — return empty DataFrame
+
+def merge_replace_existing(df_existing, df_new):
+   """
+   Merge `df_new` into `df_existing` using replace-by-`dataset_path`
+   semantics: any existing rows whose `dataset_path` appears in `df_new`
+   are removed before appending `df_new`.
+
+   :param df_existing: existing DataFrame (may be empty)
+   :param df_new: incoming DataFrame with new rows
+   :return: merged DataFrame
+   """
+   
+   if not df_existing.empty and "dataset_path" in df_new.columns: # If existing rows present and incoming rows include dataset_path
+      new_paths = df_new["dataset_path"].unique().tolist() # Compute unique dataset paths from incoming rows
+      df_existing = df_existing[~df_existing["dataset_path"].isin(new_paths)] # Remove any existing rows that match those paths
+   df_combined = pd.concat([df_existing, df_new], ignore_index=True, sort=False) # Concatenate remaining existing rows with new rows
+   return df_combined # Return the merged DataFrame
+
+def ensure_expected_columns(df_combined, columns):
+   """
+   Ensure the expected columns exist on the combined DataFrame; add
+   missing columns with None values.
+
+   :param df_combined: pandas.DataFrame
+   :param columns: list of expected column names
+   :return: DataFrame with ensured columns
+   """
+   
+   for column in columns: # Iterate over expected column names
+      if column not in df_combined.columns: # If the column is missing from the DataFrame
+         df_combined[column] = None # Add the missing column and fill with None
+   return df_combined # Return DataFrame with ensured columns
+
+def sort_run_index_first(df_combined):
+   """
+   Sort by `dataset`, `dataset_path` and a numeric-coded `run_index`
+   where the string "best" is forced to come before numeric runs.
+
+   :param df_combined: pandas.DataFrame
+   :return: sorted DataFrame
+   """
+   
+   def run_index_sort(val): # Helper that maps run_index values to sortable integers
+      try: # Try to normalize and parse the run index
+         s = str(val).strip() # Convert the value to string and strip whitespace
+         if s.lower() == "best": # If value is the literal 'best'
+            return -1 # Force 'best' to sort before numeric indices
+         return int(float(s)) # Convert numeric-like strings to integer for sorting
+      except Exception: # On any parsing error
+         return 10**9 # Use a very large number to push malformed values to the end
+
+   df_combined["run_index_sort"] = df_combined["run_index"].apply(run_index_sort) # Create temporary numeric sort key
+   df_combined.sort_values(by=["dataset", "dataset_path", "run_index_sort"], inplace=True, ascending=[True, True, True]) # Sort by dataset, path, then run order
+   df_combined.drop(columns=["run_index_sort"], inplace=True) # Remove temporary sort key column
+   return df_combined # Return the sorted DataFrame
+
 def write_consolidated_csv(rows, output_dir):
    """
    Write the consolidated GA results rows to a CSV file inside `output_dir`.
@@ -942,20 +1027,55 @@ def write_consolidated_csv(rows, output_dir):
    :return: None
    """
    
-   try: # Attempt to write consolidated CSV
-      df_out = pd.DataFrame(rows) # Create DataFrame from rows
-      columns = ["dataset","dataset_path","population_size","n_generations","n_train","n_test","train_test_ratio","timestamp","run_index","classifier","accuracy","precision","recall","f1_score","fpr","fnr","elapsed_time_s","best_features","rfe_ranking"]
+   verbose_output(f"{BackgroundColors.GREEN}Writing consolidated Genetic Algorithm results CSV.{Style.RESET_ALL}") # Output the verbose message
+   
+   try: # Try to write the consolidated CSV
+      os.makedirs(output_dir, exist_ok=True) # Ensure output directory exists
 
-      for column in columns: # For each expected column
-         if column not in df_out.columns: # If column is missing
-            df_out[column] = None # Add it with None values
-            
-      df_out = df_out[columns] # Reorder
-      csv_out = os.path.join(output_dir, "Genetic_Algorithm_Results.csv") # Output CSV path
-      df_out.to_csv(csv_out, index=False, encoding="utf-8") # Write to CSV
-      print(f"\n{BackgroundColors.GREEN}Genetic Algorithm consolidated results saved to {BackgroundColors.CYAN}{csv_out}{Style.RESET_ALL}")
-   except Exception as e: # If writing fails
-      print(f"{BackgroundColors.RED}Failed to write consolidated GA CSV: {str(e)}{Style.RESET_ALL}")
+      df_new = pd.DataFrame(rows) # Create DataFrame from provided rows
+
+      df_new = normalize_elapsed_column_df(df_new) # Normalize legacy elapsed_time to elapsed_time_s in new rows
+
+      csv_out = os.path.join(output_dir, "Genetic_Algorithm_Results.csv") # Build path for consolidated CSV
+
+      df_existing = load_existing_results(csv_out) # Load existing consolidated CSV if available
+      df_existing = normalize_elapsed_column_df(df_existing) # Normalize legacy elapsed_time to elapsed_time_s in existing rows
+
+      if df_existing.empty: # If there is no existing consolidated CSV
+         df_combined = df_new.copy() # Use the new DataFrame as the combined result
+      else: # If existing consolidated CSV rows were loaded
+         df_combined = merge_replace_existing(df_existing, df_new) # Merge new rows, replacing by dataset_path where needed
+
+      columns = [ # Define canonical column order for the consolidated CSV
+         "dataset",
+         "dataset_path",
+         "population_size",
+         "n_generations",
+         "n_train",
+         "n_test",
+         "train_test_ratio",
+         "timestamp",
+         "run_index",
+         "classifier",
+         "accuracy",
+         "precision",
+         "recall",
+         "f1_score",
+         "fpr",
+         "fnr",
+         "elapsed_time_s",
+         "best_features",
+         "rfe_ranking",
+      ]
+
+      df_combined = ensure_expected_columns(df_combined, columns) # Add any missing expected columns with None values
+      df_combined = sort_run_index_first(df_combined) # Sort so that 'best' run_index appears first for each dataset/dataset_path
+
+      df_combined = df_combined[columns] # Reorder columns into the canonical order
+      df_combined.to_csv(csv_out, index=False, encoding="utf-8") # Persist the consolidated CSV to disk
+      print(f"\n{BackgroundColors.GREEN}Genetic Algorithm consolidated results saved to {BackgroundColors.CYAN}{csv_out}{Style.RESET_ALL}") # Notify user of success
+   except Exception as e:
+      print(f"{BackgroundColors.RED}Failed to write consolidated GA CSV: {str(e)}{Style.RESET_ALL}") # Print failure message with exception
 
 def prepare_feature_dataframe(X, feature_names):
    """
@@ -974,7 +1094,8 @@ def prepare_feature_dataframe(X, feature_names):
          df_features.columns = [f"feature_{i}" for i in range(df_features.shape[1])] # Generic feature names
    else: # If X is already a pandas DataFrame
       df_features = X.copy() # Use the DataFrame as is
-   return df_features
+      
+   return df_features # Return the prepared DataFrame
 
 def save_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=None, y_test=None, n_generations=None, best_pop_size=None, runs_list=None):
    """
@@ -1016,7 +1137,7 @@ def save_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=N
    print(f"\n{BackgroundColors.GREEN}Best features subset found: {BackgroundColors.CYAN}{best_features}{Style.RESET_ALL}")
 
    dataset_name = os.path.splitext(os.path.basename(csv_path))[0] # Get the base name of the dataset
-   output_dir = f"{os.path.dirname(csv_path)}/{dataset_name}/" # Directory to save outputs
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Directory to save outputs
    os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
 
    rf_metrics = metrics if metrics is not None else None # Use provided metrics if available
