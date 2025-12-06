@@ -859,7 +859,7 @@ def metrics_to_dict(metrics):
    
    if not metrics: # If metrics is None or falsy, return explicit keys with None
       return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None, "elapsed_time_s": None}
-   acc, prec, rec, f1, fpr, fnr, elapsed = metrics # Unpack metrics
+
    acc, prec, rec, f1, fpr, fnr, elapsed = metrics # Unpack metrics
 
    return {
