@@ -887,6 +887,7 @@ def build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test
    """
    
    timestamp = datetime.datetime.now().isoformat() # Current timestamp
+   
    return { # Base row for CSV
       "dataset": os.path.splitext(os.path.basename(csv_path))[0], # Dataset name
       "dataset_path": csv_path, # Dataset path
