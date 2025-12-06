@@ -99,6 +99,7 @@ class BackgroundColors: # Colors for the terminal
 # Execution Constants:
 VERBOSE = False # Set to True to output verbose messages
 THREADS_LIMIT = 2 # Number of threads for parallel evaluation of individual classifiers
+FILES_TO_IGNORE = [""] # List of files to ignore during processing
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
@@ -176,6 +177,11 @@ def get_files_to_process(directory_path, file_extension=".csv"):
 
    for item in os.listdir(directory_path): # List all items in the directory
       item_path = os.path.join(directory_path, item) # Get the full path of the item
+      filename = os.path.basename(item_path) # Get the filename
+      
+      if any(ignore and (ignore == filename or ignore == item_path) for ignore in FILES_TO_IGNORE): # If the file is in the FILES_TO_IGNORE list
+         verbose_output(f"{BackgroundColors.YELLOW}Ignoring file {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} listed in FILES_TO_IGNORE{Style.RESET_ALL}")
+         continue # Skip this file
       
       if os.path.isfile(item_path) and item.lower().endswith(file_extension): # If the item is a file and has the specified extension
          files.append(item_path) # Add the file to the list
