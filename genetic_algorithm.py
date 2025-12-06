@@ -860,7 +860,17 @@ def metrics_to_dict(metrics):
    if not metrics: # If metrics is None or falsy, return explicit keys with None
       return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None, "elapsed_time_s": None}
    acc, prec, rec, f1, fpr, fnr, elapsed = metrics # Unpack metrics
-   return {"accuracy": float(acc), "precision": float(prec), "recall": float(rec), "f1_score": float(f1), "fpr": float(fpr), "fnr": float(fnr), "elapsed_time_s": float(elapsed)}
+   acc, prec, rec, f1, fpr, fnr, elapsed = metrics # Unpack metrics
+
+   return {
+      "accuracy": float(round(acc, 4)), # Accuracy
+      "precision": float(round(prec, 4)), # Precision
+      "recall": float(round(rec, 4)), # Recall
+      "f1_score": float(round(f1, 4)), # F1 Score
+      "fpr": float(round(fpr, 4)), # False Positive Rate
+      "fnr": float(round(fnr, 4)), # False Negative Rate
+      "elapsed_time": int(round(elapsed)) # Elapsed time in seconds
+   }
 
 def build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking):
    """
