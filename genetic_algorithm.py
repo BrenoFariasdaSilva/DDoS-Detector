@@ -1024,6 +1024,38 @@ def sort_run_index_first(df_combined):
    df_combined.drop(columns=["run_index_sort"], inplace=True) # Remove temporary sort key column
    return df_combined # Return the sorted DataFrame
 
+def adjust_progress_for_early_stop(progress_state, n_generations, pop_size, gens_ran, folds):
+   """
+   Adjust `progress_state` when a GA run finishes early.
+
+   This subtracts planned-but-not-executed classifier instantiations from
+   `progress_state['total_it']` and increments `current_it` for the final
+   re-evaluation (which is always performed once per run).
+
+   :param progress_state: dict with keys `current_it` and `total_it`.
+   :param n_generations: configured total generations for the run.
+   :param pop_size: population size used for the run.
+   :param gens_ran: number of generations actually executed.
+   :param folds: number of CV folds (classifier instantiations per evaluation).
+   :return: None (mutates `progress_state` in-place)
+   """
+   
+   if not (progress_state and isinstance(progress_state, dict)): # Validate progress_state
+      return # Nothing to do if invalid
+
+   try: # Try to compute planned vs actual evaluations
+      planned = int(n_generations) * int(pop_size) + 1 # Planned evaluations: generations * pop_size + 1 re-eval
+      actual = int(gens_ran) * int(pop_size) + 1 # Actual evaluations: generations run * pop_size + 1 re-eval
+      delta = max(0, planned - actual) # Number of generation-evaluations saved by early stopping
+      progress_state["total_it"] = int(progress_state.get("total_it", 0)) - delta * folds # Reduce total iterations by saved evaluations
+   except Exception: # Silently ignore failures during adjustment
+      pass # Do nothing on error
+
+   try: # Update current_it by the single re-evaluation performed after GA (folds classifiers)
+      progress_state["current_it"] = int(progress_state.get("current_it", 0)) + folds # Increment current_it for final re-eval
+   except Exception: # Silently ignore failures when updating current_it
+      pass # Do nothing on error
+
 def write_consolidated_csv(rows, output_dir):
    """
    Write the consolidated GA results rows to a CSV file inside `output_dir`.
@@ -1278,20 +1310,7 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    
    metrics = evaluate_individual(best_ind, X_train, y_train, X_test, y_test) # Evaluate best individual
    
-   if progress_state and isinstance(progress_state, dict):  # If progress_state is valid
-      try: # Try to adjust total_it for early stopping and update current_it
-         planned = int(n_generations) * int(pop_size) + 1 # Planned evaluations: generations * pop_size + 1 re-eval
-         actual = int(gens_ran) * int(pop_size) + 1 # Actual evaluations: generations run * pop_size + 1 re-eval
-         delta = max(0, planned - actual) # Number of generation-evaluations saved by early stopping
-         progress_state["total_it"] = int(progress_state.get("total_it", 0)) - delta * folds # Reduce total iterations by saved evaluations
-      except Exception: # Silently ignore failures
-         pass # Do nothing
-
-      try: # Update current_it by the single re-evaluation performed after GA (folds classifiers)
-         progress_state["current_it"] = int(progress_state.get("current_it", 0)) + folds # Increment by number of evaluations done for final re-eval
-      except Exception: # Silently ignore failures
-         pass # Do nothing
-   
+   adjust_progress_for_early_stop(progress_state, n_generations, pop_size, gens_ran, folds) # Update progress_state in helper
    update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar
    
    best_features = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1] # Extract best features
