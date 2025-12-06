@@ -658,6 +658,7 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
 
    folds = 10 # Number of folds used in cross-validation
    gen_range = tqdm(range(1, n_generations + 1), desc=f"{BackgroundColors.GREEN}Generations{Style.RESET_ALL}") if show_progress else range(1, n_generations + 1)
+   gens_ran = 0 # Track how many generations were actually executed
    for gen in gen_range: # Loop for the specified number of generations
       update_progress_bar(progress_bar, dataset_name or "", csv_path or "", pop_size=pop_size, max_pop=max_pop, gen=gen, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
 
@@ -684,9 +685,10 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
       else:
          gens_without_improvement += 1 # Increment counter
 
-      if gens_without_improvement >= early_stop_gens:
-         print(f"{BackgroundColors.YELLOW}Early stopping: No improvement in best fitness for {early_stop_gens} generations. Stopping at generation {gen}.{Style.RESET_ALL}")
-         break # Stop the loop early
+         if gens_without_improvement >= early_stop_gens: # Verify early-stop condition
+            print(f"{BackgroundColors.YELLOW}Early stopping: No improvement in best fitness for {early_stop_gens} generations. Stopping at generation {gen}.{Style.RESET_ALL}")
+            gens_ran = gen # Record how many generations were executed before early stopping
+            break # Stop the loop early
 
       if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID and show_progress and gen % max(1, n_generations // 100) == 0: # Send periodic updates to Telegram in every ~1% of generations
          try: # Try to send message
@@ -694,11 +696,15 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
          except Exception: # Silently ignore Telegram errors
             pass # Do nothing
 
+      gens_ran = gen # Update gens_ran each generation
+
+   gens_ran = gen if gens_ran == 0 else gens_ran # Ensure gens_ran is set correctly if no early stopping occurred
+
    if hasattr(toolbox, "map") and hasattr(toolbox.map, "close"): # If using multiprocessing pool
       toolbox.map.close() # Close the pool
       toolbox.map.join() # Join the pool
 
-   return hof[0] # Return the best individual from the Hall of Fame
+   return hof[0], gens_ran # Return the best individual and number of generations actually run
 
 def safe_filename(name):
    """
@@ -1265,7 +1271,7 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
    
    toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # Setup GA components
-   best_ind = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, run=run, runs=runs, progress_state=progress_state) # Run GA loop
+   best_ind, gens_ran = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, run=run, runs=runs, progress_state=progress_state) # Run GA loop and get generations actually run
    
    if best_ind is None: # If GA failed
       return None # Exit early
@@ -1273,8 +1279,16 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    metrics = evaluate_individual(best_ind, X_train, y_train, X_test, y_test) # Evaluate best individual
    
    if progress_state and isinstance(progress_state, dict):  # If progress_state is valid
-      try: # Try to update current_it
-         progress_state["current_it"] = int(progress_state.get("current_it", 0)) + folds # Increment by number of evaluations done
+      try: # Try to adjust total_it for early stopping and update current_it
+         planned = int(n_generations) * int(pop_size) + 1 # Planned evaluations: generations * pop_size + 1 re-eval
+         actual = int(gens_ran) * int(pop_size) + 1 # Actual evaluations: generations run * pop_size + 1 re-eval
+         delta = max(0, planned - actual) # Number of generation-evaluations saved by early stopping
+         progress_state["total_it"] = int(progress_state.get("total_it", 0)) - delta * folds # Reduce total iterations by saved evaluations
+      except Exception: # Silently ignore failures
+         pass # Do nothing
+
+      try: # Update current_it by the single re-evaluation performed after GA (folds classifiers)
+         progress_state["current_it"] = int(progress_state.get("current_it", 0)) + folds # Increment by number of evaluations done for final re-eval
       except Exception: # Silently ignore failures
          pass # Do nothing
    
