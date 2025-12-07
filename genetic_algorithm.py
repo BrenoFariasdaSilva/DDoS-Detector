@@ -115,6 +115,7 @@ EARLY_STOP_ACC_THRESHOLD = 0.75 # Minimum acceptable accuracy for an individual
 EARLY_STOP_FOLDS = 3 # Number of folds to check before early stopping
 CPU_PROCESSES = 2 # Number of CPU processes to use for multiprocessing (None = all available)
 FILES_TO_IGNORE = [""] # List of files to ignore during processing
+GA_GENERATIONS_COMPLETED = 0 # Updated by GA loop to inform monitor when some generations have run
 
 # Fitness Cache:
 fitness_cache = {} # Cache for fitness results to avoid re-evaluating same feature masks
@@ -652,6 +653,7 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
    fitness_func = partial(evaluate_individual, X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test) # Partial function for evaluation
    toolbox.register("evaluate", partial(ga_fitness, fitness_func=fitness_func)) # Register the global fitness function
 
+   global GA_GENERATIONS_COMPLETED # To track completed generations
    best_fitness = None # Track the best fitness value
    gens_without_improvement = 0 # Counter for generations with no improvement
    early_stop_gens = 10 # Number of generations to wait for improvement before stopping
@@ -688,6 +690,7 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
          if gens_without_improvement >= early_stop_gens: # Verify early-stop condition
             print(f"{BackgroundColors.YELLOW}Early stopping: No improvement in best fitness for {early_stop_gens} generations. Stopping at generation {gen}.{Style.RESET_ALL}")
             gens_ran = gen # Record how many generations were executed before early stopping
+            GA_GENERATIONS_COMPLETED = int(gen) # Update global variable
             break # Stop the loop early
 
       if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID and show_progress and gen % max(1, n_generations // 100) == 0: # Send periodic updates to Telegram in every ~1% of generations
@@ -697,6 +700,7 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
             pass # Do nothing
 
       gens_ran = gen # Update gens_ran each generation
+      GA_GENERATIONS_COMPLETED = int(gen) # Update global variable
 
    gens_ran = gen if gens_ran == 0 else gens_ran # Ensure gens_ran is set correctly if no early stopping occurred
 
