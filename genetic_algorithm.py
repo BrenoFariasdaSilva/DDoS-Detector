@@ -1546,7 +1546,7 @@ def aggregate_sweep_results(results, min_pop, max_pop, bot, dataset_name):
    
    return best_score, best_result, best_metrics, results # Return aggregated results
 
-def run_population_sweep(bot, dataset_name, csv_path, n_generations=100, min_pop=20, max_pop=20, runs=RUNS, progress_bar=None):
+def run_population_sweep(bot, dataset_name, csv_path, n_generations=200, min_pop=20, max_pop=20, runs=RUNS, progress_bar=None):
    """
    Executes a genetic algorithm (GA) for feature selection across multiple population sizes and runs.
 
@@ -1675,7 +1675,7 @@ def main():
       signal_new_file(file) # Notify resource monitor a new file has started (one update allowed per file)
       update_progress_bar(progress_bar, dataset_name, file) # Update the description to show the dataset and filename consistently
 
-      sweep_results = run_population_sweep(bot, dataset_name, file, n_generations=100, min_pop=20, max_pop=20, runs=RUNS, progress_bar=progress_bar) # Run population sweep
+      sweep_results = run_population_sweep(bot, dataset_name, file, n_generations=200, min_pop=20, max_pop=20, runs=RUNS, progress_bar=progress_bar) # Run population sweep
 
       if VERBOSE and sweep_results: # If VERBOSE is True and there are results
          print(f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}") # Print detailed results
