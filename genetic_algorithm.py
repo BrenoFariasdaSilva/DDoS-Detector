@@ -119,6 +119,8 @@ EARLY_STOP_FOLDS = 3 # Number of folds to check before early stopping
 CPU_PROCESSES = 1 # Initial number of worker processes; can be updated by monitor
 FILES_TO_IGNORE = [""] # List of files to ignore during processing
 GA_GENERATIONS_COMPLETED = 0 # Updated by GA loop to inform monitor when some generations have run
+RESOURCE_MONITOR_LAST_FILE = None # Path of the file currently being processed (monitor uses this)
+RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = False # Whether monitor already applied an update for the current file
 
 # Fitness Cache:
 fitness_cache = {} # Cache for fitness results to avoid re-evaluating same feature masks
@@ -251,19 +253,23 @@ def start_resource_monitor(interval_seconds=30, reserve_cpu_frac=0.15, reserve_m
    """
 
    def monitor(): # Monitoring thread function
-      global CPU_PROCESSES # Use the module-level CPU_PROCESSES variable
+      global CPU_PROCESSES, RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE, RESOURCE_MONITOR_LAST_FILE
       while True: # Infinite loop
-         try: # Check if sufficient GA generations have completed
+         try: # If we've already updated for the current file, wait for a new file
+            if RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE: # Only one update per file
+               time.sleep(1) # Sleep briefly until new file arrives
+               continue # Skip computing suggestions until new file
             if GA_GENERATIONS_COMPLETED < int(min_gens_before_update): # If not enough generations yet
                time.sleep(1) # Sleep briefly and re-check
                continue # Skip computing suggestions until threshold met
-         except Exception: # If GA_GENERATIONS_COMPLETED is missing or invalid
-            pass # Proceed to compute anyway
+         except Exception: # If GA_GENERATIONS_COMPLETED or flags are missing or invalid
+            pass # Proceed to compute (best-effort)
 
          try: # Try to compute a suggested worker count
             suggested = compute_optimal_processes(reserve_cpu_frac=reserve_cpu_frac, reserve_mem_frac=reserve_mem_frac, min_procs=min_procs, max_procs=max_procs) # Compute candidate
             if suggested and suggested != CPU_PROCESSES: # If suggestion differs from current
                CPU_PROCESSES = suggested # Update module-level worker count
+            RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = True # Mark that we've updated for this file
          except Exception: # On any computation or assignment error
             pass # Ignore and retry on next loop
          try: # Sleep for configured interval before next check
@@ -289,6 +295,27 @@ def start_resource_monitor_safe(*args, **kwargs):
       return start_resource_monitor(*args, **kwargs) # Start the resource monitor
    except Exception: # If any exception occurs
       return None # Return None
+
+def signal_new_file(file_path):
+   """
+   Notify the resource monitor that processing of a new file has started.
+
+   This resets the per-file monitor flag so the monitor will perform one
+   sizing update (after `min_gens_before_update` generations) for the
+   newly-started file. It also resets `GA_GENERATIONS_COMPLETED` to 0 so
+   the monitor waits again for the configured number of generations.
+
+   :param file_path: path of the file that will be processed
+   :return: None
+   """
+   
+   global RESOURCE_MONITOR_LAST_FILE, RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE, GA_GENERATIONS_COMPLETED # Use global variables
+   try: # Try to signal the new file
+      RESOURCE_MONITOR_LAST_FILE = file_path # Update the last file being processed
+      RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = False # Reset the per-file update flag
+      GA_GENERATIONS_COMPLETED = 0 # Reset generations completed for the new file
+   except Exception: # Ignore any errors during signaling
+      pass # Do nothing
 
 def verify_filepath_exists(filepath):
    """
@@ -1645,6 +1672,7 @@ def main():
 
    progress_bar = tqdm(files_to_process, desc=f"{BackgroundColors.GREEN}Datasets{Style.RESET_ALL}", unit="file") # Progress bar for files to process
    for file in progress_bar: # For each file to process
+      signal_new_file(file) # Notify resource monitor a new file has started (one update allowed per file)
       update_progress_bar(progress_bar, dataset_name, file) # Update the description to show the dataset and filename consistently
 
       sweep_results = run_population_sweep(bot, dataset_name, file, n_generations=100, min_pop=20, max_pop=20, runs=RUNS, progress_bar=progress_bar) # Run population sweep
