@@ -113,7 +113,7 @@ VERBOSE = False # Set to True to output verbose messages
 RUNS = 5 # Number of runs for Genetic Algorithm analysis
 EARLY_STOP_ACC_THRESHOLD = 0.75 # Minimum acceptable accuracy for an individual
 EARLY_STOP_FOLDS = 3 # Number of folds to check before early stopping
-CPU_PROCESSES = 2 # Number of CPU processes to use for multiprocessing (None = all available)
+CPU_PROCESSES = 1 # Initial number of worker processes; can be updated by monitor
 FILES_TO_IGNORE = [""] # List of files to ignore during processing
 GA_GENERATIONS_COMPLETED = 0 # Updated by GA loop to inform monitor when some generations have run
 
