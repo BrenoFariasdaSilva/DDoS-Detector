@@ -86,6 +86,7 @@ import random # For random number generation
 import re # For sanitizing filenames
 import seaborn as sns # For enhanced plotting
 import shutil # For checking disk usage
+import threading # For optional background resource monitor
 import time # For measuring execution time
 import warnings # For suppressing warnings
 from colorama import Style # For coloring the terminal
@@ -97,6 +98,8 @@ from sklearn.model_selection import train_test_split, StratifiedKFold # For spli
 from sklearn.preprocessing import StandardScaler # For feature scaling
 from telegram_bot import TelegramBot # For Telegram notifications
 from tqdm import tqdm # For progress bars
+
+psutil = __import__("psutil") if __import__("importlib").util.find_spec("psutil") else None # Import psutil if available, otherwise set to None
 
 # Macros:
 class BackgroundColors: # Colors for the terminal
@@ -144,6 +147,148 @@ def verbose_output(true_string="", false_string=""):
       print(true_string) # Output the true statement string
    elif false_string != "": # If the false_string is set
       print(false_string) # Output the false statement string
+ 
+def get_logical_cpu_count():
+   """
+   Get logical CPU count, preferring psutil when available.
+
+   :return: integer logical CPU count (>=1)
+   """
+
+   try: # Try to obtain CPU count via psutil (preferred) or os.cpu_count (fallback)
+      return int(psutil.cpu_count(logical=True)) if psutil and psutil.cpu_count() else int(os.cpu_count() or 1) # Return logical CPU count
+   except Exception: # On any exception while querying CPU count
+      return max(1, int(os.cpu_count() or 1)) # Fallback to at least 1 logical CPU
+
+def compute_reserved_cpus(total_cpus, reserve_cpu_frac):
+   """
+   Compute how many CPUs to reserve for system and main process.
+
+   :param total_cpus: total logical CPUs
+   :param reserve_cpu_frac: fraction to reserve
+   :return: reserved CPU count (>=1)
+   """
+
+   try: # Try to compute reserved CPUs from fraction
+      return max(1, int(total_cpus * float(reserve_cpu_frac))) # Return reserved CPUs
+   except Exception: # If computation fails for any reason
+      return 1 # Default to reserving 1 CPU
+
+def compute_cpu_bound(total_cpus, reserved, min_procs):
+   """
+   Compute CPU-based upper bound for worker processes.
+
+   :param total_cpus: total logical CPUs
+   :param reserved: CPUs reserved for system/main
+   :param min_procs: minimum allowed worker processes
+   :return: cpu_bound (>= min_procs)
+   """
+
+   return max(min_procs, total_cpus - reserved) # Compute CPU-based bound
+    
+def compute_memory_bound(reserve_mem_frac):
+   """
+   Compute memory-based upper bound for worker processes using psutil.
+
+   :param reserve_mem_frac: fraction of memory to keep free
+   :return: integer mem_bound or None if not computable
+   """
+
+   if not psutil: # If psutil is not available
+      return None # Memory bound cannot be computed
+   try: # Try to compute memory-based bound
+      vm = psutil.virtual_memory() # Get virtual memory statistics
+      avail = int(vm.available) # Available memory in bytes
+      my_rss = max(1, int(psutil.Process().memory_info().rss)) # Current process RSS in bytes (per-worker estimate)
+      usable = int(avail * (1.0 - float(reserve_mem_frac))) # Memory usable after reserving fraction
+      return max(1, usable // my_rss) # Return memory-based maximum number of workers
+   except Exception: # On any error while obtaining memory info
+      return None # Indicate memory bound not available
+  
+def compute_optimal_processes(reserve_cpu_frac=0.15, reserve_mem_frac=0.15, min_procs=1, max_procs=None):
+   """
+   Compute a conservative number of worker processes based on current CPU and
+   memory availability.
+
+   Returns an integer number of workers >= min_procs. Uses `psutil` when
+   available; falls back to CPU-count heuristics otherwise.
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Computing optimal number of worker processes...{Style.RESET_ALL}") # Output the verbose message
+
+   total_cpus = get_logical_cpu_count() # Get logical CPU count (psutil/os fallback)
+
+   reserved = compute_reserved_cpus(total_cpus, reserve_cpu_frac) # Compute reserved CPUs from fraction
+   cpu_bound = compute_cpu_bound(total_cpus, reserved, min_procs) # Compute CPU-based bound for workers
+
+   mem_bound = compute_memory_bound(reserve_mem_frac) # Compute memory-based bound (or None)
+   if mem_bound is None: # If memory-based bound not available
+      mem_bound = cpu_bound # Fallback to CPU-based bound
+
+   candidate = min(cpu_bound, mem_bound) # Start with the smaller of CPU and memory bounds
+   if max_procs is not None: # If an explicit maximum is provided
+      try: # Try to apply the explicit maximum
+         candidate = min(candidate, int(max_procs)) # Respect user-provided max_procs
+      except Exception: # Ignore invalid max_procs values
+         pass # Do nothing
+
+   candidate = max(min_procs, int(candidate)) # Ensure candidate is not below min_procs
+
+   try: # Try to cap candidate by os.cpu_count for safety
+      candidate = min(candidate, int(os.cpu_count() or candidate)) # Cap to logical CPUs reported by OS
+   except Exception: # If os.cpu_count fails for any reason
+      pass # Keep current candidate value
+
+   return candidate # Return final computed candidate number of worker processes
+
+def start_resource_monitor(interval_seconds=30, reserve_cpu_frac=0.15, reserve_mem_frac=0.15, min_procs=1, max_procs=None, min_gens_before_update=10, daemon=True):
+   """
+   Spawn a daemon thread that updates global `CPU_PROCESSES` periodically.
+
+   The thread computes a safe worker count using `compute_optimal_processes`
+   and assigns it to the module-level `CPU_PROCESSES`. The thread swallows
+   exceptions and retries after `interval_seconds`.
+   """
+
+   def monitor(): # Monitoring thread function
+      global CPU_PROCESSES # Use the module-level CPU_PROCESSES variable
+      while True: # Infinite loop
+         try: # Check if sufficient GA generations have completed
+            if GA_GENERATIONS_COMPLETED < int(min_gens_before_update): # If not enough generations yet
+               time.sleep(1) # Sleep briefly and re-check
+               continue # Skip computing suggestions until threshold met
+         except Exception: # If GA_GENERATIONS_COMPLETED is missing or invalid
+            pass # Proceed to compute anyway
+
+         try: # Try to compute a suggested worker count
+            suggested = compute_optimal_processes(reserve_cpu_frac=reserve_cpu_frac, reserve_mem_frac=reserve_mem_frac, min_procs=min_procs, max_procs=max_procs) # Compute candidate
+            if suggested and suggested != CPU_PROCESSES: # If suggestion differs from current
+               CPU_PROCESSES = suggested # Update module-level worker count
+         except Exception: # On any computation or assignment error
+            pass # Ignore and retry on next loop
+         try: # Sleep for configured interval before next check
+            time.sleep(max(1, int(interval_seconds))) # Sleep at least 1 second
+         except Exception: # If sleep is interrupted or invalid
+            time.sleep(5) # Fallback sleep
+
+   t = threading.Thread(target=monitor, daemon=daemon, name="ga-resource-monitor") # Create the monitoring thread
+   t.start() # Start the thread
+   
+   return t # Return the Thread object
+
+def start_resource_monitor_safe(*args, **kwargs):
+   """
+   Safe wrapper to start the resource monitor: swallow any exceptions so
+   callers (e.g., `main`) don't need to handle psutil or threading issues.
+
+   Usage: `start_resource_monitor_safe()` (calls `start_resource_monitor` with defaults).
+   Returns the Thread object when started, or None on failure.
+   """
+
+   try: # Try to start the resource monitor
+      return start_resource_monitor(*args, **kwargs) # Start the resource monitor
+   except Exception: # If any exception occurs
+      return None # Return None
 
 def verify_filepath_exists(filepath):
    """
@@ -1495,6 +1640,8 @@ def main():
    dataset_name = get_dataset_name(input_path) # Get the dataset name from the input path
    
    bot = TelegramBot() # Initialize Telegram bot for notifications
+   
+   start_resource_monitor_safe() # Start background resource monitor to adapt CPU_PROCESSES safely
 
    progress_bar = tqdm(files_to_process, desc=f"{BackgroundColors.GREEN}Datasets{Style.RESET_ALL}", unit="file") # Progress bar for files to process
    for file in progress_bar: # For each file to process
