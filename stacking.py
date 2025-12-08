@@ -528,6 +528,77 @@ def extract_hyperparameter_optimization_results(csv_path):
    verbose_output(f"{BackgroundColors.GREEN}Loaded hyperparameter optimization results from: {BackgroundColors.CYAN}{csv_filepath}{Style.RESET_ALL}")
    return results # Return the normalized results mapping
 
+def apply_hyperparameters_to_models(hyperparams_map, models_map):
+   """
+   Apply hyperparameter mappings to instantiated models.
+
+   This function attempts to match keys from the hyperparameter mapping
+   to the model names in the provided models dictionary. Matching is
+   attempted in the following order: exact match, case-insensitive
+   match, and normalized (alphanumeric-only) match. When a matching
+   entry is found and the corresponding value is a valid dictionary of
+   hyperparameters, they are applied to the estimator using set_params.
+   Errors during matching or parameter application are handled
+   gracefully and reported via verbose_output.
+
+   :param hyperparams_map: Mapping of model name -> hyperparameter dict
+   :param models_map: Mapping of model name -> instantiated estimator
+   :return: Updated models_map with applied hyperparameters where possible
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Starting to apply hyperparameters to models...{Style.RESET_ALL}") # Inform user that application is starting
+
+   if not hyperparams_map: # Nothing to apply
+      return models_map # Return models unchanged
+
+   def _normalize(name): # Convert to alphanumeric lowercase
+      return "".join([c.lower() for c in str(name) if c.isalnum()]) # Normalize model name by removing non-alphanumeric characters and converting to lowercase
+
+   hp_keys = list(hyperparams_map.keys()) # List of provided model names
+   hp_normalized = {k: _normalize(k) for k in hp_keys} # Normalized lookup for matching
+
+   for model_name, model in models_map.items(): # Iterate over each instantiated model
+      try: # Try to match hyperparameters to this model
+         params = None # Default if not found
+
+         if model_name in hyperparams_map: # Attempt exact match
+            params = hyperparams_map[model_name] # Exact match found
+         else: # Try case-insensitive and normalized matches
+            lower_matches = [k for k in hp_keys if k.lower() == model_name.lower()] # Case-insensitive match
+            if lower_matches: # If case-insensitive match found
+               params = hyperparams_map[lower_matches[0]] # Use the matched parameters
+            else: # Try normalized match
+               norm = _normalize(model_name) # Compute normalized name
+               norm_matches = [k for k, nk in hp_normalized.items() if nk == norm] # Normalized match
+               if norm_matches: # If normalized match found
+                  params = hyperparams_map[norm_matches[0]] # Use the matched parameters
+
+         if params is None: # No parameters for this model
+            continue # Skip to next model
+
+         if isinstance(params, str): # Parameters stored as string
+            try: # Try JSON decode
+               params = json.loads(params) # Parse JSON if possible
+            except Exception: # Fallback to literal evaluation
+               try: # Try to parse using ast.literal_eval
+                  params = ast.literal_eval(params) # Safely evaluate string to Python literal
+               except Exception: # If both parsing attempts fail
+                  params = None # Leave as None if parsing fails
+
+         if not isinstance(params, dict): # Ensure parameters are valid dictionary
+            verbose_output(f"{BackgroundColors.YELLOW}Warning: Parsed hyperparameters for {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW} are not a dict. Skipping.{Style.RESET_ALL}")
+            continue # Skip invalid parameter entries
+
+         try: # Try applying parameters
+            model.set_params(**params) # Apply parameters to estimator
+            verbose_output(f"{BackgroundColors.GREEN}Applied hyperparameters to {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}") # Inform success
+         except Exception as e: # If applying fails
+            print(f"{BackgroundColors.YELLOW}Failed to apply hyperparameters to {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}") # Warn user
+      except Exception: # Catch any unexpected errors for this model
+         continue # Skip problematic entries silently
+
+   return models_map # Return updated model mapping
+
 def load_pca_object(file_path, pca_n_components):
    """
    Loads a pre-fitted PCA object from a pickle file.
