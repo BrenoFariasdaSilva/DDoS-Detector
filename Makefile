@@ -6,7 +6,7 @@ OS := $(shell uname 2>/dev/null || echo Windows)
 LOG_DIR := ./Logs
 
 # Ensure logs directory exists (cross-platform). Use as: $(ENSURE_LOG_DIR)
-ENSURE_LOG_DIR := @mkdir -p $(LOG_DIR) 2>nul || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
+ENSURE_LOG_DIR := @mkdir -p $(LOG_DIR) 2>/dev/null || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
 
 # Reusable run-and-log function: call with the script path, e.g. $(call RUN_AND_LOG, ./script.py)
 RUN_AND_LOG = $(TIME_CMD) $(PYTHON) $(1) 2>&1 | tee $(LOG_DIR)/$(notdir $(basename $(1))).log
