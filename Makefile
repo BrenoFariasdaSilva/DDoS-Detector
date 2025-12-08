@@ -3,7 +3,7 @@ VENV := venv
 OS := $(shell uname 2>/dev/null || echo Windows)
 
 # Logs directory
-LOG_DIR := ./logs
+LOG_DIR := ./Logs
 
 # Ensure logs directory exists (cross-platform). Use as: $(ENSURE_LOG_DIR)
 ENSURE_LOG_DIR := @mkdir -p $(LOG_DIR) 2>nul || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
