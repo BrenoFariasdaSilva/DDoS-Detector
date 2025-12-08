@@ -274,6 +274,46 @@ def get_feature_subset(X_scaled, features, feature_names):
    else: # If no features are selected (or features is None)
       return np.empty((X_scaled.shape[0], 0)) # Return an empty array with correct number of rows
 
+def scale_and_split(X, y, test_size=0.2, random_state=42):
+   """
+   Scales the numeric features using StandardScaler and splits the data
+   into training and testing sets.
+
+   Note: The target variable 'y' is label-encoded before splitting.
+
+   :param X: Features DataFrame (must contain numeric features).
+   :param y: Target Series or array.
+   :param test_size: Fraction of the data to reserve for the test set.
+   :param random_state: Seed for the random split for reproducibility.
+   :return: Tuple (X_train_scaled, X_test_scaled, y_train, y_test, scaler)
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Scaling features and splitting data (train/test ratio: {BackgroundColors.CYAN}{1-test_size}/{test_size}{BackgroundColors.GREEN})...{Style.RESET_ALL}") # Output the verbose message
+   
+   le = LabelEncoder() # Initialize a LabelEncoder
+   y_encoded = pd.Series(le.fit_transform(y), index=y.index) # Encode the target variable (essential for stratification)
+
+   numeric_X = X.select_dtypes(include=np.number) # Select only numeric columns for scaling
+   non_numeric_X = X.select_dtypes(exclude=np.number) # Identify non-numeric columns (to be dropped)
+   
+   if not non_numeric_X.empty: # If non-numeric columns were found
+      print(f"{BackgroundColors.YELLOW}Warning: Dropping non-numeric feature columns for scaling: {BackgroundColors.CYAN}{list(non_numeric_X.columns)}{Style.RESET_ALL}") # Warn about dropped columns
+       
+   if numeric_X.empty: # If no numeric features remain
+      raise ValueError(f"{BackgroundColors.RED}No numeric features found in X after filtering.{Style.RESET_ALL}") # Raise an error if X is empty
+
+   X_train, X_test, y_train, y_test = train_test_split(numeric_X, y_encoded, test_size=test_size, random_state=random_state, stratify=y_encoded) # Split the data into training and testing sets with stratification
+   
+   scaler = StandardScaler() # Initialize the StandardScaler
+   
+   X_train_scaled = scaler.fit_transform(X_train) # Fit and transform the training features
+   
+   X_test_scaled = scaler.transform(X_test) # Transform the testing features
+
+   verbose_output(f"{BackgroundColors.GREEN}Data split successful. Training set shape: {BackgroundColors.CYAN}{X_train_scaled.shape}{BackgroundColors.GREEN}. Testing set shape: {BackgroundColors.CYAN}{X_test_scaled.shape}{Style.RESET_ALL}") # Output the successful split message
+   
+   return X_train_scaled, X_test_scaled, y_train, y_test, scaler # Return scaled features, target, and the fitted scaler
+
 def calculate_execution_time(start_time, finish_time):
    """
    Calculates the execution time between start and finish times and formats it as hh:mm:ss.
