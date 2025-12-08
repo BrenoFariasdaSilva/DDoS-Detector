@@ -611,6 +611,33 @@ def compute_class_aware_allocations(labels, sample_size, min_class_size=50):
 
    return allocations # Return finalized allocations
 
+def sample_by_class_allocation(labels, allocations, random_state):
+   """
+   Sample row indices according to per-class allocations.
+
+   For each class, randomly selects the allocated number of samples without
+   replacement. If allocation exceeds available samples for a class, all
+   samples from that class are included.
+
+   :param labels: pandas Series containing class labels
+   :param allocations: dict mapping class -> number of samples to select
+   :param random_state: seed for reproducible random sampling
+   :return: list of selected row indices
+   """
+
+   selected_idx = [] # Container for selected indices
+   rng = np.random.RandomState(random_state) # RNG for reproducibility
+   
+   for cls, k in allocations.items(): # Iterate allocations per class
+      idxs = labels[labels == cls].index.to_list() # All indices for this class
+      if k >= len(idxs): # If allocation >= available samples
+         sampled_local = idxs # Take all available indices
+      else: # Otherwise
+         sampled_local = list(rng.choice(idxs, size=k, replace=False)) # Randomly choose k indices without replacement
+      selected_idx.extend(sampled_local) # Append sampled indices to selection
+   
+   return selected_idx # Return the final list of indices
+
 def generate_tsne_plot(filepath, low_memory=True, sample_size=5000, perplexity=30, n_iter=1000, random_state=42, output_dir=None):
    """
    Generate and save a 2D t-SNE visualization of a CSV dataset.
