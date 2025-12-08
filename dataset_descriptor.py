@@ -903,6 +903,9 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
          info["Common Features (in all files)"] = ", ".join(common_list) if common_list else "None" # Join common features into a string
          info["Extra Features (not in all files)"] = ", ".join(extras) if extras else "None" # Join extra features into a string
 
+         tsne_file = generate_tsne_plot(filepath, low_memory=low_memory, sample_size=2000, output_dir=os.path.join(base_dir, RESULTS_DIR)) # Generate t-SNE plot
+         info["t-SNE Plot"] = tsne_file if tsne_file else "None" # Add t-SNE plot filename or "None"
+
          report_rows.append(info) # Add the info to the report rows
 
    if report_rows: # If there are report rows to write
