@@ -1,49 +1,60 @@
 """
 ================================================================================
-<PROJECT OR SCRIPT TITLE>
+Classifiers Hyperparameter Optimization
 ================================================================================
 Author      : Breno Farias da Silva
-Created     : <YYYY-MM-DD>
+Created     : 2025-12-06
 Description :
-   <Provide a concise and complete overview of what this script does.>
-   <Mention its purpose, scope, and relevance to the larger project.>
+   This script performs hyperparameter optimization for multiple machine learning
+   classifiers using GridSearchCV on DDoS detection datasets. It uses only the
+   features selected by the Genetic Algorithm for optimal performance. The script
+   evaluates Random Forest, SVM, XGBoost, Logistic Regression, KNN, Nearest Centroid,
+   Gradient Boosting, LightGBM, and MLP Neural Network classifiers.
 
    Key features include:
-      - <Feature 1 — e.g., automatic data loading and preprocessing>
-      - <Feature 2 — e.g., model training and evaluation>
-      - <Feature 3 — e.g., visualization or report generation>
-      - <Feature 4 — e.g., logging or notification system>
-      - <Feature 5 — e.g., integration with other modules or datasets>
+      - Automatic loading of Genetic Algorithm selected features
+      - Data preprocessing with NaN/infinite value removal and zero-variance filtering
+      - Comprehensive hyperparameter search grids for each classifier
+      - Cross-validation with stratified K-fold (cv=5) for robust evaluation
+      - F1-score optimization (weighted average for multi-class problems)
+      - Results saved to CSV with best parameters and cross-validation scores
+      - Progress tracking with tqdm progress bars
+      - Sound notification upon completion
 
 Usage:
-   1. <Explain any configuration steps before running, such as editing variables or paths.>
-   2. <Describe how to execute the script — typically via Makefile or Python.>
-         $ make <target>   or   $ python <script_name>.py
-   3. <List what outputs are expected or where results are saved.>
+   1. Configure the dataset path in the main() function (csv_path variable).
+   2. Execute the script via Python:
+         $ python hyperparameter_optimization.py
+   3. Check the output CSV file for optimized hyperparameters and scores.
 
 Outputs:
-   - <Output file or directory 1 — e.g., results.csv>
-   - <Output file or directory 2 — e.g., Feature_Analysis/plots/>
-   - <Output file or directory 3 — e.g., logs/output.txt>
+   - Hyperparameter_Optimization_Results.csv: Contains best parameters and CV scores for each model
+   - Terminal logs showing optimization progress and execution time
+   - Sound notification when processing completes
 
 TODOs:
-   - <Add a task or improvement — e.g., implement CLI argument parsing.>
-   - <Add another improvement — e.g., extend support to Parquet files.>
-   - <Add optimization — e.g., parallelize evaluation loop.>
-   - <Add robustness — e.g., error handling or data validation.>
+   - Add CLI argument parsing for dataset path and output directory
+   - Implement Bayesian optimization for more efficient search
+   - Add support for custom parameter grids
+   - Extend to support additional classifiers
+   - Add visualization of hyperparameter importance
 
 Dependencies:
-   - Python >= <version>
-   - <Library 1 — e.g., pandas>
-   - <Library 2 — e.g., numpy>
-   - <Library 3 — e.g., scikit-learn>
-   - <Library 4 — e.g., matplotlib, seaborn, tqdm, colorama>
+   - Python >= 3.8
+   - pandas
+   - numpy
+   - scikit-learn
+   - lightgbm
+   - xgboost
+   - tqdm
+   - colorama
 
 Assumptions & Notes:
-   - <List any key assumptions — e.g., last column is the target variable.>
-   - <Mention data format — e.g., CSV files only.>
-   - <Mention platform or OS-specific notes — e.g., sound disabled on Windows.>
-   - <Note on output structure or reusability.>
+   - Dataset CSV files with last column as target variable
+   - Genetic Algorithm results available in Feature_Analysis/Genetic_Algorithm_Results.csv
+   - Numeric features only (non-numeric features are dropped)
+   - Uses weighted F1-score for multi-class classification
+   - Sound notification skipped on Windows platform
 """
 
 import atexit # For playing a sound when the program finishes
