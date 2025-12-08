@@ -412,6 +412,39 @@ def get_models_and_param_grids():
       )
    }
 
+def optimize_model(model_name, model, param_grid, X_train, y_train):
+   """
+   Performs hyperparameter optimization for a single model using GridSearchCV.
+
+   :param model_name: Name of the model (for logging).
+   :param model: The classifier model instance.
+   :param param_grid: Dictionary of hyperparameters to search.
+   :param X_train: Training features (scaled numpy array).
+   :param y_train: Training target labels (encoded).
+   :return: Tuple (best_params, best_score, cv_results) or (None, None, None) if optimization fails
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Optimizing {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}...{Style.RESET_ALL}") # Output the verbose message
+   
+   try: # Try to perform grid search
+      f1_scorer = make_scorer(f1_score, average="weighted") # Create F1 scorer for multi-class problems
+      
+      grid_search = GridSearchCV(estimator=model, param_grid=param_grid, cv=CV_FOLDS, scoring=f1_scorer, n_jobs=N_JOBS, verbose=0, error_score="raise") # Initialize GridSearchCV
+      
+      grid_search.fit(X_train, y_train) # Fit the grid search
+      
+      best_params = grid_search.best_params_ # Get the best parameters
+      best_score = grid_search.best_score_ # Get the best cross-validation score
+      
+      print(f"{BackgroundColors.GREEN}{model_name} - Best CV F1 Score: {BackgroundColors.CYAN}{best_score:.4f}{Style.RESET_ALL}")
+      verbose_output(f"{BackgroundColors.GREEN}Best parameters: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}")
+      
+      return best_params, best_score, grid_search.cv_results_ # Return optimization results
+      
+   except Exception as e: # Catch any errors during optimization
+      print(f"{BackgroundColors.RED}Error optimizing {model_name}: {e}{Style.RESET_ALL}")
+      return None, None, None # Return None values if optimization failed
+
 def calculate_execution_time(start_time, finish_time):
    """
    Calculates the execution time between start and finish times and formats it as hh:mm:ss.
