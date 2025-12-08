@@ -611,6 +611,22 @@ def get_dataset_file_info(filepath, low_memory=True):
 
    return result # Return the dataset information
 
+def get_file_common_and_extras(headers_map, filepath, common_features):
+   """
+   Return the sorted common features list and extra columns for a specific file.
+
+   :param headers_map: dict mapping filepath -> list of column names
+   :param filepath: path for which to compute extras
+   :param common_features: set of features present in all files
+   :return: tuple (common_list, extras_list)
+   """
+
+   file_cols = headers_map.get(filepath, []) # Get headers for this file
+   extras = sorted(set(file_cols) - common_features) if file_cols is not None else [] # Compute non-common extras
+   common_list = sorted(common_features) if common_features else [] # Sorted list of shared features
+
+   return common_list, extras # Return common + extras lists
+
 def write_report(report_rows, base_dir, output_filename):
    """
    Writes the report rows to a CSV file.
