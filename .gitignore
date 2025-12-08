@@ -27,6 +27,8 @@ Icon? # match Icon<CR>
 **/data/*
 **/dataset/*
 **/datasets/*
+**/Logs/*
+**/logs/*
 !.assets/*
 
 # Ignore the Data Files
