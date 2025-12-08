@@ -680,6 +680,9 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
       print(f"{BackgroundColors.RED}No matching {file_extension} files found in: {input_path}{Style.RESET_ALL}")
       return False # Exit the function
 
+   headers_map = build_headers_map(sorted_matching_files, low_memory=low_memory) # Build headers map for all matching files
+   common_features, headers_match_all = compute_common_features(headers_map) # Compute common features and header match status
+
    progress = tqdm(sorted_matching_files, desc=f"{BackgroundColors.GREEN}Processing files{Style.RESET_ALL}", unit="file") # Create a progress bar
    for idx, filepath in enumerate(progress, 1): # Process each matching file
       progress.set_description(f"{BackgroundColors.GREEN}Processing file {BackgroundColors.CYAN}{idx}/{len(sorted_matching_files)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{os.path.basename(filepath)}{Style.RESET_ALL}") # Update progress bar description
@@ -687,6 +690,13 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
       if info: # If info was successfully retrieved
          relative_path = os.path.relpath(filepath, base_dir) # Get path relative to base_dir
          info["Dataset Name"] = relative_path.replace("\\", "/") # Use relative path for Dataset Name and normalize slashes
+
+         common_list, extras = get_file_common_and_extras(headers_map, filepath, common_features) # Get common and extra features for this file
+
+         info["Common Features (in all files)"] = ", ".join(common_list) if common_list else "None" # Join common features into a string
+         info["Headers Match All Files"] = "Yes" if headers_match_all else "No" # Indicate if headers match all files
+         info["Extra Features (not in all files)"] = ", ".join(extras) if extras else "None" # Join extra features into a string
+
          report_rows.append(info) # Add the info to the report rows
 
    if report_rows: # If there are report rows to write
