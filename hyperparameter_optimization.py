@@ -75,6 +75,11 @@ class BackgroundColors: # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False # Set to True to output verbose messages
+CV_FOLDS = 5 # Number of cross-validation folds for GridSearchCV
+N_JOBS = -1 # Number of parallel jobs for GridSearchCV (-1 uses all processors)
+RESULTS_FILENAME = "Hyperparameter_Optimization_Results.csv" # Filename for saving results
+IGNORE_FILES = [RESULTS_FILENAME] # List of filenames to ignore when searching for datasets
+IGNORE_DIRS = ["Cache", "Dataset_Description", "Data_Separability", "Feature_Analysis"] # List of directory names to ignore when searching for datasets
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
