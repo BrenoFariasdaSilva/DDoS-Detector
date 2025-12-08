@@ -29,6 +29,10 @@ dataset_descriptor: dependencies
 	$(CLEAR_CMD)
 	$(TIME_CMD) $(PYTHON) ./dataset_descriptor.py
 
+hyperparameter_optimization: dependencies
+	$(CLEAR_CMD)
+	$(TIME_CMD) $(PYTHON) ./hyperparameter_optimization.py
+
 genetic_algorithm: dependencies
 	$(CLEAR_CMD)
 	$(TIME_CMD) $(PYTHON) ./genetic_algorithm.py
@@ -73,4 +77,4 @@ clean:
 	find . -type f -name '*.pyc' -delete || del /S /Q *.pyc 2>nul
 	find . -type d -name '__pycache__' -delete || rmdir /S /Q __pycache__ 2>nul
 
-.PHONY: all main clean dependencies generate_requirements dataset_descriptor genetic_algorithm pca rfe stacking telegram wgan_gp
+.PHONY: all main clean dependencies generate_requirements dataset_descriptor genetic_algorithm hyperparameter_optimization pca rfe stacking telegram wgangp
