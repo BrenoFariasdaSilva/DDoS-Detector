@@ -160,6 +160,31 @@ def collect_matching_files(input_dir, file_format=".csv", ignore_files=IGNORE_FI
    
    return sorted_matching_files # Return the sorted list of matching files
 
+def build_headers_map(filepaths, low_memory=True):
+   """
+   Build a mapping of file path -> list of header columns.
+
+   Attempts a lightweight header-only read (`pd.read_csv(..., nrows=0)`)
+   and falls back to `load_dataset` if that fails.
+
+   :param filepaths: Iterable of file paths
+   :param low_memory: Passed to `load_dataset` when falling back
+   :return: dict mapping filepath -> list of column names
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Building headers map for provided file paths.{Style.RESET_ALL}") # Output the verbose message
+
+   headers = {} # Dictionary that will map each filepath to its list of columns
+   for fp in filepaths: # Iterate over all given file paths
+      try: # Try header-only read
+         cols = pd.read_csv(fp, nrows=0).columns.tolist() # Extract columns without loading file content
+      except Exception: # If header-only read fails
+         df_tmp = load_dataset(fp, low_memory=low_memory) # Load full dataset (slow fallback)
+         cols = df_tmp.columns.tolist() if df_tmp is not None else [] # Extract columns if dataset loaded
+      headers[fp] = cols # Store the resolved column list for this file
+
+   return headers # Return filepath->headers mapping
+
 def load_dataset(filepath, low_memory=True):
    """
    Loads a dataset from a CSV file.
