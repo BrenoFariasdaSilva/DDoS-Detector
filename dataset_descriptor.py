@@ -747,11 +747,11 @@ def generate_tsne_plot(filepath, low_memory=True, sample_size=5000, perplexity=3
       X_emb = tsne.fit_transform(X) # Compute embedding
 
       if output_dir is None: # Determine output directory
-         output_dir = os.path.join(os.path.dirname(os.path.abspath(filepath)), RESULTS_DIR) # Default RESULTS_DIR under file folder
+         output_dir = os.path.join(os.path.dirname(os.path.abspath(filepath)), "Data_Separability") # Default RESULTS_DIR under file folder
       os.makedirs(output_dir, exist_ok=True) # Ensure directory exists
 
       base = os.path.splitext(os.path.basename(filepath))[0] # Base filename
-      out_name = f"{base}_tsne.png" # Output PNG name
+      out_name = f"TSNE_3D_{base}.png" # Output PNG name
       out_path = os.path.join(output_dir, out_name) # Absolute path
 
       save_tsne_plot(X_emb, labels, out_path, f"t-SNE: {base}") # Create and save plot
@@ -903,7 +903,7 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
          info["Common Features (in all files)"] = ", ".join(common_list) if common_list else "None" # Join common features into a string
          info["Extra Features (not in all files)"] = ", ".join(extras) if extras else "None" # Join extra features into a string
 
-         tsne_file = generate_tsne_plot(filepath, low_memory=low_memory, sample_size=2000, output_dir=os.path.join(base_dir, RESULTS_DIR)) # Generate t-SNE plot
+         tsne_file = generate_tsne_plot(filepath, low_memory=low_memory, sample_size=2000, output_dir=os.path.join(os.path.dirname(os.path.abspath(filepath)), "Data_Separability")) # Generate t-SNE plot
          info["t-SNE Plot"] = tsne_file if tsne_file else "None" # Add t-SNE plot filename or "None"
 
          report_rows.append(info) # Add the info to the report rows
