@@ -2,6 +2,9 @@
 VENV := venv
 OS := $(shell uname 2>/dev/null || echo Windows)
 
+# Logs directory
+LOG_DIR := ./logs
+
 # Detect correct Python and Pip commands based on OS
 ifeq ($(OS), Windows)
 	PYTHON := $(VENV)/Scripts/python.exe
@@ -22,40 +25,49 @@ all: main
 
 # Run main scripts
 main: dependencies
+	@mkdir -p $(LOG_DIR) 2>nul || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./main.py
+	$(TIME_CMD) $(PYTHON) ./main.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./main.py)).log
 
 dataset_descriptor: dependencies
+	@mkdir -p $(LOG_DIR) 2>nul || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./dataset_descriptor.py
+	$(TIME_CMD) $(PYTHON) ./dataset_descriptor.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./dataset_descriptor.py)).log
 
 hyperparameters_optimization: dependencies
+	@mkdir -p $(LOG_DIR) 2>nul || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./hyperparameters_optimization.py
+	$(TIME_CMD) $(PYTHON) ./hyperparameters_optimization.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./hyperparameters_optimization.py)).log
 
 genetic_algorithm: dependencies
+	@mkdir -p $(LOG_DIR) 2>nul || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./genetic_algorithm.py
+	$(TIME_CMD) $(PYTHON) ./genetic_algorithm.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./genetic_algorithm.py)).log
 
 pca: dependencies
+	@mkdir -p $(LOG_DIR) 2>nul || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./pca.py
+	$(TIME_CMD) $(PYTHON) ./pca.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./pca.py)).log
 
 rfe: dependencies
+	@mkdir -p $(LOG_DIR) 2>nul || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./rfe.py
+	$(TIME_CMD) $(PYTHON) ./rfe.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./rfe.py)).log
 
 stacking: dependencies
+	@mkdir -p $(LOG_DIR) 2>nul || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./stacking.py
+	$(TIME_CMD) $(PYTHON) ./stacking.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./stacking.py)).log
 
 telegram: dependencies
+	@mkdir -p $(LOG_DIR) 2>nul || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./telegram_bot.py
+	$(TIME_CMD) $(PYTHON) ./telegram_bot.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./telegram_bot.py)).log
 
 wgangp: dependencies
+	@mkdir -p $(LOG_DIR) 2>nul || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./wgangp.py
+	$(TIME_CMD) $(PYTHON) ./wgangp.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./wgangp.py)).log
 
 # Create virtual environment if missing
 $(VENV):
