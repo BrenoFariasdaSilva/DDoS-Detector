@@ -473,6 +473,61 @@ def get_models():
 		"MLP (Neural Net)": MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=42),
 	}
 
+def extract_hyperparameter_optimization_results(csv_path):
+   """
+   Extract hyperparameter optimization results for a dataset.
+
+   Looks for common output locations created by the project's
+   hyperparameter optimization script, located in the f"{dataset_name}_Hyperparameter_Optimization_Results.csv" file
+   within the "Classifiers_Hyperparameters" subdirectory relative to the dataset CSV file
+
+   This modified version extracts **only the best hyperparameters** for each classifier.
+
+   :param csv_path: Path to the dataset CSV file being processed.
+   :return: Dictionary mapping model names to their best hyperparameters, or None if not found.
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Looking for hyperparameter optimization results for: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}") # Inform user which dataset we're searching for
+
+   file_dir = os.path.dirname(csv_path) # Directory containing the dataset file
+   dataset_name = os.path.splitext(os.path.basename(csv_path))[0] # Dataset filename without extension
+
+   csv_filepath = os.path.join(file_dir, "Classifiers_Hyperparameters", f"{dataset_name}_Hyperparameter_Optimization_Results.csv") # First possible location
+
+   if not verify_filepath_exists(csv_filepath): # If the CSV file does not exist at the expected path
+      return None # Return None if no optimization results found
+
+   try: # Try to load the CSV file
+      df = pd.read_csv(csv_filepath) # Load the CSV into a DataFrame
+   except Exception as e: # If there is an error loading the CSV
+      print(f"{BackgroundColors.RED}Failed to load hyperparameter optimization file {csv_filepath}: {e}{Style.RESET_ALL}")
+      return {} # Return empty dict on failure
+
+   results = {} # Initialize dictionary to hold parsed results per model
+   for _, row in df.iterrows(): # Iterate over each row (each model's optimization result)
+      try: # Try to parse each row
+         model = row.get("model") or row.get("Model") # Try common column names for model identifier
+         if not model: # If model identifier is missing
+            continue # Skip invalid rows
+
+         best_params_raw = row.get("best_params") or row.get("best_params_json") or row.get("best_params_str") # Try common column names for best_params
+         best_params = None # Default if parsing fails or value missing
+         if isinstance(best_params_raw, str) and best_params_raw.strip(): # If best_params_raw is a non-empty string
+            try: # Try to parse best_params as JSON first
+               best_params = json.loads(best_params_raw) # Parse JSON string if possible
+            except Exception: # If JSON parsing fails, try ast.literal_eval as a fallback
+               try: # Try to parse using ast.literal_eval
+                  best_params = ast.literal_eval(best_params_raw) # Safely evaluate string to Python literal
+               except Exception: # If both parsing attempts fail
+                  best_params = None # Leave as None if parsing fails
+
+         results[str(model)] = {"best_params": best_params} # Store parsed parameters only
+      except Exception: # Catch any unexpected errors during row parsing
+         continue # Skip problematic rows silently
+
+   verbose_output(f"{BackgroundColors.GREEN}Loaded hyperparameter optimization results from: {BackgroundColors.CYAN}{csv_filepath}{Style.RESET_ALL}")
+   return results # Return the normalized results mapping
+
 def load_pca_object(file_path, pca_n_components):
    """
    Loads a pre-fitted PCA object from a pickle file.
