@@ -45,12 +45,14 @@ Output:
 
 import atexit # For playing a sound when the program finishes
 import gc # For explicit garbage collection
+import matplotlib.pyplot as plt # For plotting t-SNE results
 import numpy as np # For numerical operations
 import os # For running a command in the terminal
 import pandas as pd # For data manipulation
-import warnings # For suppressing pandas warnings when requested
 import platform # For getting the operating system name
+import warnings # For suppressing pandas warnings when requested
 from colorama import Style # For coloring the terminal
+from sklearn.manifold import TSNE # For t-SNE dimensionality reduction
 from sklearn.preprocessing import StandardScaler # For feature scaling
 from tqdm import tqdm # For progress bars
 
@@ -560,6 +562,74 @@ def scale_features(numeric_df):
       X_scaled = np.asarray(numeric_df.values, dtype=np.float64) # Convert to a float64 numpy array
    
    return X_scaled # Return the scaled array
+
+def generate_tsne_plot(filepath, low_memory=True, sample_size=5000, perplexity=30, n_iter=1000, random_state=42, output_dir=None):
+   """
+   Generate and save a 2D t-SNE visualization of a CSV dataset.
+
+   This function loads a dataset, extracts numeric features, performs class-aware
+   downsampling (if needed), computes a 2D t-SNE embedding, and saves the result
+   as a PNG scatter plot with per-class coloring (if labels are detected).
+
+   Downsampling strategy:
+   - Classes with < 50 samples: all samples included
+   - Larger classes: sampled proportionally to preserve distribution
+   - Falls back to random sampling if class detection fails
+
+   :param filepath: path to CSV file
+   :param low_memory: whether to use low-memory mode when loading CSV
+   :param sample_size: maximum number of rows to embed (reduces computation time)
+   :param perplexity: t-SNE perplexity parameter (typically 5-50)
+   :param n_iter: number of t-SNE optimization iterations
+   :param random_state: random seed for reproducible results
+   :param output_dir: directory for saving PNG (defaults to dataset's RESULTS_DIR)
+   :return: basename of saved PNG file, or None on failure
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Generating t-SNE plot for: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output start message for t-SNE generation
+
+   try: # Main try-catch block for overall failure handling
+      df = load_dataset(filepath, low_memory=low_memory) # Load CSV into DataFrame
+      if df is None: # If loading failed
+         return None # Abort
+
+      cleaned = preprocess_dataframe(df, remove_zero_variance=False) # Basic cleaning
+      numeric_df = coerce_numeric_columns(cleaned) # Extract numeric features
+      numeric_df = fill_replace_and_drop(numeric_df) # Clean numeric frame
+
+      if numeric_df is None or numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0: # No numeric data
+         return None # Abort
+
+      label_col = detect_label_column(cleaned.columns) # Detect label column
+      labels = cleaned[label_col] if label_col in cleaned.columns else None # Extract labels if present
+
+      if numeric_df.shape[0] > sample_size: # Downsample if too many rows
+         numeric_df, labels = downsample_with_class_awareness(numeric_df, labels, sample_size, random_state) # Class-aware downsampling
+
+      X = scale_features(numeric_df) # Scale features for t-SNE
+      tsne = TSNE(n_components=2, perplexity=perplexity, n_iter=n_iter, random_state=random_state, init="pca") # Initialize t-SNE
+      X_emb = tsne.fit_transform(X) # Compute embedding
+
+      if output_dir is None: # Determine output directory
+         output_dir = os.path.join(os.path.dirname(os.path.abspath(filepath)), RESULTS_DIR) # Default RESULTS_DIR under file folder
+      os.makedirs(output_dir, exist_ok=True) # Ensure directory exists
+
+      base = os.path.splitext(os.path.basename(filepath))[0] # Base filename
+      out_name = f"{base}_tsne.png" # Output PNG name
+      out_path = os.path.join(output_dir, out_name) # Absolute path
+
+      save_tsne_plot(X_emb, labels, out_path, f"t-SNE: {base}") # Create and save plot
+
+      try: # Try to delete DataFrame to free memory
+         del df # Free raw DataFrame
+      except Exception: # Ignore any exceptions during deletion
+         pass # Do nothing
+      gc.collect() # Force garbage collection
+
+      return out_name # Return saved filename
+   except Exception as e: # Catch-all failure
+      verbose_output(f"{BackgroundColors.RED}t-SNE generation failed for {filepath}: {e}{Style.RESET_ALL}") # Verbose error
+      return None # Indicate failure
 
 def get_dataset_file_info(filepath, low_memory=True):
    """
