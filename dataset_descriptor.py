@@ -668,15 +668,15 @@ def main():
       print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")
       safe_dataset_name = str(dataset_name).replace(" ", "_").replace("/", "_") # Create a safe dataset name for filenames
 
-      for input_path in paths: # For each path in the list of paths for the dataset
-         print(f" {BackgroundColors.GREEN}Location: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}")
-         if not verify_filepath_exists(input_path): # Verify path exists
-            print(f"{BackgroundColors.RED}The specified input path does not exist: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}")
+      for dir_path in paths: # For each path in the list of paths for the dataset
+         print(f" {BackgroundColors.GREEN}Location: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")
+         if not verify_filepath_exists(dir_path): # Verify path exists
+            print(f"{BackgroundColors.RED}The specified input path does not exist: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")
             continue # Skip to next configured path
          
-         success = generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME) # Generate the dataset report
+         success = generate_dataset_report(dir_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME) # Generate the dataset report
          if not success: # If the report was not generated successfully
-            print(f"{BackgroundColors.RED}Failed to generate dataset report for: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.RED}Failed to generate dataset report for: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")
          else: # If the report was generated successfully
             print(f"{BackgroundColors.GREEN}Report saved for {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} -> {BackgroundColors.CYAN}{RESULTS_FILENAME}{Style.RESET_ALL}")
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
