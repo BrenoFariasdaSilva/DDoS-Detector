@@ -563,6 +563,54 @@ def scale_features(numeric_df):
    
    return X_scaled # Return the scaled array
 
+def compute_class_aware_allocations(labels, sample_size, min_class_size=50):
+   """
+   Compute per-class sample allocations that preserve class distribution while
+   ensuring small classes (< min_class_size) are fully included.
+
+   Strategy:
+   - Classes with fewer than min_class_size samples: include all samples
+   - Remaining budget: distribute proportionally among larger classes
+   - Use fractional remainder method to allocate leftover samples fairly
+
+   :param labels: pandas Series containing class labels
+   :param sample_size: maximum total samples to allocate
+   :param min_class_size: threshold below which all class samples are included
+   :return: dict mapping class -> number of samples to select
+   """
+
+   counts = labels.value_counts() # Get per-class counts
+   small_mask = counts < min_class_size # Identify small classes
+   small_classes = counts[small_mask] # Classes to fully include
+   large_classes = counts[~small_mask] # Classes to allocate proportionally
+
+   allocations = {} # Initialize allocations dictionary
+   for cls, cnt in small_classes.items(): # Allocate all samples for small classes
+      allocations[cls] = int(cnt) # Assign full count to allocation
+
+   remaining_budget = int(sample_size - sum(allocations.values())) # Remaining samples to allocate
+
+   if remaining_budget > 0 and not large_classes.empty: # Only allocate if budget remains and there are large classes
+      total_large = int(large_classes.sum()) # Total samples in large classes
+      float_alloc = {cls: remaining_budget * int(cnt) / total_large for cls, cnt in large_classes.items()} # Fractional proportional allocation
+      base_alloc = {cls: int(fa) for cls, fa in float_alloc.items()} # Base integer allocation
+      
+      assigned = sum(base_alloc.values()) # Sum of base allocations
+      leftover = remaining_budget - assigned # Leftover samples to distribute
+      
+      remainders = sorted(large_classes.index, key=lambda c: (float_alloc[c] - base_alloc[c]), reverse=True) # Order by fractional remainder
+      for cls in remainders: # Distribute leftover samples
+         if leftover <= 0: # Stop when no leftover remains
+            break # Exit loop
+         if base_alloc[cls] < int(large_classes[cls]): # Only add if class can accept more
+            base_alloc[cls] += 1 # Increment allocation for this class
+            leftover -= 1 # Decrease leftover count
+      
+      for cls in large_classes.index: # Finalize allocations applying available caps
+         allocations[cls] = min(int(large_classes[cls]), base_alloc.get(cls, 0)) # Cap addition by remaining available
+
+   return allocations # Return finalized allocations
+
 def generate_tsne_plot(filepath, low_memory=True, sample_size=5000, perplexity=30, n_iter=1000, random_state=42, output_dir=None):
    """
    Generate and save a 2D t-SNE visualization of a CSV dataset.
