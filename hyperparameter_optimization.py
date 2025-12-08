@@ -445,6 +445,31 @@ def optimize_model(model_name, model, param_grid, X_train, y_train):
       print(f"{BackgroundColors.RED}Error optimizing {model_name}: {e}{Style.RESET_ALL}")
       return None, None, None # Return None values if optimization failed
 
+def save_optimization_results(csv_path, results_list):
+   """
+   Saves hyperparameter optimization results to a CSV file.
+
+   :param csv_path: Path to the original dataset CSV file.
+   :param results_list: List of dictionaries containing optimization results.
+   :return: None
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Saving optimization results...{Style.RESET_ALL}") # Output the verbose message
+   
+   if not results_list: # If the results list is empty
+      print(f"{BackgroundColors.YELLOW}No results to save.{Style.RESET_ALL}")
+      return # Exit the function
+   
+   file_dir = os.path.dirname(csv_path) # Get the directory of the dataset
+   output_path = os.path.join(file_dir, RESULTS_FILENAME) # Construct output path
+   
+   try: # Try to save the results
+      df_results = pd.DataFrame(results_list) # Convert results list to DataFrame
+      df_results.to_csv(output_path, index=False, encoding="utf-8") # Save to CSV
+      print(f"{BackgroundColors.GREEN}Results saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")
+   except Exception as e: # Catch any errors during saving
+      print(f"{BackgroundColors.RED}Error saving results: {e}{Style.RESET_ALL}")
+
 def calculate_execution_time(start_time, finish_time):
    """
    Calculates the execution time between start and finish times and formats it as hh:mm:ss.
