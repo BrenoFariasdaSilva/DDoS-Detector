@@ -241,6 +241,12 @@ def compute_optimal_processes(reserve_cpu_frac=0.15, reserve_mem_frac=0.15, min_
    except Exception: # If os.cpu_count fails for any reason
       pass # Keep current candidate value
 
+   try: # Try to output verbose message and a visible print for auditing
+      print(f"{BackgroundColors.GREEN}Optimal worker suggestion: {candidate} (total_cpus={total_cpus}, reserved={reserved}, cpu_bound={cpu_bound}, mem_bound={mem_bound}){Style.RESET_ALL}") # Verbose output
+      print(f"{BackgroundColors.GREEN}[Resource Monitor] Using {BackgroundColors.CYAN}{candidate}{BackgroundColors.GREEN} worker(s)  , cpu={BackgroundColors.CYAN}{total_cpus}{BackgroundColors.GREEN}, reserved={BackgroundColors.CYAN}{reserved}{BackgroundColors.GREEN}, cpu_bound={BackgroundColors.CYAN}{cpu_bound}{BackgroundColors.GREEN}, mem_bound={BackgroundColors.CYAN}{mem_bound}{Style.RESET_ALL}") # Visible runtime message
+   except Exception: # Do not fail on any print errors
+      pass # Silently ignore printing failures
+
    return candidate # Return final computed candidate number of worker processes
 
 def start_resource_monitor(interval_seconds=30, reserve_cpu_frac=0.15, reserve_mem_frac=0.15, min_procs=1, max_procs=None, min_gens_before_update=10, daemon=True):
