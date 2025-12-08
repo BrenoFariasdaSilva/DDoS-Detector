@@ -164,6 +164,47 @@ def get_files_to_process(directory_path, file_extension=".csv"):
 
    return sorted(files) # Return sorted list for consistency
 
+def extract_genetic_algorithm_features(file_path):
+   """
+   Extracts the features selected by the Genetic Algorithm from the corresponding
+   "Genetic_Algorithm_Results.csv" file located in the "Feature_Analysis"
+   subdirectory relative to the input file's directory.
+
+   It specifically retrieves the 'best_features' (a JSON string) from the row
+   where the 'run_index' is 'best', and returns it as a Python list.
+
+   :param file_path: Full path to the current CSV file being processed (e.g., "./Datasets/.../DrDoS_DNS.csv").
+   :return: List of features selected by the GA, or None if the file is not found or fails to load/parse.
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Extracting Genetic Algorithm selected features...{Style.RESET_ALL}") # Output the verbose message
+   
+   file_dir = os.path.dirname(file_path) # Determine the directory of the input file
+   ga_results_path = os.path.join(file_dir, "Feature_Analysis", "Genetic_Algorithm_Results.csv") # Construct the path to the consolidated GA results file
+   
+   verbose_output(f"{BackgroundColors.GREEN}Extracting GA features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
+
+   if not verify_filepath_exists(ga_results_path): # If the GA results file does not exist
+      print(f"{BackgroundColors.YELLOW}GA results file not found: {BackgroundColors.CYAN}{ga_results_path}{Style.RESET_ALL}")
+      return None # Return None if the file doesn't exist
+
+   try: # Try to load and parse the GA results
+      df = pd.read_csv(ga_results_path) # Load the CSV file into a DataFrame
+      best_row = df[df["run_index"] == "best"] # Filter for the row with run_index == "best"
+      if best_row.empty: # If no "best" row is found
+         print(f"{BackgroundColors.YELLOW}No 'best' run_index found in {BackgroundColors.CYAN}{ga_results_path}{Style.RESET_ALL}")
+         return None # Return None if the "best" row doesn't exist
+      best_features_str = best_row.iloc[0]["best_features"] # Get the best_features column value (JSON string)
+      best_features = json.loads(best_features_str) # Parse the JSON string into a Python list
+      verbose_output(f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(best_features)}{BackgroundColors.GREEN} GA features{Style.RESET_ALL}")
+      return best_features # Return the list of best features
+   except IndexError: # If there's an issue accessing the row
+      print(f"{BackgroundColors.RED}Error: Could not access 'best' row in {BackgroundColors.CYAN}{ga_results_path}{Style.RESET_ALL}")
+      return None # Return None if there was an error
+   except Exception as e: # Catch any other exceptions
+      print(f"{BackgroundColors.RED}Error loading GA features: {e}{Style.RESET_ALL}")
+      return None # Return None if there was an error
+
 def calculate_execution_time(start_time, finish_time):
    """
    Calculates the execution time between start and finish times and formats it as hh:mm:ss.
