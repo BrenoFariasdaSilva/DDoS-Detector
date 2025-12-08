@@ -86,7 +86,7 @@ DATASETS = { # Dictionary containing dataset paths and feature files
 }
 
 RESULTS_DIR = "./Dataset_Description/" # Directory to save the results
-RESULTS_FILENAME = "Dataset_descriptor.csv" # Filename for the results CSV
+RESULTS_FILENAME = "Dataset_Descriptor.csv" # Filename for the results CSV
 
 IGNORE_FILES = [RESULTS_FILENAME] # List of filenames to ignore when searching for datasets
 IGNORE_DIRS = ["Cache", "Data_Separability", "Dataset_Description", "Feature_Analysis"] # List of directory names to ignore when searching for datasets
