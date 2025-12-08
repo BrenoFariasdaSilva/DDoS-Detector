@@ -59,9 +59,23 @@ Assumptions & Notes:
 
 import atexit # For playing a sound when the program finishes
 import datetime # For getting the current date and time
+import json # For handling JSON strings
+import lightgbm as lgb # For LightGBM model
+import numpy as np # For numerical operations
 import os # For running a command in the terminal
+import pandas as pd # For data manipulation
 import platform # For getting the operating system name
 from colorama import Style # For coloring the terminal
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier # For ensemble models
+from sklearn.linear_model import LogisticRegression # For logistic regression model
+from sklearn.metrics import make_scorer, f1_score # For custom scoring metrics
+from sklearn.model_selection import GridSearchCV, train_test_split # For hyperparameter search and data splitting
+from sklearn.neighbors import KNeighborsClassifier, NearestCentroid # For k-nearest neighbors model
+from sklearn.neural_network import MLPClassifier # For neural network model
+from sklearn.preprocessing import LabelEncoder, StandardScaler # For label encoding and feature scaling
+from sklearn.svm import SVC # For Support Vector Machine model
+from tqdm import tqdm # For progress bars
+from xgboost import XGBClassifier # For XGBoost classifier
 
 # Macros:
 class BackgroundColors: # Colors for the terminal
