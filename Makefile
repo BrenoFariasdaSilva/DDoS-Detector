@@ -8,6 +8,9 @@ LOG_DIR := ./logs
 # Ensure logs directory exists (cross-platform). Use as: $(ENSURE_LOG_DIR)
 ENSURE_LOG_DIR := @mkdir -p $(LOG_DIR) 2>nul || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
 
+# Reusable run-and-log function: call with the script path, e.g. $(call RUN_AND_LOG, ./script.py)
+RUN_AND_LOG = $(TIME_CMD) $(PYTHON) $(1) 2>&1 | tee $(LOG_DIR)/$(notdir $(basename $(1))).log
+
 # Detect correct Python and Pip commands based on OS
 ifeq ($(OS), Windows)
 	PYTHON := $(VENV)/Scripts/python.exe
@@ -30,47 +33,47 @@ all: main
 main: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./main.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./main.py)).log
+	$(call RUN_AND_LOG, ./main.py)
 
 dataset_descriptor: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./dataset_descriptor.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./dataset_descriptor.py)).log
+	$(call RUN_AND_LOG, ./dataset_descriptor.py)
 
 hyperparameters_optimization: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./hyperparameters_optimization.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./hyperparameters_optimization.py)).log
+	$(call RUN_AND_LOG, ./hyperparameters_optimization.py)
 
 genetic_algorithm: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./genetic_algorithm.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./genetic_algorithm.py)).log
+	$(call RUN_AND_LOG, ./genetic_algorithm.py)
 
 pca: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./pca.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./pca.py)).log
+	$(call RUN_AND_LOG, ./pca.py)
 
 rfe: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./rfe.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./rfe.py)).log
+	$(call RUN_AND_LOG, ./rfe.py)
 
 stacking: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./stacking.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./stacking.py)).log
+	$(call RUN_AND_LOG, ./stacking.py)
 
 telegram: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./telegram_bot.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./telegram_bot.py)).log
+	$(call RUN_AND_LOG, ./telegram_bot.py)
 
 wgangp: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(TIME_CMD) $(PYTHON) ./wgangp.py 2>&1 | tee $(LOG_DIR)/$(notdir $(basename ./wgangp.py)).log
+	$(call RUN_AND_LOG, ./wgangp.py)
 
 # Create virtual environment if missing
 $(VENV):
