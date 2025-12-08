@@ -693,8 +693,8 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
 
          common_list, extras = get_file_common_and_extras(headers_map, filepath, common_features) # Get common and extra features for this file
 
-         info["Common Features (in all files)"] = ", ".join(common_list) if common_list else "None" # Join common features into a string
          info["Headers Match All Files"] = "Yes" if headers_match_all else "No" # Indicate if headers match all files
+         info["Common Features (in all files)"] = ", ".join(common_list) if common_list else "None" # Join common features into a string
          info["Extra Features (not in all files)"] = ", ".join(extras) if extras else "None" # Join extra features into a string
 
          report_rows.append(info) # Add the info to the report rows
