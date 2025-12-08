@@ -524,7 +524,85 @@ def main():
       return # Exit the main function
 
    for csv_path in files_to_process: # Process each CSV file
-      pass # Placeholder for processing each file (to be implemented)
+      try: # Try to process the file
+         print(f"{BackgroundColors.GREEN}\nProcessing file: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}") # Output the file being processed
+
+         print(f"{BackgroundColors.GREEN}Loading Genetic Algorithm selected features...{Style.RESET_ALL}") # Output the loading message
+         ga_selected_features = extract_genetic_algorithm_features(csv_path) # Extract GA selected features
+
+         if ga_selected_features is None or len(ga_selected_features) == 0: # If no GA features were found
+            print(f"{BackgroundColors.YELLOW}No GA features found for {csv_path}. Skipping file.{Style.RESET_ALL}")
+            continue # Skip this file
+
+         print(f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(ga_selected_features)}{BackgroundColors.GREEN} GA selected features{Style.RESET_ALL}") # Output the number of features
+
+         df = load_dataset(csv_path) # Load the dataset
+         if df is None: # If loading failed
+            print(f"{BackgroundColors.YELLOW}Failed to load dataset {csv_path}. Skipping file.{Style.RESET_ALL}")
+            continue # Skip this file
+
+         df_clean = preprocess_dataframe(df) # Preprocess the DataFrame
+         if df_clean is None or df_clean.empty: # If preprocessing failed
+            print(f"{BackgroundColors.YELLOW}Dataset preprocessing failed for {csv_path}. Skipping file.{Style.RESET_ALL}")
+            continue # Skip this file
+
+         X = df_clean.iloc[:, :-1] # Extract features (all columns except last)
+         y = df_clean.iloc[:, -1] # Extract target (last column)
+
+         print(f"{BackgroundColors.GREEN}Dataset loaded with {BackgroundColors.CYAN}{X.shape[0]}{BackgroundColors.GREEN} samples and {BackgroundColors.CYAN}{X.shape[1]}{BackgroundColors.GREEN} features{Style.RESET_ALL}") # Output dataset shape
+
+         X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X, y) # Scale and split the data
+
+         feature_names = list(X.select_dtypes(include=np.number).columns) # Get numeric feature names
+
+         print(f"{BackgroundColors.GREEN}Applying GA feature selection...{Style.RESET_ALL}") # Output the message
+         X_train_ga = get_feature_subset(X_train_scaled, ga_selected_features, feature_names) # Get GA feature subset for training
+         X_test_ga = get_feature_subset(X_test_scaled, ga_selected_features, feature_names) # Get GA feature subset for testing
+
+         print(f"{BackgroundColors.GREEN}Training set shape after GA feature selection: {BackgroundColors.CYAN}{X_train_ga.shape}{Style.RESET_ALL}") # Output shape
+         print(f"{BackgroundColors.GREEN}Testing set shape after GA feature selection: {BackgroundColors.CYAN}{X_test_ga.shape}{Style.RESET_ALL}") # Output shape
+
+         if X_train_ga.shape[1] == 0: # If no features remain
+            print(f"{BackgroundColors.YELLOW}No features selected by GA for {csv_path}. Skipping file.{Style.RESET_ALL}")
+            continue # Skip this file
+
+         models_and_grids = get_models_and_param_grids() # Get models and their parameter grids
+
+         results_list = [] # List to store optimization results per file
+
+         print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Starting hyperparameter optimization for {BackgroundColors.CYAN}{len(models_and_grids)}{BackgroundColors.GREEN} models on {BackgroundColors.CYAN}{os.path.basename(csv_path)}{BackgroundColors.GREEN}...{Style.RESET_ALL}\n") # Output the message
+
+         for model_name in tqdm(models_and_grids.keys(), desc=f"{BackgroundColors.GREEN}Optimizing Models{Style.RESET_ALL}", unit="model"):
+            model, param_grid = models_and_grids[model_name] # Get model and parameter grid
+
+            best_params, best_score, cv_results = optimize_model(model_name, model, param_grid, X_train_ga, y_train) # Optimize the model
+
+            if best_params is not None: # If optimization was successful
+               results_list.append({ # Append results to the list
+                  "model": model_name, # Model name
+                  "best_params": json.dumps(best_params), # Best parameters as JSON string
+                  "best_cv_f1_score": best_score, # Best cross-validation F1 score
+                  "cv_folds": CV_FOLDS, # Number of CV folds
+                  "n_features": X_train_ga.shape[1], # Number of features used
+                  "feature_selection_method": "Genetic Algorithm", # Feature selection method
+                  "dataset": os.path.basename(csv_path), # Dataset filename
+                  "timestamp": datetime.datetime.now().isoformat() # Timestamp of the optimization
+               }) # End of results dictionary
+
+            print() # Empty line for spacing
+
+         save_optimization_results(csv_path, results_list) # Save the optimization results for this file
+
+         print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Optimization Summary for {BackgroundColors.CYAN}{os.path.basename(csv_path)}{BackgroundColors.GREEN}:{Style.RESET_ALL}")
+         print(f"{BackgroundColors.GREEN}Total models optimized: {BackgroundColors.CYAN}{len(results_list)}{Style.RESET_ALL}")
+         if results_list: # If there are results to summarize
+            best_model = max(results_list, key=lambda x: x["best_cv_f1_score"]) # Find the best model
+            print(f"{BackgroundColors.GREEN}Best model: {BackgroundColors.CYAN}{best_model['model']}{Style.RESET_ALL}") # Output best model name
+            print(f"{BackgroundColors.GREEN}Best CV F1 Score: {BackgroundColors.CYAN}{best_model['best_cv_f1_score']:.4f}{Style.RESET_ALL}") # Output best score
+
+      except Exception as e: # Catch any unhandled exceptions during file processing
+         print(f"{BackgroundColors.RED}Unhandled error processing {csv_path}: {e}{Style.RESET_ALL}")
+         continue # Continue to the next file
 
    finish_time = datetime.datetime.now() # Get the finish time of the program
    print(f"\n{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
