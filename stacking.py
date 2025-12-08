@@ -916,6 +916,12 @@ def main():
       X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X_full, y) # Scale and split the data
       
       base_models = get_models() # Get the base models
+
+      hp_results_raw = extract_hyperparameter_optimization_results(file) # Extract hyperparameter optimization results
+      if hp_results_raw: # If results were found, extract the params mapping and apply
+         hp_params_map = {k: (v.get("best_params") if isinstance(v, dict) else v) for k, v in hp_results_raw.items()} # Extract only the best_params mapping
+         base_models = apply_hyperparameters_to_models(hp_params_map, base_models) # Apply hyperparameters to base models
+
       estimators = [(name, model) for name, model in base_models.items() if name != "SVM"] # Define estimators (excluding SVM)
       
       stacking_model = StackingClassifier(estimators=estimators, final_estimator=RandomForestClassifier(n_estimators=50, random_state=42), cv=5, n_jobs=1) # Define the Stacking Classifier model
@@ -932,7 +938,7 @@ def main():
       feature_sets = {k: v for k, v in feature_sets.items() if v is not None} # Remove any None entries (e.g., PCA if not applied)
       feature_sets = dict(sorted(feature_sets.items())) # Sort the feature sets by name
 
-      individual_models = get_models() # Get all individual models
+      individual_models = {k: v for k, v in base_models.items()} # Use the base models (with hyperparameters applied) for individual evaluation
       total_steps = len(feature_sets) * (len(individual_models) + 1) # Total steps: models + stacking per feature set
       progress_bar = tqdm(total=total_steps) # Progress bar for all evaluations
 
