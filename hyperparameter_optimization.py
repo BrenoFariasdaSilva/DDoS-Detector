@@ -314,6 +314,104 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
    
    return X_train_scaled, X_test_scaled, y_train, y_test, scaler # Return scaled features, target, and the fitted scaler
 
+def get_models_and_param_grids():
+   """
+   Returns a dictionary of models with their corresponding hyperparameter grids for GridSearchCV.
+
+   :param: None
+   :return: Dictionary with model names as keys and tuples (model_instance, param_grid) as values
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Initializing models and parameter grids for hyperparameter optimization...{Style.RESET_ALL}") # Output the verbose message
+   
+   return { # Dictionary of models and their parameter grids
+      "Random Forest": (
+         RandomForestClassifier(random_state=42), # Random Forest classifier
+         {
+            "n_estimators": [50, 100, 200], # Number of trees in the forest
+            "max_depth": [None, 10, 20, 30], # Maximum depth of the tree
+            "min_samples_split": [2, 5, 10], # Minimum number of samples required to split an internal node
+            "min_samples_leaf": [1, 2, 4], # Minimum number of samples required to be at a leaf node
+            "max_features": ["sqrt", "log2", None] # Number of features to consider when looking for the best split
+         }
+      ),
+      "SVM": (
+         SVC(random_state=42, probability=True), # Enable probability estimates for SVC
+         {
+            "C": [0.1, 1, 10, 100], # Regularization parameter
+            "kernel": ["linear", "rbf", "poly"], # Kernel type to be used in the algorithm
+            "gamma": ["scale", "auto", 0.001, 0.01, 0.1, 1] # Kernel coefficient
+         }
+      ),
+      "XGBoost": (
+         XGBClassifier(eval_metric="mlogloss", random_state=42), # XGBoost classifier
+         {
+            "n_estimators": [50, 100, 200], # Number of trees in the forest
+            "max_depth": [3, 5, 7, 10], # Maximum depth of the tree
+            "learning_rate": [0.01, 0.1, 0.3], # Step size shrinkage
+            "subsample": [0.6, 0.8, 1.0], # Subsample ratio of the training instances
+            "colsample_bytree": [0.6, 0.8, 1.0] # Subsample ratio of columns when constructing each tree
+         }
+      ),
+      "Logistic Regression": (
+         LogisticRegression(max_iter=1000, random_state=42), # Logistic Regression classifier
+         {
+            "C": [0.001, 0.01, 0.1, 1, 10, 100], # Inverse of regularization strength
+            "penalty": ["l1", "l2", "elasticnet", None], # Norm used in the penalization
+            "solver": ["lbfgs", "liblinear", "saga"], # Algorithm to use in the optimization problem
+            "l1_ratio": [0.0, 0.5, 1.0] # The Elastic-Net mixing parameter
+         }
+      ),
+      "KNN": (
+         KNeighborsClassifier(), # K-Nearest Neighbors classifier
+         {
+            "n_neighbors": [3, 5, 7, 9, 11], # Number of neighbors to use
+            "weights": ["uniform", "distance"], # Weight function used in prediction
+            "metric": ["euclidean", "manhattan", "minkowski"], # Distance metric
+            "p": [1, 2] # Power parameter for the Minkowski metric
+         }
+      ),
+      "Nearest Centroid": (
+         NearestCentroid(), # Nearest Centroid classifier
+         {
+            "metric": ["euclidean", "manhattan"], # Distance metric
+            "shrink_threshold": [None, 0.1, 0.5, 1.0, 2.0] # Threshold for shrinking centroids
+         }
+      ),
+      "Gradient Boosting": (
+         GradientBoostingClassifier(random_state=42), # Gradient Boosting classifier
+         {
+            "n_estimators": [50, 100, 200], # Number of boosting stages to be run
+            "learning_rate": [0.01, 0.1, 0.3], # Learning rate shrinks the contribution of each tree
+            "max_depth": [3, 5, 7], # Maximum depth of the individual regression estimators
+            "min_samples_split": [2, 5, 10], # Minimum number of samples required to split an internal node
+            "min_samples_leaf": [1, 2, 4], # Minimum number of samples required to be at a leaf node
+            "subsample": [0.6, 0.8, 1.0] # Subsample ratio of the training instances
+         }
+      ),
+      "LightGBM": (
+         lgb.LGBMClassifier(force_row_wise=True, random_state=42, verbosity=-1), # LightGBM classifier
+         {
+            "n_estimators": [50, 100, 200], # Number of boosting stages to be run
+            "max_depth": [3, 5, 7, 10, -1], # Maximum depth of the tree (-1 means no limit)
+            "learning_rate": [0.01, 0.1, 0.3], # Step size shrinkage
+            "num_leaves": [15, 31, 63], # Number of leaves in one tree
+            "min_child_samples": [10, 20, 30], # Minimum number of data needed in a child (leaf)
+            "subsample": [0.6, 0.8, 1.0] # Subsample ratio of the training instances
+         }
+      ),
+      "MLP (Neural Net)": (
+         MLPClassifier(max_iter=500, random_state=42), # Multi-layer Perceptron classifier
+         {
+            "hidden_layer_sizes": [(50,), (100,), (100, 50), (100, 100)], # Number of neurons in the hidden layers
+            "activation": ["relu", "tanh", "logistic"], # Activation function for the hidden layer
+            "solver": ["adam", "sgd"], # The solver for weight optimization
+            "alpha": [0.0001, 0.001, 0.01], # L2 penalty (regularization term) parameter
+            "learning_rate": ["constant", "adaptive"] # Learning rate schedule for weight updates
+         }
+      )
+   }
+
 def calculate_execution_time(start_time, finish_time):
    """
    Calculates the execution time between start and finish times and formats it as hh:mm:ss.
