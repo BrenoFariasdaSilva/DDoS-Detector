@@ -667,6 +667,38 @@ def downsample_with_class_awareness(numeric_df, labels, sample_size, random_stat
    except Exception: # On any error, fallback to random sampling
       return numeric_df.sample(n=sample_size, random_state=random_state), None # Return random sample and no labels
 
+def save_tsne_plot(X_emb, labels, output_path, title):
+   """
+   Create and save a 2D t-SNE scatter plot.
+
+   If labels are provided, points are colored by class with a legend.
+   Otherwise, all points are plotted uniformly.
+
+   :param X_emb: 2D numpy array of t-SNE embeddings (shape: [n_samples, 2])
+   :param labels: pandas Series of class labels or None
+   :param output_path: absolute path where PNG will be saved
+   :param title: plot title string
+   :return: None
+   """
+
+   plt.figure(figsize=(8, 6)) # Create matplotlib figure
+   
+   if labels is not None: # Plot colored by class
+      unique = list(pd.Series(labels).unique()) # Unique class labels
+      for cls in unique: # Plot each class separately
+         mask = (labels == cls) # Boolean mask for class
+         plt.scatter(X_emb[mask, 0], X_emb[mask, 1], label=str(cls), s=8) # Scatter plot for class
+      plt.legend(markerscale=2, fontsize="small") # Add legend for classes
+   else: # No labels provided
+      plt.scatter(X_emb[:, 0], X_emb[:, 1], s=8) # Plot all points uniformly
+   
+   plt.title(title) # Set plot title
+   plt.xlabel("t-SNE 1") # X-axis label
+   plt.ylabel("t-SNE 2") # Y-axis label
+   plt.tight_layout() # Adjust layout
+   plt.savefig(output_path, dpi=150) # Save figure to disk
+   plt.close() # Close figure to free memory
+
 def generate_tsne_plot(filepath, low_memory=True, sample_size=5000, perplexity=30, n_iter=1000, random_state=42, output_dir=None):
    """
    Generate and save a 2D t-SNE visualization of a CSV dataset.
