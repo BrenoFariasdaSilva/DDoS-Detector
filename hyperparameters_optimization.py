@@ -282,24 +282,6 @@ def preprocess_dataframe(df, remove_zero_variance=True):
 
    return df_clean # Return the cleaned DataFrame
 
-def get_feature_subset(X_scaled, features, feature_names):
-   """
-   Returns a subset of features from the scaled feature set based on the provided feature names.
-   
-   :param X_scaled: Scaled features (numpy array).
-   :param features: List of feature names to select.
-   :param feature_names: List of all feature names corresponding to columns in X_scaled.
-   :return: Numpy array containing only the selected features, or an empty array if features is None/empty.
-   """
-   
-   verbose_output(f"{BackgroundColors.GREEN}Selecting subset of features based on GA selection...{Style.RESET_ALL}") # Output the verbose message
-   
-   if features: # Only proceed if the list of selected features is NOT empty/None
-      indices = [feature_names.index(f) for f in features if f in feature_names]
-      return X_scaled[:, indices] # Return the subset of features
-   else: # If no features are selected (or features is None)
-      return np.empty((X_scaled.shape[0], 0)) # Return an empty array with correct number of rows
-
 def scale_and_split(X, y, test_size=0.2, random_state=42):
    """
    Scales the numeric features using StandardScaler and splits the data
@@ -339,6 +321,24 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
    verbose_output(f"{BackgroundColors.GREEN}Data split successful. Training set shape: {BackgroundColors.CYAN}{X_train_scaled.shape}{BackgroundColors.GREEN}. Testing set shape: {BackgroundColors.CYAN}{X_test_scaled.shape}{Style.RESET_ALL}") # Output the successful split message
    
    return X_train_scaled, X_test_scaled, y_train, y_test, scaler # Return scaled features, target, and the fitted scaler
+
+def get_feature_subset(X_scaled, features, feature_names):
+   """
+   Returns a subset of features from the scaled feature set based on the provided feature names.
+   
+   :param X_scaled: Scaled features (numpy array).
+   :param features: List of feature names to select.
+   :param feature_names: List of all feature names corresponding to columns in X_scaled.
+   :return: Numpy array containing only the selected features, or an empty array if features is None/empty.
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Selecting subset of features based on GA selection...{Style.RESET_ALL}") # Output the verbose message
+   
+   if features: # Only proceed if the list of selected features is NOT empty/None
+      indices = [feature_names.index(f) for f in features if f in feature_names]
+      return X_scaled[:, indices] # Return the subset of features
+   else: # If no features are selected (or features is None)
+      return np.empty((X_scaled.shape[0], 0)) # Return an empty array with correct number of rows
 
 def get_models_and_param_grids():
    """
