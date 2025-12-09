@@ -370,6 +370,22 @@ def get_hardware_specifications():
       "os": os_name # Operating system
    }
 
+def populate_hardware_column_and_order(df, column_name="Hardware"):
+   """
+   Add a hardware-specs column to `df` and reorder columns so the hardware
+   column appears immediately after `elapsed_time_s`.
+
+   :param df: pandas DataFrame with RFE results
+   :param column_name: name for the hardware column
+   :return: reordered DataFrame with hardware column added
+   """
+
+   df_results = df.copy() # Copy DataFrame to modify
+   hardware_specs = get_hardware_specifications() # Get system specs
+   df_results[column_name] = hardware_specs["cpu_model"] + " | Cores: " + str(hardware_specs["cores"]) + " | RAM: " + str(hardware_specs["ram_gb"]) + " GB | OS: " + hardware_specs["os"] # Add hardware specs column
+   columns_order = ["model", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s", column_name, "top_features", "rfe_ranking"] # Define column order
+   return df_results.reindex(columns=columns_order) # Reorder columns
+
 def save_rfe_results(csv_path, run_results):
    """
    Saves results from RFE run to a structured CSV file.
