@@ -1475,6 +1475,7 @@ def save_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=N
       "n_generations": n_generations,
       "best_pop_size": best_pop_size,
       "runs_list": runs_list,
+      "elapsed_time_s": int(round(elapsed_for_base)) if elapsed_for_base is not None else None,
    }
 
 def analyze_results(saved_info, X, y, feature_names, csv_path):
