@@ -65,6 +65,7 @@ import numpy as np # For numerical operations
 import os # For running a command in the terminal
 import pandas as pd # For data manipulation
 import platform # For getting the operating system name
+import warnings # For suppressing warnings
 from colorama import Style # For coloring the terminal
 from collections import OrderedDict # For deterministic results column ordering when saving
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier # For ensemble models
@@ -77,6 +78,9 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler # For label encod
 from sklearn.svm import SVC # For Support Vector Machine model
 from tqdm import tqdm # For progress bars
 from xgboost import XGBClassifier # For XGBoost classifier
+
+# Warnings:
+warnings.filterwarnings("ignore", category=pd.errors.DtypeWarning) # Ignore pandas dtype warnings
 
 # Macros:
 class BackgroundColors: # Colors for the terminal
