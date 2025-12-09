@@ -550,6 +550,8 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_g
       desc = f"{desc} {BackgroundColors.GREEN}({param_display}){Style.RESET_ALL}" # Append parameter display to description
 
       progress_bar.set_description(desc) # Update progress bar description
+      progress_bar.n = current # Sync internal progress counter
+      progress_bar.total = total # Ensure total is correct
       progress_bar.refresh() # Force refresh of the progress bar
 
    except Exception: pass # Silently ignore any errors during update
