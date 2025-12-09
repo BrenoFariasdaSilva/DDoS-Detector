@@ -539,7 +539,7 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_g
                shown = ",".join([_short(x, 12) for x in vals[:4]]) # Show up to 4 values per hyperparameter
                if len(vals) > 4: shown += f",+{len(vals)-4}" # Indicate remaining values
                parts.append(f"{BackgroundColors.GREEN}{_short(k,18)}{BackgroundColors.GREEN}:[{BackgroundColors.CYAN}{shown}{BackgroundColors.GREEN}]") # Append formatted hyperparameter
-            except Exception:
+            except Exception: # Fallback on error
                parts.append(f"{BackgroundColors.GREEN}{_short(k,18)}{BackgroundColors.GREEN}:[{BackgroundColors.CYAN}{_short(v,12)}{BackgroundColors.GREEN}]") # Fallback formatting
          remaining = max(0, len(param_grid)-4) # Count remaining parameters
          param_display = ", ".join(parts) # Join formatted parameters
