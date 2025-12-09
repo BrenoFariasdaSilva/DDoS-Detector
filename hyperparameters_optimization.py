@@ -471,7 +471,7 @@ def get_models_and_param_grids():
       )
    }
 
-def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_summary=None, current=None, total=None):
+def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=None, current=None, total=None):
    """
    Updates the tqdm progress bar for model hyperparameter optimization.
 
@@ -481,7 +481,7 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_s
    :param progress_bar: tqdm progress bar instance
    :param csv_path: Path to the dataset CSV file
    :param model_name: Current model being optimized
-   :param param_summary: Short parameter summary or raw param grid (optional)
+   :param param_grid: Optional parameter grid or summary to display
    :param current: Current model index (1-based)
    :param total: Total number of models
    :return: None
@@ -502,21 +502,16 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_s
 
       desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} - {idx_str} Model: {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}" # Full single-line description
 
-      if param_summary is not None: # Parameter summary provided
-         if isinstance(param_summary, dict): # Raw param grid
-            parts = [] # List to accumulate items
-            for k, v in param_summary.items(): # Iterate parameters
-               try: # Try counting items
-                  parts.append(f"{BackgroundColors.GREEN}{k}{BackgroundColors.GREEN}={BackgroundColors.CYAN}{len(v)}{BackgroundColors.GREEN}") # Add formatted count
-               except Exception: # Value not countable
-                  parts.append(f"{BackgroundColors.GREEN}{k}{BackgroundColors.GREEN}={BackgroundColors.CYAN}{str(v)[:20]}{BackgroundColors.GREEN}") # Add fallback summary
-            param_display = ", ".join(parts) # Join parts into string
-         else: # Non-dict summary
-            if "\033[" in str(param_summary): # Already colored
-               param_display = str(param_summary) # Use directly
-            else: # Not colored
-               param_display = f"{BackgroundColors.CYAN}{str(param_summary)[:140]}{BackgroundColors.GREEN}" # Color and truncate
-         desc = f"{desc} {BackgroundColors.GREEN}({param_display}){Style.RESET_ALL}" # Append parameter display
+      if isinstance(param_grid, dict): # Raw param grid
+         parts = [] # List to accumulate items
+         for k, v in param_grid.items(): # Iterate parameters
+            try: # Try counting items
+               parts.append(f"{BackgroundColors.GREEN}{k}{BackgroundColors.GREEN}={BackgroundColors.CYAN}{len(v)}{BackgroundColors.GREEN}") # Add formatted count
+            except Exception: # Value not countable
+               parts.append(f"{BackgroundColors.GREEN}{k}{BackgroundColors.GREEN}={BackgroundColors.CYAN}{str(v)[:20]}{BackgroundColors.GREEN}") # Add fallback summary
+         param_display = ", ".join(parts) # Join parts into string
+      
+      desc = f"{desc} {BackgroundColors.GREEN}({param_display}){Style.RESET_ALL}" # Append parameter display
 
       progress_bar.set_description(desc) # Update bar description
       progress_bar.refresh() # Refresh bar immediately
@@ -573,7 +568,7 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, total_models,
 
    with tqdm(total=total_models, desc=f"{BackgroundColors.GREEN}Optimizing Models{Style.RESET_ALL}", unit="model") as pbar: # Progress bar
       for idx, (model_name, (model, param_grid)) in enumerate(models, start=1): # Iterate models
-         update_optimization_progress_bar(pbar, csv_path, model_name, param_summary=param_grid, current=idx, total=total_models) # Update progress bar
+         update_optimization_progress_bar(pbar, csv_path, model_name, param_grid=param_grid, current=idx, total=total_models) # Update progress bar
 
          best_params, best_score, cv_results = optimize_model(model_name, model, param_grid, X_train_ga, y_train) # Optimize model
 
