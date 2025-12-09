@@ -1061,6 +1061,25 @@ def metrics_to_dict(metrics):
       "elapsed_time": int(round(elapsed)) # Elapsed time in seconds
    }
 
+def extract_elapsed_from_metrics(metrics, index=6):
+   """
+   Safely extract an elapsed-time value from a metrics tuple.
+
+   :param metrics: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed) or None
+   :param index: Index within the tuple where elapsed time is expected (default 6)
+   :return: elapsed value (float) if available, otherwise None
+   """
+   
+   if not metrics: # If metrics is None or falsy
+      return None # Return None
+   try: # Try to extract elapsed time
+      if isinstance(metrics, (list, tuple)) and len(metrics) > index: # Verify index is valid
+         return metrics[index] # Return elapsed time
+   except Exception: # On any error
+      pass # Ignore errors
+   
+   return None # Return None if extraction fails
+
 def build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking):
    """
    Build the base dictionary row used for the consolidated GA CSV output.
