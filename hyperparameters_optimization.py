@@ -101,7 +101,7 @@ VERBOSE = False # Set to True to output verbose messages
 CV_FOLDS = 5 # Number of cross-validation folds for GridSearchCV
 N_JOBS = -1 # Number of parallel jobs for GridSearchCV (-1 uses all processors)
 RESULTS_FILENAME = "Hyperparameter_Optimization_Results.csv" # Filename for saving results
-MATCH_FILENAMES_TO_PROCESS = None # List of specific filenames to search for a match (set to None to process all files)
+MATCH_FILENAMES_TO_PROCESS = [""] # List of specific filenames to search for a match (set to None to process all files)
 IGNORE_FILES = [RESULTS_FILENAME] # List of filenames to ignore when searching for datasets
 IGNORE_DIRS = ["Cache", "Dataset_Description", "Data_Separability", "Feature_Analysis"] # List of directory names to ignore when searching for datasets
 
@@ -187,7 +187,7 @@ def get_files_to_process(directory_path, file_extension=".csv"):
       return [] # Return empty list for invalid paths
 
    try: # Attempt to read MATCH_FILENAMES_TO_PROCESS if defined
-      match_names = set(MATCH_FILENAMES_TO_PROCESS) if MATCH_FILENAMES_TO_PROCESS else None # Load match list or None
+      match_names = set(MATCH_FILENAMES_TO_PROCESS) if MATCH_FILENAMES_TO_PROCESS not in ([], [""], [" "]) else None # Load match list or None
       if match_names: verbose_output(f"{BackgroundColors.GREEN}Filtering to filenames: {BackgroundColors.CYAN}{match_names}{Style.RESET_ALL}") # Verbose: applying filename filter
    except NameError: # MATCH_FILENAMES_TO_PROCESS not defined
       match_names = None # No filtering will be applied
