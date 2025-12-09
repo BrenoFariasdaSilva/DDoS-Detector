@@ -621,24 +621,35 @@ def main():
 
          print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Starting hyperparameter optimization for {BackgroundColors.CYAN}{len(models_and_grids)}{BackgroundColors.GREEN} models on {BackgroundColors.CYAN}{os.path.basename(csv_path)}{BackgroundColors.GREEN}...{Style.RESET_ALL}\n") # Output the message
 
-         for model_name in tqdm(models_and_grids.keys(), desc=f"{BackgroundColors.GREEN}Optimizing Models{Style.RESET_ALL}", unit="model"):
-            model, param_grid = models_and_grids[model_name] # Get model and parameter grid
+         models = list(models_and_grids.items()) # Convert models dict to list of tuples for indexing
+         total_models = len(models) # Total number of models to optimize
+         with tqdm(total=total_models, desc=f"{BackgroundColors.GREEN}Optimizing Models{Style.RESET_ALL}", unit="model") as pbar: # Initialize tqdm progress bar
+            for idx, (model_name, (model, param_grid)) in enumerate(models, start=1): # Iterate over each model and its parameter grid
+               try: # Try to build a brief parameter summary
+                  if isinstance(param_grid, dict): # If grid is a dict of lists
+                     param_summary = ", ".join([f"{k}:{len(v)}" for k, v in param_grid.items()]) # Show counts per hyperparameter
+                  else: # Fallback for non-dict grid specifications
+                     param_summary = str(param_grid)[:80] # Truncate long reprs
+               except Exception: # On any failure building the summary
+                  param_summary = None # Leave param_summary empty
+                  update_optimization_progress_bar(pbar, csv_path, model_name, param_summary=param_summary, current=idx, total=total_models) # Update progress bar
 
-            best_params, best_score, cv_results = optimize_model(model_name, model, param_grid, X_train_ga, y_train) # Optimize the model
+               best_params, best_score, cv_results = optimize_model(model_name, model, param_grid, X_train_ga, y_train) # Optimize the model
 
-            if best_params is not None: # If optimization was successful
-               results_list.append({ # Append results to the list
-                  "model": model_name, # Model name
-                  "best_params": json.dumps(best_params), # Best parameters as JSON string
-                  "best_cv_f1_score": best_score, # Best cross-validation F1 score
-                  "cv_folds": CV_FOLDS, # Number of CV folds
-                  "n_features": X_train_ga.shape[1], # Number of features used
-                  "feature_selection_method": "Genetic Algorithm", # Feature selection method
-                  "dataset": os.path.basename(csv_path), # Dataset filename
-                  "timestamp": datetime.datetime.now().isoformat() # Timestamp of the optimization
-               }) # End of results dictionary
+               if best_params is not None: # If optimization was successful
+                  results_list.append({ # Append results to the list
+                     "model": model_name, # Model name
+                     "best_params": json.dumps(best_params), # Best parameters as JSON string
+                     "best_cv_f1_score": best_score, # Best cross-validation F1 score
+                     "cv_folds": CV_FOLDS, # Number of CV folds
+                     "n_features": X_train_ga.shape[1], # Number of features used
+                     "feature_selection_method": "Genetic Algorithm", # Feature selection method
+                     "dataset": os.path.basename(csv_path), # Dataset filename
+                     "timestamp": datetime.datetime.now().isoformat() # Timestamp of the optimization
+                  }) # End of results dictionary
 
-            print() # Empty line for spacing
+               print() # Empty line for spacing
+               pbar.update(1) # Advance progress bar
 
          save_optimization_results(csv_path, results_list) # Save the optimization results for this file
 
