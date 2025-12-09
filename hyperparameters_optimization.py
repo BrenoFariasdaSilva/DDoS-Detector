@@ -557,7 +557,7 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_g
 
    except Exception: pass # Silently ignore any errors during update
 
-def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress_bar=None, csv_path=None, global_counter_start=0, total_combinations_all_models=None, total_models=None):
+def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress_bar=None, csv_path=None, global_counter_start=0, total_combinations_all_models=None, model_index=None, total_models=None):
    """
    Performs manual grid search hyperparameter optimization with integrated progress bar.
 
@@ -596,8 +596,10 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
       current_params = dict(zip(keys, combination)) # Build dict of current params
       global_counter += 1 # Increment overall combination counter
 
-      if progress_bar is not None and csv_path is not None and total_combinations_all_models is not None: # Update progress bar
-         update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=global_counter, total_models=total_models, total_combinations=total_combinations_all_models) # Update progress bar
+      if progress_bar is not None and csv_path is not None: # Update progress bar
+         display_current = model_index if model_index is not None else idx # Current model index
+         display_total = total_models if total_models is not None else total_combinations_all_models # Total models
+         update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=display_current, total=display_total) # Update progress bar
 
       start_time = time.time() # Start timing
 
@@ -646,8 +648,8 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
    global_counter = 0 # Initialize global combination counter
 
    with tqdm(total=total_combinations_all_models, desc=f"{BackgroundColors.GREEN}Optimizing Models{Style.RESET_ALL}", unit="comb") as pbar: # Progress bar
-      for model_name, (model, param_grid) in models: # Iterate models
-         best_params, best_score, all_results, global_counter = manual_grid_search(model_name, model, param_grid, X_train_ga, y_train, progress_bar=pbar, csv_path=csv_path, global_counter_start=global_counter, total_combinations_all_models=total_combinations_all_models, total_models=len(models)) # Manual grid search instead of GridSearchCV
+      for model_index, (model_name, (model, param_grid)) in enumerate(models, start=1): # Iterate models with index
+         best_params, best_score, all_results, global_counter = manual_grid_search(model_name, model, param_grid, X_train_ga, y_train, progress_bar=pbar, csv_path=csv_path, global_counter_start=global_counter, total_combinations_all_models=total_combinations_all_models, model_index=model_index, total_models=len(models)) # Manual grid search instead of GridSearchCV
 
          if best_params is not None: # If optimization succeeded
             dir_results_list.append(OrderedDict([ # Append only the best result
