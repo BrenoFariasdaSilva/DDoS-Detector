@@ -349,6 +349,33 @@ def get_hardware_specifications():
 		"os": os_name # Operating system
 	}
 
+def populate_hardware_column(df, column_name="Hardware"):
+	"""
+	Populate `df[column_name]` with a readable hardware description built from
+	`get_hardware_specifications()`. On failure the column will be set to None.
+
+	:param df: pandas.DataFrame to modify or reindex
+	:param column_name: Name of the column to set (default: "Hardware")
+	:return: DataFrame with hardware column ensured and positioned after `elapsed_time_s`
+	"""
+
+	try: # Try to fetch hardware specifications
+		hardware_specs = get_hardware_specifications() # Get system specs
+		hardware_str = (f"{hardware_specs.get('cpu_model','Unknown')} | Cores: {hardware_specs.get('cores', 'N/A')} | RAM: {hardware_specs.get('ram_gb', 'N/A')} GB | OS: {hardware_specs.get('os','Unknown')}") # Build hardware string
+		df[column_name] = hardware_str # Set the hardware column
+	except Exception: # On any failure
+		df[column_name] = None # Set hardware column to None
+
+	if "elapsed_time_s" in df.columns: # If elapsed_time_s exists, reposition Hardware after it
+		cols = list(df.columns) # Get current columns
+		if column_name in cols: # If hardware column exists
+			cols.remove(column_name) # Remove it
+		el_idx = cols.index("elapsed_time_s") if "elapsed_time_s" in cols else len(cols) - 1 # Find index of elapsed_time_s
+		cols.insert(el_idx + 1, column_name) # Insert hardware column after elapsed_time_s
+		return df[cols] # Reindex DataFrame with new column order
+
+	return df # Return DataFrame as-is if no repositioning needed
+
 def get_file_size_string(file_path):
 	"""
 	Get the file size in human-readable format (KB, MB, GB).
