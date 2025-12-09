@@ -703,7 +703,7 @@ def process_single_csv_file(csv_path, dir_results_list):
    models = list(models_and_grids.items()) # Convert dict to list
    total_models = len(models) # Count models
 
-   run_model_optimizations(models, csv_path, X_train_ga, y_train, total_models, dir_results_list) # Run optimizations
+   run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list) # Run optimizations
 
    added_slice = dir_results_list[start_idx:] # Extract slice
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Optimization Summary for {BackgroundColors.CYAN}{os.path.basename(csv_path)}{BackgroundColors.GREEN}:{Style.RESET_ALL}") # Summary header
