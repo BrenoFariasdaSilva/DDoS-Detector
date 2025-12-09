@@ -1342,6 +1342,7 @@ def write_consolidated_csv(rows, output_dir):
          "n_test",
          "train_test_ratio",
          "timestamp",
+         "hardware",
          "run_index",
          "classifier",
          "accuracy",
@@ -1354,6 +1355,8 @@ def write_consolidated_csv(rows, output_dir):
          "best_features",
          "rfe_ranking",
       ]
+
+      populate_hardware_column(df_combined, column_name="hardware") # Populate hardware column using system specs
 
       df_combined = ensure_expected_columns(df_combined, columns) # Add any missing expected columns with None values
       df_combined = sort_run_index_first(df_combined) # Sort so that 'best' run_index appears first for each dataset/dataset_path
