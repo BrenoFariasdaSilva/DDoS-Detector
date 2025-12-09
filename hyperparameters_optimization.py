@@ -657,6 +657,7 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
          best_params, best_score, best_elapsed, all_results, global_counter = manual_grid_search(model_name, model, param_grid, X_train_ga, y_train, progress_bar=pbar, csv_path=csv_path, global_counter_start=global_counter, total_combinations_all_models=total_combinations_all_models, model_index=model_index, total_models=len(models)) # Manual grid search instead of GridSearchCV
 
          if best_params is not None: # If optimization succeeded
+            elapsed_time = float(best_elapsed or 0.0) # Elapsed time for best params
             dir_results_list.append(OrderedDict([ # Append only the best result
                ("base_csv", os.path.basename(csv_path)), # Base CSV filename
                ("model", model_name), # Model name
@@ -665,7 +666,7 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
                ("n_features", X_train_ga.shape[1]), # Number of features after GA selection
                ("feature_selection_method", "Genetic Algorithm"), # Feature selection method
                ("dataset", os.path.basename(csv_path)), # Dataset filename
-               ("elapsed_time_s", round(float(best_elapsed or 0.0), 2)) # Elapsed training time (seconds) for best params
+               ("elapsed_time_s", round(float(elapsed_time), 2)) # Elapsed training time (seconds) for best params
             ])) # End of append
 
       print() # Line spacing between models
