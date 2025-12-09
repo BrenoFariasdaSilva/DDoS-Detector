@@ -498,7 +498,7 @@ def compute_total_param_combinations(models):
 
    return total_combinations_all_models, model_combinations_counts # Return total and per-model counts
 
-def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=None, current=None, total=None):
+def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=None, current=None, total_models=None, total_combinations=None):
    """
    Updates a tqdm progress bar during hyperparameter optimization.
 
@@ -510,7 +510,8 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_g
    :param model_name: Name of the model being optimized
    :param param_grid: Optional hyperparameter dictionary or summary
    :param current: Current model index (1-based)
-   :param total: Total number of models
+   :param total_models: Total number of models being optimized
+   :param total_combinations: Total number of hyperparameter combinations across all models
    :return: None
    """
 
@@ -524,7 +525,7 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_g
       else: # Parent same as filename or empty
          dataset_ref = f"{BackgroundColors.CYAN}{csv_name}{BackgroundColors.GREEN}" # Show only filename
 
-      idx_str = f"{BackgroundColors.GREEN}[{BackgroundColors.CYAN}{current}/{total}{BackgroundColors.GREEN}]" if current is not None and total is not None else "" # Progress index string
+      idx_str = f"{BackgroundColors.GREEN}[{BackgroundColors.CYAN}{current}/{total_models}{BackgroundColors.GREEN}]" if current is not None and total_combinations is not None else "" # Progress index string
 
       desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} - {idx_str} {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}:" # Base description
 
@@ -551,12 +552,12 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_g
 
       progress_bar.set_description(desc) # Update progress bar description
       progress_bar.n = current # Sync internal progress counter
-      progress_bar.total = total # Ensure total is correct
+      progress_bar.total = total_combinations # Ensure total is correct
       progress_bar.refresh() # Force refresh of the progress bar
 
    except Exception: pass # Silently ignore any errors during update
 
-def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress_bar=None, csv_path=None, global_counter_start=0, total_combinations_all_models=None):
+def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress_bar=None, csv_path=None, global_counter_start=0, total_combinations_all_models=None, total_models=None):
    """
    Performs manual grid search hyperparameter optimization with integrated progress bar.
 
@@ -573,6 +574,7 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
    :param csv_path: Path to CSV for progress description
    :param global_counter_start: Starting counter of overall combination index
    :param total_combinations_all_models: Total number of parameter combinations across all models
+   :param total_models: Total number of models being optimized
    :return: Tuple (best_params, best_score, all_results, global_counter_end)
    """
 
@@ -595,7 +597,7 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
       global_counter += 1 # Increment overall combination counter
 
       if progress_bar is not None and csv_path is not None and total_combinations_all_models is not None: # Update progress bar
-         update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=global_counter, total=total_combinations_all_models) # Update progress bar
+         update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=global_counter, total_models=total_models, total_combinations=total_combinations_all_models) # Update progress bar
 
       start_time = time.time() # Start timing
 
@@ -645,7 +647,7 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
 
    with tqdm(total=total_combinations_all_models, desc=f"{BackgroundColors.GREEN}Optimizing Models{Style.RESET_ALL}", unit="comb") as pbar: # Progress bar
       for model_name, (model, param_grid) in models: # Iterate models
-         best_params, best_score, all_results, global_counter = manual_grid_search(model_name, model, param_grid, X_train_ga, y_train, progress_bar=pbar, csv_path=csv_path, global_counter_start=global_counter, total_combinations_all_models=total_combinations_all_models) # Manual grid search instead of GridSearchCV
+         best_params, best_score, all_results, global_counter = manual_grid_search(model_name, model, param_grid, X_train_ga, y_train, progress_bar=pbar, csv_path=csv_path, global_counter_start=global_counter, total_combinations_all_models=total_combinations_all_models, total_models=len(models)) # Manual grid search instead of GridSearchCV
 
          if best_params is not None: # If optimization succeeded
             dir_results_list.append(OrderedDict([ # Append only the best result
