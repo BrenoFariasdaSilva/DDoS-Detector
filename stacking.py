@@ -219,56 +219,119 @@ def get_dataset_name(input_path):
 
    return dataset_name # Return the dataset name
 
-def find_feature_file(file_path, filename):
+def find_local_feature_file(file_dir, filename):
    """
-   Locate a feature-analysis CSV file related to `file_path`.
+   Attempt to locate <file_dir>/Feature_Analysis/<filename>.
 
-   Search order:
-   - <file_dir>/Feature_Analysis/<filename>
-   - ascend parent directories checking <parent>/Feature_Analysis/<filename>
-   - dataset-level folder under `.../Datasets/<dataset_name>/Feature_Analysis/<filename>`
-   - fallback: search under workspace ./Datasets/**/Feature_Analysis/<filename>
-
-   Returns the first matching path or None if not found.
+   :param file_dir: Directory to search within
+   :param filename: Filename to search for
+   :return: The matching path or None
    """
-   
-   verbose_output(f"{BackgroundColors.GREEN}Searching for feature analysis file: {BackgroundColors.CYAN}{filename}{BackgroundColors.GREEN} related to file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
-   
-   file_dir = os.path.dirname(os.path.abspath(file_path)) # Get the directory of the input file
 
-   # 1) Local Feature_Analysis in the same directory
+   verbose_output(f"{BackgroundColors.GREEN}Checking local Feature_Analysis in directory: {BackgroundColors.CYAN}{file_dir}{BackgroundColors.GREEN} for file: {BackgroundColors.CYAN}{filename}{Style.RESET_ALL}") # Output the verbose message
+
    candidate = os.path.join(file_dir, "Feature_Analysis", filename) # Construct candidate path
+
    if os.path.exists(candidate): # If the candidate file exists
       return candidate # Return the candidate path
 
-   # 2) Ascend parents checking for Feature_Analysis
-   p = file_dir # Start from the file's directory
+   return None # Not found
+
+def find_parent_feature_file(file_dir, filename):
+   """
+   Ascend parent directories searching for <parent>/Feature_Analysis/<filename>.
+
+   :param file_dir: Directory to search within
+   :param filename: Filename to search for
+   :return: The matching path or None
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Ascending parent directories from: {BackgroundColors.CYAN}{file_dir}{BackgroundColors.GREEN} searching for file: {BackgroundColors.CYAN}{filename}{Style.RESET_ALL}") # Output the verbose message
+
+   path = file_dir # Start from the file's directory
    while True: # Loop until break
-      candidate = os.path.join(p, "Feature_Analysis", filename) # Construct candidate path
+      candidate = os.path.join(path, "Feature_Analysis", filename) # Construct candidate path
       if os.path.exists(candidate): # If the candidate file exists
          return candidate # Return the candidate path
-      parent = os.path.dirname(p) # Get the parent directory
-      if parent == p: # If reached the root directory
+      
+      parent = os.path.dirname(path) # Get the parent directory
+      if parent == path: # If reached the root directory
          break # Break the loop
-      p = parent # Move up to the parent directory
+      
+      path = parent # Move up to the parent directory
 
-   # 3) Try dataset-level under /.../Datasets/<dataset_name>/Feature_Analysis/
+   return None # Not found
+
+def find_dataset_level_feature_file(file_path, filename):
+   """
+   Try dataset-level search:
+
+   - /.../Datasets/<dataset_name>/Feature_Analysis/<filename>
+   - recursive search under dataset directory
+
+   :param file_path: Path to the file
+   :param filename: Filename to search for
+   :return: The matching path or None
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Searching dataset-level Feature_Analysis for file: {BackgroundColors.CYAN}{filename}{BackgroundColors.GREEN} related to file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
+
    abs_path = os.path.abspath(file_path) # Get absolute path of the input file
    parts = abs_path.split(os.sep) # Split the path into parts
-   if "Datasets" in parts: # If "Datasets" is in the path parts
-      idx = parts.index("Datasets") # Get the index of "Datasets"
-      if idx + 1 < len(parts): # If there is a dataset name after "Datasets"
-         dataset_dir = os.sep.join(parts[: idx + 2]) # Construct the dataset directory path
-         candidate = os.path.join(dataset_dir, "Feature_Analysis", filename) # Construct candidate path
-         if os.path.exists(candidate): # If the candidate file exists
-            return candidate # Return the candidate path
-         matches = glob.glob(os.path.join(dataset_dir, "**", "Feature_Analysis", filename), recursive=True) # Search recursively under dataset directory
-         if matches: # If matches are found
-            return matches[0] # Return the first match
 
-   print(f"{BackgroundColors.YELLOW}Warning: Feature analysis file {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}.{Style.RESET_ALL}") # Output the warning message
-   
-   return None # Return None if not found
+   if "Datasets" not in parts: # If "Datasets" is not in the path parts
+      return None # Nothing to do
+
+   idx = parts.index("Datasets") # Get the index of "Datasets"
+   if idx + 1 >= len(parts): # If there is no dataset name after "Datasets"
+      return None # Nothing to do
+
+   dataset_dir = os.sep.join(parts[: idx + 2]) # Construct the dataset directory path
+
+   candidate = os.path.join(dataset_dir, "Feature_Analysis", filename) # Construct candidate path for the direct path
+   if os.path.exists(candidate): # If the candidate file exists
+      return candidate # Return the candidate path
+
+   matches = glob.glob(os.path.join(dataset_dir, "**", "Feature_Analysis", filename), recursive=True) # Search recursively
+   if matches: # If matches are found
+      return matches[0] # Return the first match
+
+   return None # Not found
+
+def find_feature_file(file_path, filename):
+	"""
+	Locate a feature-analysis CSV file related to `file_path`.
+
+	Search order:
+	- <file_dir>/Feature_Analysis/<filename>
+	- ascend parent directories checking <parent>/Feature_Analysis/<filename>
+	- dataset-level folder under `.../Datasets/<dataset_name>/Feature_Analysis/<filename>`
+	- fallback: search under workspace ./Datasets/**/Feature_Analysis/<filename`
+
+	:param file_path: Path to the file
+   :param filename: Filename to search for
+   :return: The matching path or None
+	"""
+	
+	verbose_output(f"{BackgroundColors.GREEN}Searching for feature analysis file: {BackgroundColors.CYAN}{filename}{BackgroundColors.GREEN} related to file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
+	
+	file_dir = os.path.dirname(os.path.abspath(file_path)) # Get the directory of the input file
+
+	result = find_local_feature_file(file_dir, filename) # 1. Local Feature_Analysis in the same directory
+	if result is not None: # If found
+		return result # Return the result
+
+	result = find_parent_feature_file(file_dir, filename) # 2. Ascend parents checking for Feature_Analysis
+	if result is not None: # If found
+		return result # Return the result
+
+	result = find_dataset_level_feature_file(file_path, filename) # 3. Dataset-level Feature_Analysis
+	if result is not None: # If found
+		return result # Return the result
+
+	print(f"{BackgroundColors.YELLOW}Warning: Feature analysis file {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}.{Style.RESET_ALL}") # Output the warning message
+	
+	return None # Return None if not found
 
 def extract_genetic_algorithm_features(file_path):
    """
