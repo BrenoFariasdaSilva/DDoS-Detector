@@ -219,7 +219,7 @@ def load_dataset(csv_path):
       print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
       return None # Return None
 
-   df = pd.read_csv(csv_path, low_memory=False) # Load the dataset
+   df = pd.read_csv(csv_path, low_memory=True) # Load the dataset
 
    df.columns = df.columns.str.strip() # Clean column names by stripping leading/trailing whitespace
 
