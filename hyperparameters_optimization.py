@@ -592,7 +592,7 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
 
 def run_model_optimizations(models, csv_path, X_train_ga, y_train, total_models, dir_results_list):
    """
-   Runs optimization for all configured ML models using a progress bar.
+   Runs optimization for all configured ML models using a progress bar and manual grid search.
 
    :param models: List of (model_name, (model_instance, param_grid))
    :param csv_path: Path of the CSV file currently being processed
@@ -602,30 +602,30 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, total_models,
    :param dir_results_list: Accumulator list for storing optimization results
    :return: None
    """
-   
+
    verbose_output(f"{BackgroundColors.GREEN}Starting model hyperparameter optimizations...{Style.RESET_ALL}") # Output the verbose message
 
    with tqdm(total=total_models, desc=f"{BackgroundColors.GREEN}Optimizing Models{Style.RESET_ALL}", unit="model") as pbar: # Progress bar
       for idx, (model_name, (model, param_grid)) in enumerate(models, start=1): # Iterate models
+
          update_optimization_progress_bar(pbar, csv_path, model_name, param_grid=param_grid, current=idx, total=total_models) # Update progress bar
 
-         best_params, best_score, cv_results = optimize_model(model_name, model, param_grid, X_train_ga, y_train) # Optimize model
+         best_params, best_score, all_results = manual_grid_search(model_name, model, param_grid, X_train_ga, y_train, progress_bar=pbar, csv_path=csv_path, current_model_idx=idx, total_models=total_models) # Manual grid search instead of GridSearchCV
 
          if best_params is not None: # If optimization succeeded
-            dir_results_list.append(OrderedDict([ # Append results
+            dir_results_list.append(OrderedDict([ # Append only the best result
                ("base_csv", os.path.basename(csv_path)), # Base CSV filename
                ("model", model_name), # Model name
                ("best_params", json.dumps(best_params)), # Best parameters as JSON string
-               ("best_cv_f1_score", best_score), # Best cross-validated F1 score
-               ("cv_folds", CV_FOLDS), # Number of cross-validation folds
+               ("best_cv_f1_score", best_score), # Best F1 score
                ("n_features", X_train_ga.shape[1]), # Number of features after GA selection
-               ("feature_selection_method", "Genetic Algorithm"), # Feature selection method used
+               ("feature_selection_method", "Genetic Algorithm"), # Feature selection method
                ("dataset", os.path.basename(csv_path)), # Dataset filename
                ("timestamp", datetime.datetime.now().isoformat()) # Timestamp of optimization
-            ]))
+            ])) # End of append
 
          print() # Line spacing
-         pbar.update(1) # Advance progress
+         pbar.update(1) # Advance progress bar by one model
 
 def process_single_csv_file(csv_path, dir_results_list):
    """
