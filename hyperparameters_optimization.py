@@ -621,6 +621,7 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
          if (score > best_score) or (score == best_score and elapsed < next((r["execution_time"] for r in all_results if r["score"] == best_score), float("inf"))): # Better score or same score but faster
             best_score = score # Update best score
             best_params = current_params # Update best parameters
+            verbose_output(f"{BackgroundColors.GREEN}New best score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}") # Log new best
 
    return best_params, best_score, all_results, global_counter # Return best results, all combinations, and final global counter
 
