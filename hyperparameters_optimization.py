@@ -65,6 +65,8 @@ import numpy as np # For numerical operations
 import os # For running a command in the terminal
 import pandas as pd # For data manipulation
 import platform # For getting the operating system name
+import psutil # RAM and CPU core info
+import subprocess # WMIC call
 import time # For measuring execution time
 import warnings # For suppressing warnings
 from colorama import Style # For coloring the terminal
@@ -720,6 +722,52 @@ def process_single_csv_file(csv_path, dir_results_list):
       best_model = max(added_slice, key=lambda x: x["best_cv_f1_score"]) # Best model
       print(f"{BackgroundColors.GREEN}Best model: {BackgroundColors.CYAN}{best_model['model']}{Style.RESET_ALL}") # Output model
       print(f"{BackgroundColors.GREEN}Best CV F1 Score: {BackgroundColors.CYAN}{best_model['best_cv_f1_score']:.4f}{Style.RESET_ALL}") # Output score
+
+def get_specs():
+   """
+   Returns system specs: real CPU model (Windows/Linux/macOS), physical cores,
+   RAM in GB, and OS name/version.
+   
+   :return: Dictionary with keys: cpu_model, cores, ram_gb, os
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Fetching system specifications...{Style.RESET_ALL}") # Output the verbose message
+   
+   system = platform.system() # Identify OS type
+
+   try: # Try to fetch real CPU model using OS-specific methods
+      if system == "Windows": # Windows: use WMIC
+         out = subprocess.check_output("wmic cpu get Name", shell=True).decode(errors="ignore") # Run WMIC
+         cpu_model = out.strip().split("\n")[1].strip() # Extract model line
+
+      elif system == "Linux": # Linux: read from /proc/cpuinfo
+         cpu_model = "Unknown" # Default
+         with open("/proc/cpuinfo") as f: # Open cpuinfo
+            for line in f: # Iterate lines
+               if "model name" in line: # Model name entry
+                  cpu_model = line.split(":",1)[1].strip() # Extract name
+                  break # Stop after first match
+
+      elif system == "Darwin": # macOS: use sysctl
+         out = subprocess.check_output(["sysctl","-n","machdep.cpu.brand_string"]) # Run sysctl
+         cpu_model = out.decode().strip() # Extract model string
+
+      else: # Unsupported OS
+         cpu_model = "Unknown" # Fallback
+
+   except Exception: # If any method fails
+      cpu_model = "Unknown" # Fallback on failure
+
+   cores = psutil.cpu_count(logical=False) # Physical core count
+   ram_gb = round(psutil.virtual_memory().total / (1024**3), 1) # Total RAM in GB
+   os_name = f"{platform.system()} {platform.release()}" # OS name + version
+
+   return { # Build final dictionary
+      "cpu_model": cpu_model, # CPU model string
+      "cores": cores, # Physical cores
+      "ram_gb": ram_gb, # RAM in gigabytes
+      "os": os_name # Operating system
+   }
 
 def save_optimization_results(csv_path, results_list):
    """
