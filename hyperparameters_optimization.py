@@ -615,9 +615,10 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
          ("execution_time", elapsed) # Time in seconds
       ]))
 
-      if score is not None and score > best_score: # Update best score if applicable
-         best_score = score # Update best score
-         best_params = current_params # Update best parameters
+      if score is not None: # If score is valid
+         if (score > best_score) or (score == best_score and elapsed < next((r["execution_time"] for r in all_results if r["score"] == best_score), float("inf"))): # Better score or same score but faster
+            best_score = score # Update best score
+            best_params = current_params # Update best parameters
 
    return best_params, best_score, all_results, global_counter # Return best results, all combinations, and final global counter
 
