@@ -273,7 +273,7 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
 		"test_f1_score": f1,
 		"test_fpr": fpr,
 		"test_fnr": fnr,
-		"elapsed_time": elapsed_time,
+		"elapsed_time_s": elapsed_time,
 		"pca_object": pca
 	}
 
@@ -299,7 +299,7 @@ def print_pca_results(results):
 	print(f"  {BackgroundColors.GREEN}Test F1-Score: {BackgroundColors.CYAN}{results['test_f1_score']:.4f}{Style.RESET_ALL}")
 	print(f"  {BackgroundColors.GREEN}Test FPR: {BackgroundColors.CYAN}{results['test_fpr']:.4f}{Style.RESET_ALL}")
 	print(f"  {BackgroundColors.GREEN}Test FNR: {BackgroundColors.CYAN}{results['test_fnr']:.4f}{Style.RESET_ALL}")
-	print(f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{results['elapsed_time']:.2f}s{Style.RESET_ALL}")
+	print(f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{results['elapsed_time_s']:.2f}s{Style.RESET_ALL}")	
 
 def get_file_size_string(file_path):
 	"""
@@ -361,7 +361,7 @@ def save_pca_results(csv_path, all_results):
 			"test_f1_score": round(results["test_f1_score"], 4), # Test F1-score
 			"test_fpr": round(results["test_fpr"], 4), # Test false positive rate
 			"test_fnr": round(results["test_fnr"], 4), # Test false negative rate
-			"training_time_s": round(results["elapsed_time"], 2) # Training time in seconds
+			"elapsed_time_s": round(results["elapsed_time_s"], 2) # Training time in seconds
 		})
 
 	comparison_df = pd.DataFrame(rows) # Create DataFrame from rows
