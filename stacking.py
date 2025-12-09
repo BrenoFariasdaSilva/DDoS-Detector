@@ -888,113 +888,118 @@ def main():
    start_time = datetime.datetime.now() # Get the start time of the program
    
    set_threads_limit_based_on_ram() # Adjust THREADS_LIMIT based on system RAM
-   
-   input_path = "./Datasets/CICDDoS2019/01-12/" # Path to the input dataset directory
-   files_to_process = get_files_to_process(input_path, file_extension=".csv") # Get list of CSV files to process
-   files_to_process = ["./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"] # For testing purposes, process only this file
-   
-   dataset_name = get_dataset_name(input_path) # Get the dataset name from the input path
-   
-   for file in files_to_process: # For each file to process
-      print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}") # Output the file being processed
-      
-      ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(file) # Load feature selection results
-      
-      df = load_dataset(file) # Load the dataset
-      
-      if df is None: # If the dataset failed to load
-         verbose_output(f"{BackgroundColors.RED}Failed to load dataset from: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}") # Output the failure message
-         continue # Skip to the next file if loading failed
-      
-      cleaned_df = preprocess_dataframe(df) # Preprocess the DataFrame
-      
-      if cleaned_df is None or cleaned_df.empty: # If the DataFrame is None or empty after preprocessing
-         print(f"{BackgroundColors.RED}Dataset {BackgroundColors.CYAN}{file}{BackgroundColors.RED} empty after preprocessing. Skipping.{Style.RESET_ALL}")
-         continue # Skip to the next file if preprocessing failed
-      
-      X_full = cleaned_df.select_dtypes(include=np.number).iloc[:, :-1] # Features (numeric only)
-      y = cleaned_df.iloc[:, -1] # Target
-      feature_names = X_full.columns.tolist() # Get the list of feature names
 
-      if len(np.unique(y)) < 2: # Verify if there is more than one class
-         print(f"{BackgroundColors.RED}Target column has only one class. Cannot perform classification. Skipping.{Style.RESET_ALL}") # Output the error message
-         continue # Skip to the next file
-      
-      X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X_full, y) # Scale and split the data
-      
-      base_models = get_models() # Get the base models
+   for dataset_name, paths in DATASETS.items(): # For each dataset in the DATASETS dictionary
+      print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")
+      for input_path in paths: # For each path in the dataset's paths list
+         if not verify_filepath_exists(input_path): # If the input path does not exist
+            verbose_output(f"{BackgroundColors.YELLOW}Skipping missing path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}")
+            continue # Skip to the next path if the current one doesn't exist
 
-      hp_results_raw = extract_hyperparameter_optimization_results(file) # Extract hyperparameter optimization results
-      if hp_results_raw: # If results were found, extract the params mapping and apply
-         hp_params_map = {k: (v.get("best_params") if isinstance(v, dict) else v) for k, v in hp_results_raw.items()} # Extract only the best_params mapping
-         base_models = apply_hyperparameters_to_models(hp_params_map, base_models) # Apply hyperparameters to base models
+         files_to_process = get_files_to_process(input_path, file_extension=".csv") # Get list of CSV files to process
 
-      estimators = [(name, model) for name, model in base_models.items() if name != "SVM"] # Define estimators (excluding SVM)
-      
-      stacking_model = StackingClassifier(estimators=estimators, final_estimator=RandomForestClassifier(n_estimators=50, random_state=42), cv=5, n_jobs=1) # Define the Stacking Classifier model
-      
-      X_train_pca, X_test_pca = apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file) # Apply PCA transformation if applicable
-      
-      feature_sets = { # Dictionary of feature sets to evaluate
-         "Full Features": (X_train_scaled, X_test_scaled), # All features
-         "GA Features": (get_feature_subset(X_train_scaled, ga_selected_features, feature_names), get_feature_subset(X_test_scaled, ga_selected_features, feature_names)), # GA subset
-         "PCA Components": (X_train_pca, X_test_pca) if X_train_pca is not None else None, # PCA components (only if PCA was applied)
-         "RFE Features": (get_feature_subset(X_train_scaled, rfe_selected_features, feature_names), get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)) # RFE subset
-      }
-      
-      feature_sets = {k: v for k, v in feature_sets.items() if v is not None} # Remove any None entries (e.g., PCA if not applied)
-      feature_sets = dict(sorted(feature_sets.items())) # Sort the feature sets by name
+         local_dataset_name = dataset_name or get_dataset_name(input_path) # Use provided dataset name or infer from path
 
-      individual_models = {k: v for k, v in base_models.items()} # Use the base models (with hyperparameters applied) for individual evaluation
-      total_steps = len(feature_sets) * (len(individual_models) + 1) # Total steps: models + stacking per feature set
-      progress_bar = tqdm(total=total_steps) # Progress bar for all evaluations
+         for file in files_to_process: # For each file to process
+            print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}") # Output the file being processed
+            
+            ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(file) # Load feature selection results
+            
+            df = load_dataset(file) # Load the dataset
+            
+            if df is None: # If the dataset failed to load
+               verbose_output(f"{BackgroundColors.RED}Failed to load dataset from: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}") # Output the failure message
+               continue # Skip to the next file if loading failed
+            
+            cleaned_df = preprocess_dataframe(df) # Preprocess the DataFrame
+            
+            if cleaned_df is None or cleaned_df.empty: # If the DataFrame is None or empty after preprocessing
+               print(f"{BackgroundColors.RED}Dataset {BackgroundColors.CYAN}{file}{BackgroundColors.RED} empty after preprocessing. Skipping.{Style.RESET_ALL}")
+               continue # Skip to the next file if preprocessing failed
+            
+            X_full = cleaned_df.select_dtypes(include=np.number).iloc[:, :-1] # Features (numeric only)
+            y = cleaned_df.iloc[:, -1] # Target
+            feature_names = X_full.columns.tolist() # Get the list of feature names
 
-      all_results = [] # List to store results for saving (individual + stacking)
-      
-      print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}--- Running Classifier Evaluation (Individual + Stacking) ---{Style.RESET_ALL}") # Output separator
-      
-      for idx, (name, (X_train_subset, X_test_subset)) in enumerate(feature_sets.items(), start=1):
-         if X_train_subset.shape[1] == 0: # Verify if the subset is empty
-            print(f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}") # Output warning
-            progress_bar.update(len(individual_models) + 1) # Skip all steps for this feature set
-            continue # Skip to the next set
-             
-         print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating models on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}") # Output evaluation status
+            if len(np.unique(y)) < 2: # Verify if there is more than one class
+               print(f"{BackgroundColors.RED}Target column has only one class. Cannot perform classification. Skipping.{Style.RESET_ALL}") # Output the error message
+               continue # Skip to the next file
+            
+            X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X_full, y) # Scale and split the data
+            
+            base_models = get_models() # Get the base models
+
+            hp_results_raw = extract_hyperparameter_optimization_results(file) # Extract hyperparameter optimization results
+            if hp_results_raw: # If results were found, extract the params mapping and apply
+               hp_params_map = {k: (v.get("best_params") if isinstance(v, dict) else v) for k, v in hp_results_raw.items()} # Extract only the best_params mapping
+               base_models = apply_hyperparameters_to_models(hp_params_map, base_models) # Apply hyperparameters to base models
+
+            estimators = [(name, model) for name, model in base_models.items() if name != "SVM"] # Define estimators (excluding SVM)
+            
+            stacking_model = StackingClassifier(estimators=estimators, final_estimator=RandomForestClassifier(n_estimators=50, random_state=42), cv=5, n_jobs=1) # Define the Stacking Classifier model
+            
+            X_train_pca, X_test_pca = apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file) # Apply PCA transformation if applicable
+            
+            feature_sets = { # Dictionary of feature sets to evaluate
+               "Full Features": (X_train_scaled, X_test_scaled), # All features
+               "GA Features": (get_feature_subset(X_train_scaled, ga_selected_features, feature_names), get_feature_subset(X_test_scaled, ga_selected_features, feature_names)), # GA subset
+               "PCA Components": (X_train_pca, X_test_pca) if X_train_pca is not None else None, # PCA components (only if PCA was applied)
+               "RFE Features": (get_feature_subset(X_train_scaled, rfe_selected_features, feature_names), get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)) # RFE subset
+            }
+            
+            feature_sets = {k: v for k, v in feature_sets.items() if v is not None} # Remove any None entries (e.g., PCA if not applied)
+            feature_sets = dict(sorted(feature_sets.items())) # Sort the feature sets by name
+
+            individual_models = {k: v for k, v in base_models.items()} # Use the base models (with hyperparameters applied) for individual evaluation
+            total_steps = len(feature_sets) * (len(individual_models) + 1) # Total steps: models + stacking per feature set
+            progress_bar = tqdm(total=total_steps) # Progress bar for all evaluations
+
+            all_results = [] # List to store results for saving (individual + stacking)
+            
+            print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}--- Running Classifier Evaluation (Individual + Stacking) ---{Style.RESET_ALL}") # Output separator
+            
+            for idx, (name, (X_train_subset, X_test_subset)) in enumerate(feature_sets.items(), start=1):
+               if X_train_subset.shape[1] == 0: # Verify if the subset is empty
+                  print(f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}") # Output warning
+                  progress_bar.update(len(individual_models) + 1) # Skip all steps for this feature set
+                  continue # Skip to the next set
+                  
+               print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating models on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}") # Output evaluation status
+               
+               features_list = get_features_list_for_feature_set(name, feature_names, ga_selected_features, rfe_selected_features) # Determine the features list for this feature set
+               
+               if name == "PCA Components": # If the feature set is PCA Components
+                  subset_feature_names = [f"PC{i+1}" for i in range(X_train_subset.shape[1])] # Generate PCA component names
+               else: # For other feature sets
+                  subset_feature_names = features_list if features_list else [f"feature_{i}" for i in range(X_train_subset.shape[1])] # Use actual feature names or generate generic ones
+               
+               X_train_df = pd.DataFrame(X_train_subset, columns=subset_feature_names) # Convert training features to DataFrame
+               X_test_df = pd.DataFrame(X_test_subset, columns=subset_feature_names) # Convert test features to DataFrame
+               
+               progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating individual classifiers in parallel on {BackgroundColors.CYAN}{name}{Style.RESET_ALL}") # Update progress bar description
+               with concurrent.futures.ThreadPoolExecutor(max_workers=THREADS_LIMIT) as executor: # Create a thread pool executor for parallel evaluation
+                  future_to_model = {} # Dictionary to map futures to model names
+                  for model_name, model in individual_models.items(): # Iterate over each individual model
+                     future = executor.submit(evaluate_individual_classifier, model, model_name, X_train_df.values, y_train, X_test_df.values, y_test) # Submit evaluation task to thread pool (using .values for numpy arrays)
+                     future_to_model[future] = model_name # Store mapping of future to model name
+                  for future in concurrent.futures.as_completed(future_to_model): # As each evaluation completes
+                     model_name = future_to_model[future] # Get the model name from the mapping
+                     metrics = future.result() # Get the metrics from the completed future
+                     result_entry = { "dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Individual", "model_name": model_name, "n_features": X_train_subset.shape[1], "metrics": metrics, "features_list": features_list} # Prepare result entry
+                     all_results.append(result_entry) # Add result to list
+                     print(f"    {BackgroundColors.GREEN}{model_name} Accuracy for classifier {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
+                     progress_bar.update(1) # Update progress after each model
+               
+               print(f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}")
+               progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating {BackgroundColors.CYAN}{idx}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{len(feature_sets)}{BackgroundColors.GREEN} - {BackgroundColors.CYAN}{name}{BackgroundColors.GREEN}: Stacking{Style.RESET_ALL}") # Update progress bar description for stacking
+               stacking_metrics = evaluate_stacking_classifier(stacking_model, X_train_df, y_train, X_test_df, y_test) # Evaluate stacking model with DataFrames
+               
+               stacking_result_entry = {"dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Stacking", "model_name": "StackingClassifier", "n_features": X_train_subset.shape[1], "metrics": stacking_metrics, "features_list": features_list} # Prepare stacking result entry
+               all_results.append(stacking_result_entry) # Add stacking result
+               print(f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{stacking_metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
+               progress_bar.update(1) # Update progress after stacking
          
-         features_list = get_features_list_for_feature_set(name, feature_names, ga_selected_features, rfe_selected_features) # Determine the features list for this feature set
-         
-         if name == "PCA Components": # If the feature set is PCA Components
-            subset_feature_names = [f"PC{i+1}" for i in range(X_train_subset.shape[1])] # Generate PCA component names
-         else: # For other feature sets
-            subset_feature_names = features_list if features_list else [f"feature_{i}" for i in range(X_train_subset.shape[1])] # Use actual feature names or generate generic ones
-         
-         X_train_df = pd.DataFrame(X_train_subset, columns=subset_feature_names) # Convert training features to DataFrame
-         X_test_df = pd.DataFrame(X_test_subset, columns=subset_feature_names) # Convert test features to DataFrame
-         
-         progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating individual classifiers in parallel on {BackgroundColors.CYAN}{name}{Style.RESET_ALL}") # Update progress bar description
-         with concurrent.futures.ThreadPoolExecutor(max_workers=THREADS_LIMIT) as executor: # Create a thread pool executor for parallel evaluation
-            future_to_model = {} # Dictionary to map futures to model names
-            for model_name, model in individual_models.items(): # Iterate over each individual model
-               future = executor.submit(evaluate_individual_classifier, model, model_name, X_train_df.values, y_train, X_test_df.values, y_test) # Submit evaluation task to thread pool (using .values for numpy arrays)
-               future_to_model[future] = model_name # Store mapping of future to model name
-            for future in concurrent.futures.as_completed(future_to_model): # As each evaluation completes
-               model_name = future_to_model[future] # Get the model name from the mapping
-               metrics = future.result() # Get the metrics from the completed future
-               result_entry = { "dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Individual", "model_name": model_name, "n_features": X_train_subset.shape[1], "metrics": metrics, "features_list": features_list} # Prepare result entry
-               all_results.append(result_entry) # Add result to list
-               print(f"    {BackgroundColors.GREEN}{model_name} Accuracy for classifier {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
-               progress_bar.update(1) # Update progress after each model
-         
-         print(f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}")
-         progress_bar.set_description(f"{BackgroundColors.GREEN}Evaluating {BackgroundColors.CYAN}{idx}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{len(feature_sets)}{BackgroundColors.GREEN} - {BackgroundColors.CYAN}{name}{BackgroundColors.GREEN}: Stacking{Style.RESET_ALL}") # Update progress bar description for stacking
-         stacking_metrics = evaluate_stacking_classifier(stacking_model, X_train_df, y_train, X_test_df, y_test) # Evaluate stacking model with DataFrames
-         
-         stacking_result_entry = {"dataset": os.path.basename(file), "feature_set": name, "classifier_type": "Stacking", "model_name": "StackingClassifier", "n_features": X_train_subset.shape[1], "metrics": stacking_metrics, "features_list": features_list} # Prepare stacking result entry
-         all_results.append(stacking_result_entry) # Add stacking result
-         print(f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{stacking_metrics[0]:.4f}{Style.RESET_ALL}") # Output accuracy
-         progress_bar.update(1) # Update progress after stacking
-      
-      save_stacking_results(file, all_results) # Save consolidated results to CSV
+            save_stacking_results(file, all_results) # Save consolidated results to CSV
 
    finish_time = datetime.datetime.now() # Get the finish time of the program
    print(f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
