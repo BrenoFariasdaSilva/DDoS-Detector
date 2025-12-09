@@ -564,15 +564,7 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, total_models,
 
    with tqdm(total=total_models, desc=f"{BackgroundColors.GREEN}Optimizing Models{Style.RESET_ALL}", unit="model") as pbar: # Progress bar
       for idx, (model_name, (model, param_grid)) in enumerate(models, start=1): # Iterate models
-         try: # Try to create summary of param grid
-            if isinstance(param_grid, dict): # If param grid is a dict
-               param_summary = ", ".join([f"{k}:{len(v)}" for k, v in param_grid.items()]) # Count values per key
-            else: # Otherwise
-               param_summary = str(param_grid)[:80] # Fallback truncated representation
-         except Exception: # Catch any errors
-            param_summary = None # Fallback summary if error occurs
-
-         update_optimization_progress_bar(pbar, csv_path, model_name, param_summary=param_summary, current=idx, total=total_models) # Update progress bar
+         update_optimization_progress_bar(pbar, csv_path, model_name, param_summary=param_grid, current=idx, total=total_models) # Update progress bar
 
          best_params, best_score, cv_results = optimize_model(model_name, model, param_grid, X_train_ga, y_train) # Optimize model
 
