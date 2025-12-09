@@ -95,6 +95,13 @@ RESULTS_FILENAME = "Hyperparameter_Optimization_Results.csv" # Filename for savi
 IGNORE_FILES = [RESULTS_FILENAME] # List of filenames to ignore when searching for datasets
 IGNORE_DIRS = ["Cache", "Dataset_Description", "Data_Separability", "Feature_Analysis"] # List of directory names to ignore when searching for datasets
 
+DATASETS = { # Dictionary containing dataset paths and feature files
+	"CICDDoS2019-Dataset": [ # List of paths to the CICDDoS2019 dataset
+		"./Datasets/CICDDoS2019/01-12/",
+		"./Datasets/CICDDoS2019/03-11/",
+   ],
+}
+
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
 SOUND_FILE = "./.assets/Sounds/NotificationSound.wav" # The path to the sound file
