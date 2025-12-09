@@ -1058,7 +1058,7 @@ def metrics_to_dict(metrics):
       "f1_score": float(round(f1, 4)), # F1 Score
       "fpr": float(round(fpr, 4)), # False Positive Rate
       "fnr": float(round(fnr, 4)), # False Negative Rate
-      "elapsed_time": int(round(elapsed)) # Elapsed time in seconds
+      "elapsed_time_s": int(round(elapsed)) # Elapsed time in seconds
    }
 
 def extract_elapsed_from_metrics(metrics, index=6):
@@ -1080,7 +1080,7 @@ def extract_elapsed_from_metrics(metrics, index=6):
    
    return None # Return None if extraction fails
 
-def build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking):
+def build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking, elapsed_time_s=None):
    """
    Build the base dictionary row used for the consolidated GA CSV output.
 
@@ -1094,8 +1094,6 @@ def build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test
    :return: Dictionary representing the base row for CSV output.
    """
    
-   timestamp = datetime.datetime.now().isoformat() # Current timestamp
-   
    return { # Base row for CSV
       "dataset": os.path.splitext(os.path.basename(csv_path))[0], # Dataset name
       "dataset_path": csv_path, # Dataset path
@@ -1104,7 +1102,7 @@ def build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test
       "n_train": n_train, # Number of training samples
       "n_test": n_test, # Number of testing samples
       "train_test_ratio": test_frac, # Train/test fraction
-      "timestamp": timestamp, # Timestamp
+      "elapsed_time_s": int(round(elapsed_time_s)) if elapsed_time_s is not None else None, # Elapsed seconds for best-model training
       "run_index": "best", # Indicates best run
       "rfe_ranking": json.dumps(rfe_ranking, ensure_ascii=False) # RFE ranking as JSON string
    }
@@ -1360,7 +1358,6 @@ def write_consolidated_csv(rows, output_dir):
          "n_train",
          "n_test",
          "train_test_ratio",
-         "timestamp",
          "hardware",
          "run_index",
          "classifier",
@@ -1461,7 +1458,9 @@ def save_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=N
    if n_train is not None and n_test is not None and (n_train + n_test) > 0: # If both lengths are valid
       test_frac = float(n_test) / float(n_train + n_test) # Calculate train/test fraction
 
-   base_row = build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking) # Base row for CSV
+   elapsed_for_base = extract_elapsed_from_metrics(rf_metrics)
+
+   base_row = build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking, elapsed_time_s=elapsed_for_base) # Base row for CSV
    rows = build_rows_list(rf_metrics, best_features, runs_list, feature_names, base_row) # Build rows from metrics and runs
    write_consolidated_csv(rows, output_dir) # Persist consolidated CSV
 
