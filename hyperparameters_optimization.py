@@ -473,6 +473,31 @@ def get_models_and_param_grids():
       )
    }
 
+def compute_total_param_combinations(models):
+   """
+   Computes the total number of hyperparameter combinations for all models
+   and returns both the total count and a per-model combination dictionary.
+
+   :param models: List of (model_name, (model_instance, param_grid))
+   :return: Tuple (total_combinations_all_models, model_combinations_counts)
+   """
+
+   total_combinations_all_models = 0 # Initialize total combinations counter
+   model_combinations_counts = {} # Store per-model combination counts
+
+   for model_name, (model, param_grid) in models: # Iterate models
+      if param_grid: # If there is a param grid
+         keys = list(param_grid.keys()) # Parameter names
+         values = [v if isinstance(v, (list, tuple)) else [v] for v in param_grid.values()] # Ensure lists
+         count = len(list(product(*values))) # Count combinations
+      else: # No hyperparameters
+         count = 1 # Single combination
+
+      model_combinations_counts[model_name] = count # Store per-model count
+      total_combinations_all_models += count # Add to total
+
+   return total_combinations_all_models, model_combinations_counts # Return total and per-model counts
+
 def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=None, current=None, total=None):
    """
    Updates a tqdm progress bar during hyperparameter optimization.
@@ -604,17 +629,7 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
 
    verbose_output(f"{BackgroundColors.GREEN}Starting model hyperparameter optimizations...{Style.RESET_ALL}") # Output the verbose message
 
-   total_combinations_all_models = 0 # Initialize total combinations counter
-   model_combinations_counts = {} # Store per-model combination counts
-   for model_name, (model, param_grid) in models: # Iterate models
-      if param_grid: # If there is a param grid
-         keys = list(param_grid.keys()) # Parameter names
-         values = [v if isinstance(v, (list, tuple)) else [v] for v in param_grid.values()] # Ensure lists
-         count = len(list(product(*values))) # Count combinations
-      else: # No hyperparameters
-         count = 1 # Single combination
-      model_combinations_counts[model_name] = count # Store per-model count
-      total_combinations_all_models += count # Add to total
+   total_combinations_all_models, model_combinations_counts = compute_total_param_combinations(models) # Compute total combinations
 
    with tqdm(total=total_combinations_all_models, desc=f"{BackgroundColors.GREEN}Optimizing Models{Style.RESET_ALL}", unit="comb") as pbar: # Progress bar
       for model_name, (model, param_grid) in models: # Iterate models
