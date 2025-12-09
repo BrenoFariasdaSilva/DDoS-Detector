@@ -469,50 +469,55 @@ def get_models_and_param_grids():
 
 def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_summary=None, current=None, total=None):
    """
-   Update the tqdm progress bar description/postfix for hyperparameter optimization.
+   Updates the tqdm progress bar for model hyperparameter optimization.
 
-   Shows dataset (base path), current model name, a brief parameter-summary,
-   and progress index (current/total).
+   The description shows: dataset reference, model name, progress index, and an
+   optional compact parameter summary appended to the description.
 
    :param progress_bar: tqdm progress bar instance
    :param csv_path: Path to the dataset CSV file
    :param model_name: Current model being optimized
-   :param param_summary: Short string summarizing parameter grid (optional)
+   :param param_summary: Short parameter summary or raw param grid (optional)
    :param current: Current model index (1-based)
    :param total: Total number of models
    :return: None
    """
 
-   if progress_bar is None: # If no progress bar instance provided
+   if progress_bar is None: # No progress bar provided
       return # Nothing to update
-   try: # Safely attempt to build description and postfix
-      csv_basename = os.path.basename(csv_path) # Get CSV filename
-      parent_dir = os.path.basename(os.path.dirname(csv_path)) # Get parent directory name
-      if parent_dir and parent_dir.lower() != csv_basename.lower(): # If parent dir differs from basename
-         dataset_ref = f"{BackgroundColors.CYAN}{parent_dir}/{csv_basename}{Style.RESET_ALL}" # Include parent/filename
-      else: # Otherwise
-         dataset_ref = f"{BackgroundColors.CYAN}{csv_basename}{Style.RESET_ALL}" # Use only basename
+   try: # Protect against update errors
+      csv_basename = os.path.basename(csv_path) # Extract CSV filename
+      parent_dir = os.path.basename(os.path.dirname(csv_path)) # Extract parent directory
 
-      idx_str = f" {BackgroundColors.GREEN}[{BackgroundColors.CYAN}{current}/{total}{BackgroundColors.GREEN}]" if current is not None and total is not None else "" # Optional progress index
+      if parent_dir and parent_dir.lower() != csv_basename.lower(): # Parent differs from filename
+         dataset_ref = f"{BackgroundColors.CYAN}{parent_dir}/{csv_basename}{Style.RESET_ALL}" # Use parent/filename reference
+      else: # Parent matches filename or empty
+         dataset_ref = f"{BackgroundColors.CYAN}{csv_basename}{Style.RESET_ALL}" # Use only filename reference
 
-      desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref} - Model: {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}{idx_str}{Style.RESET_ALL}" # Build description string
+      idx_str = f" {BackgroundColors.GREEN}[{BackgroundColors.CYAN}{current}/{total}{BackgroundColors.GREEN}]" if current is not None and total is not None else "" # Index string
 
-      postfix = {} # Prepare postfix dict for tqdm
-      if param_summary: # If parameter summary is provided
-         postfix["params"] = param_summary # Short parameter info shown in postfix
+      desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} - Model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}{idx_str}" # Full single-line description
 
-      progress_bar.set_description(desc) # Update the description text
-      if postfix: # If we have postfix data
-         progress_bar.set_postfix(postfix) # Show param summary in postfix
-      else: # No postfix to show
-         # clear postfix if none
-         try:
-            progress_bar.set_postfix({}) # Clear any previous postfix
-         except Exception:
-            pass # Ignore failures to clear
-      progress_bar.refresh() # Force refresh to display updates immediately
-   except Exception: # Swallow any errors while updating progress to avoid crashing
-      pass
+      if param_summary is not None: # Parameter summary provided
+         if isinstance(param_summary, dict): # Raw param grid
+            parts = [] # List to accumulate items
+            for k, v in param_summary.items(): # Iterate parameters
+               try: # Try counting items
+                  parts.append(f"{BackgroundColors.GREEN}{k}{Style.RESET_ALL}:{BackgroundColors.CYAN}{len(v)}{Style.RESET_ALL}") # Add formatted count
+               except Exception: # Value not countable
+                  parts.append(f"{BackgroundColors.GREEN}{k}{Style.RESET_ALL}:{BackgroundColors.CYAN}{str(v)[:20]}{Style.RESET_ALL}") # Add fallback summary
+            param_display = ", ".join(parts) # Join parts into string
+         else: # Non-dict summary
+            if "\033[" in str(param_summary): # Already colored
+               param_display = str(param_summary) # Use directly
+            else: # Not colored
+               param_display = f"{BackgroundColors.CYAN}{str(param_summary)[:140]}{Style.RESET_ALL}" # Color and truncate
+         desc = f"{desc} {BackgroundColors.GREEN}- Params: {param_display}{Style.RESET_ALL}" # Append parameter display
+
+      progress_bar.set_description(desc) # Update bar description
+      progress_bar.refresh() # Refresh bar immediately
+   except Exception: # Handle any exception silently
+      pass # Suppress all update errors
 
 def optimize_model(model_name, model, param_grid, X_train, y_train):
    """
