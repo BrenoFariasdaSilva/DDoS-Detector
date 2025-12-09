@@ -955,6 +955,27 @@ def get_hardware_specifications():
       "os": os_name # Operating system
    }
 
+def add_hardware_column(df, columns_order, column_name="Hardware"):
+   """
+   Ensure a hardware description column named by `column_name` exists on `df`
+   and insert it into `columns_order` immediately after `elapsed_time_s`.
+
+   :param df: pandas.DataFrame to mutate in-place
+   :param columns_order: list of canonical column names to update
+   :param column_name: hardware column name to add (default: "Hardware")
+   :return: None
+   """
+   
+   try: # Try to get hardware specifications
+      hardware_specs = get_hardware_specifications() # Get system specs
+      df[column_name] = hardware_specs["cpu_model"] + " | Cores: " + str(hardware_specs["cores"]) + " | RAM: " + str(hardware_specs["ram_gb"]) + " GB | OS: " + hardware_specs["os"] # Add hardware specs column
+   except Exception: # If fetching specs fails
+      df[column_name] = None # Add column with None values
+
+   if column_name not in columns_order: # If the hardware column is not already in the order list
+      insert_idx = (columns_order.index("elapsed_time_s") + 1) if "elapsed_time_s" in columns_order else len(columns_order) # Determine insertion index
+      columns_order.insert(insert_idx, column_name) # Insert hardware column into the desired position
+
 def save_stacking_results(csv_path, results_list):
    """
    Saves the results of the stacking classifier evaluations to a structured CSV file.
