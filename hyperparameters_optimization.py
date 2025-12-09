@@ -591,6 +591,7 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
 
    best_score = -float("inf") # Initialize best score
    best_params = None # Initialize best parameters
+   best_elapsed = 0.0 # Execution time for best parameters (seconds)
    all_results = [] # Store results for all combinations
    global_counter = global_counter_start # Initialize global counter
 
@@ -624,12 +625,14 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
       ]))
 
       if score is not None: # If score is valid
-         if (score > best_score) or (score == best_score and elapsed < next((r["execution_time"] for r in all_results if r["score"] == best_score), float("inf"))): # Better score or same score but faster
+         current_best_elapsed = next((r["execution_time"] for r in all_results if r["score"] == best_score), float("inf")) if best_score != -float("inf") else float("inf") # Get elapsed time for current best score
+         if (score > best_score) or (score == best_score and elapsed < current_best_elapsed): # Verify for new best (higher score or same score but faster)
             best_score = score # Update best score
             best_params = current_params # Update best parameters
+            best_elapsed = elapsed # Save execution time for best params
             verbose_output(f"{BackgroundColors.GREEN}New best score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}") # Log new best
 
-   return best_params, best_score, all_results, global_counter # Return best results, all combinations, and final global counter
+   return best_params, best_score, best_elapsed, all_results, global_counter # Return best results, elapsed for best, all combinations, and final global counter
 
 def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list):
    """
@@ -651,7 +654,7 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
 
    with tqdm(total=total_combinations_all_models, desc=f"{BackgroundColors.GREEN}Optimizing Models{Style.RESET_ALL}", unit="comb") as pbar: # Progress bar
       for model_index, (model_name, (model, param_grid)) in enumerate(models, start=1): # Iterate models with index
-         best_params, best_score, all_results, global_counter = manual_grid_search(model_name, model, param_grid, X_train_ga, y_train, progress_bar=pbar, csv_path=csv_path, global_counter_start=global_counter, total_combinations_all_models=total_combinations_all_models, model_index=model_index, total_models=len(models)) # Manual grid search instead of GridSearchCV
+         best_params, best_score, best_elapsed, all_results, global_counter = manual_grid_search(model_name, model, param_grid, X_train_ga, y_train, progress_bar=pbar, csv_path=csv_path, global_counter_start=global_counter, total_combinations_all_models=total_combinations_all_models, model_index=model_index, total_models=len(models)) # Manual grid search instead of GridSearchCV
 
          if best_params is not None: # If optimization succeeded
             dir_results_list.append(OrderedDict([ # Append only the best result
@@ -662,7 +665,7 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
                ("n_features", X_train_ga.shape[1]), # Number of features after GA selection
                ("feature_selection_method", "Genetic Algorithm"), # Feature selection method
                ("dataset", os.path.basename(csv_path)), # Dataset filename
-               ("timestamp", datetime.datetime.now().isoformat()) # Timestamp of optimization
+               ("elapsed_time_s", round(float(best_elapsed or 0.0), 2)) # Elapsed training time (seconds) for best params
             ])) # End of append
 
       print() # Line spacing between models
