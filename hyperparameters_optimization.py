@@ -571,13 +571,18 @@ def main():
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Classifiers Hyperparameters Optimization{BackgroundColors.GREEN} program!{Style.RESET_ALL}", end="\n\n") # Output the welcome message
    start_time = datetime.datetime.now() # Get the start time of the program
 
-   input_path = "./Datasets/CICDDoS2019/01-12/" # Path to the input dataset directory
-   files_to_process = get_files_to_process(input_path, file_extension=".csv") # Get list of CSV files to process
-   files_to_process = ["./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"] # TEMPORARY: Process only DrDoS_DNS.csv for testing
+   files_to_process = [] # Master list of CSV files to process
+   for dataset_name, paths in DATASETS.items(): # Iterate over configured datasets
+      for input_path in paths: # Iterate each path for the current dataset
+         found_files = get_files_to_process(input_path, file_extension=".csv") # Discover CSV files in this path
+         if not found_files: # If no CSV files were found
+            verbose_output(f"{BackgroundColors.YELLOW}No CSV files found in: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}") # Verbose notice for missing files
+            continue # Skip to the next configured path
+         files_to_process.extend(found_files) # Add discovered files to the master list
 
-   if not files_to_process: # If no files were found to process
-      print(f"{BackgroundColors.RED}No CSV files found in the specified directory: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}")
-      return # Exit the main function
+   if not files_to_process: # If no files were found to process across all DATASETS
+      print(f"{BackgroundColors.RED}No CSV files found in any configured DATASETS paths.{Style.RESET_ALL}") # Inform the user and bail out
+      return # Exit the main function early
 
    for csv_path in files_to_process: # Process each CSV file
       try: # Try to process the file
