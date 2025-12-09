@@ -64,6 +64,7 @@ import ast # For safely evaluating Python literals
 import atexit # For playing a sound when the program finishes
 import concurrent.futures # For parallel execution
 import datetime # For getting the current date and time
+import glob # For file pattern matching
 import json # Import json for handling JSON strings within the CSV
 import lightgbm as lgb # For LightGBM model
 import numpy as np # Import numpy for numerical operations
@@ -218,6 +219,57 @@ def get_dataset_name(input_path):
 
    return dataset_name # Return the dataset name
 
+def find_feature_file(file_path, filename):
+   """
+   Locate a feature-analysis CSV file related to `file_path`.
+
+   Search order:
+   - <file_dir>/Feature_Analysis/<filename>
+   - ascend parent directories checking <parent>/Feature_Analysis/<filename>
+   - dataset-level folder under `.../Datasets/<dataset_name>/Feature_Analysis/<filename>`
+   - fallback: search under workspace ./Datasets/**/Feature_Analysis/<filename>
+
+   Returns the first matching path or None if not found.
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Searching for feature analysis file: {BackgroundColors.CYAN}{filename}{BackgroundColors.GREEN} related to file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
+   
+   file_dir = os.path.dirname(os.path.abspath(file_path)) # Get the directory of the input file
+
+   # 1) Local Feature_Analysis in the same directory
+   candidate = os.path.join(file_dir, "Feature_Analysis", filename) # Construct candidate path
+   if os.path.exists(candidate): # If the candidate file exists
+      return candidate # Return the candidate path
+
+   # 2) Ascend parents checking for Feature_Analysis
+   p = file_dir # Start from the file's directory
+   while True: # Loop until break
+      candidate = os.path.join(p, "Feature_Analysis", filename) # Construct candidate path
+      if os.path.exists(candidate): # If the candidate file exists
+         return candidate # Return the candidate path
+      parent = os.path.dirname(p) # Get the parent directory
+      if parent == p: # If reached the root directory
+         break # Break the loop
+      p = parent # Move up to the parent directory
+
+   # 3) Try dataset-level under /.../Datasets/<dataset_name>/Feature_Analysis/
+   abs_path = os.path.abspath(file_path) # Get absolute path of the input file
+   parts = abs_path.split(os.sep) # Split the path into parts
+   if "Datasets" in parts: # If "Datasets" is in the path parts
+      idx = parts.index("Datasets") # Get the index of "Datasets"
+      if idx + 1 < len(parts): # If there is a dataset name after "Datasets"
+         dataset_dir = os.sep.join(parts[: idx + 2]) # Construct the dataset directory path
+         candidate = os.path.join(dataset_dir, "Feature_Analysis", filename) # Construct candidate path
+         if os.path.exists(candidate): # If the candidate file exists
+            return candidate # Return the candidate path
+         matches = glob.glob(os.path.join(dataset_dir, "**", "Feature_Analysis", filename), recursive=True) # Search recursively under dataset directory
+         if matches: # If matches are found
+            return matches[0] # Return the first match
+
+   print(f"{BackgroundColors.YELLOW}Warning: Feature analysis file {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}.{Style.RESET_ALL}") # Output the warning message
+   
+   return None # Return None if not found
+
 def extract_genetic_algorithm_features(file_path):
    """
    Extracts the features selected by the Genetic Algorithm from the corresponding
@@ -232,12 +284,11 @@ def extract_genetic_algorithm_features(file_path):
    """
    
    file_dir = os.path.dirname(file_path) # Determine the directory of the input file
-   ga_results_path = os.path.join(file_dir, "Feature_Analysis", "Genetic_Algorithm_Results.csv") # Construct the path to the consolidated GA results file
-   
    verbose_output(f"{BackgroundColors.GREEN}Extracting GA features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
 
-   if not verify_filepath_exists(ga_results_path): # Verify if the GA results file exists
-      print(f"{BackgroundColors.YELLOW}Warning: GA results file not found at {BackgroundColors.CYAN}{ga_results_path}{BackgroundColors.YELLOW}. Skipping GA feature extraction for this file.{Style.RESET_ALL}")
+   ga_results_path = find_feature_file(file_path, "Genetic_Algorithm_Results.csv") # Find the GA results file
+   if ga_results_path is None: # If the GA results file does not exist
+      print(f"{BackgroundColors.YELLOW}Warning: GA results file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping GA feature extraction for this file.{Style.RESET_ALL}")
       return None # Return None if the file does not exist
 
    try: # Try to load the GA results
@@ -269,12 +320,11 @@ def extract_principal_component_analysis_features(file_path):
    """
    
    file_dir = os.path.dirname(file_path) # Determine the directory of the input file
-   pca_results_path = os.path.join(file_dir, "Feature_Analysis", "PCA_Results.csv") # Construct the path to the PCA results file
-   
    verbose_output(f"{BackgroundColors.GREEN}Extracting PCA features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
 
-   if not verify_filepath_exists(pca_results_path): # Verify if the PCA results file exists
-      print(f"{BackgroundColors.YELLOW}Warning: PCA results file not found at {BackgroundColors.CYAN}{pca_results_path}{BackgroundColors.YELLOW}. Skipping PCA feature extraction for this file.{Style.RESET_ALL}")
+   pca_results_path = find_feature_file(file_path, "PCA_Results.csv") # Find the PCA results file
+   if pca_results_path is None: # If the PCA results file does not exist
+      print(f"{BackgroundColors.YELLOW}Warning: PCA results file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping PCA feature extraction for this file.{Style.RESET_ALL}")
       return None # Return None if the file does not exist
 
    try: # Try to load the PCA results
@@ -309,12 +359,11 @@ def extract_recursive_feature_elimination_features(file_path):
    """
    
    file_dir = os.path.dirname(file_path) # Determine the directory of the input file
-   rfe_runs_path = os.path.join(file_dir, "Feature_Analysis", "RFE_Run_Results.csv") # Construct the path to the RFE runs file
-   
    verbose_output(f"{BackgroundColors.GREEN}Extracting RFE features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}") # Output the verbose message
 
-   if not verify_filepath_exists(rfe_runs_path): # Verify if the RFE runs file exists
-      print(f"{BackgroundColors.YELLOW}Warning: RFE runs file not found at {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.YELLOW}. Skipping RFE feature extraction for this file.{Style.RESET_ALL}")
+   rfe_runs_path = find_feature_file(file_path, "RFE_Run_Results.csv") # Find the RFE runs file
+   if rfe_runs_path is None: # If the RFE runs file does not exist
+      print(f"{BackgroundColors.YELLOW}Warning: RFE runs file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping RFE feature extraction for this file.{Style.RESET_ALL}")
       return None # Return None if the file does not exist
 
    try: # Try to load the RFE runs results
