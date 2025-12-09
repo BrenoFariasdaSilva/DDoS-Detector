@@ -1285,6 +1285,26 @@ def get_hardware_specifications():
       "os": os_name # Operating system
    }
 
+def populate_hardware_column(df, column_name="hardware"):
+   """
+   Populate `df[column_name]` with a readable hardware description built from
+   `get_hardware_specifications()`. On failure the column will be set to None.
+
+   :param df: pandas.DataFrame to modify in-place
+   :param column_name: Name of the column to set (default: "hardware")
+   :return: None
+   """
+   
+   try: # Try to fetch hardware specifications
+      hardware_specs = get_hardware_specifications() # Get system specs
+      hardware_str = ( # Build readable hardware string
+         f"{hardware_specs.get('cpu_model','Unknown')} | Cores: {hardware_specs.get('cores', 'N/A')}"
+         f" | RAM: {hardware_specs.get('ram_gb', 'N/A')} GB | OS: {hardware_specs.get('os','Unknown')}"
+      )
+      df[column_name] = hardware_str # Set the hardware column
+   except Exception: # On any failure
+      df[column_name] = None # Set hardware column to None
+
 def write_consolidated_csv(rows, output_dir):
    """
    Write the consolidated GA results rows to a CSV file inside `output_dir`.
