@@ -128,6 +128,24 @@ def verbose_output(true_string="", false_string=""):
    elif false_string != "": # If the false_string is set
       print(false_string) # Output the false statement string
 
+def iterate_dataset_directories():
+   """
+   Iterates over all dataset directories defined in DATASETS, skipping invalid and ignored directories.
+
+   :param: None
+   :return: Generator yielding (dataset_name, dirpath)
+   """
+   
+   for dataset_name, paths in DATASETS.items(): # Iterate over datasets
+      for dirpath in paths: # Iterate configured paths
+         if not os.path.isdir(dirpath): # If path is not a directory
+            verbose_output(f"{BackgroundColors.YELLOW}Skipping non-directory path: {BackgroundColors.CYAN}{dirpath}{Style.RESET_ALL}") # Verbose notice
+            continue # Skip invalid path
+         if os.path.basename(os.path.normpath(dirpath)) in IGNORE_DIRS: # If path is in ignore list
+            verbose_output(f"{BackgroundColors.YELLOW}Ignoring directory per IGNORE_DIRS: {BackgroundColors.CYAN}{dirpath}{Style.RESET_ALL}") # Verbose notice
+            continue # Skip ignored directory
+         yield dataset_name, dirpath # Yield valid directory
+
 def verify_filepath_exists(filepath):
    """
    Verify if a file or folder exists at the specified path.
