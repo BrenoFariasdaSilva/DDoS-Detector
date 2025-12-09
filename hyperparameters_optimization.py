@@ -65,9 +65,11 @@ import numpy as np # For numerical operations
 import os # For running a command in the terminal
 import pandas as pd # For data manipulation
 import platform # For getting the operating system name
+import time # For measuring execution time
 import warnings # For suppressing warnings
 from colorama import Style # For coloring the terminal
 from collections import OrderedDict # For deterministic results column ordering when saving
+from itertools import product # For generating parameter combinations
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier # For ensemble models
 from sklearn.linear_model import LogisticRegression # For logistic regression model
 from sklearn.metrics import make_scorer, f1_score # For custom scoring metrics
@@ -527,38 +529,66 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_g
 
    except Exception: pass # Silently ignore any errors during update
 
-def optimize_model(model_name, model, param_grid, X_train, y_train):
+def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress_bar=None, csv_path=None, current_model_idx=None, total_models=None):
    """
-   Performs hyperparameter optimization for a single model using GridSearchCV.
+   Performs manual grid search hyperparameter optimization.
 
-   :param model_name: Name of the model (for logging).
-   :param model: The classifier model instance.
-   :param param_grid: Dictionary of hyperparameters to search.
-   :param X_train: Training features (scaled numpy array).
-   :param y_train: Training target labels (encoded).
-   :return: Tuple (best_params, best_score, cv_results) or (None, None, None) if optimization fails
+   :param model_name: Name of the model for logging
+   :param model: Model instance to optimize
+   :param param_grid: Dictionary of hyperparameters to search
+   :param X_train: Training features
+   :param y_train: Training labels
+   :param progress_bar: Optional tqdm progress bar
+   :param csv_path: Path to CSV for progress description
+   :param current_model_idx: Index of current model (for progress bar)
+   :param total_models: Total number of models (for progress bar)
+   :return: Tuple (best_params, best_score, all_results)
    """
    
-   verbose_output(f"{BackgroundColors.GREEN}Optimizing {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}...{Style.RESET_ALL}") # Output the verbose message
+   verbose_output(f"{BackgroundColors.GREEN}Manually optimizing {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}...{Style.RESET_ALL}") # Output the verbose message
    
-   try: # Try to perform grid search
-      f1_scorer = make_scorer(f1_score, average="weighted") # Create F1 scorer for multi-class problems
-      
-      grid_search = GridSearchCV(estimator=model, param_grid=param_grid, cv=CV_FOLDS, scoring=f1_scorer, n_jobs=N_JOBS, verbose=0, error_score="raise") # Initialize GridSearchCV
-      
-      grid_search.fit(X_train, y_train) # Fit the grid search
-      
-      best_params = grid_search.best_params_ # Get the best parameters
-      best_score = grid_search.best_score_ # Get the best cross-validation score
-      
-      print(f"{BackgroundColors.GREEN}{model_name} - Best CV F1 Score: {BackgroundColors.CYAN}{best_score:.4f}{Style.RESET_ALL}")
-      verbose_output(f"{BackgroundColors.GREEN}Best parameters: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}")
-      
-      return best_params, best_score, grid_search.cv_results_ # Return optimization results
-      
-   except Exception as e: # Catch any errors during optimization
-      print(f"{BackgroundColors.RED}Error optimizing {model_name}: {e}{Style.RESET_ALL}")
-      return None, None, None # Return None values if optimization failed
+   if not param_grid: return None, None, None # No hyperparameters to optimize
+
+   keys = list(param_grid.keys()) # Parameter names
+   values = [v if isinstance(v, (list, tuple)) else [v] for v in param_grid.values()] # Ensure values are lists
+   param_combinations = list(product(*values)) # Cartesian product
+   total_combinations = len(param_combinations) # Total number of parameter sets
+
+   best_score = -float("inf") # Initialize best score
+   best_params = None # Initialize best parameters
+   all_results = [] # Store results for all combinations
+
+   for idx, combination in enumerate(param_combinations, start=1): # Iterate all parameter combinations
+      current_params = dict(zip(keys, combination)) # Build dict of current params
+
+      if progress_bar is not None and csv_path is not None: # If progress bar and CSV path are provided
+         update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=idx, total=total_combinations) # Update progress bar
+
+      start_time = time.time() # Start timing
+
+      try: # Try to train and evaluate
+         model.set_params(**current_params) # Apply hyperparameters
+         model.fit(X_train, y_train) # Train model
+         y_pred = model.predict(X_train) # Predict on training set
+         score = f1_score(y_train, y_pred, average="weighted") # Compute weighted F1 score
+
+      except Exception as e: # Catch any errors during training/evaluation
+         print(f"{BackgroundColors.RED}Error with params {current_params}: {e}{Style.RESET_ALL}") # Log error
+         score = None # Mark score as None
+
+      elapsed = time.time() - start_time # Measure execution time
+
+      all_results.append(OrderedDict([ # Append results
+         ("params", json.dumps(current_params)), # Parameter combination
+         ("score", score), # F1 score
+         ("execution_time", elapsed) # Time in seconds
+      ]))
+
+      if score is not None and score > best_score: # Update best score if applicable
+         best_score = score # Update best score
+         best_params = current_params # Update best parameters
+
+   return best_params, best_score, all_results # Return best results and all combinations
 
 def run_model_optimizations(models, csv_path, X_train_ga, y_train, total_models, dir_results_list):
    """
