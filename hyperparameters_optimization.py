@@ -554,9 +554,13 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_g
 
    except Exception: pass # Silently ignore any errors during update
 
-def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress_bar=None, csv_path=None, current_model_idx=None, total_models=None):
+def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress_bar=None, csv_path=None, global_counter_start=0, total_combinations_all_models=None):
    """
-   Performs manual grid search hyperparameter optimization.
+   Performs manual grid search hyperparameter optimization with integrated progress bar.
+
+   Updates the progress bar description and counter for each parameter combination
+   tested, showing both the current combination index of this model and the
+   overall combination count across all models.
 
    :param model_name: Name of the model for logging
    :param model: Model instance to optimize
@@ -565,29 +569,31 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
    :param y_train: Training labels
    :param progress_bar: Optional tqdm progress bar
    :param csv_path: Path to CSV for progress description
-   :param current_model_idx: Index of current model (for progress bar)
-   :param total_models: Total number of models (for progress bar)
-   :return: Tuple (best_params, best_score, all_results)
+   :param global_counter_start: Starting counter of overall combination index
+   :param total_combinations_all_models: Total number of parameter combinations across all models
+   :return: Tuple (best_params, best_score, all_results, global_counter_end)
    """
-   
+
    verbose_output(f"{BackgroundColors.GREEN}Manually optimizing {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}...{Style.RESET_ALL}") # Output the verbose message
    
-   if not param_grid: return None, None, None # No hyperparameters to optimize
+   if not param_grid: return None, None, None, global_counter_start # No hyperparameters to optimize
 
    keys = list(param_grid.keys()) # Parameter names
    values = [v if isinstance(v, (list, tuple)) else [v] for v in param_grid.values()] # Ensure values are lists
    param_combinations = list(product(*values)) # Cartesian product
-   total_combinations = len(param_combinations) # Total number of parameter sets
+   total_combinations = len(param_combinations) # Total number of combinations for this model
 
    best_score = -float("inf") # Initialize best score
    best_params = None # Initialize best parameters
    all_results = [] # Store results for all combinations
+   global_counter = global_counter_start # Initialize global counter
 
    for idx, combination in enumerate(param_combinations, start=1): # Iterate all parameter combinations
       current_params = dict(zip(keys, combination)) # Build dict of current params
+      global_counter += 1 # Increment overall combination counter
 
-      if progress_bar is not None and csv_path is not None: # If progress bar and CSV path are provided
-         update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=idx, total=total_combinations) # Update progress bar
+      if progress_bar is not None and csv_path is not None and total_combinations_all_models is not None: # Update progress bar
+         update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=global_counter, total=total_combinations_all_models) # Update progress bar
 
       start_time = time.time() # Start timing
 
@@ -613,7 +619,7 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
          best_score = score # Update best score
          best_params = current_params # Update best parameters
 
-   return best_params, best_score, all_results # Return best results and all combinations
+   return best_params, best_score, all_results, global_counter # Return best results, all combinations, and final global counter
 
 def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list):
    """
