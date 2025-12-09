@@ -110,6 +110,13 @@ RUN_FUNCTIONS = {
    "Play Sound": True, # Set to True to play a sound when the program finishes
 }
 
+DATASETS = { # Dictionary containing dataset paths and feature files
+	"CICDDoS2019-Dataset": [ # List of paths to the CICDDoS2019 dataset
+		"./Datasets/CICDDoS2019/01-12/",
+		"./Datasets/CICDDoS2019/03-11/",
+   ],
+}
+
 # Functions Definitions:
 
 def verbose_output(true_string="", false_string=""):
