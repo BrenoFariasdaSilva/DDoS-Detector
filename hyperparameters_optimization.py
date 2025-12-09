@@ -66,6 +66,7 @@ import os # For running a command in the terminal
 import pandas as pd # For data manipulation
 import platform # For getting the operating system name
 from colorama import Style # For coloring the terminal
+from collections import OrderedDict # For deterministic results column ordering when saving
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier # For ensemble models
 from sklearn.linear_model import LogisticRegression # For logistic regression model
 from sklearn.metrics import make_scorer, f1_score # For custom scoring metrics
@@ -571,112 +572,118 @@ def main():
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Classifiers Hyperparameters Optimization{BackgroundColors.GREEN} program!{Style.RESET_ALL}", end="\n\n") # Output the welcome message
    start_time = datetime.datetime.now() # Get the start time of the program
 
-   files_to_process = [] # Master list of CSV files to process
-   for dataset_name, paths in DATASETS.items(): # Iterate over configured datasets
-      for input_path in paths: # Iterate each path for the current dataset
-         found_files = get_files_to_process(input_path, file_extension=".csv") # Discover CSV files in this path
-         if not found_files: # If no CSV files were found
-            verbose_output(f"{BackgroundColors.YELLOW}No CSV files found in: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}") # Verbose notice for missing files
+   for dataset_name, paths in DATASETS.items(): # Iterate over each dataset defined in DATASETS
+      for dirpath in paths: # Iterate each configured directory path for the current dataset
+         if not os.path.isdir(dirpath): # If the configured path does not exist or is not a directory
+            verbose_output(f"{BackgroundColors.YELLOW}Skipping non-directory path: {BackgroundColors.CYAN}{dirpath}{Style.RESET_ALL}") # Verbose notice about invalid path
             continue # Skip to the next configured path
-         files_to_process.extend(found_files) # Add discovered files to the master list
+         if os.path.basename(os.path.normpath(dirpath)) in IGNORE_DIRS: # If this directory is in the ignore list
+            verbose_output(f"{BackgroundColors.YELLOW}Ignoring directory per IGNORE_DIRS: {BackgroundColors.CYAN}{dirpath}{Style.RESET_ALL}") # Verbose notice for ignored dir
+            continue # Skip ignored directories
 
-   if not files_to_process: # If no files were found to process across all DATASETS
-      print(f"{BackgroundColors.RED}No CSV files found in any configured DATASETS paths.{Style.RESET_ALL}") # Inform the user and bail out
-      return # Exit the main function early
+         csv_files = get_files_to_process(dirpath, file_extension=".csv") # Discover CSV files in this directory (non-recursive)
+         if not csv_files: # If no CSV files were discovered in this dirpath
+            verbose_output(f"{BackgroundColors.YELLOW}No CSV files found in: {BackgroundColors.CYAN}{dirpath}{Style.RESET_ALL}") # Verbose notice
+            continue # Move to the next dirpath
 
-   for csv_path in files_to_process: # Process each CSV file
-      try: # Try to process the file
-         print(f"{BackgroundColors.GREEN}\nProcessing file: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}") # Output the file being processed
+         dir_results_list = [] # Aggregate results for all CSVs in this dirpath
 
-         print(f"{BackgroundColors.GREEN}Loading Genetic Algorithm selected features...{Style.RESET_ALL}") # Output the loading message
-         ga_selected_features = extract_genetic_algorithm_features(csv_path) # Extract GA selected features
+         for csv_path in csv_files: # Process each CSV file found in the current dirpath
+            try: # Process the current csv_path inside a try/except to continue on errors
+               print(f"{BackgroundColors.GREEN}\nProcessing file: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}") # Output the file being processed
 
-         if ga_selected_features is None or len(ga_selected_features) == 0: # If no GA features were found
-            print(f"{BackgroundColors.YELLOW}No GA features found for {csv_path}. Skipping file.{Style.RESET_ALL}")
-            continue # Skip this file
+               print(f"{BackgroundColors.GREEN}Loading Genetic Algorithm selected features...{Style.RESET_ALL}") # Output the loading message
+               ga_selected_features = extract_genetic_algorithm_features(csv_path) # Extract GA selected features for this CSV
 
-         print(f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(ga_selected_features)}{BackgroundColors.GREEN} GA selected features{Style.RESET_ALL}") # Output the number of features
+               if ga_selected_features is None or len(ga_selected_features) == 0: # If no GA features were found
+                  print(f"{BackgroundColors.YELLOW}No GA features found for {csv_path}. Skipping file.{Style.RESET_ALL}") # Inform and skip
+                  continue # Skip this file
 
-         df = load_dataset(csv_path) # Load the dataset
-         if df is None: # If loading failed
-            print(f"{BackgroundColors.YELLOW}Failed to load dataset {csv_path}. Skipping file.{Style.RESET_ALL}")
-            continue # Skip this file
+               print(f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(ga_selected_features)}{BackgroundColors.GREEN} GA selected features{Style.RESET_ALL}") # Output number of features loaded
 
-         df_clean = preprocess_dataframe(df) # Preprocess the DataFrame
-         if df_clean is None or df_clean.empty: # If preprocessing failed
-            print(f"{BackgroundColors.YELLOW}Dataset preprocessing failed for {csv_path}. Skipping file.{Style.RESET_ALL}")
-            continue # Skip this file
+               df = load_dataset(csv_path) # Load the dataset from CSV
+               if df is None: # If loading failed
+                  print(f"{BackgroundColors.YELLOW}Failed to load dataset {csv_path}. Skipping file.{Style.RESET_ALL}") # Inform and skip
+                  continue # Skip this file
 
-         X = df_clean.iloc[:, :-1] # Extract features (all columns except last)
-         y = df_clean.iloc[:, -1] # Extract target (last column)
+               df_clean = preprocess_dataframe(df) # Preprocess the DataFrame
+               if df_clean is None or df_clean.empty: # If preprocessing failed or returned empty
+                  print(f"{BackgroundColors.YELLOW}Dataset preprocessing failed for {csv_path}. Skipping file.{Style.RESET_ALL}") # Inform and skip
+                  continue # Skip this file
 
-         print(f"{BackgroundColors.GREEN}Dataset loaded with {BackgroundColors.CYAN}{X.shape[0]}{BackgroundColors.GREEN} samples and {BackgroundColors.CYAN}{X.shape[1]}{BackgroundColors.GREEN} features{Style.RESET_ALL}") # Output dataset shape
+               X = df_clean.iloc[:, :-1] # Extract features (all columns except last)
+               y = df_clean.iloc[:, -1] # Extract target (last column)
 
-         X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X, y) # Scale and split the data
+               print(f"{BackgroundColors.GREEN}Dataset loaded with {BackgroundColors.CYAN}{X.shape[0]}{BackgroundColors.GREEN} samples and {BackgroundColors.CYAN}{X.shape[1]}{BackgroundColors.GREEN} features{Style.RESET_ALL}") # Output dataset shape
 
-         feature_names = list(X.select_dtypes(include=np.number).columns) # Get numeric feature names
+               X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X, y) # Scale and split the data
 
-         print(f"{BackgroundColors.GREEN}Applying GA feature selection...{Style.RESET_ALL}") # Output the message
-         X_train_ga = get_feature_subset(X_train_scaled, ga_selected_features, feature_names) # Get GA feature subset for training
-         X_test_ga = get_feature_subset(X_test_scaled, ga_selected_features, feature_names) # Get GA feature subset for testing
+               feature_names = list(X.select_dtypes(include=np.number).columns) # Get numeric feature names
 
-         print(f"{BackgroundColors.GREEN}Training set shape after GA feature selection: {BackgroundColors.CYAN}{X_train_ga.shape}{Style.RESET_ALL}") # Output shape
-         print(f"{BackgroundColors.GREEN}Testing set shape after GA feature selection: {BackgroundColors.CYAN}{X_test_ga.shape}{Style.RESET_ALL}") # Output shape
+               print(f"{BackgroundColors.GREEN}Applying GA feature selection...{Style.RESET_ALL}") # Output the message
+               X_train_ga = get_feature_subset(X_train_scaled, ga_selected_features, feature_names) # Get GA feature subset for training
+               X_test_ga = get_feature_subset(X_test_scaled, ga_selected_features, feature_names) # Get GA feature subset for testing
 
-         if X_train_ga.shape[1] == 0: # If no features remain
-            print(f"{BackgroundColors.YELLOW}No features selected by GA for {csv_path}. Skipping file.{Style.RESET_ALL}")
-            continue # Skip this file
+               print(f"{BackgroundColors.GREEN}Training set shape after GA feature selection: {BackgroundColors.CYAN}{X_train_ga.shape}{Style.RESET_ALL}") # Output shape
+               print(f"{BackgroundColors.GREEN}Testing set shape after GA feature selection: {BackgroundColors.CYAN}{X_test_ga.shape}{Style.RESET_ALL}") # Output shape
 
-         models_and_grids = get_models_and_param_grids() # Get models and their parameter grids
+               if X_train_ga.shape[1] == 0: # If no features remain after GA selection
+                  print(f"{BackgroundColors.YELLOW}No features selected by GA for {csv_path}. Skipping file.{Style.RESET_ALL}") # Inform and skip
+                  continue # Skip this file
 
-         results_list = [] # List to store optimization results per file
+               models_and_grids = get_models_and_param_grids() # Get models and their parameter grids
 
-         print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Starting hyperparameter optimization for {BackgroundColors.CYAN}{len(models_and_grids)}{BackgroundColors.GREEN} models on {BackgroundColors.CYAN}{os.path.basename(csv_path)}{BackgroundColors.GREEN}...{Style.RESET_ALL}\n") # Output the message
+               start_idx = len(dir_results_list) # Starting length of dir-level results
+               print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Starting hyperparameter optimization for {BackgroundColors.CYAN}{len(models_and_grids)}{BackgroundColors.GREEN} models on {BackgroundColors.CYAN}{os.path.basename(csv_path)}{BackgroundColors.GREEN}...{Style.RESET_ALL}\n") # Output the message
 
-         models = list(models_and_grids.items()) # Convert models dict to list of tuples for indexing
-         total_models = len(models) # Total number of models to optimize
+               models = list(models_and_grids.items()) # Convert models dict to list of tuples for indexing
+               total_models = len(models) # Total number of models to optimize
 
-         with tqdm(total=total_models, desc=f"{BackgroundColors.GREEN}Optimizing Models{Style.RESET_ALL}", unit="model") as pbar: # Initialize tqdm progress bar
-            for idx, (model_name, (model, param_grid)) in enumerate(models, start=1): # Iterate over each model and its parameter grid (1-based index)
-               try: # Try to build a brief parameter summary for display
-                  if isinstance(param_grid, dict): # If the parameter grid is a dict of lists
-                     param_summary = ", ".join([f"{k}:{len(v)}" for k, v in param_grid.items()]) # Build counts per hyperparameter
-                  else: # Otherwise
-                     param_summary = str(param_grid)[:80] # Fallback: truncated string representation
-               except Exception: # On any failure building the parameter summary
-                  param_summary = None # Leave param_summary empty
+               with tqdm(total=total_models, desc=f"{BackgroundColors.GREEN}Optimizing Models{Style.RESET_ALL}", unit="model") as pbar: # Initialize tqdm progress bar
+                  for idx, (model_name, (model, param_grid)) in enumerate(models, start=1): # Iterate models with 1-based index
+                     try: # Try to build a brief parameter summary for display
+                        if isinstance(param_grid, dict): # If the parameter grid is a dict of lists
+                           param_summary = ", ".join([f"{k}:{len(v)}" for k, v in param_grid.items()]) # Build counts per hyperparameter
+                        else: # Otherwise
+                           param_summary = str(param_grid)[:80] # Fallback: truncated representation
+                     except Exception: # On any failure building the parameter summary
+                        param_summary = None # Leave param_summary empty
 
-               update_optimization_progress_bar(pbar, csv_path, model_name, param_summary=param_summary, current=idx, total=total_models) # Update progress bar before optimization
+                     update_optimization_progress_bar(pbar, csv_path, model_name, param_summary=param_summary, current=idx, total=total_models) # Update progress bar before optimization
 
-               best_params, best_score, cv_results = optimize_model(model_name, model, param_grid, X_train_ga, y_train) # Run GridSearchCV for the current model
+                     best_params, best_score, cv_results = optimize_model(model_name, model, param_grid, X_train_ga, y_train) # Run GridSearchCV for the current model
 
-               if best_params is not None: # If optimization returned a result
-                  results_list.append({ # Append the result dictionary to results_list
-                     "model": model_name, # Model name
-                     "best_params": json.dumps(best_params), # Best parameters as JSON string
-                     "best_cv_f1_score": best_score, # Best cross-validation F1 score
-                     "cv_folds": CV_FOLDS, # Number of CV folds used
-                     "n_features": X_train_ga.shape[1], # Number of GA-selected features
-                     "feature_selection_method": "Genetic Algorithm", # Feature selection method used
-                     "dataset": os.path.basename(csv_path), # Dataset filename
-                     "timestamp": datetime.datetime.now().isoformat() # Timestamp of when the optimization finished
-                  }) # End result dict
+                     if best_params is not None: # If optimization returned a result
+                        dir_results_list.append(OrderedDict([ # Append optimization results for this model into dir-level list
+                           ("base_csv", os.path.basename(csv_path)), # Base CSV filename
+                           ("model", model_name), # Model name
+                           ("best_params", json.dumps(best_params)), # Best parameters as JSON string
+                           ("best_cv_f1_score", best_score), # Best CV F1 score
+                           ("cv_folds", CV_FOLDS), # Number of CV folds used
+                           ("n_features", X_train_ga.shape[1]), # Number of GA-selected features
+                           ("feature_selection_method", "Genetic Algorithm"), # Feature selection method used
+                           ("dataset", os.path.basename(csv_path)), # Dataset filename
+                           ("timestamp", datetime.datetime.now().isoformat()) # Timestamp
+                        ])) # End appended OrderedDict
 
-               print() # Print an empty line for spacing after each model
-               pbar.update(1) # Advance the progress bar by one model
+                     print() # Print an empty line for spacing after each model
+                     pbar.update(1) # Advance the progress bar by one model
 
-         save_optimization_results(csv_path, results_list) # Save the optimization results for this file
+               added_slice = dir_results_list[start_idx:] # New entries added for this csv
+               print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Optimization Summary for {BackgroundColors.CYAN}{os.path.basename(csv_path)}{BackgroundColors.GREEN}:{Style.RESET_ALL}") # Print per-csv summary header
+               print(f"{BackgroundColors.GREEN}Total models optimized: {BackgroundColors.CYAN}{len(added_slice)}{Style.RESET_ALL}") # Print number of successful model optimizations for this csv
+               if added_slice: # If there are results for this csv
+                  best_model = max(added_slice, key=lambda x: x["best_cv_f1_score"]) # Find the best model for this csv
+                  print(f"{BackgroundColors.GREEN}Best model: {BackgroundColors.CYAN}{best_model['model']}{Style.RESET_ALL}") # Output best model name
+                  print(f"{BackgroundColors.GREEN}Best CV F1 Score: {BackgroundColors.CYAN}{best_model['best_cv_f1_score']:.4f}{Style.RESET_ALL}") # Output best score for this csv
 
-         print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Optimization Summary for {BackgroundColors.CYAN}{os.path.basename(csv_path)}{BackgroundColors.GREEN}:{Style.RESET_ALL}")
-         print(f"{BackgroundColors.GREEN}Total models optimized: {BackgroundColors.CYAN}{len(results_list)}{Style.RESET_ALL}")
-         if results_list: # If there are results to summarize
-            best_model = max(results_list, key=lambda x: x["best_cv_f1_score"]) # Find the best model
-            print(f"{BackgroundColors.GREEN}Best model: {BackgroundColors.CYAN}{best_model['model']}{Style.RESET_ALL}") # Output best model name
-            print(f"{BackgroundColors.GREEN}Best CV F1 Score: {BackgroundColors.CYAN}{best_model['best_cv_f1_score']:.4f}{Style.RESET_ALL}") # Output best score
+            except Exception as e: # Catch any unhandled exceptions during CSV processing
+               print(f"{BackgroundColors.RED}Unhandled error processing {csv_path}: {e}{Style.RESET_ALL}") # Print the exception and continue
+               continue # Continue to the next CSV file
 
-      except Exception as e: # Catch any unhandled exceptions during file processing
-         print(f"{BackgroundColors.RED}Unhandled error processing {csv_path}: {e}{Style.RESET_ALL}")
-         continue # Continue to the next file
+         if dir_results_list: # Only save if there are any results collected for this dirpath
+            rep_csv_path = os.path.join(dirpath, os.path.basename(os.path.normpath(dirpath))) # Representative path so save_optimization_results writes to dirpath
+            save_optimization_results(rep_csv_path, dir_results_list) # Save aggregated results for the directory
 
    finish_time = datetime.datetime.now() # Get the finish time of the program
    print(f"\n{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
