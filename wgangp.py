@@ -55,6 +55,7 @@ Assumptions & Notes:
 
 import argparse # For CLI argument parsing
 import atexit # For playing a sound when the program finishes
+import datetime # For tracking execution time
 import numpy as np # Numerical operations
 import os # For running a command in the terminal
 import pandas as pd # For CSV handling
@@ -606,6 +607,7 @@ def main():
    """
 
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}WGAN-GP Data Augmentation{BackgroundColors.GREEN} program!{Style.RESET_ALL}", end="\n\n") # Output the welcome message
+   start_time = datetime.datetime.now() # Get the start time of the program
    
    args = parse_args() # Parse command-line arguments
    if args.mode == "train": # If training mode is selected
@@ -615,6 +617,8 @@ def main():
       assert args.checkpoint is not None, "Generation requires --checkpoint" # Ensure checkpoint is provided
       generate(args) # Run generation function
 
+   finish_time = datetime.datetime.now() # Get the finish time of the program
+   print(f"\n{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
 
    atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None # Register the play_sound function to be called when the program finishes
