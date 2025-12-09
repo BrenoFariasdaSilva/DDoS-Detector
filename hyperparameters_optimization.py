@@ -791,6 +791,8 @@ def save_optimization_results(csv_path, results_list):
    
    try: # Try to save the results
       df_results = pd.DataFrame(results_list) # Convert results list to DataFrame
+      hardware_specs = get_hardware_specifications() # Get system specs
+      df_results["Hardware"] = hardware_specs["cpu_model"] + " | Cores: " + str(hardware_specs["cores"]) + " | RAM: " + str(hardware_specs["ram_gb"]) + " GB | OS: " + hardware_specs["os"] # Add hardware specs column
       df_results.to_csv(output_path, index=False, encoding="utf-8") # Save to CSV
       print(f"{BackgroundColors.GREEN}Results saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")
    except Exception as e: # Catch any errors during saving
