@@ -1246,7 +1246,9 @@ def get_hardware_specifications():
    
    :return: Dictionary with keys: cpu_model, cores, ram_gb, os
    """
+   
    verbose_output(f"{BackgroundColors.GREEN}Fetching system specifications...{Style.RESET_ALL}") # Output the verbose message
+   
    system = platform.system() # Identify OS type
 
    try: # Try to fetch real CPU model using OS-specific methods
