@@ -592,6 +592,62 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, total_models,
          print() # Line spacing
          pbar.update(1) # Advance progress
 
+def process_single_csv_file(csv_path, dir_results_list):
+   """
+   Processes a single CSV file: loads GA-selected features, prepares the dataset,
+   applies GA-based column filtering, and runs model hyperparameter optimization.
+
+   :param csv_path: Path to dataset CSV file
+   :param dir_results_list: List to store optimization results for the directory
+   :return: None
+   """
+   
+   print(f"{BackgroundColors.GREEN}\nProcessing file: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}") # Output the file being processed
+
+   print(f"{BackgroundColors.GREEN}Loading Genetic Algorithm selected features...{Style.RESET_ALL}") # Output loading message
+   ga_selected_features = extract_genetic_algorithm_features(csv_path) # Extract GA features
+   if ga_selected_features is None or len(ga_selected_features) == 0: # If no GA features found
+      print(f"{BackgroundColors.YELLOW}No GA features found for {csv_path}. Skipping file.{Style.RESET_ALL}")
+      return # Exit early
+
+   print(f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(ga_selected_features)}{BackgroundColors.GREEN} GA selected features{Style.RESET_ALL}") # Output feature count
+
+   dataset_bundle = load_and_prepare_dataset(csv_path) # Load, preprocess, split, scale
+   if dataset_bundle is None: # If loading/preprocessing failed
+      return # Exit early
+
+   X_train_scaled, X_test_scaled, y_train, y_test, scaler, feature_names = dataset_bundle # Unpack dataset bundle
+
+   print(f"{BackgroundColors.GREEN}Applying GA feature selection...{Style.RESET_ALL}") # Output message
+   X_train_ga = get_feature_subset(X_train_scaled, ga_selected_features, feature_names) # GA train subset
+   X_test_ga = get_feature_subset(X_test_scaled, ga_selected_features, feature_names) # GA test subset
+
+   print(f"{BackgroundColors.GREEN}Training set shape after GA feature selection: {BackgroundColors.CYAN}{X_train_ga.shape}{Style.RESET_ALL}") # Output shape
+   print(f"{BackgroundColors.GREEN}Testing set shape after GA feature selection: {BackgroundColors.CYAN}{X_test_ga.shape}{Style.RESET_ALL}") # Output shape
+
+   if X_train_ga.shape[1] == 0: # If GA selects no features
+      print(f"{BackgroundColors.YELLOW}No features selected by GA for {csv_path}. Skipping file.{Style.RESET_ALL}")
+      return # Exit early
+
+   models_and_grids = get_models_and_param_grids() # Get model grids
+
+   start_idx = len(dir_results_list) # Track result insertion index
+   print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Starting hyperparameter optimization for {BackgroundColors.CYAN}{len(models_and_grids)}{BackgroundColors.GREEN} models on {BackgroundColors.CYAN}{os.path.basename(csv_path)}{BackgroundColors.GREEN}...{Style.RESET_ALL}\n") # Output header
+
+   models = list(models_and_grids.items()) # Convert dict to list
+   total_models = len(models) # Count models
+
+   run_model_optimizations(models, csv_path, X_train_ga, y_train, total_models, dir_results_list) # Run optimizations
+
+   added_slice = dir_results_list[start_idx:] # Extract slice
+   print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Optimization Summary for {BackgroundColors.CYAN}{os.path.basename(csv_path)}{BackgroundColors.GREEN}:{Style.RESET_ALL}") # Summary header
+   print(f"{BackgroundColors.GREEN}Total models optimized: {BackgroundColors.CYAN}{len(added_slice)}{Style.RESET_ALL}") # Output count
+
+   if added_slice: # If results exist
+      best_model = max(added_slice, key=lambda x: x["best_cv_f1_score"]) # Best model
+      print(f"{BackgroundColors.GREEN}Best model: {BackgroundColors.CYAN}{best_model['model']}{Style.RESET_ALL}") # Output model
+      print(f"{BackgroundColors.GREEN}Best CV F1 Score: {BackgroundColors.CYAN}{best_model['best_cv_f1_score']:.4f}{Style.RESET_ALL}") # Output score
+
 def save_optimization_results(csv_path, results_list):
    """
    Saves hyperparameter optimization results to a CSV file.
