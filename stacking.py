@@ -1011,6 +1011,7 @@ def save_stacking_results(csv_path, results_list):
 
    df_out = pd.DataFrame(flat_rows) # Create DataFrame from flattened rows
    columns_order = ["dataset", "feature_set", "classifier_type", "model_name", "n_features", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s", "features_list"] # Define desired column order
+   add_hardware_column(df_out, columns_order, column_name="Hardware") # Ensure Hardware column exists and is placed after elapsed_time_s
    for col in columns_order: # Ensure all columns exist
       if col not in df_out.columns: # If column is missing
          df_out[col] = None # Add missing columns with None
