@@ -496,7 +496,7 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_s
 
       idx_str = f" {BackgroundColors.GREEN}[{BackgroundColors.CYAN}{current}/{total}{BackgroundColors.GREEN}]" if current is not None and total is not None else "" # Index string
 
-      desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} - Model: {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}{idx_str}" # Full single-line description
+      desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} - Model {idx_str}: {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}" # Full single-line description
 
       if param_summary is not None: # Parameter summary provided
          if isinstance(param_summary, dict): # Raw param grid
