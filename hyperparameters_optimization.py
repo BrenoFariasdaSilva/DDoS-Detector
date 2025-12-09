@@ -575,7 +575,7 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
    """
 
    verbose_output(f"{BackgroundColors.GREEN}Manually optimizing {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}...{Style.RESET_ALL}") # Output the verbose message
-   
+
    if not param_grid: return None, None, None, global_counter_start # No hyperparameters to optimize
 
    keys = list(param_grid.keys()) # Parameter names
@@ -637,9 +637,11 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
 
    total_combinations_all_models, model_combinations_counts = compute_total_param_combinations(models) # Compute total combinations
 
+   global_counter = 0 # Initialize global combination counter
+
    with tqdm(total=total_combinations_all_models, desc=f"{BackgroundColors.GREEN}Optimizing Models{Style.RESET_ALL}", unit="comb") as pbar: # Progress bar
       for model_name, (model, param_grid) in models: # Iterate models
-         best_params, best_score, all_results = manual_grid_search(model_name, model, param_grid, X_train_ga, y_train, progress_bar=pbar, csv_path=csv_path, current_model_idx=0, total_models=model_combinations_counts[model_name]) # Manual grid search instead of GridSearchCV
+         best_params, best_score, all_results, global_counter = manual_grid_search(model_name, model, param_grid, X_train_ga, y_train, progress_bar=pbar, csv_path=csv_path, global_counter_start=global_counter, total_combinations_all_models=total_combinations_all_models) # Manual grid search instead of GridSearchCV
 
          if best_params is not None: # If optimization succeeded
             dir_results_list.append(OrderedDict([ # Append only the best result
