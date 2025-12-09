@@ -82,6 +82,7 @@ import os # For running a command in the terminal
 import pandas as pd # For data manipulation
 import pickle # For caching preprocessed data
 import platform # For getting the operating system name
+import subprocess # For running small system commands (sysctl/wmic)
 import random # For random number generation
 import re # For sanitizing filenames
 import seaborn as sns # For enhanced plotting
@@ -1237,6 +1238,50 @@ def adjust_progress_for_early_stop(progress_state, n_generations, pop_size, gens
       progress_state["current_it"] = int(progress_state.get("current_it", 0)) + folds # Increment current_it for final re-eval
    except Exception: # Silently ignore failures when updating current_it
       pass # Do nothing on error
+
+def get_hardware_specifications():
+   """
+   Returns system specs: real CPU model (Windows/Linux/macOS), physical cores,
+   RAM in GB, and OS name/version.
+   
+   :return: Dictionary with keys: cpu_model, cores, ram_gb, os
+   """
+   verbose_output(f"{BackgroundColors.GREEN}Fetching system specifications...{Style.RESET_ALL}") # Output the verbose message
+   system = platform.system() # Identify OS type
+
+   try: # Try to fetch real CPU model using OS-specific methods
+      if system == "Windows": # Windows: use WMIC
+         out = subprocess.check_output("wmic cpu get Name", shell=True).decode(errors="ignore") # Run WMIC
+         cpu_model = out.strip().split("\n")[1].strip() # Extract model line
+
+      elif system == "Linux": # Linux: read from /proc/cpuinfo
+         cpu_model = "Unknown" # Default
+         with open("/proc/cpuinfo") as f: # Open cpuinfo
+            for line in f: # Iterate lines
+               if "model name" in line: # Model name entry
+                  cpu_model = line.split(":",1)[1].strip() # Extract name
+                  break # Stop after first match
+
+      elif system == "Darwin": # macOS: use sysctl
+         out = subprocess.check_output(["sysctl","-n","machdep.cpu.brand_string"]) # Run sysctl
+         cpu_model = out.decode().strip() # Extract model string
+
+      else: # Unsupported OS
+         cpu_model = "Unknown" # Fallback
+
+   except Exception: # If any method fails
+      cpu_model = "Unknown" # Fallback on failure
+
+   cores = psutil.cpu_count(logical=False) if psutil else None # Physical core count
+   ram_gb = round(psutil.virtual_memory().total / (1024**3), 1) if psutil else None # Total RAM in GB
+   os_name = f"{platform.system()} {platform.release()}" # OS name + version
+
+   return { # Build final dictionary
+      "cpu_model": cpu_model, # CPU model string
+      "cores": cores, # Physical cores
+      "ram_gb": ram_gb, # RAM in gigabytes
+      "os": os_name # Operating system
+   }
 
 def write_consolidated_csv(rows, output_dir):
    """
