@@ -528,7 +528,7 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_g
 
       desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} - {idx_str} {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}:" # Base description
 
-      def _short(value, limit=30): return str(value) if len(str(value)) <= limit else str(value)[:limit-3]+"..." # Helper to truncate strings
+      def _short(value, limit=30): return str(value) if len(str(value)) <= limit else str(value)[:limit-3] + "..." # Helper to truncate strings
 
       if isinstance(param_grid, dict): # If param_grid is a dictionary
          parts = [] # Collect formatted hyperparameters
