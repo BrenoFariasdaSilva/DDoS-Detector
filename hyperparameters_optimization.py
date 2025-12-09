@@ -322,6 +322,35 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
    
    return X_train_scaled, X_test_scaled, y_train, y_test, scaler # Return scaled features, target, and the fitted scaler
 
+def load_and_prepare_dataset(csv_path):
+   """
+   Loads, preprocesses, and prepares a dataset for model training and evaluation.
+
+   :param csv_path: Path to the CSV dataset file
+   :return: Tuple (X_train_scaled, X_test_scaled, y_train, y_test, scaler, feature_names)
+   """
+   
+   df = load_dataset(csv_path) # Load dataset
+   if df is None: # If load failed
+      print(f"{BackgroundColors.YELLOW}Failed to load dataset {csv_path}. Skipping file.{Style.RESET_ALL}")
+      return None # Exit early
+
+   df_clean = preprocess_dataframe(df) # Preprocess DataFrame
+   if df_clean is None or df_clean.empty: # If preprocessing failed
+      print(f"{BackgroundColors.YELLOW}Dataset preprocessing failed for {csv_path}. Skipping file.{Style.RESET_ALL}")
+      return None # Exit early
+
+   X = df_clean.iloc[:, :-1] # Features
+   y = df_clean.iloc[:, -1] # Target
+
+   print(f"{BackgroundColors.GREEN}Dataset loaded with {BackgroundColors.CYAN}{X.shape[0]}{BackgroundColors.GREEN} samples and {BackgroundColors.CYAN}{X.shape[1]}{BackgroundColors.GREEN} features{Style.RESET_ALL}") # Output dataset shape
+
+   X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X, y) # Split and scale
+
+   feature_names = list(X.select_dtypes(include=np.number).columns) # Numeric feature names
+
+   return X_train_scaled, X_test_scaled, y_train, y_test, scaler, feature_names
+
 def get_feature_subset(X_scaled, features, feature_names):
    """
    Returns a subset of features from the scaled feature set based on the provided feature names.
