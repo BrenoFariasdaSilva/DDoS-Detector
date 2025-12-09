@@ -534,7 +534,7 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_g
          parts = [] # Collect formatted hyperparameters
          for i, (k, v) in enumerate(param_grid.items()): # Iterate over hyperparameters
             if i >= 4: break # Limit to 4 params for compactness
-            try:
+            try: # Try to format the hyperparameter
                vals = list(v) if hasattr(v, '__iter__') and not isinstance(v, (str, bytes, dict)) else [v] # Convert iterable values to list
                shown = ",".join([_short(x, 12) for x in vals[:4]]) # Show up to 4 values per hyperparameter
                if len(vals) > 4: shown += f",+{len(vals)-4}" # Indicate remaining values
