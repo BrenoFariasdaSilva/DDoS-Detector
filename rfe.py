@@ -401,8 +401,7 @@ def save_rfe_results(csv_path, run_results):
 
    try: # Try saving CSV
       df_run = pd.DataFrame(run_results) # Create DataFrame
-      columns_order = ["model", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s", "top_features", "rfe_ranking"] # Define column order
-      df_run = df_run.reindex(columns=columns_order) # Reorder columns
+      df_run = populate_hardware_column_and_order(df_run, column_name="Hardware")
       run_csv_path = f"{output_dir}RFE_Run_Results.csv" # CSV path
       df_run.to_csv(run_csv_path, index=False, encoding="utf-8") # Write run results CSV
       print(f"{BackgroundColors.GREEN}Run results saved to {BackgroundColors.CYAN}{run_csv_path}{Style.RESET_ALL}") # Notify CSV saved
