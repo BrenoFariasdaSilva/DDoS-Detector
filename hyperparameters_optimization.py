@@ -500,23 +500,23 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_s
 
       idx_str = f" {BackgroundColors.GREEN}[{BackgroundColors.CYAN}{current}/{total}{BackgroundColors.GREEN}]" if current is not None and total is not None else "" # Index string
 
-      desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} - Model {idx_str}: {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}" # Full single-line description
+      desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} - {idx_str} Model: {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}" # Full single-line description
 
       if param_summary is not None: # Parameter summary provided
          if isinstance(param_summary, dict): # Raw param grid
             parts = [] # List to accumulate items
             for k, v in param_summary.items(): # Iterate parameters
                try: # Try counting items
-                  parts.append(f"{BackgroundColors.GREEN}{k}{BackgroundColors.GREEN}:{BackgroundColors.CYAN}{len(v)}{BackgroundColors.GREEN}") # Add formatted count
+                  parts.append(f"{BackgroundColors.GREEN}{k}{BackgroundColors.GREEN}={BackgroundColors.CYAN}{len(v)}{BackgroundColors.GREEN}") # Add formatted count
                except Exception: # Value not countable
-                  parts.append(f"{BackgroundColors.GREEN}{k}{BackgroundColors.GREEN}:{BackgroundColors.CYAN}{str(v)[:20]}{BackgroundColors.GREEN}") # Add fallback summary
+                  parts.append(f"{BackgroundColors.GREEN}{k}{BackgroundColors.GREEN}={BackgroundColors.CYAN}{str(v)[:20]}{BackgroundColors.GREEN}") # Add fallback summary
             param_display = ", ".join(parts) # Join parts into string
          else: # Non-dict summary
             if "\033[" in str(param_summary): # Already colored
                param_display = str(param_summary) # Use directly
             else: # Not colored
                param_display = f"{BackgroundColors.CYAN}{str(param_summary)[:140]}{BackgroundColors.GREEN}" # Color and truncate
-         desc = f"{desc} {BackgroundColors.GREEN}- Params: {param_display}{Style.RESET_ALL}" # Append parameter display
+         desc = f"{desc} {BackgroundColors.GREEN}({param_display}){Style.RESET_ALL}" # Append parameter display
 
       progress_bar.set_description(desc) # Update bar description
       progress_bar.refresh() # Refresh bar immediately
