@@ -442,6 +442,8 @@ def save_pca_results(csv_path, all_results):
 	comparison_df = pd.DataFrame(rows) # Create DataFrame from rows
 	csv_output = f"{output_dir}/PCA_Results.csv" # Output CSV path
 
+	comparison_df = populate_hardware_column(comparison_df, column_name="Hardware") # Add hardware specs column
+
 	try: # Attempt to save the CSV
 		comparison_df.to_csv(csv_output, index=False) # Save the DataFrame to CSV
 		print(f"{BackgroundColors.GREEN}PCA results saved to {BackgroundColors.CYAN}{csv_output}{Style.RESET_ALL}")
