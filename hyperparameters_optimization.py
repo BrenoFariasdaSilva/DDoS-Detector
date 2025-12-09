@@ -473,50 +473,59 @@ def get_models_and_param_grids():
 
 def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=None, current=None, total=None):
    """
-   Updates the tqdm progress bar for model hyperparameter optimization.
+   Updates a tqdm progress bar during hyperparameter optimization.
 
-   The description shows: dataset reference, model name, progress index, and an
-   optional compact parameter summary appended to the description.
+   Shows dataset reference, model name, progress index, and an optional compact
+   summary of hyperparameters.
 
    :param progress_bar: tqdm progress bar instance
-   :param csv_path: Path to the dataset CSV file
-   :param model_name: Current model being optimized
-   :param param_grid: Optional parameter grid or summary to display
+   :param csv_path: Path to dataset CSV
+   :param model_name: Name of the model being optimized
+   :param param_grid: Optional hyperparameter dictionary or summary
    :param current: Current model index (1-based)
    :param total: Total number of models
    :return: None
    """
 
-   if progress_bar is None: # No progress bar provided
-      return # Nothing to update
-   try: # Protect against update errors
-      csv_basename = os.path.basename(csv_path) # Extract CSV filename
+   if progress_bar is None: return # Nothing to update if progress bar is None
+
+   try: # Protect against unexpected errors
+      csv_name = os.path.basename(csv_path) # Extract CSV filename
       parent_dir = os.path.basename(os.path.dirname(csv_path)) # Extract parent directory
+      if parent_dir and parent_dir.lower() != csv_name.lower(): # Parent differs from filename
+         dataset_ref = f"{BackgroundColors.CYAN}{parent_dir}/{csv_name}{BackgroundColors.GREEN}" # Show parent/filename
+      else: # Parent same as filename or empty
+         dataset_ref = f"{BackgroundColors.CYAN}{csv_name}{BackgroundColors.GREEN}" # Show only filename
 
-      if parent_dir and parent_dir.lower() != csv_basename.lower(): # Parent differs from filename
-         dataset_ref = f"{BackgroundColors.CYAN}{parent_dir}/{csv_basename}{BackgroundColors.GREEN}" # Use parent/filename reference
-      else: # Parent matches filename or empty
-         dataset_ref = f"{BackgroundColors.CYAN}{csv_basename}{BackgroundColors.GREEN}" # Use only filename reference
+      idx_str = f" {BackgroundColors.GREEN}[{BackgroundColors.CYAN}{current}/{total}{BackgroundColors.GREEN}]" if current is not None and total is not None else "" # Progress index string
 
-      idx_str = f" {BackgroundColors.GREEN}[{BackgroundColors.CYAN}{current}/{total}{BackgroundColors.GREEN}]" if current is not None and total is not None else "" # Index string
+      desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} -{idx_str} Model: {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}" # Base description
 
-      desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} - {idx_str} Model: {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}" # Full single-line description
+      def _short(value, limit=30): return str(value) if len(str(value)) <= limit else str(value)[:limit-3]+"..." # Helper to truncate strings
 
-      if isinstance(param_grid, dict): # Raw param grid
-         parts = [] # List to accumulate items
-         for k, v in param_grid.items(): # Iterate parameters
-            try: # Try counting items
-               parts.append(f"{BackgroundColors.GREEN}{k}{BackgroundColors.GREEN}={BackgroundColors.CYAN}{len(v)}{BackgroundColors.GREEN}") # Add formatted count
-            except Exception: # Value not countable
-               parts.append(f"{BackgroundColors.GREEN}{k}{BackgroundColors.GREEN}={BackgroundColors.CYAN}{str(v)[:20]}{BackgroundColors.GREEN}") # Add fallback summary
-         param_display = ", ".join(parts) # Join parts into string
-      
-      desc = f"{desc} {BackgroundColors.GREEN}({param_display}){Style.RESET_ALL}" # Append parameter display
+      if isinstance(param_grid, dict): # If param_grid is a dictionary
+         parts = [] # Collect formatted hyperparameters
+         for i, (k, v) in enumerate(param_grid.items()): # Iterate over hyperparameters
+            if i >= 4: break # Limit to 4 params for compactness
+            try:
+               vals = list(v) if hasattr(v, '__iter__') and not isinstance(v, (str, bytes, dict)) else [v] # Convert iterable values to list
+               shown = ",".join([_short(x, 12) for x in vals[:4]]) # Show up to 4 values per hyperparameter
+               if len(vals) > 4: shown += f",+{len(vals)-4}" # Indicate remaining values
+               parts.append(f"{BackgroundColors.GREEN}{_short(k,18)}{BackgroundColors.GREEN}:[{BackgroundColors.CYAN}{shown}{BackgroundColors.GREEN}]") # Append formatted hyperparameter
+            except Exception:
+               parts.append(f"{BackgroundColors.GREEN}{_short(k,18)}{BackgroundColors.GREEN}:[{BackgroundColors.CYAN}{_short(v,12)}{BackgroundColors.GREEN}]") # Fallback formatting
+         remaining = max(0, len(param_grid)-4) # Count remaining parameters
+         param_display = ", ".join(parts) # Join formatted parameters
+         if remaining > 0: param_display += f", {BackgroundColors.CYAN}+{remaining} more{BackgroundColors.GREEN}" # Show remaining count
+      else: # If param_grid is not a dictionary
+         param_display = _short(param_grid, 60) # Truncate string or other type
 
-      progress_bar.set_description(desc) # Update bar description
-      progress_bar.refresh() # Refresh bar immediately
-   except Exception: # Handle any exception silently
-      pass # Suppress all update errors
+      desc = f"{desc} {BackgroundColors.GREEN}({param_display}){Style.RESET_ALL}" # Append parameter display to description
+
+      progress_bar.set_description(desc) # Update progress bar description
+      progress_bar.refresh() # Force refresh of the progress bar
+
+   except Exception: pass # Silently ignore any errors during update
 
 def optimize_model(model_name, model, param_grid, X_train, y_train):
    """
