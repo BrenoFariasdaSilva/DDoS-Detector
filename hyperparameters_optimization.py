@@ -660,7 +660,7 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
 
    total_combinations_all_models, model_combinations_counts = compute_total_param_combinations(models) # Compute total combinations
 
-   verbose_output(f"{BackgroundColors.GREEN}Starting hyperparameter optimizations for {BackgroundColors.CYAN}{len(models)}{BackgroundColors.GREEN} models with a total of {BackgroundColors.CLEAR_TERMINAL}{total_combinations_all_models}{BackgroundColors.GREEN} parameter combinations...{Style.RESET_ALL}") # Output verbose message
+   verbose_output(f"{BackgroundColors.GREEN}Starting hyperparameter optimizations for {BackgroundColors.CYAN}{len(models)}{BackgroundColors.GREEN} models with a total of {BackgroundColors.CYAN}{total_combinations_all_models}{BackgroundColors.GREEN} parameter combinations...{Style.RESET_ALL}") # Output verbose message
 
    global_counter = 0 # Initialize global combination counter
 
