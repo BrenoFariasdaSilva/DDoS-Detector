@@ -512,7 +512,7 @@ def compute_total_param_combinations(models):
 
    return total_combinations_all_models, model_combinations_counts # Return total and per-model counts
 
-def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=None, current=None, total_models=None, total_combinations=None):
+def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=None, current=None, total_models=None, total_combinations=None, overall=None):
    """
    Updates a tqdm progress bar during hyperparameter optimization.
 
@@ -565,7 +565,7 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_g
       desc = f"{desc} {BackgroundColors.GREEN}({param_display}){Style.RESET_ALL}" # Append parameter display to description
 
       progress_bar.set_description(desc) # Update progress bar description
-      progress_bar.n = current # Sync internal progress counter
+      progress_bar.n = overall if overall is not None else (current or getattr(progress_bar, 'n', 0))
       progress_bar.total = total_combinations # Ensure total is correct
       progress_bar.refresh() # Force refresh of the progress bar
 
@@ -611,7 +611,7 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
       current_params = dict(zip(keys, combination)) # Build dict of current params
       global_counter += 1 # Increment overall combination counter
 
-      update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=global_counter, total_combinations=total_combinations_all_models, total_models=total_models) if progress_bar is not None and csv_path is not None else None # Update progress bar
+      update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=model_index, total_combinations=total_combinations_all_models, total_models=total_models, overall=global_counter) if progress_bar is not None and csv_path is not None else None # Update progress bar
 
       start_time = time.time() # Start timing
 
