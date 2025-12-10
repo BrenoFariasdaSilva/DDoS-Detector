@@ -611,7 +611,7 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
       current_params = dict(zip(keys, combination)) # Build dict of current params
       global_counter += 1 # Increment overall combination counter
 
-      update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=model_index, total_combinations=total_combinations_all_models, total_models=total_models) if progress_bar is not None and csv_path is not None else None # Update progress bar
+      update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=global_counter, total_combinations=total_combinations_all_models, total_models=total_models) if progress_bar is not None and csv_path is not None else None # Update progress bar
 
       start_time = time.time() # Start timing
 
