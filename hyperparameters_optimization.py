@@ -617,9 +617,6 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
 
       try: # Try to train and evaluate
          model.set_params(**current_params) # Apply hyperparameters
-         if N_JOBS is not None: # Set n_jobs if applicable
-            model.set_params(n_jobs=N_JOBS) # Set n_jobs for parallel processing
-
          model.fit(X_train, y_train) # Train model
          y_pred = model.predict(X_train) # Predict on training set
          score = f1_score(y_train, y_pred, average="weighted") # Compute weighted F1 score
