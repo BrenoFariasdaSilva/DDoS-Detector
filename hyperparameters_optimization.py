@@ -401,7 +401,7 @@ def get_models_and_param_grids():
    
    return { # Dictionary of models and their parameter grids
       "Random Forest": (
-         RandomForestClassifier(random_state=42), # Random Forest classifier
+         RandomForestClassifier(random_state=42, n_jobs=N_JOBS), # Random Forest classifier
          {
             "n_estimators": [50, 100, 200], # Number of trees in the forest
             "max_depth": [None, 10, 20, 30], # Maximum depth of the tree
@@ -419,7 +419,7 @@ def get_models_and_param_grids():
          }
       ),
       "XGBoost": (
-         XGBClassifier(eval_metric="mlogloss", random_state=42), # XGBoost classifier
+         XGBClassifier(eval_metric="mlogloss", random_state=42, n_jobs=N_JOBS), # XGBoost classifier
          {
             "n_estimators": [50, 100, 200], # Number of trees in the forest
             "max_depth": [3, 5, 7, 10], # Maximum depth of the tree
@@ -429,7 +429,7 @@ def get_models_and_param_grids():
          }
       ),
       "Logistic Regression": (
-         LogisticRegression(max_iter=1000, random_state=42), # Logistic Regression classifier
+         LogisticRegression(max_iter=1000, random_state=42, n_jobs=N_JOBS), # Logistic Regression classifier
          {
             "C": [0.001, 0.01, 0.1, 1, 10, 100], # Inverse of regularization strength
             "penalty": ["l1", "l2", "elasticnet", None], # Norm used in the penalization
@@ -438,7 +438,7 @@ def get_models_and_param_grids():
          }
       ),
       "KNN": (
-         KNeighborsClassifier(), # K-Nearest Neighbors classifier
+         KNeighborsClassifier(n_jobs=N_JOBS), # K-Nearest Neighbors classifier
          {
             "n_neighbors": [3, 5, 7, 9, 11], # Number of neighbors to use
             "weights": ["uniform", "distance"], # Weight function used in prediction
@@ -465,7 +465,7 @@ def get_models_and_param_grids():
          }
       ),
       "LightGBM": (
-         lgb.LGBMClassifier(force_row_wise=True, random_state=42, verbosity=-1), # LightGBM classifier
+         lgb.LGBMClassifier(force_row_wise=True, random_state=42, verbosity=-1, n_jobs=N_JOBS), # LightGBM classifier
          {
             "n_estimators": [50, 100, 200], # Number of boosting stages to be run
             "max_depth": [3, 5, 7, 10, -1], # Maximum depth of the tree (-1 means no limit)
