@@ -146,6 +146,34 @@ def verify_filepath_exists(filepath):
 
    return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
 
+def resolve_io_paths(args):
+   """
+   Resolve and validate input/output paths from CLI arguments.
+
+   :param args: Parsed CLI arguments.
+   :return: Tuple (input_path, output_path).
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Resolving input/output paths...{Style.RESET_ALL}") # Output the verbose message
+
+   input_path = args.input if args.input else INPUT_DIRECTORY # Resolve input path
+   output_path = args.output if args.output else OUTPUT_DIRECTORY # Resolve output path
+
+   if args.input: # If a custom input path was provided
+      if not verify_filepath_exists(input_path): # Check if it exists
+         print(f"{BackgroundColors.RED}Specified input path does not exist: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}") # Output error message
+         return None, None # Invalid path, exit early
+   else: # No custom input path
+      if not verify_filepath_exists(INPUT_DIRECTORY): # Check default folder
+         create_directories(INPUT_DIRECTORY) # Create default folder
+         print(f"{BackgroundColors.RED}Input folder does not exist: {INPUT_DIRECTORY}{Style.RESET_ALL}") # Output error message
+         return None, None # Invalid input directory
+
+   if not verify_filepath_exists(output_path): # If output directory does not exist
+      create_directories(output_path) # Create output directory
+
+   return input_path, output_path # Return validated paths
+
 def create_directories(directory_name):
    """
    Creates a directory if it does not exist.
@@ -633,14 +661,12 @@ def main():
    
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Multi-Format Dataset Converter{BackgroundColors.GREEN}!{Style.RESET_ALL}\n") # Output the Welcome message
 
-   if not verify_filepath_exists(INPUT_DIRECTORY): # If the input directory does not exist
-      create_directories(INPUT_DIRECTORY) # Create input folder if it does not exist
-      print(f"{BackgroundColors.RED}Input folder does not exist: {INPUT_DIRECTORY}{Style.RESET_ALL}")
-      return # Exit the program if the input folder does not exist
-   
-   if not verify_filepath_exists(OUTPUT_DIRECTORY): # If the output directory does not exist
-      create_directories(OUTPUT_DIRECTORY) # Create the output directory
+   args = parse_cli_arguments() # Parse CLI arguments
 
+   input_path, output_path = resolve_io_paths(args) # Resolve and validate paths
+   if input_path is None or output_path is None: # If either path is invalid
+      return # Exit early if input/output paths are invalid
+   
    batch_convert(INPUT_DIRECTORY, OUTPUT_DIRECTORY) # Batch convert dataset files from the input directory to multiple formats in the output directory
 
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Conversions completed!{Style.RESET_ALL}") # Output the completion message
