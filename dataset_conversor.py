@@ -343,13 +343,9 @@ def ensure_enough_space(path, required_bytes):
    :return: None
    """
 
-   if not has_enough_space_for_path(path, required_bytes):  # Verify free space for the write operation
-      raise OSError(
-         f"{BackgroundColors.RED}Not enough disk space to write file: "
-         f"{BackgroundColors.CYAN}{path}{BackgroundColors.RED} "
-         f"(requires ~{BackgroundColors.CYAN}{required_bytes}{BackgroundColors.RED} bytes)"
-         f"{Style.RESET_ALL}"
-      )
+   if not has_enough_space_for_path(path, required_bytes): # Verify free space for the write operation
+      free = get_free_space_bytes(os.path.dirname(path) or ".")
+      raise OSError(f"Not enough disk space to write {path}. Free: {format_size_units(free)}; required: {format_size_units(required_bytes)}")
 
 def estimate_bytes_arff(df, overhead, attributes):
    """
