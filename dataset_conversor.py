@@ -65,6 +65,7 @@ Assumptions & Notes:
 """
 
 import arff # liac-arff, used to save ARFF files
+import argparse # For parsing command-line arguments
 import atexit # For playing a sound when the program finishes
 import io # For in-memory file operations
 import os # For running commands in the terminal
@@ -114,6 +115,24 @@ def verbose_output(true_string="", false_string=""):
       print(true_string) # Output the true statement string
    elif false_string != "": # If the false_string is set
       print(false_string) # Output the false statement string
+
+def parse_cli_arguments():
+   """
+   Parse command-line arguments for the dataset converter.
+
+   :return: Parsed ArgumentParser namespace.
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Parsing command-line arguments...{Style.RESET_ALL}") # Output the verbose message
+
+   parser = argparse.ArgumentParser(description="Multi-Format Dataset Converter: convert ARFF/CSV/Parquet/TXT datasets") # Create the argument parser
+
+   parser.add_argument("-i", "--input", type=str, help="Input path (file or directory). If not provided, uses ./Input") # Input path argument
+   parser.add_argument("-o", "--output", type=str, help="Output directory. If not provided, uses ./Output") # Output directory argument
+   parser.add_argument("-f", "--formats", type=str, help="Comma-separated output formats to produce (arff,csv,parquet,txt). If not provided, all formats are produced") # Output formats argument
+   parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output") # Verbose mode flag
+
+   return parser.parse_args() # Return parsed CLI arguments
 
 def verify_filepath_exists(filepath):
    """
@@ -586,7 +605,7 @@ def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIREC
          convert_to_parquet(df, os.path.join(dest_dir, f"{name}.parquet")) # Write Parquet file
       if ext != ".txt": # Convert to TXT if not already TXT
          convert_to_txt(df, os.path.join(dest_dir, f"{name}.txt")) # Write TXT file
-      
+
 def play_sound():
    """
    Plays a sound when the program finishes and skips if the operating system is Windows.
