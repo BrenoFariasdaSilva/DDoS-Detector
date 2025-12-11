@@ -174,6 +174,18 @@ def resolve_io_paths(args):
 
    return input_path, output_path # Return validated paths
 
+def configure_verbose_mode(args):
+   """
+   Enable verbose output mode when requested via CLI.
+
+   :param args: Parsed CLI arguments.
+   :return: None
+   """
+
+   if args.verbose: # If verbose mode requested
+      global VERBOSE # Use global variable
+      VERBOSE = True # Enable verbose mode
+
 def create_directories(directory_name):
    """
    Creates a directory if it does not exist.
@@ -666,8 +678,10 @@ def main():
    input_path, output_path = resolve_io_paths(args) # Resolve and validate paths
    if input_path is None or output_path is None: # If either path is invalid
       return # Exit early if input/output paths are invalid
+
+   configure_verbose_mode(args) # Enable verbose mode if requested
    
-   batch_convert(INPUT_DIRECTORY, OUTPUT_DIRECTORY) # Batch convert dataset files from the input directory to multiple formats in the output directory
+   batch_convert(input_path, output_path) # Batch convert dataset files from the input directory to multiple formats in the output directory
 
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Conversions completed!{Style.RESET_ALL}") # Output the completion message
 
