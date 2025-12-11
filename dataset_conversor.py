@@ -226,19 +226,6 @@ def convert_to_csv(df, output_path):
 
    df.to_csv(output_path, index=False) # Save the DataFrame to the specified output path in CSV format, without the index
 
-def convert_to_txt(df, output_path):
-   """
-   Convert a pandas DataFrame to TXT format and save it to the specified output path.
-
-   :param df: pandas DataFrame to be converted.
-   :param output_path: Path to save the converted TXT file.
-   :return: None
-   """
-
-   verbose_output(f"{BackgroundColors.GREEN}Converting DataFrame to TXT format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}") # Output the verbose message
-
-   df.to_csv(output_path, sep="\t", index=False) # Save the DataFrame to the specified output path in TXT format, using tab as the separator and without the index
-
 def convert_to_parquet(df, output_path):
    """
    Convert a pandas DataFrame to PARQUET format and save it to the specified output path.
@@ -251,6 +238,19 @@ def convert_to_parquet(df, output_path):
    verbose_output(f"{BackgroundColors.GREEN}Converting DataFrame to PARQUET format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")
 
    df.to_parquet(output_path, index=False) # Save the DataFrame to the specified output path in PARQUET format, without the index
+
+def convert_to_txt(df, output_path):
+   """
+   Convert a pandas DataFrame to TXT format and save it to the specified output path.
+
+   :param df: pandas DataFrame to be converted.
+   :param output_path: Path to save the converted TXT file.
+   :return: None
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Converting DataFrame to TXT format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}") # Output the verbose message
+
+   df.to_csv(output_path, sep="\t", index=False) # Save the DataFrame to the specified output path in TXT format, using tab as the separator and without the index
 
 def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIRECTORY):
    """
