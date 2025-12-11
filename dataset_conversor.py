@@ -220,6 +220,19 @@ def get_dataset_files(directory=INPUT_DIRECTORY):
 
    return dataset_files # Return the list of dataset files
 
+def resolve_dataset_files(input_directory):
+   """
+   Resolve dataset files from a directory or a single file path.
+
+   :param input_directory: Input directory or single file path.
+   :return: List of dataset file paths.
+   """
+
+   if os.path.isfile(input_directory): # If the input directory is actually a file
+      return [input_directory] # Process only that one file
+
+   return get_dataset_files(input_directory) # Otherwise, scan directory recursively
+
 def get_free_space_bytes(path):
    """
    Return the number of free bytes available on the filesystem
@@ -664,10 +677,7 @@ def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIREC
 
    verbose_output(f"{BackgroundColors.GREEN}Batch converting dataset files from {BackgroundColors.CYAN}{input_directory}{BackgroundColors.GREEN} to {BackgroundColors.CYAN}{output_directory}{Style.RESET_ALL}") # Output the verbose message
 
-   if os.path.isfile(input_directory): # If the input directory is actually a file
-      dataset_files = [input_directory] # Process only that single file
-   else: # If the input directory is a directory
-      dataset_files = get_dataset_files(input_directory) # Get all dataset files in the input directory
+   dataset_files = resolve_dataset_files(input_directory) # Get all dataset files from the input directory
 
    if not dataset_files: # If no dataset files were found
       print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}") # Print error message
