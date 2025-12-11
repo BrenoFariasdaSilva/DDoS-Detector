@@ -87,4 +87,26 @@ class DualLogger:
 
       self.is_tty = sys.stdout.isatty() # Verify if running in a real terminal
 
-   
+   def write(self, data):
+      """
+      Writes output to both the terminal (optionally with color) and
+      the log file (without ANSI codes).
+
+      :param data: The raw string to be written.
+      :return: None
+      """
+
+      if not data: # If there is no output, do nothing
+         return # Early exit
+
+      clean_data = ANSI_ESCAPE_REGEX.sub("", data) # Remove ANSI codes for log file
+
+      self.logfile.write(clean_data) # Write clean data to the log file
+      self.logfile.flush() # Ensure it is written immediately
+
+      if self.is_tty: # If running in a real terminal
+         sys.__stdout__.write(data) # Write colored output
+         sys.__stdout__.flush() # Ensure it is written immediately
+      else: # Non-TTY: strip colors to avoid garbled characters
+         sys.__stdout__.write(clean_data) # Write clean output
+         sys.__stdout__.flush() # Ensure it is written immediately
