@@ -110,3 +110,13 @@ class DualLogger:
       else: # Non-TTY: strip colors to avoid garbled characters
          sys.__stdout__.write(clean_data) # Write clean output
          sys.__stdout__.flush() # Ensure it is written immediately
+
+   def flush(self):
+      """
+      Flushes both the log file and terminal output streams.
+
+      :return: None
+      """
+
+      self.logfile.flush() # Flush the log file
+      sys.__stdout__.flush() # Flush terminal output
