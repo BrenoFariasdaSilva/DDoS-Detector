@@ -147,6 +147,18 @@ def clean_csv_or_txt_lines(lines):
 
    return cleaned_lines # Return the list of cleaned lines
 
+def write_cleaned_lines_to_file(cleaned_path, cleaned_lines):
+   """
+   Writes cleaned lines to a specified file.
+
+   :param cleaned_path: Path to the file where cleaned lines will be written.
+   :param cleaned_lines: List of cleaned lines to write to the file.
+   :return: None
+   """
+
+   with open(cleaned_path, "w", encoding="utf-8") as f: # Open the cleaned file path for writing
+      f.writelines(cleaned_lines) # Write all cleaned lines to the output file
+
 def clean_file(input_path, cleaned_path):
    """
    Cleans ARFF, TXT, CSV, and Parquet files by removing unnecessary spaces in
@@ -176,8 +188,7 @@ def clean_file(input_path, cleaned_path):
    else: # If the file extension is not supported
       raise ValueError(f"{BackgroundColors.RED}Unsupported file extension: {BackgroundColors.CYAN}{file_extension}{Style.RESET_ALL}") # Raise error for unsupported formats
 
-   with open(cleaned_path, "w", encoding="utf-8") as f: # Open cleaned file path for writing
-      f.writelines(cleaned_lines) # Write all cleaned lines to the output file
+   write_cleaned_lines_to_file(cleaned_path, cleaned_lines) # Write cleaned lines to the cleaned file path
 
 def load_dataset(input_path):
    """
