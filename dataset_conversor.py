@@ -93,6 +93,60 @@ def get_dataset_files(directory=INPUT_DIRECTORY):
 
    return dataset_files # Return the list of dataset files
 
+def clean_parquet_file(input_path, cleaned_path):
+   """
+   Cleans Parquet files by rewriting them without any textual cleaning,
+
+   :param input_path: Path to the input Parquet file.
+   :param cleaned_path: Path where the rewritten Parquet file will be saved.
+   :return: None
+   """
+
+   pass # Parquet files are binary and do not require textual cleaning, so we just read and write them
+
+def clean_arff_lines(lines):
+   """
+   Cleans ARFF files by removing unnecessary spaces in @attribute domain lists.
+
+   :param lines: List of lines read from the ARFF file.
+   :return: List of cleaned lines with sanitized domain values.
+   """
+
+   cleaned_lines = [] # List to store cleaned lines
+
+   for line in lines: # Iterate through each line of the ARFF file
+      if line.strip().lower().startswith("@attribute") and "{" in line and "}" in line: # Check if the line defines a domain list
+         parts = line.split("{") # Split before domain
+         before = parts[0] # Content before the domain
+         domain = parts[1].split("}")[0] # Extract domain content
+         after = line.split("}")[1] # Content after domain
+
+         cleaned_domain = ",".join([val.strip() for val in domain.split(",")]) # Strip spaces inside domain list
+         cleaned_line = f"{before}{{{cleaned_domain}}}{after}" # Construct cleaned line
+         cleaned_lines.append(cleaned_line) # Add cleaned attribute line
+      else: # If the line is not an attribute definition
+         cleaned_lines.append(line) # Keep non-attribute lines unchanged
+
+   return cleaned_lines # Return the list of cleaned lines
+
+def clean_csv_or_txt_lines(lines):
+   """
+   Cleans TXT and CSV files by removing unnecessary spaces around comma-separated values.
+
+   :param lines: List of lines read from the file.
+   :return: List of cleaned lines with sanitized comma-separated values.
+   """
+
+   cleaned_lines = [] # List to store cleaned lines
+
+   for line in lines: # Iterate through each line
+      values = line.strip().split(",") # Split the line on commas
+      cleaned_values = [val.strip() for val in values] # Strip whitespace
+      cleaned_line = ",".join(cleaned_values) + "\n" # Join cleaned values and add newline
+      cleaned_lines.append(cleaned_line) # Add cleaned line
+
+   return cleaned_lines # Return the list of cleaned lines
+
 def clean_file(input_path, cleaned_path):
    """
    Cleans ARFF, TXT, CSV, and Parquet files by removing unnecessary spaces in
@@ -109,38 +163,18 @@ def clean_file(input_path, cleaned_path):
    verbose_output(f"{BackgroundColors.GREEN}Cleaning file: {BackgroundColors.CYAN}{input_path}{BackgroundColors.GREEN} and saving to {BackgroundColors.CYAN}{cleaned_path}{Style.RESET_ALL}") # Output the verbose message
 
    if file_extension == ".parquet": # Handle parquet files separately (binary format)
-      df = pd.read_parquet(input_path, engine="fastparquet") # Read the parquet file
-      df.to_parquet(cleaned_path, index=False) # Write the parquet file without changes
+      clean_parquet_file(input_path, cleaned_path) # Clean parquet file
       return # Exit early after handling parquet
 
    with open(input_path, "r", encoding="utf-8") as f: # Open the input file for reading
       lines = f.readlines() # Read all lines from the file
 
-   cleaned_lines = [] # List to store the cleaned lines
-
    if file_extension == ".arff": # Cleaning logic for ARFF files
-      for line in lines: # Iterate through each line of the ARFF file
-         if line.strip().lower().startswith("@attribute") and "{" in line and "}" in line: # Check if the line defines a domain list
-            parts = line.split("{") # Split the line at the domain start
-            before = parts[0] # Content before the domain
-            domain = parts[1].split("}")[0] # Extract domain content between braces
-            after = line.split("}")[1] # Content after the domain
-
-            cleaned_domain = ",".join([val.strip() for val in domain.split(",")]) # Strip spaces around values in domain list
-            cleaned_line = f"{before}{{{cleaned_domain}}}{after}" # Reconstruct the cleaned line
-
-            cleaned_lines.append(cleaned_line) # Add cleaned attribute line
-         else:
-            cleaned_lines.append(line) # Keep non-attribute lines unchanged
-
+      cleaned_lines = clean_arff_lines(lines) # Clean ARFF lines
    elif file_extension in [".txt", ".csv"]: # Cleaning logic for TXT and CSV files
-      for line in lines: # Iterate through each line
-         values = line.strip().split(",") # Split the line on commas
-         cleaned_values = [val.strip() for val in values] # Strip whitespace from each value
-         cleaned_line = ",".join(cleaned_values) + "\n" # Join cleaned values and add newline
-         cleaned_lines.append(cleaned_line) # Add the cleaned line
-   else:
-      raise ValueError(f"Unsupported file extension: {file_extension}") # Raise error for unsupported formats
+      cleaned_lines = clean_csv_or_txt_lines(lines) # Clean TXT/CSV lines
+   else: # If the file extension is not supported
+      raise ValueError(f"{BackgroundColors.RED}Unsupported file extension: {BackgroundColors.CYAN}{file_extension}{Style.RESET_ALL}") # Raise error for unsupported formats
 
    with open(cleaned_path, "w", encoding="utf-8") as f: # Open cleaned file path for writing
       f.writelines(cleaned_lines) # Write all cleaned lines to the output file
