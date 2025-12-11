@@ -584,17 +584,7 @@ def convert_to_arff(df, output_path):
       "data": df.values.tolist(), # Convert the DataFrame values to a list of lists for ARFF data
    }
 
-   try: # Try to estimate size by dumping to a string buffer
-      buf = io.StringIO() # Create an in-memory string buffer
-      arff.dump(arff_dict, buf) # Dump ARFF data into the buffer
-      bytes_needed = len(buf.getvalue().encode("utf-8")) + 512 # Estimate size with some overhead
-   except Exception: # If dumping fails,
-      try: # Try estimating size via CSV serialization
-         csv_buf = io.StringIO() # Create another in-memory string buffer
-         df.to_csv(csv_buf, index=False) # Serialize DataFrame to CSV in the buffer
-         bytes_needed = len(csv_buf.getvalue().encode("utf-8")) + 512 # Estimate ARFF size as CSV size plus overhead
-      except Exception: # If CSV serialization also fails,
-         bytes_needed = max(1024, int(df.memory_usage(deep=True).sum())) # Fallback to DataFrame memory usage
+   bytes_needed = estimate_bytes_arff(df, 512, attributes) # Estimate size needed for ARFF output
 
    ensure_enough_space(output_path, bytes_needed) # Ensure enough space to write the ARFF file
 
