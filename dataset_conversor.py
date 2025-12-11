@@ -1,3 +1,69 @@
+"""
+================================================================================
+Multi-Format Dataset Converter (main.py)
+================================================================================
+Author      : Breno Farias da Silva
+Created     : 2025-12-11
+Description :
+   Command-line utility to batch-convert datasets between common formats
+   (ARFF, CSV, TXT, Parquet). It searches an `Input/` directory (recursively),
+   cleans simple formatting issues in text-based datasets, preserves the
+   input subdirectory structure, and writes converted outputs to `Output/`.
+
+   Purpose and scope:
+      - Support bulk dataset normalization and format conversion for
+        downstream processing or experiments.
+      - Keep conversions reproducible by writing all derived files alongside
+        the original dataset relative to the `Output/` root.
+
+   Key features include:
+      - Recursive discovery of supported dataset files under `Input/`.
+      - Simple cleaning for ARFF/CSV/TXT (trim whitespace around values
+        and domain lists).
+      - Safe Parquet handling (read-and-rewrite using fastparquet).
+      - Conversion to ARFF, CSV, TXT and Parquet for each dataset.
+      - Preserves input subdirectories when writing results to `Output/`.
+      - Optional completion sound (platform-dependent).
+
+Usage:
+   1. Place dataset files under the `Input/` folder (preserve subfolders).
+   2. Run:
+         $ make run
+      or
+         $ python3 main.py
+   3. Converted files are written to `Output/` mirroring the `Input/`
+      subdirectory layout (e.g. `Input/X/Y.parquet` -> `Output/X/Y.csv`,
+      `Y.arff`, `Y.txt`, `Y.parquet`).
+
+Outputs:
+   - `Output/<same-subdirs>/` containing converted files for each input.
+   - Cleaned intermediate files are written to the same destination folder.
+
+TODOs:
+   - Add CLI arguments for input/output paths, format selection, and verbosity.
+   - Add robust CSV parsing that preserves quoted fields and complex cases.
+   - Add unit tests for loaders/cleaners and end-to-end conversion.
+   - Optionally parallelize conversions for large datasets.
+
+Dependencies:
+   - Python >= 3.8
+   - pandas
+   - fastparquet
+   - scipy (for ARFF loading)
+   - liac-arff (for ARFF fallback)
+   - colorama
+   - tqdm
+
+Assumptions & Notes:
+   - Text files are UTF-8 encoded; ARFF handling decodes byte strings when
+     needed.
+   - Parquet files are handled via `fastparquet` (read and rewrite).
+   - Sound notification uses platform-specific commands and is skipped on
+     Windows.
+   - The script performs simple textual cleaning — it is not a full CSV
+     sanitizer for complex quoting/escaping cases.
+"""
+
 import arff # liac-arff, used to save ARFF files
 import atexit # For playing a sound when the program finishes
 import os # For running commands in the terminal
