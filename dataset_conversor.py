@@ -236,7 +236,7 @@ def clean_arff_lines(lines):
    cleaned_lines = [] # List to store cleaned lines
 
    for line in lines: # Iterate through each line of the ARFF file
-      if line.strip().lower().startswith("@attribute") and "{" in line and "}" in line: # Check if the line defines a domain list
+      if line.strip().lower().startswith("@attribute") and "{" in line and "}" in line: # Verify if the line defines a domain list
          parts = line.split("{") # Split before domain
          before = parts[0] # Content before the domain
          domain = parts[1].split("}")[0] # Extract domain content
