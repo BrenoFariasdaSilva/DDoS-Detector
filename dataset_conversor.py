@@ -293,11 +293,25 @@ def format_size_units(size_bytes):
    :return: Formatted size string.
    """
    
-   for unit in ("TB","GB","MB","KB","Bytes"): # Iterate through units
-      if size_bytes >= 1024 and unit != "Bytes": # While size is large enough for next unit
-         size_bytes /= 1024 # Convert to next unit
-      else: # Return formatted size
-         return f"{size_bytes:.2f} {unit}" # Return formatted size string
+   if size_bytes is None: # If size_bytes is None
+      return "0 Bytes" # Return 0 Bytes
+
+   try: # Try to convert to float
+      size = float(size_bytes) # Convert to float
+   except Exception: # Catch conversion errors
+      return str(size_bytes) # Return original value as string
+
+   for unit in ("TB", "GB", "MB", "KB"): # Iterate through units
+      if size >= 1024 ** 4 and unit == "TB": # Terabytes
+         return f"{size / (1024 ** 4):.2f} TB" # Return formatted string
+      if size >= 1024 ** 3 and unit == "GB": # Gigabytes
+         return f"{size / (1024 ** 3):.2f} GB" # Return formatted string
+      if size >= 1024 ** 2 and unit == "MB": # Megabytes
+         return f"{size / (1024 ** 2):.2f} MB" # Return formatted string
+      if size >= 1024 ** 1 and unit == "KB": # Kilobytes
+         return f"{size / 1024:.2f} KB" # Return formatted string
+
+   return f"{int(size)} Bytes" # Return bytes if less than 1 KB
 
 def has_enough_space_for_path(path, required_bytes):
    """
