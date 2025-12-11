@@ -329,6 +329,17 @@ def estimate_bytes_parquet(df):
 
    return max(1024, int(df.memory_usage(deep=True).sum())) # Estimate size based on DataFrame memory usage
 
+def estimate_bytes_from_lines(lines, overhead):
+   """
+   Estimate required bytes for plain-text lines (UTF-8 encoded).
+
+   :param lines: List of text lines.
+   :param overhead: Additional bytes for headers/metadata.
+   :return: Integer number of required bytes.
+   """
+
+   return max(1024, sum(len((ln or "").encode("utf-8")) for ln in lines) + overhead) # Estimate byte size
+
 def clean_parquet_file(input_path, cleaned_path):
    """
    Cleans Parquet files by rewriting them without any textual cleaning,
