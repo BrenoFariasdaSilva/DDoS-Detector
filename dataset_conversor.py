@@ -69,6 +69,7 @@ import atexit # For playing a sound when the program finishes
 import os # For running commands in the terminal
 import pandas as pd # For handling CSV and TXT file formats
 import platform # For getting the operating system name
+import shutil # For checking disk usage
 from colorama import Style # For coloring the terminal output
 from fastparquet import ParquetFile # For handling Parquet file format
 from scipy.io import arff as scipy_arff # used to read ARFF files
@@ -158,6 +159,26 @@ def get_dataset_files(directory=INPUT_DIRECTORY):
             dataset_files.append(os.path.join(root, file)) # Append the full path of the file to the list
 
    return dataset_files # Return the list of dataset files
+
+def get_free_space_bytes(path):
+   """
+   Return the number of free bytes available on the filesystem
+   containing the specified path.
+
+   :param path: File or directory path to inspect.
+   :return: Free space in bytes.
+   """
+
+   target = path if os.path.isdir(path) else os.path.dirname(path) or "." # Resolve target directory
+
+   verbose_output(f"{BackgroundColors.GREEN}Verifying free space at: {BackgroundColors.CYAN}{target}{Style.RESET_ALL}") # Output verbose message
+
+   try: # Try to retrieve disk usage
+      usage = shutil.disk_usage(target) # Get disk usage statistics
+      return usage.free # Return free space
+   except Exception as e: # Catch any errors
+      verbose_output(f"{BackgroundColors.RED}Failed to retrieve disk usage for {target}: {e}{Style.RESET_ALL}") # Log error
+      return 0 # Fallback to zero
 
 def clean_parquet_file(input_path, cleaned_path):
    """
