@@ -233,6 +233,22 @@ def resolve_dataset_files(input_directory):
 
    return get_dataset_files(input_directory) # Otherwise, scan directory recursively
 
+def resolve_formats(formats):
+   """
+   Normalize and validate the list of output formats.
+
+   :param formats: List or string of formats.
+   :return: Cleaned list of formats.
+   """
+
+   if formats is None: # If no specific formats were provided
+      return ["arff", "csv", "parquet", "txt"] # Default to all supported formats
+
+   if isinstance(formats, str): # If provided as CSV string
+      return [f.strip().lower().lstrip(".") for f in formats.split(",") if f.strip()] # Split and clean
+
+   return [f.strip().lower().lstrip(".") for f in formats if isinstance(f, str)] # Clean list
+
 def get_free_space_bytes(path):
    """
    Return the number of free bytes available on the filesystem
@@ -683,13 +699,7 @@ def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIREC
       print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}") # Print error message
       return # Exit early if there are no files to convert
 
-   if formats is None: # If no specific formats were provided
-      formats_list = ["arff", "csv", "parquet", "txt"] # Default to all supported formats
-   else: # If specific formats were provided
-      if isinstance(formats, str): # If formats is a comma-separated string
-         formats_list = [f.strip().lower().lstrip('.') for f in formats.split(',') if f.strip()] # Split and clean the string into a list
-      else: # If formats is already a list
-         formats_list = [f.strip().lower().lstrip('.') for f in formats if isinstance(f, str)] # Clean the list
+   formats_list = resolve_formats(formats) # Normalize and validate output formats
 
    pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len(dataset_files)}{BackgroundColors.GREEN} {'file' if len(dataset_files) == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len(dataset_files)) # Create a progress bar for the conversion process
    for input_path in pbar: # Iterate through each dataset file
