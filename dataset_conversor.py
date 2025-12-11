@@ -328,7 +328,9 @@ def has_enough_space_for_path(path, required_bytes):
    verbose_output(f"{BackgroundColors.GREEN}Evaluating free space for: {BackgroundColors.CYAN}{parent}{Style.RESET_ALL}") # Output verbose message
 
    free = get_free_space_bytes(parent) # Retrieve free space
-   verbose_output(f"{BackgroundColors.RED}Free space: {BackgroundColors.CYAN}{format_size_units}{BackgroundColors.RED} bytes; required: {BackgroundColors.CYAN}{required_bytes}{BackgroundColors.CYAN} bytes{Style.RESET_ALL}") # Log details
+   free_str = format_size_units(free) # Format free space
+   req_str = format_size_units(required_bytes) # Format required space
+   verbose_output(f"{BackgroundColors.GREEN}Free space: {BackgroundColors.CYAN}{free_str}{BackgroundColors.GREEN}; required: {BackgroundColors.CYAN}{req_str}{Style.RESET_ALL}") # Log details
 
    return free >= required_bytes # Return comparison result
 
