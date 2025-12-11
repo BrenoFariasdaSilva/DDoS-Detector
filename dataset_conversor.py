@@ -279,7 +279,7 @@ def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIREC
 
       pbar.set_postfix_str(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}") # Display current file in progress bar
 
-      if ext not in [".csv", ".arff", ".txt", ".parquet"]: # Skip unsupported file types
+      if ext not in [".arff", ".csv", ".parquet", ".txt"]: # Skip unsupported file types
          continue # Move to the next file
 
       cleaned_path = os.path.join(output_directory, f"{name}{ext}") # Path for saving the cleaned file
@@ -291,11 +291,11 @@ def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIREC
          convert_to_arff(df, os.path.join(output_directory, f"{name}.arff")) # Write ARFF file
       if ext != ".csv": # Convert to CSV if not already CSV
          convert_to_csv(df, os.path.join(output_directory, f"{name}.csv")) # Write CSV file
-      if ext != ".txt": # Convert to TXT if not already TXT
-         convert_to_txt(df, os.path.join(output_directory, f"{name}.txt")) # Write TXT file
       if ext != ".parquet": # Convert to Parquet if not already Parquet
          convert_to_parquet(df, os.path.join(output_directory, f"{name}.parquet")) # Write Parquet file
-
+      if ext != ".txt": # Convert to TXT if not already TXT
+         convert_to_txt(df, os.path.join(output_directory, f"{name}.txt")) # Write TXT file
+      
 def play_sound():
    """
    Plays a sound when the program finishes and skips if the operating system is Windows.
