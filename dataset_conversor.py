@@ -276,6 +276,16 @@ def ensure_enough_space(path, required_bytes):
          f"{Style.RESET_ALL}"
       )
 
+def estimate_bytes_parquet(df):
+   """
+   Estimate required bytes for Parquet output using DataFrame memory size.
+
+   :param df: pandas DataFrame.
+   :return: Integer number of required bytes.
+   """
+
+   return max(1024, int(df.memory_usage(deep=True).sum())) # Estimate size based on DataFrame memory usage
+
 def clean_parquet_file(input_path, cleaned_path):
    """
    Cleans Parquet files by rewriting them without any textual cleaning,
@@ -287,7 +297,7 @@ def clean_parquet_file(input_path, cleaned_path):
 
    df = pd.read_parquet(input_path, engine="fastparquet") # Read parquet into DataFrame
    
-   required_bytes = max(1024, int(df.memory_usage(deep=True).sum())) # Estimate size based on DataFrame memory usage
+   required_bytes = estimate_bytes_parquet(df) # Estimate bytes needed for cleaned Parquet
    ensure_enough_space(cleaned_path, required_bytes) # Ensure enough space to write the cleaned file
    
    df.to_parquet(cleaned_path, index=False) # Write DataFrame back to parquet at destination
