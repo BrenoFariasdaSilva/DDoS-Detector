@@ -779,7 +779,7 @@ def main():
 
    configure_verbose_mode(args) # Enable verbose mode if requested
    
-   batch_convert(input_path, output_path, formats=args.formats if args.formats else None, verbose=args.verbose if args.verbose else None) # Perform batch conversion of dataset files
+   batch_convert(input_path, output_path, formats=args.formats if args.formats else None) # Perform batch conversion of dataset files
 
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Conversions completed!{Style.RESET_ALL}") # Output the completion message
 
