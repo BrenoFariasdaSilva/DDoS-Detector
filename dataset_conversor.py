@@ -102,7 +102,8 @@ def clean_parquet_file(input_path, cleaned_path):
    :return: None
    """
 
-   pass # Parquet files are binary and do not require textual cleaning, so we just read and write them
+   df = pd.read_parquet(input_path, engine="fastparquet") # Read parquet into DataFrame
+   df.to_parquet(cleaned_path, index=False) # Write DataFrame back to parquet at destination
 
 def clean_arff_lines(lines):
    """
