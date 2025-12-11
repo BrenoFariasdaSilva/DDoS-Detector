@@ -213,6 +213,23 @@ def estimate_bytes_for_lines(lines):
 
    return sum(len((ln or "").encode("utf-8")) for ln in lines) # Compute and return byte size
 
+def ensure_enough_space(path, required_bytes):
+   """
+   Ensure that the filesystem has enough space to write the required number of bytes.
+
+   :param path: Destination file path to verify.
+   :param required_bytes: Number of bytes required for writing.
+   :return: None
+   """
+
+   if not has_enough_space_for_path(path, required_bytes):  # Verify free space for the write operation
+      raise OSError(
+         f"{BackgroundColors.RED}Not enough disk space to write file: "
+         f"{BackgroundColors.CYAN}{path}{BackgroundColors.RED} "
+         f"(requires ~{BackgroundColors.CYAN}{required_bytes}{BackgroundColors.RED} bytes)"
+         f"{Style.RESET_ALL}"
+      )
+
 def clean_parquet_file(input_path, cleaned_path):
    """
    Cleans Parquet files by rewriting them without any textual cleaning,
