@@ -240,6 +240,9 @@ def clean_parquet_file(input_path, cleaned_path):
    """
 
    df = pd.read_parquet(input_path, engine="fastparquet") # Read parquet into DataFrame
+   
+   required_bytes = max(1024, int(df.memory_usage(deep=True).sum())) # Estimate size based on DataFrame memory usage
+   
    df.to_parquet(cleaned_path, index=False) # Write DataFrame back to parquet at destination
 
 def clean_arff_lines(lines):
@@ -293,6 +296,8 @@ def write_cleaned_lines_to_file(cleaned_path, cleaned_lines):
    :param cleaned_lines: List of cleaned lines to write to the file.
    :return: None
    """
+
+   required_bytes = estimate_bytes_for_lines(cleaned_lines) # Estimate bytes needed for cleaned lines
 
    with open(cleaned_path, "w", encoding="utf-8") as f: # Open the cleaned file path for writing
       f.writelines(cleaned_lines) # Write all cleaned lines to the output file
@@ -454,6 +459,18 @@ def convert_to_arff(df, output_path):
       "data": df.values.tolist(), # Convert the DataFrame values to a list of lists for ARFF data
    }
 
+   try: # Try to estimate size by dumping to a string buffer
+      buf = io.StringIO() # Create an in-memory string buffer
+      arff.dump(arff_dict, buf) # Dump ARFF data into the buffer
+      bytes_needed = len(buf.getvalue().encode("utf-8")) + 512 # Estimate size with some overhead
+   except Exception: # If dumping fails,
+      try: # Try estimating size via CSV serialization
+         csv_buf = io.StringIO() # Create another in-memory string buffer
+         df.to_csv(csv_buf, index=False) # Serialize DataFrame to CSV in the buffer
+         bytes_needed = len(csv_buf.getvalue().encode("utf-8")) + 512 # Estimate ARFF size as CSV size plus overhead
+      except Exception: # If CSV serialization also fails,
+         bytes_needed = max(1024, int(df.memory_usage(deep=True).sum())) # Fallback to DataFrame memory usage
+
    with open(output_path, "w") as f: # Open the output file for writing
       arff.dump(arff_dict, f) # Dump the ARFF data into the file using liac-arff
 
@@ -468,6 +485,14 @@ def convert_to_csv(df, output_path):
 
    verbose_output(f"{BackgroundColors.GREEN}Converting DataFrame to CSV format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}") # Output the verbose message
 
+   # Estimate CSV size by writing to a string buffer
+   try: # Try to estimate size by dumping to a string buffer
+      buf = io.StringIO() # Create an in-memory string buffer
+      df.to_csv(buf, index=False) # Dump DataFrame to CSV in the buffer
+      bytes_needed = len(buf.getvalue().encode("utf-8")) # Estimate size
+   except Exception: # If dumping fails,
+      bytes_needed = max(1024, int(df.memory_usage(deep=True).sum())) # Fallback to DataFrame memory usage
+
    df.to_csv(output_path, index=False) # Save the DataFrame to the specified output path in CSV format, without the index
 
 def convert_to_parquet(df, output_path):
@@ -481,6 +506,8 @@ def convert_to_parquet(df, output_path):
 
    verbose_output(f"{BackgroundColors.GREEN}Converting DataFrame to PARQUET format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")
 
+   bytes_needed = max(1024, int(df.memory_usage(deep=True).sum())) # Estimate size based on DataFrame memory usage
+
    df.to_parquet(output_path, index=False) # Save the DataFrame to the specified output path in PARQUET format, without the index
 
 def convert_to_txt(df, output_path):
@@ -493,6 +520,13 @@ def convert_to_txt(df, output_path):
    """
 
    verbose_output(f"{BackgroundColors.GREEN}Converting DataFrame to TXT format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}") # Output the verbose message
+
+   try: # Try to estimate size by dumping to a string buffer
+      buf = io.StringIO() # Create an in-memory string buffer
+      df.to_csv(buf, sep="\t", index=False) # Dump DataFrame to TXT in the buffer using tab as separator
+      bytes_needed = len(buf.getvalue().encode("utf-8")) # Estimate size
+   except Exception: # If dumping fails,
+      bytes_needed = max(1024, int(df.memory_usage(deep=True).sum())) # Fallback to DataFrame memory usage
 
    df.to_csv(output_path, sep="\t", index=False) # Save the DataFrame to the specified output path in TXT format, using tab as the separator and without the index
 
