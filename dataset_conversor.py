@@ -285,6 +285,20 @@ def get_free_space_bytes(path):
       verbose_output(f"{BackgroundColors.RED}Failed to retrieve disk usage for {target}: {e}{Style.RESET_ALL}") # Log error
       return 0 # Fallback to zero
 
+def format_size_units(size_bytes):
+   """
+   Format a byte size into a human-readable string with appropriate units.
+
+   :param size_bytes: Size in bytes.
+   :return: Formatted size string.
+   """
+   
+   for unit in ("TB","GB","MB","KB","Bytes"): # Iterate through units
+      if size_bytes >= 1024 and unit != "Bytes": # While size is large enough for next unit
+         size_bytes /= 1024 # Convert to next unit
+      else: # Return formatted size
+         return f"{size_bytes:.2f} {unit}" # Return formatted size string
+
 def has_enough_space_for_path(path, required_bytes):
    """
    Verify whether the filesystem containing the specified path has at least
@@ -300,7 +314,7 @@ def has_enough_space_for_path(path, required_bytes):
    verbose_output(f"{BackgroundColors.GREEN}Evaluating free space for: {BackgroundColors.CYAN}{parent}{Style.RESET_ALL}") # Output verbose message
 
    free = get_free_space_bytes(parent) # Retrieve free space
-   verbose_output(f"{BackgroundColors.RED}Free space: {BackgroundColors.CYAN}{free}{BackgroundColors.RED} bytes; required: {BackgroundColors.CYAN}{required_bytes}{BackgroundColors.CYAN} bytes{Style.RESET_ALL}") # Log details
+   verbose_output(f"{BackgroundColors.RED}Free space: {BackgroundColors.CYAN}{format_size_units}{BackgroundColors.RED} bytes; required: {BackgroundColors.CYAN}{required_bytes}{BackgroundColors.CYAN} bytes{Style.RESET_ALL}") # Log details
 
    return free >= required_bytes # Return comparison result
 
