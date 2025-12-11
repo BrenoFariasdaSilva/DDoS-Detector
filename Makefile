@@ -46,6 +46,11 @@ main: dependencies
 	$(CLEAR_CMD)
 	$(call RUN_AND_LOG, ./main.py)
 
+dataset_converter: dependencies
+	$(ENSURE_LOG_DIR)
+	$(CLEAR_CMD)
+	$(call RUN_AND_LOG, ./dataset_converter.py)
+
 dataset_descriptor: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
@@ -106,4 +111,4 @@ clean:
 	find . -type f -name '*.pyc' -delete || del /S /Q *.pyc 2>nul
 	find . -type d -name '__pycache__' -delete || rmdir /S /Q __pycache__ 2>nul
 
-.PHONY: all main clean dependencies generate_requirements dataset_descriptor genetic_algorithm hyperparameters_optimization pca rfe stacking telegram wgangp
+.PHONY: all main clean dependencies generate_requirements dataset_converter dataset_descriptor genetic_algorithm hyperparameters_optimization pca rfe stacking telegram wgangp
