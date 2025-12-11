@@ -95,47 +95,55 @@ def get_dataset_files(directory=INPUT_DIRECTORY):
 
 def clean_file(input_path, cleaned_path):
    """
-   Cleans ARFF, TXT, and CSV files by removing extra spaces in comma-separated values or domains.
+   Cleans ARFF, TXT, CSV, and Parquet files by removing unnecessary spaces in
+   comma-separated values or domains. For Parquet files, it rewrites the file
+   directly without textual cleaning.
 
-   :param input_path: Path to the input file (.arff, .txt, .csv).
+   :param input_path: Path to the input file (.arff, .txt, .csv, .parquet).
    :param cleaned_path: Path to save the cleaned file.
    :return: None
    """
 
    file_extension = os.path.splitext(input_path)[1].lower() # Get the file extension of the input file
 
-   verbose_output(f"{BackgroundColors.GREEN}Cleaning file: {BackgroundColors.CYAN}{input_path}{BackgroundColors.GREEN} and saving to {BackgroundColors.CYAN}{cleaned_path}{Style.RESET_ALL}")
+   verbose_output(f"{BackgroundColors.GREEN}Cleaning file: {BackgroundColors.CYAN}{input_path}{BackgroundColors.GREEN} and saving to {BackgroundColors.CYAN}{cleaned_path}{Style.RESET_ALL}") # Output the verbose message
 
-   with open(input_path, "r") as f: # Open the input file for reading
-      lines = f.readlines() # Read all lines from the input file
+   if file_extension == ".parquet": # Handle parquet files separately (binary format)
+      df = pd.read_parquet(input_path, engine="fastparquet") # Read the parquet file
+      df.to_parquet(cleaned_path, index=False) # Write the parquet file without changes
+      return # Exit early after handling parquet
 
-   cleaned_lines = [] # List to store cleaned lines
+   with open(input_path, "r", encoding="utf-8") as f: # Open the input file for reading
+      lines = f.readlines() # Read all lines from the file
 
-   if file_extension == ".arff": # If the file is in ARFF format
-      for line in lines: # Iterate through each line in the file
-         if line.strip().lower().startswith("@attribute") and "{" in line and "}" in line: # If the line is an attribute definition with a domain
-            parts = line.split("{") # Split the line into parts at the first occurrence of "{"
-            before = parts[0] # Get the part before the domain
-            domain = parts[1].split("}")[0] # Get the domain part (between "{" and "}")
-            after = line.split("}")[1] # Get the part after the domain
+   cleaned_lines = [] # List to store the cleaned lines
 
-            cleaned_domain = ",".join([val.strip() for val in domain.split(",")]) # Clean the domain by removing extra spaces around comma-separated values
-            cleaned_line = f"{before}{{{cleaned_domain}}}{after}" # Reconstruct the cleaned line with the cleaned domain
-            cleaned_lines.append(cleaned_line) # Append the cleaned line to the list
-         else: # If the line is not an attribute definition with a domain
-            cleaned_lines.append(line) # Append the line as is to the cleaned lines list
-   elif file_extension in [".txt", ".csv"]: # If the file is in TXT or CSV format
-      for line in lines: # Iterate through each line in the file
-         cleaned_line = ",".join([val.strip() for val in line.strip().split(",")]) + "\n" # Clean the line by removing extra spaces around comma-separated values
-         cleaned_lines.append(cleaned_line) # Append the cleaned line to the cleaned lines list
-   elif file_extension == ".parquet": # If the file is in Parquet format
-      df = pd.read_parquet(input_path, engine="fastparquet") # Load the Parquet file into a pandas DataFrame
-      df.to_parquet(cleaned_path, index=False) # Save the DataFrame to the cleaned path in Parquet format
-   else: # If the file extension is not supported
-      raise ValueError(f"Unsupported file extension: {file_extension}") # Raise an error for unsupported file extensions
+   if file_extension == ".arff": # Cleaning logic for ARFF files
+      for line in lines: # Iterate through each line of the ARFF file
+         if line.strip().lower().startswith("@attribute") and "{" in line and "}" in line: # Check if the line defines a domain list
+            parts = line.split("{") # Split the line at the domain start
+            before = parts[0] # Content before the domain
+            domain = parts[1].split("}")[0] # Extract domain content between braces
+            after = line.split("}")[1] # Content after the domain
 
-   with open(cleaned_path, "w") as f: # Open the cleaned file for writing
-      f.writelines(cleaned_lines) # Write the cleaned lines to the cleaned file
+            cleaned_domain = ",".join([val.strip() for val in domain.split(",")]) # Strip spaces around values in domain list
+            cleaned_line = f"{before}{{{cleaned_domain}}}{after}" # Reconstruct the cleaned line
+
+            cleaned_lines.append(cleaned_line) # Add cleaned attribute line
+         else:
+            cleaned_lines.append(line) # Keep non-attribute lines unchanged
+
+   elif file_extension in [".txt", ".csv"]: # Cleaning logic for TXT and CSV files
+      for line in lines: # Iterate through each line
+         values = line.strip().split(",") # Split the line on commas
+         cleaned_values = [val.strip() for val in values] # Strip whitespace from each value
+         cleaned_line = ",".join(cleaned_values) + "\n" # Join cleaned values and add newline
+         cleaned_lines.append(cleaned_line) # Add the cleaned line
+   else:
+      raise ValueError(f"Unsupported file extension: {file_extension}") # Raise error for unsupported formats
+
+   with open(cleaned_path, "w", encoding="utf-8") as f: # Open cleaned file path for writing
+      f.writelines(cleaned_lines) # Write all cleaned lines to the output file
 
 def load_dataset(input_path):
    """
