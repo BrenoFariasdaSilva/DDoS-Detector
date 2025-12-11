@@ -5,7 +5,7 @@ Multi-Format Dataset Converter (main.py)
 Author      : Breno Farias da Silva
 Created     : 2025-12-11
 Description :
-   Command-line utility to batch-convert datasets between common formats
+   Python project to batch-convert datasets between common formats
    (ARFF, CSV, Parquet, TXT). It searches an `Input/` directory (recursively),
    cleans simple formatting issues in text-based datasets, preserves the
    input subdirectory structure, and writes converted outputs to `Output/`.
@@ -21,7 +21,7 @@ Description :
       - Simple cleaning for ARFF/CSV/TXT (trim whitespace around values
         and domain lists).
       - Safe Parquet handling (read-and-rewrite using fastparquet).
-      - Conversion to ARFF, CSV, TXT and Parquet for each dataset.
+      - Conversion to ARFF, CSV, Parquet and TXT for each dataset.
       - Preserves input subdirectories when writing results to `Output/`.
       - Optional completion sound (platform-dependent).
 
@@ -33,7 +33,7 @@ Usage:
          $ python3 main.py
    3. Converted files are written to `Output/` mirroring the `Input/`
       subdirectory layout (e.g. `Input/X/Y.parquet` -> `Output/X/Y.csv`,
-      `Y.arff`, `Y.txt`, `Y.parquet`).
+      `Y.arff`, `Y.parquet`, `Y.txt`).
 
 Outputs:
    - `Output/<same-subdirs>/` containing converted files for each input.
