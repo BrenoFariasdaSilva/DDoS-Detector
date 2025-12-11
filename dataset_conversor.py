@@ -769,6 +769,8 @@ def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIREC
          convert_to_parquet(df, os.path.join(dest_dir, f"{name}.parquet")) # Convert and save as Parquet
       if "txt" in formats_list: # If TXT format is requested
          convert_to_txt(df, os.path.join(dest_dir, f"{name}.txt")) # Convert and save as TXT
+         
+      print() # Print a newline for better readability between files
 
 def play_sound():
    """
