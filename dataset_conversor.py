@@ -242,6 +242,7 @@ def clean_parquet_file(input_path, cleaned_path):
    df = pd.read_parquet(input_path, engine="fastparquet") # Read parquet into DataFrame
    
    required_bytes = max(1024, int(df.memory_usage(deep=True).sum())) # Estimate size based on DataFrame memory usage
+   ensure_enough_space(cleaned_path, required_bytes) # Ensure enough space to write the cleaned file
    
    df.to_parquet(cleaned_path, index=False) # Write DataFrame back to parquet at destination
 
@@ -298,6 +299,7 @@ def write_cleaned_lines_to_file(cleaned_path, cleaned_lines):
    """
 
    required_bytes = estimate_bytes_for_lines(cleaned_lines) # Estimate bytes needed for cleaned lines
+   ensure_enough_space(cleaned_path, required_bytes) # Ensure enough space to write the cleaned file
 
    with open(cleaned_path, "w", encoding="utf-8") as f: # Open the cleaned file path for writing
       f.writelines(cleaned_lines) # Write all cleaned lines to the output file
@@ -471,6 +473,8 @@ def convert_to_arff(df, output_path):
       except Exception: # If CSV serialization also fails,
          bytes_needed = max(1024, int(df.memory_usage(deep=True).sum())) # Fallback to DataFrame memory usage
 
+   ensure_enough_space(output_path, bytes_needed) # Ensure enough space to write the ARFF file
+
    with open(output_path, "w") as f: # Open the output file for writing
       arff.dump(arff_dict, f) # Dump the ARFF data into the file using liac-arff
 
@@ -493,6 +497,8 @@ def convert_to_csv(df, output_path):
    except Exception: # If dumping fails,
       bytes_needed = max(1024, int(df.memory_usage(deep=True).sum())) # Fallback to DataFrame memory usage
 
+   ensure_enough_space(output_path, bytes_needed) # Ensure enough space to write the CSV file
+
    df.to_csv(output_path, index=False) # Save the DataFrame to the specified output path in CSV format, without the index
 
 def convert_to_parquet(df, output_path):
@@ -507,6 +513,7 @@ def convert_to_parquet(df, output_path):
    verbose_output(f"{BackgroundColors.GREEN}Converting DataFrame to PARQUET format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")
 
    bytes_needed = max(1024, int(df.memory_usage(deep=True).sum())) # Estimate size based on DataFrame memory usage
+   ensure_enough_space(output_path, bytes_needed) # Ensure enough space to write the PARQUET file
 
    df.to_parquet(output_path, index=False) # Save the DataFrame to the specified output path in PARQUET format, without the index
 
@@ -527,6 +534,8 @@ def convert_to_txt(df, output_path):
       bytes_needed = len(buf.getvalue().encode("utf-8")) # Estimate size
    except Exception: # If dumping fails,
       bytes_needed = max(1024, int(df.memory_usage(deep=True).sum())) # Fallback to DataFrame memory usage
+
+   ensure_enough_space(output_path, bytes_needed) # Ensure enough space to write the TXT file
 
    df.to_csv(output_path, sep="\t", index=False) # Save the DataFrame to the specified output path in TXT format, using tab as the separator and without the index
 
