@@ -6,7 +6,7 @@ Author      : Breno Farias da Silva
 Created     : 2025-12-11
 Description :
    Command-line utility to batch-convert datasets between common formats
-   (ARFF, CSV, TXT, Parquet). It searches an `Input/` directory (recursively),
+   (ARFF, CSV, Parquet, TXT). It searches an `Input/` directory (recursively),
    cleans simple formatting issues in text-based datasets, preserves the
    input subdirectory structure, and writes converted outputs to `Output/`.
 
@@ -69,8 +69,8 @@ import atexit # For playing a sound when the program finishes
 import os # For running commands in the terminal
 import pandas as pd # For handling CSV and TXT file formats
 import platform # For getting the operating system name
-from fastparquet import ParquetFile # For handling Parquet file format
 from colorama import Style # For coloring the terminal output
+from fastparquet import ParquetFile # For handling Parquet file format
 from scipy.io import arff as scipy_arff # used to read ARFF files
 from tqdm import tqdm # For showing a progress bar
 
