@@ -271,7 +271,7 @@ def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIREC
       print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}") # Print error message
       return # Exit early if there are no files to convert
 
-   pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting files{Style.RESET_ALL}", unit="file", colour="green") # Initialize progress bar for conversion
+   pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {len(dataset_files)} {'file' if len(dataset_files) == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len(dataset_files)) # Create a progress bar for the conversion process
    for input_path in pbar: # Iterate through each dataset file
       file = os.path.basename(input_path) # Extract the file name from the full path
       name, ext = os.path.splitext(file) # Split file name into base name and extension
