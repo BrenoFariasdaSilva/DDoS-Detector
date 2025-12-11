@@ -1,0 +1,823 @@
+"""
+================================================================================
+Multi-Format Dataset Converter (main.py)
+================================================================================
+Author      : Breno Farias da Silva
+Created     : 2025-12-11
+
+Description:
+   Core script of the Multi-Format-Dataset-Converter. This tool recursively
+   scans the `Input` directory for ARFF, CSV, Parquet, and TXT files, applies
+   minimal structural cleanup to text-based formats (whitespace and basic
+   formatting adjustments), loads the cleaned data into pandas DataFrames,
+   and converts each dataset into all supported formats while preserving the
+   original directory structure inside `Output`.
+
+Purpose and Scope:
+   - Standardize datasets across ARFF, CSV, Parquet, and TXT formats.
+   - Provide consistent and readable outputs for experiments and data workflows.
+   - Automatically mirror the folder structure from `Input` to `Output`.
+   - Ensure deterministic and reproducible conversions.
+
+Key Features:
+   - Recursive file discovery under `Input/`.
+   - Structural cleanup for ARFF/CSV/TXT (domain-list cleanup and trimmed values).
+   - Parquet read-and-rewrite for structural consistency.
+   - Conversion to ARFF, CSV, Parquet, and TXT for every detected dataset.
+   - Preservation of directory hierarchy in all generated outputs.
+   - Optional platform-dependent completion sound.
+
+Usage:
+   1. Place dataset files or directories inside `Input/`.
+   2. Run:
+         $ make
+      or
+         $ python3 main.py
+   3. The converter writes all generated files to the mirrored structure
+      inside `Output/`. Example:
+         Input/A/B/file.csv  →  Output/A/B/file.arff, file.parquet, file.txt, ...
+
+Outputs:
+   - `Output/<mirrored-subdirs>/` containing all converted formats.
+   - Cleaned intermediate versions are automatically handled before conversion.
+
+TODOs:
+   - Add CLI arguments (input/output paths, format selection, verbosity).
+   - Improve CSV parsing for complex quoted/escaped cases.
+   - Add unit tests for cleaners, loaders, and end-to-end conversion.
+   - Optional parallel execution for large datasets.
+
+Dependencies:
+   - Python >= 3.8
+   - pandas
+   - fastparquet
+   - scipy
+   - liac-arff
+   - colorama
+   - tqdm
+
+Assumptions & Notes:
+   - Text files are expected to be UTF-8 encoded.
+   - ARFF loaders handle byte-decoding when necessary.
+   - Parquet processing uses `fastparquet` for read-and-write consistency.
+   - Completion sound is skipped on Windows.
+   - Cleaning is intentionally minimal and not a full CSV sanitization engine.
+"""
+
+import arff # liac-arff, used to save ARFF files
+import argparse # For parsing command-line arguments
+import atexit # For playing a sound when the program finishes
+import io # For in-memory file operations
+import os # For running commands in the terminal
+import pandas as pd # For handling CSV and TXT file formats
+import platform # For getting the operating system name
+import shutil # For checking disk usage
+from colorama import Style # For coloring the terminal output
+from fastparquet import ParquetFile # For handling Parquet file format
+from scipy.io import arff as scipy_arff # used to read ARFF files
+from tqdm import tqdm # For showing a progress bar
+
+# Macros:
+class BackgroundColors: # Colors for the terminal
+   CYAN = "\033[96m" # Cyan
+   GREEN = "\033[92m" # Green
+   YELLOW = "\033[93m" # Yellow
+   RED = "\033[91m" # Red
+   BOLD = "\033[1m" # Bold
+   UNDERLINE = "\033[4m" # Underline
+   CLEAR_TERMINAL = "\033[H\033[J" # Clear the terminal
+
+# Execution Constants:
+VERBOSE = False # Set to True to output verbose messages
+INPUT_DIRECTORY = "./Input" # Input directory path
+OUTPUT_DIRECTORY = "./Output" # Output directory path
+IGNORE_DIRECTORY_NAMED_WITH = ["Results"] # List of directory names to ignore if they have any of this words in their name
+
+# Sound Constants:
+SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # Sound play command
+SOUND_FILE = "./.assets/Sounds/NotificationSound.wav" # Notification sound path
+
+# RUN_FUNCTIONS:
+RUN_FUNCTIONS = {
+   "Play Sound": True, # Set to True to play a sound when the program finishes
+}
+
+def verbose_output(true_string="", false_string=""):
+   """
+   Outputs a message if the VERBOSE constant is set to True.
+
+   :param true_string: The string to be outputted if the VERBOSE constant is set to True.
+   :param false_string: The string to be outputted if the VERBOSE constant is set to False.
+   :return: None
+   """
+
+   if VERBOSE and true_string != "": # If the VERBOSE constant is set to True and the true_string is set
+      print(true_string) # Output the true statement string
+   elif false_string != "": # If the false_string is set
+      print(false_string) # Output the false statement string
+
+def parse_cli_arguments():
+   """
+   Parse command-line arguments for the dataset converter.
+
+   :return: Parsed ArgumentParser namespace.
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Parsing command-line arguments...{Style.RESET_ALL}") # Output the verbose message
+
+   parser = argparse.ArgumentParser(description="Multi-Format Dataset Converter: convert ARFF/CSV/Parquet/TXT datasets") # Create the argument parser
+
+   parser.add_argument("-i", "--input", type=str, help="Input path (file or directory). If not provided, uses ./Input") # Input path argument
+   parser.add_argument("-o", "--output", type=str, help="Output directory. If not provided, uses ./Output") # Output directory argument
+   parser.add_argument("-f", "--formats", type=str, help="Comma-separated output formats to produce (arff,csv,parquet,txt). If not provided, all formats are produced") # Output formats argument
+   parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output") # Verbose mode flag
+
+   return parser.parse_args() # Return parsed CLI arguments
+
+def verify_filepath_exists(filepath):
+   """
+   Verify if a file or folder exists at the specified path.
+
+   :param filepath: Path to the file or folder
+   :return: True if the file or folder exists, False otherwise
+   """
+
+   verbose_output(true_string=f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output the verbose message
+
+   return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
+
+def resolve_io_paths(args):
+   """
+   Resolve and validate input/output paths from CLI arguments.
+
+   :param args: Parsed CLI arguments.
+   :return: Tuple (input_path, output_path).
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Resolving input/output paths...{Style.RESET_ALL}") # Output the verbose message
+
+   input_path = args.input if args.input else INPUT_DIRECTORY # Resolve input path
+   output_path = args.output if args.output else OUTPUT_DIRECTORY # Resolve output path
+
+   if args.input: # If a custom input path was provided
+      if not verify_filepath_exists(input_path): # Check if it exists
+         print(f"{BackgroundColors.RED}Specified input path does not exist: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}") # Output error message
+         return None, None # Invalid path, exit early
+   else: # No custom input path
+      if not verify_filepath_exists(INPUT_DIRECTORY): # Check default folder
+         create_directories(INPUT_DIRECTORY) # Create default folder
+         print(f"{BackgroundColors.RED}Input folder does not exist: {INPUT_DIRECTORY}{Style.RESET_ALL}") # Output error message
+         return None, None # Invalid input directory
+
+   if not verify_filepath_exists(output_path): # If output directory does not exist
+      create_directories(output_path) # Create output directory
+
+   return input_path, output_path # Return validated paths
+
+def configure_verbose_mode(args):
+   """
+   Enable verbose output mode when requested via CLI.
+
+   :param args: Parsed CLI arguments.
+   :return: None
+   """
+
+   if args.verbose: # If verbose mode requested
+      global VERBOSE # Use global variable
+      VERBOSE = True # Enable verbose mode
+
+def create_directories(directory_name):
+   """
+   Creates a directory if it does not exist.
+
+   :param directory_name: Name of the directory to be created.
+   :return: None
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Creating directory: {BackgroundColors.CYAN}{directory_name}{Style.RESET_ALL}") # Output the verbose message
+
+   if not os.path.exists(directory_name): # If the directory does not exist
+      os.makedirs(directory_name) # Create the directory
+
+def get_dataset_files(directory=INPUT_DIRECTORY):
+   """
+   Get all dataset files in the specified directory and its subdirectories.
+
+   :param directory: Path to the directory to search for dataset files.
+   :return: List of paths to dataset files.
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Searching for dataset files in: {BackgroundColors.CYAN}{directory}{Style.RESET_ALL}") # Output the verbose message
+
+   dataset_files = [] # List to store paths of dataset files
+   for root, dirs, files in os.walk(directory): # Walk through the directory and its subdirectories
+      if any(ignore_word.lower() in root.lower() for ignore_word in IGNORE_DIRECTORY_NAMED_WITH): # Verify if the current directory contains any of the ignore words
+         continue # If the current directory contains any of the ignore words, skip it
+
+      for file in files: # Iterate through files in the current directory
+         if os.path.splitext(file)[1].lower() in [".arff", ".csv", ".txt", ".parquet"]: # Verify if the file has a valid extension
+            dataset_files.append(os.path.join(root, file)) # Append the full path of the file to the list
+
+   return dataset_files # Return the list of dataset files
+
+def resolve_dataset_files(input_directory):
+   """
+   Resolve dataset files from a directory or a single file path.
+
+   :param input_directory: Input directory or single file path.
+   :return: List of dataset file paths.
+   """
+
+   if os.path.isfile(input_directory): # If the input directory is actually a file
+      return [input_directory] # Process only that one file
+
+   return get_dataset_files(input_directory) # Otherwise, scan directory recursively
+
+def resolve_formats(formats):
+   """
+   Normalize and validate the list of output formats.
+
+   :param formats: List or string of formats.
+   :return: Cleaned list of formats.
+   """
+
+   if formats is None: # If no specific formats were provided
+      return ["arff", "csv", "parquet", "txt"] # Default to all supported formats
+
+   if isinstance(formats, str): # If provided as CSV string
+      return [f.strip().lower().lstrip(".") for f in formats.split(",") if f.strip()] # Split and clean
+
+   return [f.strip().lower().lstrip(".") for f in formats if isinstance(f, str)] # Clean list
+
+def resolve_destination_directory(input_directory, input_path, output_directory):
+   """
+   Determine where converted files should be saved.
+
+   :param input_directory: Source directory.
+   :param input_path: Path of the current file.
+   :param output_directory: Base output directory.
+   :return: Destination directory path.
+   """
+
+   if os.path.isfile(input_directory): # If converting a single file
+      return output_directory # Save directly
+
+   rel_dir = os.path.relpath(os.path.dirname(input_path), input_directory) # Subdir path
+   return os.path.join(output_directory, rel_dir) if rel_dir != "." else output_directory # Preserve structure
+
+def get_free_space_bytes(path):
+   """
+   Return the number of free bytes available on the filesystem
+   containing the specified path.
+
+   :param path: File or directory path to inspect.
+   :return: Free space in bytes.
+   """
+
+   target = path if os.path.isdir(path) else os.path.dirname(path) or "." # Resolve target directory
+
+   verbose_output(f"{BackgroundColors.GREEN}Verifying free space at: {BackgroundColors.CYAN}{target}{Style.RESET_ALL}") # Output verbose message
+
+   try: # Try to retrieve disk usage
+      usage = shutil.disk_usage(target) # Get disk usage statistics
+      return usage.free # Return free space
+   except Exception as e: # Catch any errors
+      verbose_output(f"{BackgroundColors.RED}Failed to retrieve disk usage for {target}: {e}{Style.RESET_ALL}") # Log error
+      return 0 # Fallback to zero
+
+def format_size_units(size_bytes):
+   """
+   Format a byte size into a human-readable string with appropriate units.
+
+   :param size_bytes: Size in bytes.
+   :return: Formatted size string.
+   """
+   
+   if size_bytes is None: # If size_bytes is None
+      return "0 Bytes" # Return 0 Bytes
+
+   try: # Try to convert to float
+      size = float(size_bytes) # Convert to float
+   except Exception: # Catch conversion errors
+      return str(size_bytes) # Return original value as string
+
+   for unit in ("TB", "GB", "MB", "KB"): # Iterate through units
+      if size >= 1024 ** 4 and unit == "TB": # Terabytes
+         return f"{size / (1024 ** 4):.2f} TB" # Return formatted string
+      if size >= 1024 ** 3 and unit == "GB": # Gigabytes
+         return f"{size / (1024 ** 3):.2f} GB" # Return formatted string
+      if size >= 1024 ** 2 and unit == "MB": # Megabytes
+         return f"{size / (1024 ** 2):.2f} MB" # Return formatted string
+      if size >= 1024 ** 1 and unit == "KB": # Kilobytes
+         return f"{size / 1024:.2f} KB" # Return formatted string
+
+   return f"{int(size)} Bytes" # Return bytes if less than 1 KB
+
+def has_enough_space_for_path(path, required_bytes):
+   """
+   Verify whether the filesystem containing the specified path has at least
+   the required number of free bytes.
+
+   :param path: Path where free space must be evaluated.
+   :param required_bytes: Minimum number of bytes required.
+   :return: True if there is enough free space, otherwise False.
+   """
+
+   parent = os.path.dirname(path) or "." # Determine the directory to inspect
+
+   verbose_output(f"{BackgroundColors.GREEN}Evaluating free space for: {BackgroundColors.CYAN}{parent}{Style.RESET_ALL}") # Output verbose message
+
+   free = get_free_space_bytes(parent) # Retrieve free space
+   free_str = format_size_units(free) # Format free space
+   req_str = format_size_units(required_bytes) # Format required space
+   verbose_output(f"{BackgroundColors.GREEN}Free space: {BackgroundColors.CYAN}{free_str}{BackgroundColors.GREEN}; required: {BackgroundColors.CYAN}{req_str}{Style.RESET_ALL}") # Log details
+
+   return free >= required_bytes # Return comparison result
+
+def ensure_enough_space(path, required_bytes):
+   """
+   Ensure that the filesystem has enough space to write the required number of bytes.
+
+   :param path: Destination file path to verify.
+   :param required_bytes: Number of bytes required for writing.
+   :return: None
+   """
+
+   if not has_enough_space_for_path(path, required_bytes): # Verify free space for the write operation
+      free = get_free_space_bytes(os.path.dirname(path) or ".")
+      raise OSError(f"Not enough disk space to write {path}. Free: {format_size_units(free)}; required: {format_size_units(required_bytes)}")
+
+def estimate_bytes_arff(df, overhead, attributes):
+   """
+   Estimate required bytes for ARFF output by serializing to an in-memory buffer.
+
+   :param df: pandas DataFrame.
+   :param overhead: Additional bytes for headers/metadata.
+   :param attributes: List of attributes for ARFF serialization.
+   :return: Integer number of required bytes.
+   """
+
+   try: # Attempt ARFF serialization
+      buf = io.StringIO() # In-memory text buffer
+
+      arff_dict = { # Create a dictionary to hold the ARFF data
+      "description": "", # Description of the dataset (can be left empty)
+      "relation": "converted_data", # Name of the relation (dataset)
+      "attributes": attributes, # List of attributes with their names and types
+      "data": df.values.tolist(), # Convert the DataFrame values to a list of lists for ARFF data
+      }
+
+      arff.dump(arff_dict, buf) # Dump ARFF data into the buffer
+      
+      return max(1024, len(buf.getvalue().encode("utf-8")) + overhead) # Return estimated size with overhead
+   except Exception: # Fallback: estimate via CSV
+      return max(1024, int(df.memory_usage(deep=True).sum())) # Estimate size based on DataFrame memory usage
+
+def estimate_bytes_csv(df, overhead):
+   """
+   Estimate required bytes to write a CSV file using an in-memory buffer.
+
+   :param df: pandas DataFrame.
+   :param overhead: Additional bytes for headers/metadata.
+   :return: Integer number of required bytes.
+   """
+
+   try: # Attempt CSV serialization
+      buf = io.StringIO() # In-memory text buffer
+      df.to_csv(buf, index=False) # Serialize DataFrame to CSV
+      return max(1024, len(buf.getvalue().encode("utf-8")) + overhead) # Return estimated size with overhead
+
+   except Exception: # Fallback to memory usage
+      return max(1024, int(df.memory_usage(deep=True).sum())) # Estimate size based on DataFrame memory usage
+
+def estimate_bytes_parquet(df):
+   """
+   Estimate required bytes for Parquet output using DataFrame memory size.
+
+   :param df: pandas DataFrame.
+   :return: Integer number of required bytes.
+   """
+
+   return max(1024, int(df.memory_usage(deep=True).sum())) # Estimate size based on DataFrame memory usage
+
+def estimate_bytes_from_lines(lines, overhead):
+   """
+   Estimate required bytes for plain-text lines (UTF-8 encoded).
+
+   :param lines: List of text lines.
+   :param overhead: Additional bytes for headers/metadata.
+   :return: Integer number of required bytes.
+   """
+
+   return max(1024, sum(len((ln or "").encode("utf-8")) for ln in lines) + overhead) # Estimate byte size
+
+def clean_parquet_file(input_path, cleaned_path):
+   """
+   Cleans Parquet files by rewriting them without any textual cleaning,
+
+   :param input_path: Path to the input Parquet file.
+   :param cleaned_path: Path where the rewritten Parquet file will be saved.
+   :return: None
+   """
+
+   df = pd.read_parquet(input_path, engine="fastparquet") # Read parquet into DataFrame
+   
+   required_bytes = estimate_bytes_parquet(df) # Estimate bytes needed for cleaned Parquet
+   ensure_enough_space(cleaned_path, required_bytes) # Ensure enough space to write the cleaned file
+   
+   df.to_parquet(cleaned_path, index=False) # Write DataFrame back to parquet at destination
+
+def clean_arff_lines(lines):
+   """
+   Cleans ARFF files by removing unnecessary spaces in @attribute domain lists.
+
+   :param lines: List of lines read from the ARFF file.
+   :return: List of cleaned lines with sanitized domain values.
+   """
+
+   cleaned_lines = [] # List to store cleaned lines
+
+   for line in lines: # Iterate through each line of the ARFF file
+      if line.strip().lower().startswith("@attribute") and "{" in line and "}" in line: # Verify if the line defines a domain list
+         parts = line.split("{") # Split before domain
+         before = parts[0] # Content before the domain
+         domain = parts[1].split("}")[0] # Extract domain content
+         after = line.split("}")[1] # Content after domain
+
+         cleaned_domain = ",".join([val.strip() for val in domain.split(",")]) # Strip spaces inside domain list
+         cleaned_line = f"{before}{{{cleaned_domain}}}{after}" # Construct cleaned line
+         cleaned_lines.append(cleaned_line) # Add cleaned attribute line
+      else: # If the line is not an attribute definition
+         cleaned_lines.append(line) # Keep non-attribute lines unchanged
+
+   return cleaned_lines # Return the list of cleaned lines
+
+def clean_csv_or_txt_lines(lines):
+   """
+   Cleans TXT and CSV files by removing unnecessary spaces around comma-separated values.
+
+   :param lines: List of lines read from the file.
+   :return: List of cleaned lines with sanitized comma-separated values.
+   """
+
+   cleaned_lines = [] # List to store cleaned lines
+
+   for line in lines: # Iterate through each line
+      values = line.strip().split(",") # Split the line on commas
+      cleaned_values = [val.strip() for val in values] # Strip whitespace
+      cleaned_line = ",".join(cleaned_values) + "\n" # Join cleaned values and add newline
+      cleaned_lines.append(cleaned_line) # Add cleaned line
+
+   return cleaned_lines # Return the list of cleaned lines
+
+def estimate_bytes_for_lines(lines):
+   """
+   Estimate the number of bytes a list of text lines will occupy when
+   encoded as UTF-8.
+
+   :param lines: List of text lines to measure.
+   :return: Estimated byte size.
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Estimating UTF-8 byte size for provided lines...{Style.RESET_ALL}") # Output verbose message
+
+   return sum(len((ln or "").encode("utf-8")) for ln in lines) # Compute and return byte size
+
+def write_cleaned_lines_to_file(cleaned_path, cleaned_lines):
+   """
+   Writes cleaned lines to a specified file.
+
+   :param cleaned_path: Path to the file where cleaned lines will be written.
+   :param cleaned_lines: List of cleaned lines to write to the file.
+   :return: None
+   """
+
+   required_bytes = estimate_bytes_for_lines(cleaned_lines) # Estimate bytes needed for cleaned lines
+   ensure_enough_space(cleaned_path, required_bytes) # Ensure enough space to write the cleaned file
+
+   with open(cleaned_path, "w", encoding="utf-8") as f: # Open the cleaned file path for writing
+      f.writelines(cleaned_lines) # Write all cleaned lines to the output file
+
+def clean_file(input_path, cleaned_path):
+   """
+   Cleans ARFF, TXT, CSV, and Parquet files by removing unnecessary spaces in
+   comma-separated values or domains. For Parquet files, it rewrites the file
+   directly without textual cleaning.
+
+   :param input_path: Path to the input file (.arff, .txt, .csv, .parquet).
+   :param cleaned_path: Path to save the cleaned file.
+   :return: None
+   """
+
+   file_extension = os.path.splitext(input_path)[1].lower() # Get the file extension of the input file
+
+   verbose_output(f"{BackgroundColors.GREEN}Cleaning file: {BackgroundColors.CYAN}{input_path}{BackgroundColors.GREEN} and saving to {BackgroundColors.CYAN}{cleaned_path}{Style.RESET_ALL}") # Output the verbose message
+
+   if file_extension == ".parquet": # Handle parquet files separately (binary format)
+      clean_parquet_file(input_path, cleaned_path) # Clean parquet file
+      return # Exit early after handling parquet
+
+   with open(input_path, "r", encoding="utf-8") as f: # Open the input file for reading
+      lines = f.readlines() # Read all lines from the file
+
+   if file_extension == ".arff": # Cleaning logic for ARFF files
+      cleaned_lines = clean_arff_lines(lines) # Clean ARFF lines
+   elif file_extension in [".txt", ".csv"]: # Cleaning logic for TXT and CSV files
+      cleaned_lines = clean_csv_or_txt_lines(lines) # Clean TXT/CSV lines
+   else: # If the file extension is not supported
+      raise ValueError(f"{BackgroundColors.RED}Unsupported file extension: {BackgroundColors.CYAN}{file_extension}{Style.RESET_ALL}") # Raise error for unsupported formats
+
+   write_cleaned_lines_to_file(cleaned_path, cleaned_lines) # Write cleaned lines to the cleaned file path
+
+def load_arff_with_scipy(input_path):
+   """
+   Attempt to load an ARFF file using scipy. Decodes byte strings when necessary.
+
+   :param input_path: Path to the ARFF file.
+   :return: pandas DataFrame loaded from the ARFF file.
+   """
+
+   data, meta = scipy_arff.loadarff(input_path) # Load the ARFF file using scipy
+   df = pd.DataFrame(data) # Convert the loaded data to a DataFrame
+
+   for col in df.columns: # Iterate through each column in the DataFrame
+      if df[col].dtype == object: # If column contains byte/string data
+         df[col] = df[col].apply(lambda x: x.decode("utf-8") if isinstance(x, bytes) else x) # Decode bytes to strings
+
+   return df # Return the DataFrame with decoded strings
+
+def load_arff_with_liac(input_path):
+   """
+   Load an ARFF file using the liac-arff library.
+
+   :param input_path: Path to the ARFF file.
+   :return: pandas DataFrame loaded from the ARFF file.
+   """
+
+   with open(input_path, "r", encoding="utf-8") as f: # Open the ARFF file for reading
+      data = arff.load(f) # Load using liac-arff
+
+   return pd.DataFrame(data["data"], columns=[attr[0] for attr in data["attributes"]]) # Convert to DataFrame
+
+def load_arff_file(input_path):
+   """
+   Load an ARFF file, trying scipy first and falling back to liac-arff if needed.
+
+   :param input_path: Path to the ARFF file.
+   :return: pandas DataFrame loaded from the ARFF file.
+   """
+
+   try: # Try loading using scipy
+      return load_arff_with_scipy(input_path)
+   except Exception as e: # If scipy fails, warn and try liac-arff
+      verbose_output(f"{BackgroundColors.YELLOW}Warning: Failed to load ARFF with scipy ({e}). Trying with liac-arff...{Style.RESET_ALL}")
+
+      try: # Try loading using liac-arff
+         return load_arff_with_liac(input_path)
+      except Exception as e2: # If both fail, raise an error
+         raise RuntimeError(f"Failed to load ARFF file with both scipy and liac-arff: {e2}")
+
+def load_csv_file(input_path):
+   """
+   Load a CSV file into a pandas DataFrame.
+
+   :param input_path: Path to the CSV file.
+   :return: pandas DataFrame containing the loaded dataset.
+   """
+
+   return pd.read_csv(input_path) # Load the CSV file
+
+def load_parquet_file(input_path):
+   """
+   Load a Parquet file into a pandas DataFrame.
+
+   :param input_path: Path to the Parquet file.
+   :return: pandas DataFrame loaded from the Parquet file.
+   """
+
+   pf = ParquetFile(input_path) # Load the Parquet file using fastparquet
+   return pf.to_pandas() # Convert the Parquet file to a pandas DataFrame
+
+def load_txt_file(input_path):
+   """
+   Load a TXT file into a pandas DataFrame, assuming tab-separated values.
+
+   :param input_path: Path to the TXT file.
+   :return: pandas DataFrame containing the loaded dataset.
+   """
+
+   return pd.read_csv(input_path, sep="\t") # Load TXT file using tab separator
+
+def load_dataset(input_path):
+   """
+   Load a dataset from a file in CSV, ARFF, TXT, or Parquet format into a pandas DataFrame.
+
+   :param input_path: Path to the input dataset file.
+   :return: pandas DataFrame containing the dataset.
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}") # Output the verbose message
+
+   _, ext = os.path.splitext(input_path) # Get the file extension of the input file
+   ext = ext.lower() # Convert the file extension to lowercase
+
+   if ext == ".arff": # If the file is in ARFF format
+      df = load_arff_file(input_path)
+   elif ext == ".csv": # If the file is in CSV format
+      df = load_csv_file(input_path)
+   elif ext == ".parquet": # If the file is in Parquet format
+      df = load_parquet_file(input_path)
+   elif ext == ".txt": # If the file is in TXT format
+      df = load_txt_file(input_path)
+   else: # Unsupported file format
+      raise ValueError(f"Unsupported file format: {ext}")
+
+   return df # Return the loaded DataFrame
+
+def convert_to_arff(df, output_path):
+   """
+   Convert a pandas DataFrame to ARFF format and save it to the specified output path.
+
+   :param df: pandas DataFrame to be converted.
+   :param output_path: Path to save the converted ARFF file.
+   :return: None
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Converting DataFrame to ARFF format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}") # Output the verbose message
+
+   attributes = [(col, "STRING") for col in df.columns] # Define all attributes as strings
+   df = df.astype(str) # Ensure all values are strings
+
+   arff_dict = { # Create a dictionary to hold the ARFF data
+      "description": "", # Description of the dataset (can be left empty)
+      "relation": "converted_data", # Name of the relation (dataset)
+      "attributes": attributes, # List of attributes with their names and types
+      "data": df.values.tolist(), # Convert the DataFrame values to a list of lists for ARFF data
+   }
+
+   bytes_needed = estimate_bytes_arff(df, 512, attributes) # Estimate size needed for ARFF output
+
+   ensure_enough_space(output_path, bytes_needed) # Ensure enough space to write the ARFF file
+
+   with open(output_path, "w") as f: # Open the output file for writing
+      arff.dump(arff_dict, f) # Dump the ARFF data into the file using liac-arff
+
+def convert_to_csv(df, output_path):
+   """
+   Convert a pandas DataFrame to CSV format and save it to the specified output path.
+
+   :param df: pandas DataFrame to be converted.
+   :param output_path: Path to save the converted CSV file.
+   :return: None
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Converting DataFrame to CSV format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}") # Output the verbose message
+
+   bytes_needed = estimate_bytes_csv(df, overhead=512) # Estimate size needed for CSV output
+   ensure_enough_space(output_path, bytes_needed) # Ensure enough space to write the CSV file
+
+   df.to_csv(output_path, index=False) # Save the DataFrame to the specified output path in CSV format, without the index
+
+def convert_to_parquet(df, output_path):
+   """
+   Convert a pandas DataFrame to PARQUET format and save it to the specified output path.
+
+   :param df: pandas DataFrame to be converted.
+   :param output_path: Path to save the converted PARQUET file.
+   :return: None
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Converting DataFrame to PARQUET format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")
+
+   bytes_needed = estimate_bytes_parquet(df) # Estimate size needed for PARQUET output
+   ensure_enough_space(output_path, bytes_needed) # Ensure enough space to write the PARQUET file
+
+   df.to_parquet(output_path, index=False) # Save the DataFrame to the specified output path in PARQUET format, without the index
+
+def convert_to_txt(df, output_path):
+   """
+   Convert a pandas DataFrame to TXT format and save it to the specified output path.
+
+   :param df: pandas DataFrame to be converted.
+   :param output_path: Path to save the converted TXT file.
+   :return: None
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Converting DataFrame to TXT format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}") # Output the verbose message
+
+   try: # Try to estimate size by dumping to a string buffer
+      buf = io.StringIO() # Create an in-memory string buffer
+      df.to_csv(buf, sep="\t", index=False) # Dump DataFrame to TXT in the buffer using tab as separator
+      lines = buf.getvalue().splitlines() # Get lines from the buffer
+   except Exception: # Fallback if dumping fails
+      lines = None # Set lines to None to use memory usage estimation
+
+   if lines is not None: # If lines were successfully obtained
+      bytes_needed = estimate_bytes_from_lines(lines, overhead=512) # Estimate size based on lines
+   else: # Fallback to memory usage estimation
+      bytes_needed = estimate_bytes_parquet(df) # Estimate size based on DataFrame memory usage
+
+   ensure_enough_space(output_path, bytes_needed) # Ensure enough space to write the TXT file
+
+   df.to_csv(output_path, sep="\t", index=False) # Save the DataFrame to the specified output path in TXT format, using tab as the separator and without the index
+
+def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIRECTORY, formats=None):
+   """
+   Batch converts dataset files from the input directory into multiple output formats
+   (ARFF, CSV, TXT, Parquet). Ensures the output directory exists, cleans input files,
+   loads them into a DataFrame, and writes all supported conversions.
+
+   :param input_directory: Path to the input directory containing dataset files.
+   :param output_directory: Path to the output directory where converted files will be saved.
+   :param formats: List of output formats to generate (e.g., ["arff", "csv"]). If None, all formats are generated.
+   :return: None
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Batch converting dataset files from {BackgroundColors.CYAN}{input_directory}{BackgroundColors.GREEN} to {BackgroundColors.CYAN}{output_directory}{Style.RESET_ALL}") # Output the verbose message
+
+   dataset_files = resolve_dataset_files(input_directory) # Get all dataset files from the input directory
+
+   if not dataset_files: # If no dataset files were found
+      print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}") # Print error message
+      return # Exit early if there are no files to convert
+
+   formats_list = resolve_formats(formats) # Normalize and validate output formats
+
+   pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len(dataset_files)}{BackgroundColors.GREEN} {'file' if len(dataset_files) == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len(dataset_files)) # Create a progress bar for the conversion process
+   for input_path in pbar: # Iterate through each dataset file
+      file = os.path.basename(input_path) # Extract the file name from the full path
+      name, ext = os.path.splitext(file) # Split file name into base name and extension
+      ext = ext.lower() # Normalize extension to lowercase
+
+      pbar.set_postfix_str(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}") # Display current file in progress bar
+
+      if ext not in [".arff", ".csv", ".parquet", ".txt"]: # Skip unsupported file types
+         continue # Move to the next file
+
+      dest_dir = resolve_destination_directory(input_directory, input_path, output_directory) # Determine destination directory for converted files
+      create_directories(dest_dir) # Ensure destination directory exists
+
+      cleaned_path = os.path.join(dest_dir, f"{name}{ext}") # Path for saving the cleaned file
+      clean_file(input_path, cleaned_path) # Clean the file before conversion
+
+      df = load_dataset(cleaned_path) # Load the cleaned dataset into a DataFrame
+      if "arff" in formats_list: # If ARFF format is requested
+         convert_to_arff(df, os.path.join(dest_dir, f"{name}.arff")) # Convert and save as ARFF
+      if "csv" in formats_list: # If CSV format is requested
+         convert_to_csv(df, os.path.join(dest_dir, f"{name}.csv")) # Convert and save as CSV
+      if "parquet" in formats_list: # If Parquet format is requested
+         convert_to_parquet(df, os.path.join(dest_dir, f"{name}.parquet")) # Convert and save as Parquet
+      if "txt" in formats_list: # If TXT format is requested
+         convert_to_txt(df, os.path.join(dest_dir, f"{name}.txt")) # Convert and save as TXT
+         
+      print() # Print a newline for better readability between files
+
+def play_sound():
+   """
+   Plays a sound when the program finishes and skips if the operating system is Windows.
+   :return: None
+   """
+
+   current_os = platform.system() # Get the current operating system
+   if current_os == "Windows": # If the current operating system is Windows
+      return # Do nothing
+
+   if verify_filepath_exists(SOUND_FILE): # If the sound file exists
+      if current_os in SOUND_COMMANDS: # If the platform.system() is in the SOUND_COMMANDS dictionary
+         os.system(f"{SOUND_COMMANDS[current_os]} {SOUND_FILE}") # Play the sound
+      else: # If the platform.system() is not in the SOUND_COMMANDS dictionary
+         print(f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not in the {BackgroundColors.CYAN}SOUND_COMMANDS dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}")
+   else: # If the sound file does not exist
+      print(f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{SOUND_FILE}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}")
+
+def main():
+   """
+   Main function.
+
+   :return: None
+   """
+   
+   print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Multi-Format Dataset Converter{BackgroundColors.GREEN}!{Style.RESET_ALL}\n") # Output the Welcome message
+
+   args = parse_cli_arguments() # Parse CLI arguments
+
+   input_path, output_path = resolve_io_paths(args) # Resolve and validate paths
+   if input_path is None or output_path is None: # If either path is invalid
+      return # Exit early if input/output paths are invalid
+
+   configure_verbose_mode(args) # Enable verbose mode if requested
+   
+   batch_convert(input_path, output_path, formats=args.formats if args.formats else None) # Perform batch conversion of dataset files
+
+   print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Conversions completed!{Style.RESET_ALL}") # Output the completion message
+
+   atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None # Register the play_sound function to be called when the program exits if RUN_FUNCTIONS["Play Sound"] is True
+
+if __name__ == "__main__":
+   """
+   This is the standard boilerplate that calls the main() function.
+
+   :return: None
+   """
+
+   main() # Call the main function
