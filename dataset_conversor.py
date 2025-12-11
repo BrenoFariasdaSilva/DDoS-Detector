@@ -388,19 +388,23 @@ def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIREC
       if ext not in [".arff", ".csv", ".parquet", ".txt"]: # Skip unsupported file types
          continue # Move to the next file
 
-      cleaned_path = os.path.join(output_directory, f"{name}{ext}") # Path for saving the cleaned file
+      rel_dir = os.path.relpath(os.path.dirname(input_path), input_directory) # Relative subdir for this file
+      dest_dir = os.path.join(output_directory, rel_dir) if rel_dir != "." else output_directory # Destination directory to write outputs
+      create_directories(dest_dir) # Ensure destination directory exists
+
+      cleaned_path = os.path.join(dest_dir, f"{name}{ext}") # Path for saving the cleaned file
       clean_file(input_path, cleaned_path) # Clean the file before conversion
 
       df = load_dataset(cleaned_path) # Load the cleaned dataset into a DataFrame
 
       if ext != ".arff": # Convert to ARFF if not already ARFF
-         convert_to_arff(df, os.path.join(output_directory, f"{name}.arff")) # Write ARFF file
+         convert_to_arff(df, os.path.join(dest_dir, f"{name}.arff")) # Write ARFF file
       if ext != ".csv": # Convert to CSV if not already CSV
-         convert_to_csv(df, os.path.join(output_directory, f"{name}.csv")) # Write CSV file
+         convert_to_csv(df, os.path.join(dest_dir, f"{name}.csv")) # Write CSV file
       if ext != ".parquet": # Convert to Parquet if not already Parquet
-         convert_to_parquet(df, os.path.join(output_directory, f"{name}.parquet")) # Write Parquet file
+         convert_to_parquet(df, os.path.join(dest_dir, f"{name}.parquet")) # Write Parquet file
       if ext != ".txt": # Convert to TXT if not already TXT
-         convert_to_txt(df, os.path.join(output_directory, f"{name}.txt")) # Write TXT file
+         convert_to_txt(df, os.path.join(dest_dir, f"{name}.txt")) # Write TXT file
       
 def play_sound():
    """
