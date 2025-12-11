@@ -190,9 +190,88 @@ def clean_file(input_path, cleaned_path):
 
    write_cleaned_lines_to_file(cleaned_path, cleaned_lines) # Write cleaned lines to the cleaned file path
 
+def load_arff_with_scipy(input_path):
+   """
+   Attempt to load an ARFF file using scipy. Decodes byte strings when necessary.
+
+   :param input_path: Path to the ARFF file.
+   :return: pandas DataFrame loaded from the ARFF file.
+   """
+
+   data, meta = scipy_arff.loadarff(input_path) # Load the ARFF file using scipy
+   df = pd.DataFrame(data) # Convert the loaded data to a DataFrame
+
+   for col in df.columns: # Iterate through each column in the DataFrame
+      if df[col].dtype == object: # If column contains byte/string data
+         df[col] = df[col].apply(lambda x: x.decode("utf-8") if isinstance(x, bytes) else x) # Decode bytes to strings
+
+   return df # Return the DataFrame with decoded strings
+
+def load_arff_with_liac(input_path):
+   """
+   Load an ARFF file using the liac-arff library.
+
+   :param input_path: Path to the ARFF file.
+   :return: pandas DataFrame loaded from the ARFF file.
+   """
+
+   with open(input_path, "r", encoding="utf-8") as f: # Open the ARFF file for reading
+      data = arff.load(f) # Load using liac-arff
+
+   return pd.DataFrame(data["data"], columns=[attr[0] for attr in data["attributes"]]) # Convert to DataFrame
+
+def load_arff_file(input_path):
+   """
+   Load an ARFF file, trying scipy first and falling back to liac-arff if needed.
+
+   :param input_path: Path to the ARFF file.
+   :return: pandas DataFrame loaded from the ARFF file.
+   """
+
+   try: # Try loading using scipy
+      return load_arff_with_scipy(input_path)
+   except Exception as e: # If scipy fails, warn and try liac-arff
+      verbose_output(f"{BackgroundColors.YELLOW}Warning: Failed to load ARFF with scipy ({e}). Trying with liac-arff...{Style.RESET_ALL}")
+
+      try: # Try loading using liac-arff
+         return load_arff_with_liac(input_path)
+      except Exception as e2: # If both fail, raise an error
+         raise RuntimeError(f"Failed to load ARFF file with both scipy and liac-arff: {e2}")
+
+def load_csv_file(input_path):
+   """
+   Load a CSV file into a pandas DataFrame.
+
+   :param input_path: Path to the CSV file.
+   :return: pandas DataFrame containing the loaded dataset.
+   """
+
+   return pd.read_csv(input_path) # Load the CSV file
+
+def load_parquet_file(input_path):
+   """
+   Load a Parquet file into a pandas DataFrame.
+
+   :param input_path: Path to the Parquet file.
+   :return: pandas DataFrame loaded from the Parquet file.
+   """
+
+   pf = ParquetFile(input_path) # Load the Parquet file using fastparquet
+   return pf.to_pandas() # Convert the Parquet file to a pandas DataFrame
+
+def load_txt_file(input_path):
+   """
+   Load a TXT file into a pandas DataFrame, assuming tab-separated values.
+
+   :param input_path: Path to the TXT file.
+   :return: pandas DataFrame containing the loaded dataset.
+   """
+
+   return pd.read_csv(input_path, sep="\t") # Load TXT file using tab separator
+
 def load_dataset(input_path):
    """
-   Load a dataset from a file in CSV, ARFF, or TXT format into a pandas DataFrame.
+   Load a dataset from a file in CSV, ARFF, TXT, or Parquet format into a pandas DataFrame.
 
    :param input_path: Path to the input dataset file.
    :return: pandas DataFrame containing the dataset.
@@ -203,33 +282,15 @@ def load_dataset(input_path):
    _, ext = os.path.splitext(input_path) # Get the file extension of the input file
    ext = ext.lower() # Convert the file extension to lowercase
 
-   if ext == ".csv": # If the file is in CSV format
-      df = pd.read_csv(input_path) # Load the CSV file into a pandas DataFrame
-
-   elif ext == ".arff": # If the file is in ARFF format
-      try: # Try to load the ARFF file using scipy
-         data, meta = scipy_arff.loadarff(input_path) # Try loading the ARFF file using scipy
-         df = pd.DataFrame(data) # Convert the loaded data to a pandas DataFrame
-         for col in df.columns: # Iterate through each column in the DataFrame
-            if df[col].dtype == object: # If the column data type is object (usually for string data)
-               df[col] = df[col].apply(lambda x: x.decode("utf-8") if isinstance(x, bytes) else x) # Decode bytes to strings if necessary
-      except Exception as e: # If there is an error loading the ARFF file with scipy
-         verbose_output(f"{BackgroundColors.YELLOW}Warning: Failed to load ARFF with scipy ({e}). Trying with liac-arff...{Style.RESET_ALL}")
-         try: # Try to load the ARFF file using liac-arff
-            with open(input_path, "r", encoding="utf-8") as f:
-               data = arff.load(f) # Load the ARFF file using liac-arff
-            df = pd.DataFrame(data["data"], columns=[attr[0] for attr in data["attributes"]]) # Create DataFrame from liac-arff output
-         except Exception as e2: # If there is an error loading the ARFF file with liac-arff
-            raise RuntimeError(f"Failed to load ARFF file with both scipy and liac-arff: {e2}")
-
-   elif ext == ".txt": # If the file is in TXT format
-      df = pd.read_csv(input_path, sep="\t") # Load the TXT file into a pandas DataFrame using tab as the separator
-
+   if ext == ".arff": # If the file is in ARFF format
+      df = load_arff_file(input_path)
+   elif ext == ".csv": # If the file is in CSV format
+      df = load_csv_file(input_path)
    elif ext == ".parquet": # If the file is in Parquet format
-      pf = ParquetFile(input_path) # Load the Parquet file using fastparquet
-      df = pf.to_pandas() # Convert the Parquet file to a pandas DataFrame
-
-   else: # If the file extension is not supported
+      df = load_parquet_file(input_path)
+   elif ext == ".txt": # If the file is in TXT format
+      df = load_txt_file(input_path)
+   else: # Unsupported file format
       raise ValueError(f"Unsupported file format: {ext}")
 
    return df # Return the loaded DataFrame
