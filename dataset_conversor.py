@@ -249,6 +249,22 @@ def resolve_formats(formats):
 
    return [f.strip().lower().lstrip(".") for f in formats if isinstance(f, str)] # Clean list
 
+def resolve_destination_directory(input_directory, input_path, output_directory):
+   """
+   Determine where converted files should be saved.
+
+   :param input_directory: Source directory.
+   :param input_path: Path of the current file.
+   :param output_directory: Base output directory.
+   :return: Destination directory path.
+   """
+
+   if os.path.isfile(input_directory): # If converting a single file
+      return output_directory # Save directly
+
+   rel_dir = os.path.relpath(os.path.dirname(input_path), input_directory) # Subdir path
+   return os.path.join(output_directory, rel_dir) if rel_dir != "." else output_directory # Preserve structure
+
 def get_free_space_bytes(path):
    """
    Return the number of free bytes available on the filesystem
@@ -712,11 +728,7 @@ def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIREC
       if ext not in [".arff", ".csv", ".parquet", ".txt"]: # Skip unsupported file types
          continue # Move to the next file
 
-      if os.path.isfile(input_directory): # If the input directory is actually a file
-         dest_dir = output_directory # Destination directory is the output directory
-      else: # If the input directory is a directory
-         rel_dir = os.path.relpath(os.path.dirname(input_path), input_directory) # Relative subdir for this file
-         dest_dir = os.path.join(output_directory, rel_dir) if rel_dir != "." else output_directory # Destination directory to write outputs
+      dest_dir = resolve_destination_directory(input_directory, input_path, output_directory) # Determine destination directory for converted files
       create_directories(dest_dir) # Ensure destination directory exists
 
       cleaned_path = os.path.join(dest_dir, f"{name}{ext}") # Path for saving the cleaned file
