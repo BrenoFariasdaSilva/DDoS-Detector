@@ -618,7 +618,7 @@ def convert_to_parquet(df, output_path):
 
    verbose_output(f"{BackgroundColors.GREEN}Converting DataFrame to PARQUET format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")
 
-   bytes_needed = max(1024, int(df.memory_usage(deep=True).sum())) # Estimate size based on DataFrame memory usage
+   bytes_needed = estimate_bytes_parquet(df) # Estimate size needed for PARQUET output
    ensure_enough_space(output_path, bytes_needed) # Ensure enough space to write the PARQUET file
 
    df.to_parquet(output_path, index=False) # Save the DataFrame to the specified output path in PARQUET format, without the index
