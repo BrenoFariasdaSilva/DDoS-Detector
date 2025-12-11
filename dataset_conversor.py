@@ -200,19 +200,6 @@ def has_enough_space_for_path(path, required_bytes):
 
    return free >= required_bytes # Return comparison result
 
-def estimate_bytes_for_lines(lines):
-   """
-   Estimate the number of bytes a list of text lines will occupy when
-   encoded as UTF-8.
-
-   :param lines: List of text lines to measure.
-   :return: Estimated byte size.
-   """
-
-   verbose_output(f"{BackgroundColors.GREEN}Estimating UTF-8 byte size for provided lines...{Style.RESET_ALL}") # Output verbose message
-
-   return sum(len((ln or "").encode("utf-8")) for ln in lines) # Compute and return byte size
-
 def ensure_enough_space(path, required_bytes):
    """
    Ensure that the filesystem has enough space to write the required number of bytes.
@@ -288,6 +275,19 @@ def clean_csv_or_txt_lines(lines):
       cleaned_lines.append(cleaned_line) # Add cleaned line
 
    return cleaned_lines # Return the list of cleaned lines
+
+def estimate_bytes_for_lines(lines):
+   """
+   Estimate the number of bytes a list of text lines will occupy when
+   encoded as UTF-8.
+
+   :param lines: List of text lines to measure.
+   :return: Estimated byte size.
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Estimating UTF-8 byte size for provided lines...{Style.RESET_ALL}") # Output verbose message
+
+   return sum(len((ln or "").encode("utf-8")) for ln in lines) # Compute and return byte size
 
 def write_cleaned_lines_to_file(cleaned_path, cleaned_lines):
    """
