@@ -66,6 +66,7 @@ Assumptions & Notes:
 
 import arff # liac-arff, used to save ARFF files
 import atexit # For playing a sound when the program finishes
+import io # For in-memory file operations
 import os # For running commands in the terminal
 import pandas as pd # For handling CSV and TXT file formats
 import platform # For getting the operating system name
@@ -179,6 +180,25 @@ def get_free_space_bytes(path):
    except Exception as e: # Catch any errors
       verbose_output(f"{BackgroundColors.RED}Failed to retrieve disk usage for {target}: {e}{Style.RESET_ALL}") # Log error
       return 0 # Fallback to zero
+
+def has_enough_space_for_path(path, required_bytes):
+   """
+   Verify whether the filesystem containing the specified path has at least
+   the required number of free bytes.
+
+   :param path: Path where free space must be evaluated.
+   :param required_bytes: Minimum number of bytes required.
+   :return: True if there is enough free space, otherwise False.
+   """
+
+   parent = os.path.dirname(path) or "." # Determine the directory to inspect
+
+   verbose_output(f"{BackgroundColors.GREEN}Evaluating free space for: {BackgroundColors.CYAN}{parent}{Style.RESET_ALL}") # Output verbose message
+
+   free = get_free_space_bytes(parent) # Retrieve free space
+   verbose_output(f"{BackgroundColors.RED}Free space: {BackgroundColors.CYAN}{free}{BackgroundColors.RED} bytes; required: {BackgroundColors.CYAN}{required_bytes}{BackgroundColors.CYAN} bytes{Style.RESET_ALL}") # Log details
+
+   return free >= required_bytes # Return comparison result
 
 def clean_parquet_file(input_path, cleaned_path):
    """
