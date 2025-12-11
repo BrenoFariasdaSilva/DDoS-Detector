@@ -276,6 +276,32 @@ def ensure_enough_space(path, required_bytes):
          f"{Style.RESET_ALL}"
       )
 
+def estimate_bytes_arff(df, overhead, attributes):
+   """
+   Estimate required bytes for ARFF output by serializing to an in-memory buffer.
+
+   :param df: pandas DataFrame.
+   :param overhead: Additional bytes for headers/metadata.
+   :param attributes: List of attributes for ARFF serialization.
+   :return: Integer number of required bytes.
+   """
+
+   try: # Attempt ARFF serialization
+      buf = io.StringIO() # In-memory text buffer
+
+      arff_dict = { # Create a dictionary to hold the ARFF data
+      "description": "", # Description of the dataset (can be left empty)
+      "relation": "converted_data", # Name of the relation (dataset)
+      "attributes": attributes, # List of attributes with their names and types
+      "data": df.values.tolist(), # Convert the DataFrame values to a list of lists for ARFF data
+      }
+
+      arff.dump(arff_dict, buf) # Dump ARFF data into the buffer
+      
+      return max(1024, len(buf.getvalue().encode("utf-8")) + overhead) # Return estimated size with overhead
+   except Exception: # Fallback: estimate via CSV
+      return max(1024, int(df.memory_usage(deep=True).sum())) # Estimate size based on DataFrame memory usage
+
 def estimate_bytes_parquet(df):
    """
    Estimate required bytes for Parquet output using DataFrame memory size.
