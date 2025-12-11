@@ -246,40 +246,47 @@ def convert_to_parquet(df, output_path):
 
 def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIRECTORY):
    """
-   Batch convert dataset files from the input directory to multiple formats (ARFF, CSV, TXT) in the output directory.
+   Batch converts dataset files from the input directory into multiple output formats
+   (ARFF, CSV, TXT, Parquet). Ensures the output directory exists, cleans input files,
+   loads them into a DataFrame, and writes all supported conversions.
 
-   :param INPUT_DIRECTORY: Path to the input directory containing dataset files.
-   :param OUTPUT_DIRECTORY: Path to the output directory where converted files will be saved.
+   :param input_directory: Path to the input directory containing dataset files.
+   :param output_directory: Path to the output directory where converted files will be saved.
    :return: None
    """
 
    verbose_output(f"{BackgroundColors.GREEN}Batch converting dataset files from {BackgroundColors.CYAN}{input_directory}{BackgroundColors.GREEN} to {BackgroundColors.CYAN}{output_directory}{Style.RESET_ALL}") # Output the verbose message
 
-   dataset_files = get_dataset_files(input_directory) # Get all dataset files from the input directory
+   dataset_files = get_dataset_files(input_directory) # Get all dataset files in the input directory
 
-   if not dataset_files: # If no dataset files are found
-      print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}")
-      return # Exit the function if no dataset files are found
+   if not dataset_files: # If no dataset files were found
+      print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}") # Print error message
+      return # Exit early if there are no files to convert
 
-   pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting files{Style.RESET_ALL}", unit="file", colour="green") # Create a progress bar for the dataset files
+   pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting files{Style.RESET_ALL}", unit="file", colour="green") # Initialize progress bar for conversion
    for input_path in pbar: # Iterate through each dataset file
-      file = os.path.basename(input_path) # Get the base name of the file
-      name, ext = os.path.splitext(file) # Split the file name into name and extension
-      ext = ext.lower() # Convert the file extension to lowercase
+      file = os.path.basename(input_path) # Extract the file name from the full path
+      name, ext = os.path.splitext(file) # Split file name into base name and extension
+      ext = ext.lower() # Normalize extension to lowercase
 
-      pbar.set_postfix_str(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}") # Update the progress bar with the current file being processed
+      pbar.set_postfix_str(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}") # Display current file in progress bar
 
-      if ext not in [".csv", ".arff", ".txt"]: # If the file extension is not supported
-         continue # Skip the file if it is not in CSV, ARFF, or TXT format
+      if ext not in [".csv", ".arff", ".txt", ".parquet"]: # Skip unsupported file types
+         continue # Move to the next file
 
-      cleaned_path = os.path.join(OUTPUT_DIRECTORY, f"{name}{ext}") # Create the cleaned file path in the output directory
-      clean_file(input_path, cleaned_path) # Clean the input file and save it to the cleaned path
-      
-      df = load_dataset(cleaned_path) # Load the cleaned dataset file into a pandas DataFrame
-      convert_to_arff(df, os.path.join(OUTPUT_DIRECTORY, f"{name}.arff")) if ext != ".arff" else None # Convert the DataFrame to ARFF format and save it if the file is not already in ARFF format
-      convert_to_csv(df, os.path.join(OUTPUT_DIRECTORY, f"{name}.csv")) if ext != ".csv" else None # Convert the DataFrame to CSV format and save it if the file is not already in CSV format
-      convert_to_txt(df, os.path.join(OUTPUT_DIRECTORY, f"{name}.txt")) if ext != ".txt" else None # Convert the DataFrame to TXT format and save it if the file is not already in TXT format
-      convert_to_parquet(df, os.path.join(OUTPUT_DIRECTORY, f"{name}.parquet")) if ext != ".parquet" else None # Convert the DataFrame to PARQUET format and save it if the file is not already in PARQUET format
+      cleaned_path = os.path.join(output_directory, f"{name}{ext}") # Path for saving the cleaned file
+      clean_file(input_path, cleaned_path) # Clean the file before conversion
+
+      df = load_dataset(cleaned_path) # Load the cleaned dataset into a DataFrame
+
+      if ext != ".arff": # Convert to ARFF if not already ARFF
+         convert_to_arff(df, os.path.join(output_directory, f"{name}.arff")) # Write ARFF file
+      if ext != ".csv": # Convert to CSV if not already CSV
+         convert_to_csv(df, os.path.join(output_directory, f"{name}.csv")) # Write CSV file
+      if ext != ".txt": # Convert to TXT if not already TXT
+         convert_to_txt(df, os.path.join(output_directory, f"{name}.txt")) # Write TXT file
+      if ext != ".parquet": # Convert to Parquet if not already Parquet
+         convert_to_parquet(df, os.path.join(output_directory, f"{name}.parquet")) # Write Parquet file
 
 def play_sound():
    """
