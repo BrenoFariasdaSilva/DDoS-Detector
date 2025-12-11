@@ -200,6 +200,19 @@ def has_enough_space_for_path(path, required_bytes):
 
    return free >= required_bytes # Return comparison result
 
+def estimate_bytes_for_lines(lines):
+   """
+   Estimate the number of bytes a list of text lines will occupy when
+   encoded as UTF-8.
+
+   :param lines: List of text lines to measure.
+   :return: Estimated byte size.
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Estimating UTF-8 byte size for provided lines...{Style.RESET_ALL}") # Output verbose message
+
+   return sum(len((ln or "").encode("utf-8")) for ln in lines) # Compute and return byte size
+
 def clean_parquet_file(input_path, cleaned_path):
    """
    Cleans Parquet files by rewriting them without any textual cleaning,
