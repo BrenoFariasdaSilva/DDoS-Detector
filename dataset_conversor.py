@@ -602,14 +602,7 @@ def convert_to_csv(df, output_path):
 
    verbose_output(f"{BackgroundColors.GREEN}Converting DataFrame to CSV format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}") # Output the verbose message
 
-   # Estimate CSV size by writing to a string buffer
-   try: # Try to estimate size by dumping to a string buffer
-      buf = io.StringIO() # Create an in-memory string buffer
-      df.to_csv(buf, index=False) # Dump DataFrame to CSV in the buffer
-      bytes_needed = len(buf.getvalue().encode("utf-8")) # Estimate size
-   except Exception: # If dumping fails,
-      bytes_needed = max(1024, int(df.memory_usage(deep=True).sum())) # Fallback to DataFrame memory usage
-
+   bytes_needed = estimate_bytes_csv(df, overhead=512) # Estimate size needed for CSV output
    ensure_enough_space(output_path, bytes_needed) # Ensure enough space to write the CSV file
 
    df.to_csv(output_path, index=False) # Save the DataFrame to the specified output path in CSV format, without the index
