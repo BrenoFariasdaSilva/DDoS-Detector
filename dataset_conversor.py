@@ -637,9 +637,14 @@ def convert_to_txt(df, output_path):
    try: # Try to estimate size by dumping to a string buffer
       buf = io.StringIO() # Create an in-memory string buffer
       df.to_csv(buf, sep="\t", index=False) # Dump DataFrame to TXT in the buffer using tab as separator
-      bytes_needed = len(buf.getvalue().encode("utf-8")) # Estimate size
-   except Exception: # If dumping fails,
-      bytes_needed = max(1024, int(df.memory_usage(deep=True).sum())) # Fallback to DataFrame memory usage
+      lines = buf.getvalue().splitlines() # Get lines from the buffer
+   except Exception: # Fallback if dumping fails
+      lines = None # Set lines to None to use memory usage estimation
+
+   if lines is not None: # If lines were successfully obtained
+      bytes_needed = estimate_bytes_from_lines(lines, overhead=512) # Estimate size based on lines
+   else: # Fallback to memory usage estimation
+      bytes_needed = estimate_bytes_parquet(df) # Estimate size based on DataFrame memory usage
 
    ensure_enough_space(output_path, bytes_needed) # Ensure enough space to write the TXT file
 
