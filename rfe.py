@@ -1,53 +1,48 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-Recursive Feature Elimination (RFE) Automation and Feature Analysis Tool
+Recursive Feature Elimination (RFE) Automation and Feature Analysis Tool (rfe.py)
 ================================================================================
 Author      : Breno Farias da Silva
 Created     : 2025-10-07
 Description :
-   This script automates the process of performing Recursive Feature Elimination (RFE)
-   on structured datasets to identify the most relevant features for classification tasks.
-   It provides a fully integrated pipeline — from dataset loading and preprocessing
-   to feature ranking and export of analysis results.
+   Utility to automate Recursive Feature Elimination (RFE) workflows for
+   structured classification datasets. The module bundles safe dataset
+   loading, preprocessing, scaling, RFE selection (Random Forest base),
+   evaluation and export of structured run results for reproducible analysis.
 
-   Core functionalities include:
-      - Dataset validation and safe file handling
-      - Standardization of numeric features using z-score normalization
-      - Recursive Feature Elimination (RFE) with Random Forest as the base estimator
-      - Generation of ranked feature lists
-      - Cross-platform sound notification upon completion
+Core features:
+   - Safe CSV loading with column sanitization and basic validation
+   - Z-score standardization of numeric features prior to RFE
+   - RFE using RandomForestClassifier (configurable number of selected features)
+   - Performance evaluation (accuracy, precision, recall, F1, FPR, FNR)
+   - Export of run results to `Feature_Analysis/RFE_Run_Results.csv` with hardware metadata
+   - Portable: skips platform-specific features on unsupported OS (e.g., sound on Windows)
 
 Usage:
-   1. Set the `csv_file` variable inside the `main()` function to the dataset path.
-   2. Run the script using:
-      $ make main
-   3. The program will automatically:
-      - Load and clean the dataset
-      - Run RFE to select the most relevant features
-      - Save results to the `Feature_Analysis/` directory
-      - Optionally play a notification sound when finished
+   - Set `csv_file` in `main()` or call `run_rfe(csv_path)` programmatically.
+   - Run: `python3 rfe.py` or via the project Makefile target.
 
-Output:
-   - CSV file with RFE run results, including metrics and selected features.
+Outputs:
+   - `Feature_Analysis/RFE_Run_Results.csv` summarizing each run
+   - Per-run JSON fields for `top_features` and `rfe_ranking` inside the CSV
+
+Notes & conventions:
+   - The last column of the input CSV is treated as the target variable.
+   - Only numeric columns (or coercible-to-numeric) are used for feature ranking.
+   - Defaults: 80/20 train-test split, RandomForest with 100 trees, fixed seed
+   - Toggle `VERBOSE = True` for detailed runtime logs useful during debugging
 
 TODOs:
-   - Add support for additional estimators (e.g., SVM, Gradient Boosting).
-   - Integrate evaluation metrics (F1-score, accuracy, precision, recall, FPR, FNR)
-     directly after feature selection.
-   - Incorporate correlation analysis to remove redundant features.
-   - Extend preprocessing to handle categorical and missing data automatically.
-   - Implement CLI argument parsing for dataset paths and configuration options.
-   - Add parallel RFE runs with different feature subset sizes (1, 2, 5, 10, 15, 20, 25).
+   - Add CLI argument parsing for dataset path, `n_select`, and parallel runs.
+   - Support additional estimators (SVM, Gradient Boosting) and compare results.
+   - Integrate automatic handling for categorical and missing data.
+   - Add unit tests for preprocessing and metric computations.
 
 Dependencies:
    - Python >= 3.9
-   - pandas, numpy, seaborn, matplotlib, scikit-learn, colorama
+   - pandas, numpy, scikit-learn, seaborn, matplotlib, colorama
 
-Notes:
-   - The last column of the dataset is assumed to be the target variable.
-   - Only numeric columns are considered for RFE processing.
-   - Sound playback is skipped on Windows platforms by default.
 """
 
 import atexit # For playing a sound when the program finishes
