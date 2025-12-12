@@ -26,7 +26,7 @@ endif
 # Default target
 all: main
 
-# Run main scripts
+# Make Rules
 main: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
