@@ -936,9 +936,44 @@ def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memo
    if not report_rows: # If no report rows were generated
       return False # Return False indicating failure
 
-   base_dir = os.getcwd() # Use current working directory as base_dir
-   write_report(report_rows, base_dir, output_filename) # Write the report to a CSV file
-   return True # Return True indicating success
+   # Save one cross-report per dataset group. In each saved file the target
+   # group will always appear as "Dataset A" (swap fields when necessary).
+   saved_any = False
+   for group_name, info in group_info.items():
+      # Determine base_dir for this group: use directory of first file if present
+      if info["files"]:
+         first_file = info["files"][0]
+         base_dir = os.path.dirname(os.path.abspath(first_file))
+      else:
+         base_dir = os.getcwd()
+
+      adjusted_rows = []
+      for r in report_rows:
+         if r["Dataset A"] == group_name:
+            adjusted_rows.append(dict(r))
+         elif r["Dataset B"] == group_name:
+            # Swap A<->B fields so that this group appears as Dataset A
+            swapped = {
+               "Dataset A": r["Dataset B"],
+               "Dataset B": r["Dataset A"],
+               "Files in A": r["Files in B"],
+               "Files in B": r["Files in A"],
+               "Common Features (A ∩ B)": r["Common Features (A ∩ B)"],
+               "Extra Features in A (A \\ B)": r["Extra Features in B (B \\ A)"],
+               "Extra Features in B (B \\ A)": r["Extra Features in A (A \\ B)"],
+            }
+            adjusted_rows.append(swapped)
+         else:
+            # Pair unrelated to this group: keep as-is
+            adjusted_rows.append(dict(r))
+
+      try:
+         write_report(adjusted_rows, base_dir, output_filename)
+         saved_any = True
+      except Exception:
+         pass
+
+   return saved_any
 
 def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME):
    """
