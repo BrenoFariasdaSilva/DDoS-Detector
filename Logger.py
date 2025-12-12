@@ -78,9 +78,9 @@ class Logger:
       """
       Initialize the Logger.
       
-      :param self: Description
-      :param logfile_path: Description
-      :param clean: Description
+      :param self: Instance of the Logger class.
+      :param logfile_path: Path to the log file.
+      :param clean: If True, truncate the log file on init; otherwise append.
       """
       
       self.logfile_path = logfile_path # Store log file path
@@ -97,6 +97,7 @@ class Logger:
       """
       Internal method to write messages to both terminal and log file.
       
+      :param self: Instance of the Logger class.
       :param message: The message to log.
       """
       
@@ -129,7 +130,7 @@ class Logger:
       """
       Flush the log file.
       
-      :param self: Description
+      :param self: Instance of the Logger class.
       """
       
       try: # Flush log file buffer
@@ -141,7 +142,7 @@ class Logger:
       """
       Close the log file.
       
-      :param self: Description
+      :param self: Instance of the Logger class.
       """
       
       try: # Close log file
