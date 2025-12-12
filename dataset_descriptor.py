@@ -96,6 +96,8 @@ DATASETS = { # Dictionary containing dataset paths and feature files
    ],
 }
 
+CROSS_DATASET_VALIDATE = True # Set to True to perform cross-dataset validation between the datasets defined in DATASETS
+
 RESULTS_DIR = "./Dataset_Description/" # Directory to save the results
 RESULTS_FILENAME = "Dataset_Descriptor.csv" # Filename for the results CSV
 
@@ -1046,6 +1048,17 @@ def main():
             print(f"{BackgroundColors.RED}Failed to generate dataset report for: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")
          else: # If the report was generated successfully
             print(f"{BackgroundColors.GREEN}Report saved for {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} -> {BackgroundColors.CYAN}{RESULTS_FILENAME}{Style.RESET_ALL}")
+   
+   if CROSS_DATASET_VALIDATE and len(DATASETS) > 1: # If cross-dataset validation is enabled and there is more than one dataset
+      try: # Try to generate the cross-dataset report
+         success = generate_cross_dataset_report(DATASETS, file_extension=".csv") # Generate the cross-dataset report
+         if success: # If the report was generated successfully
+            print(f"{BackgroundColors.GREEN}Cross-dataset report saved -> {BackgroundColors.CYAN}Cross_{RESULTS_FILENAME}{Style.RESET_ALL}")
+         else: # If no comparisons were generated
+            print(f"{BackgroundColors.YELLOW}No cross-dataset comparisons generated (no files found).{Style.RESET_ALL}")
+      except Exception as e: # If an error occurs during cross-dataset validation
+         print(f"{BackgroundColors.RED}Cross-dataset validation failed: {e}{Style.RESET_ALL}")
+
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
 
    atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None # Register the play_sound function to be called when the program finishes
