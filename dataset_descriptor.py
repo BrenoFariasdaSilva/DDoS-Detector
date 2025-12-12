@@ -844,7 +844,7 @@ def generate_tsne_plot(filepath, low_memory=True, sample_size=5000, perplexity=3
    try: # Main try-catch block for overall failure handling
       numeric_df, labels = prepare_numeric_dataset(filepath, low_memory, sample_size, random_state) # Prepare numeric dataset
       if numeric_df is None: # Abort if preparation failed
-         return None
+         return None # Indicate failure
 
       X = scale_features(numeric_df) # Scale features for t-SNE
 
