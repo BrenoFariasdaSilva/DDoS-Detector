@@ -762,10 +762,18 @@ def generate_tsne_plot(filepath, low_memory=True, sample_size=5000, perplexity=3
          return None # Abort
 
       cleaned = preprocess_dataframe(df, remove_zero_variance=False) # Basic cleaning
-      numeric_df = coerce_numeric_columns(cleaned) # Extract numeric features
-      numeric_df = fill_replace_and_drop(numeric_df) # Clean numeric frame
+      if cleaned is None: # If cleaning failed
+         return None # Abort
 
-      if numeric_df is None or numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0: # No numeric data
+      numeric_df = coerce_numeric_columns(cleaned) # Extract numeric features
+      if numeric_df is None: # If extraction failed
+         return None # Abort
+      
+      numeric_df = fill_replace_and_drop(numeric_df) # Clean numeric frame
+      if numeric_df is None: # If cleaning failed
+         return None # Abort
+
+      if numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0: # No numeric data
          return None # Abort
 
       label_col = detect_label_column(cleaned.columns) # Detect label column
@@ -775,7 +783,26 @@ def generate_tsne_plot(filepath, low_memory=True, sample_size=5000, perplexity=3
          numeric_df, labels = downsample_with_class_awareness(numeric_df, labels, sample_size, random_state) # Class-aware downsampling
 
       X = scale_features(numeric_df) # Scale features for t-SNE
-      tsne = TSNE(n_components=2, perplexity=perplexity, n_iter=n_iter, random_state=random_state, init="pca") # Initialize t-SNE
+
+      n_rows = X.shape[0] # Number of rows after downsampling
+      if n_rows <= max(3, int(perplexity) + 1): # Check t-SNE feasibility
+         return None # Abort if too few samples for t-SNE
+
+      try: # Inspect TSNE init signature for compatibility
+         from inspect import signature # Import signature function
+         sig = signature(TSNE.__init__).parameters # Get TSNE init signature
+      except Exception: # If inspection fails
+         sig = {} # Fallback to empty signature
+
+      tsne_kwargs = {"n_components": 2, "perplexity": perplexity, "random_state": random_state, "init": "pca"} # Base t-SNE args
+      if "n_iter" in sig: # Check for n_iter parameter
+         tsne_kwargs["n_iter"] = n_iter # Set n_iter if supported
+      elif "max_iter" in sig: # Check for max_iter parameter
+         tsne_kwargs["max_iter"] = n_iter # Set max_iter if supported
+      else: # Neither parameter supported
+         tsne_kwargs["max_iter"] = n_iter # Default to max_iter
+
+      tsne = TSNE(**tsne_kwargs) # Initialize t-SNE with compatible args
       X_emb = tsne.fit_transform(X) # Compute embedding
 
       if output_dir is None: # Determine output directory
@@ -796,7 +823,7 @@ def generate_tsne_plot(filepath, low_memory=True, sample_size=5000, perplexity=3
 
       return out_name # Return saved filename
    except Exception as e: # Catch-all failure
-      verbose_output(f"{BackgroundColors.RED}t-SNE generation failed for {filepath}: {e}{Style.RESET_ALL}") # Verbose error
+      print(f"{BackgroundColors.RED}t-SNE generation failed for {filepath}: {e}{Style.RESET_ALL}") # Verbose error
       return None # Indicate failure
 
 def get_dataset_file_info(filepath, low_memory=True):
