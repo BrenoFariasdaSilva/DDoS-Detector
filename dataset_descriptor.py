@@ -1004,9 +1004,10 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
    headers_map = build_headers_map(sorted_matching_files, low_memory=low_memory) # Build headers map for all matching files
    common_features, headers_match_all = compute_common_features(headers_map) # Compute common features and header match status
 
-   progress = tqdm(sorted_matching_files, desc=f"{BackgroundColors.GREEN}Processing files{Style.RESET_ALL}", unit="file") # Create a progress bar
+   progress = tqdm(sorted_matching_files, desc=f"{BackgroundColors.GREEN}Processing files{BackgroundColors.GREEN}", unit="file", ncols=100) # Create a progress bar with fixed width
    for idx, filepath in enumerate(progress, 1): # Process each matching file
-      progress.set_description(f"{BackgroundColors.GREEN}Processing file {BackgroundColors.CYAN}{idx}/{len(sorted_matching_files)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{os.path.basename(filepath)}{Style.RESET_ALL}") # Update progress bar description
+      file_basename = os.path.basename(filepath) # Get the base filename
+      progress.set_description(f"{BackgroundColors.GREEN}Processing file {BackgroundColors.CYAN}{idx}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{len(sorted_matching_files)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{file_basename[:30]}{BackgroundColors.GREEN}") # Update progress bar description (truncate long names)
       info = get_dataset_file_info(filepath, low_memory) # Get dataset info
       if info: # If info was successfully retrieved
          relative_path = os.path.relpath(filepath, base_dir) # Get path relative to base_dir
@@ -1235,7 +1236,7 @@ def main():
       safe_dataset_name = str(dataset_name).replace(" ", "_").replace("/", "_") # Create a safe dataset name for filenames
 
       for dir_path in paths: # For each path in the list of paths for the dataset
-         print(f" {BackgroundColors.GREEN}Location: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")
+         print(f"{BackgroundColors.GREEN}Location: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")
          if not verify_filepath_exists(dir_path): # Verify path exists
             print(f"{BackgroundColors.RED}The specified input path does not exist: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")
             continue # Skip to next configured path
