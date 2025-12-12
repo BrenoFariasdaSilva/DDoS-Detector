@@ -67,11 +67,14 @@ import pandas as pd # For data manipulation
 import platform # For getting the operating system name
 import psutil # RAM and CPU core info
 import subprocess # WMIC call
+import sys # For system-specific parameters and functions
 import time # For measuring execution time
 import warnings # For suppressing warnings
-from colorama import Style # For coloring the terminal
 from collections import OrderedDict # For deterministic results column ordering when saving
+from colorama import Style # For coloring the terminal
 from itertools import product # For generating parameter combinations
+from Logger import Logger # For logging output to both terminal and file
+from pathlib import Path # For handling file paths
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier # For ensemble models
 from sklearn.linear_model import LogisticRegression # For logistic regression model
 from sklearn.metrics import make_scorer, f1_score # For custom scoring metrics
@@ -111,6 +114,11 @@ DATASETS = { # Dictionary containing dataset paths and feature files
 		"./Datasets/CICDDoS2019/03-11/",
    ],
 }
+
+# Logger Setup:
+logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True) # Create a Logger instance
+sys.stdout = logger # Redirect stdout to the logger
+sys.stderr = logger # Redirect stderr to the logger
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
