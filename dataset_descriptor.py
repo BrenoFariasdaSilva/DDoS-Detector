@@ -594,34 +594,45 @@ def compute_class_aware_allocations(labels, sample_size, min_class_size=50):
    """
 
    counts = labels.value_counts() # Get per-class counts
-   small_mask = counts < min_class_size # Identify small classes
-   small_classes = counts[small_mask] # Classes to fully include
-   large_classes = counts[~small_mask] # Classes to allocate proportionally
 
-   allocations = {} # Initialize allocations dictionary
-   for cls, cnt in small_classes.items(): # Allocate all samples for small classes
-      allocations[cls] = int(cnt) # Assign full count to allocation
+   allocations = {cls: min(int(cnt), int(min_class_size)) for cls, cnt in counts.items()} # Initial allocations for small classes
 
    remaining_budget = int(sample_size - sum(allocations.values())) # Remaining samples to allocate
 
-   if remaining_budget > 0 and not large_classes.empty: # Only allocate if budget remains and there are large classes
-      total_large = int(large_classes.sum()) # Total samples in large classes
-      float_alloc = {cls: remaining_budget * int(cnt) / total_large for cls, cnt in large_classes.items()} # Fractional proportional allocation
-      base_alloc = {cls: int(fa) for cls, fa in float_alloc.items()} # Base integer allocation
-      
-      assigned = sum(base_alloc.values()) # Sum of base allocations
-      leftover = remaining_budget - assigned # Leftover samples to distribute
-      
-      remainders = sorted(large_classes.index, key=lambda c: (float_alloc[c] - base_alloc[c]), reverse=True) # Order by fractional remainder
-      for cls in remainders: # Distribute leftover samples
-         if leftover <= 0: # Stop when no leftover remains
-            break # Exit loop
-         if base_alloc[cls] < int(large_classes[cls]): # Only add if class can accept more
-            base_alloc[cls] += 1 # Increment allocation for this class
-            leftover -= 1 # Decrease leftover count
-      
-      for cls in large_classes.index: # Finalize allocations applying available caps
-         allocations[cls] = min(int(large_classes[cls]), base_alloc.get(cls, 0)) # Cap addition by remaining available
+   if remaining_budget > 0: # If there is remaining budget
+      extras = {cls: max(0, int(counts[cls]) - allocations.get(cls, 0)) for cls in counts.index} # Extra samples available per class
+      total_extras = sum(extras.values()) # Total extra samples available
+
+      if total_extras > 0: # Only proceed if there are extras to allocate
+         float_alloc = {cls: remaining_budget * extras[cls] / total_extras for cls in extras} # Fractional allocation
+         base_alloc = {cls: int(float_alloc[cls]) for cls in float_alloc} # Base integer allocation
+
+         assigned = sum(base_alloc.values()) # Sum of base allocations
+         leftover = remaining_budget - assigned # Leftover samples to distribute
+
+         remainders = sorted(extras.keys(), key=lambda c: (float_alloc[c] - base_alloc[c]), reverse=True) # Order by fractional remainder
+         for cls in remainders: # Distribute leftover samples
+            if leftover <= 0: # Stop when no leftover remains
+               break # Exit loop
+            if base_alloc.get(cls, 0) < extras.get(cls, 0): # Only allocate if class can accept more
+               base_alloc[cls] = base_alloc.get(cls, 0) + 1 # Increment allocation for this class
+               leftover -= 1 # Decrease leftover count
+
+         for cls in counts.index: # Finalize allocations applying available caps
+            allocations[cls] = min(int(counts[cls]), allocations.get(cls, 0) + base_alloc.get(cls, 0)) # Cap addition by remaining available
+
+   total_alloc = sum(allocations.values()) # Total allocated samples
+   if total_alloc > sample_size: # Safety check to reduce overallocation
+      sorted_by_alloc = sorted(allocations.items(), key=lambda x: x[1], reverse=True) # Sort classes by allocation descending
+      i = 0 # Index for iteration
+      while total_alloc > sample_size and i < len(sorted_by_alloc): # While overallocation exists
+         cls, cur = sorted_by_alloc[i] # Current class and its allocation
+         reducible = cur - min(int(counts[cls]), int(min_class_size)) # Amount that can be reduced without violating minima
+         if reducible > 0: # If there is reducible allocation
+            remove = min(reducible, total_alloc - sample_size) # Amount to remove
+            allocations[cls] -= remove # Reduce allocation
+            total_alloc -= remove # Update total allocation
+         i += 1 # Move to next class
 
    return allocations # Return finalized allocations
 
