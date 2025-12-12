@@ -5,51 +5,56 @@ Logger Utility Module
 Author      : Breno Farias da Silva
 Created     : 2025-12-11
 Description :
-   This module implements a dual-channel logging system designed to cleanly
-   capture all console output produced by Python scripts.
+   This module implements a dual-channel logging system designed to capture
+   all console output produced by Python scripts while preserving ANSI colors
+   in the terminal and removing them from the log file.
 
-   Its purpose is to provide consistent, color-safe logging across interactive
-   terminals, background executions, CI pipelines, Makefile pipelines, and
-   nohup/systemd environments.
+   It provides consistent, color-safe logging across interactive terminals,
+   background executions, CI pipelines, Makefile pipelines, and nohup/systemd
+   environments.
 
    Key features include:
-      - Automatic ANSI color detection and stripping for log files
+      - Automatic ANSI color stripping for log files
       - Full compatibility with interactive and non-interactive terminals
-      - Mirrored output: terminal + clean log file
-      - Seamless integration with print() and exceptions
-      - Drop-in replacement for sys.stdout and sys.stderr
+      - Mirrored output: terminal (colored) + log file (clean)
+      - Optional integration by assigning it to sys.stdout/sys.stderr
 
 Usage:
-   1. Import the module in any script requiring safe logging.
+   1. Create a Logger instance:
 
-         from logger import DualLogger
-         sys.stdout = DualLogger("./Logs/output.log")
-         sys.stderr = sys.stdout
+         from logger import Logger
+         logger = Logger("./Logs/output.log", clean=True)
 
-   2. Run your script normally or via Makefile.  
-         $ make dataset_converter   or   $ python script.py
+   2. (Optional) Redirect all stdout/stderr to the logger:
 
-   3. All printed output appears colored in the terminal (when interactive)
-      and clean (color-free) in the log file.
+         sys.stdout = logger
+         sys.stderr = logger
+
+   3. Print normally:
+
+         print("\x1b[92mHello World\x1b[0m")
+
+      Terminal shows colored output.
+      Log file receives the same text without ANSI escape sequences.
 
 Outputs:
-   - <path>.log file containing fully sanitized log output
-   - Real-time console output with correct ANSI handling
+   - <path>.log file with fully sanitized (color-free) log output
+   - Real-time terminal output with correct ANSI handling
 
 TODOs:
-   - Add timestamp prefixing to all log lines
-   - Add optional file rotation or max-size log splitting
-   - Add a CLI flag to force-enable or disable color output
-   - Add support for JSON-structured logs
+   - Timestamp prefixing for each log line
+   - File rotation or size-based log splitting
+   - CLI flag to force color on/off
+   - Optional JSON-structured logs
 
 Dependencies:
    - Python >= 3.8
-   - colorama (optional but recommended)
+   - colorama (optional but recommended for Windows)
 
 Assumptions & Notes:
-   - ANSI escape sequences follow the regex pattern \x1B\[[0-9;]*[a-zA-Z]
-   - Log file is always written without ANSI sequences
-   - If the output is redirected (not a TTY), color output is disabled
+   - ANSI escape sequences follow the regex: \x1B\[[0-9;]*[a-zA-Z]
+   - Log file always stores clean output
+   - When stdout is not a TTY, color output is automatically disabled
 """
 
 import os # For interacting with the filesystem
