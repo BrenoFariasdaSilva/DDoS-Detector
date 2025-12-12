@@ -970,7 +970,9 @@ def compute_group_features(files, low_memory=True):
 
    union_features = set() # Initialize union set
    for cols in headers_map.values(): # Iterate over each file's columns
-      union_features.update(cols or []) # Add columns to union set
+      if cols: # If columns exist
+         union_features.update([c.strip().lower() for c in cols]) # Normalize features: strip whitespace and lowercase
+   common_features = set([c.strip().lower() for c in common_features]) # Normalize common features: strip whitespace and lowercase
 
    return set(common_features), union_features # Return both sets
 
