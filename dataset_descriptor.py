@@ -709,11 +709,18 @@ def save_tsne_plot(X_emb, labels, output_path, title):
    plt.figure(figsize=(8, 6)) # Create matplotlib figure
    
    if labels is not None: # Plot colored by class
-      unique = list(pd.Series(labels).unique()) # Unique class labels
+      labels_ser = pd.Series(labels) # Ensure labels are a pandas Series
+      counts = labels_ser.value_counts() # Count samples per class
+      unique = list(labels_ser.unique()) # Unique class labels (preserve order)
       for cls in unique: # Plot each class separately
-         mask = (labels == cls) # Boolean mask for class
-         plt.scatter(X_emb[mask, 0], X_emb[mask, 1], label=str(cls), s=8) # Scatter plot for class
+         mask = (labels_ser == cls) # Boolean mask for class
+         plt.scatter(X_emb[mask, 0], X_emb[mask, 1], label=f"{cls} ({int(counts.get(cls, 0))})", s=8) # Scatter plot for class with count in label
       plt.legend(markerscale=2, fontsize="small") # Add legend for classes
+      try: # Try to add counts text box
+         counts_text = "\n".join([f"{str(c)}: {int(counts[c])}" for c in counts.index]) # Prepare counts text
+         plt.gcf().text(0.99, 0.01, counts_text, ha="right", va="bottom", fontsize=8, bbox=dict(facecolor="white", alpha=0.6, edgecolor="none")) # Add text box with counts
+      except Exception: # Ignore any errors in adding counts text
+         pass # Do nothing
    else: # No labels provided
       plt.scatter(X_emb[:, 0], X_emb[:, 1], s=8) # Plot all points uniformly
    
