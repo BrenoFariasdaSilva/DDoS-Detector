@@ -50,8 +50,11 @@ import numpy as np # For numerical operations
 import os # For running a command in the terminal
 import pandas as pd # For data manipulation
 import platform # For getting the operating system name
+import sys # For system-specific parameters and functions
 import warnings # For suppressing pandas warnings when requested
 from colorama import Style # For coloring the terminal
+from Logger import Logger # For logging output to both terminal and file
+from pathlib import Path # For handling file paths
 from sklearn.manifold import TSNE # For t-SNE dimensionality reduction
 from sklearn.preprocessing import StandardScaler # For feature scaling
 from tqdm import tqdm # For progress bars
@@ -68,6 +71,11 @@ class BackgroundColors: # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False # Set to True to output verbose messages
+
+# Logger Setup:
+logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True) # Create a Logger instance
+sys.stdout = logger # Redirect stdout to the logger
+sys.stderr = logger # Redirect stderr to the logger
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
