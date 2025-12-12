@@ -930,6 +930,27 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
    else: # If no report rows were generated
       return False # Return False indicating failure
 
+def collect_group_files(paths, file_extension=".csv"):
+   """
+   Collect all matching files for a group of paths.
+
+   :param paths: List of file or directory paths to search
+   :param file_extension: File extension to filter (default: ".csv")
+   :return: Sorted list of unique file paths
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Collecting {file_extension} files from specified paths...{Style.RESET_ALL}") # Output collection message
+
+   files = [] # Initialize collection list
+
+   for p in paths: # Iterate over each path
+      if os.path.isdir(p): # If path is a directory
+         files.extend(collect_matching_files(p, file_extension)) # Collect matching files
+      elif os.path.isfile(p) and p.endswith(file_extension): # If path is a file with correct extension
+         files.append(p) # Add file to list
+
+   return sorted(set(files)) # Remove duplicates and sort
+
 def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memory=True, output_filename=None):
    """
    Generate a cross-dataset feature-compatibility report comparing dataset
@@ -949,12 +970,15 @@ def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memo
 
    group_info = {} # Map group_name -> {"files": [...], "common": set(), "union": set()}
    for group_name, paths in datasets_dict.items(): # Iterate over dataset groups
-      all_files = [] # Collect all matching files for this group
-      for p in paths: # Iterate over paths in the group
-         if os.path.isdir(p): # If the path is a directory
-            all_files.extend(collect_matching_files(p, file_extension)) # Collect matching files
-         elif os.path.isfile(p) and p.endswith(file_extension): # If the path is a file
-            all_files.append(p) # Add the single file
+      all_files = collect_group_files(paths, file_extension) # Collect all matching files for this group
+      if not all_files: # If no files found for this group
+         group_info[group_name] = {"files": [], "common": set(), "union": set()} # Empty info
+         continue # Proceed to next group
+
+      headers_map = build_headers_map(all_files, low_memory=low_memory) # Build headers map for this group's files
+      common_features, _ = compute_common_features(headers_map) # Compute common features
+      elif os.path.isfile(p) and p.endswith(file_extension): # If the path is a file
+         all_files.append(p) # Add the single file
       all_files = sorted(set(all_files)) # Remove duplicates and sort
 
       if not all_files: # If no files found for this group
