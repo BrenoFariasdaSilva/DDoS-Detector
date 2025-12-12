@@ -90,7 +90,10 @@ DATASETS = { # Dictionary containing dataset paths and feature files
 	"CICDDoS2019-Dataset": [ # List of paths to the CICDDoS2019 dataset
 		"./Datasets/CICDDoS2019/01-12/",
 		"./Datasets/CICDDoS2019/03-11/",
-   ]
+   ],
+   "CICDDoS2017-Dataset": [ # List of paths to the CICDDoS2017 dataset
+      "./Datasets/CIC-IDS2017/Converted/",
+   ],
 }
 
 RESULTS_DIR = "./Dataset_Description/" # Directory to save the results
