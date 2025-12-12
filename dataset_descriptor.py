@@ -867,6 +867,69 @@ def write_report(report_rows, base_dir, output_filename):
    report_csv_path = os.path.join(results_dir, output_filename) # Path to save the report CSV
    report_df.to_csv(report_csv_path, index=False) # Save the report to a CSV file
 
+def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME):
+   """
+   Generates a CSV report for the specified input path.
+   The Dataset Name column will include subdirectories if present.
+
+   :param input_path: Directory or file path containing the dataset
+   :param file_extension: File extension to filter (default: .csv)
+   :param low_memory: Whether to use low memory mode when loading CSVs (default: True)
+   :param output_filename: Name of the CSV file to save the report
+   :return: True if the report was generated successfully, False otherwise
+   """
+
+   report_rows = [] # List to store report rows
+   sorted_matching_files = [] # List to store matching files
+
+   if os.path.isdir(input_path): # If the input path is a directory
+      print(f"{BackgroundColors.GREEN}Scanning directory {BackgroundColors.CYAN}{input_path}{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files...{Style.RESET_ALL}") # Output scanning message
+      sorted_matching_files = collect_matching_files(input_path, file_extension) # Collect matching files
+      base_dir = os.path.abspath(input_path) # Get the absolute path of the base directory
+   elif os.path.isfile(input_path) and input_path.endswith(file_extension): # If the input path is a file
+      print(f"{BackgroundColors.GREEN}Processing single file...{Style.RESET_ALL}") # Output processing single file message
+      sorted_matching_files = [input_path] # Only process this single file
+      base_dir = os.path.dirname(os.path.abspath(input_path)) # Get the base directory of the file
+   else: # If the input path is neither a directory nor a valid file
+      print(f"{BackgroundColors.RED}Input path is neither a directory nor a valid {file_extension} file: {input_path}{Style.RESET_ALL}") # Output the error message
+      sorted_matching_files = [] # No files to process
+      base_dir = os.path.abspath(input_path) # Just use the input path as base_dir for error message
+
+   if not sorted_matching_files: # If no matching files were found
+      print(f"{BackgroundColors.RED}No matching {file_extension} files found in: {input_path}{Style.RESET_ALL}")
+      return False # Exit the function
+
+   headers_map = build_headers_map(sorted_matching_files, low_memory=low_memory) # Build headers map for all matching files
+   common_features, headers_match_all = compute_common_features(headers_map) # Compute common features and header match status
+
+   progress = tqdm(sorted_matching_files, desc=f"{BackgroundColors.GREEN}Processing files{Style.RESET_ALL}", unit="file") # Create a progress bar
+   for idx, filepath in enumerate(progress, 1): # Process each matching file
+      progress.set_description(f"{BackgroundColors.GREEN}Processing file {BackgroundColors.CYAN}{idx}/{len(sorted_matching_files)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{os.path.basename(filepath)}{Style.RESET_ALL}") # Update progress bar description
+      info = get_dataset_file_info(filepath, low_memory) # Get dataset info
+      if info: # If info was successfully retrieved
+         relative_path = os.path.relpath(filepath, base_dir) # Get path relative to base_dir
+         info["Dataset Name"] = relative_path.replace("\\", "/") # Use relative path for Dataset Name and normalize slashes
+
+         common_list, extras = get_file_common_and_extras(headers_map, filepath, common_features) # Get common and extra features for this file
+
+         info["Headers Match All Files"] = "Yes" if headers_match_all else "No" # Indicate if headers match all files
+         info["Common Features (in all files)"] = ", ".join(common_list) if common_list else "None" # Join common features into a string
+         info["Extra Features (not in all files)"] = ", ".join(extras) if extras else "None" # Join extra features into a string
+
+         tsne_file = generate_tsne_plot(filepath, low_memory=low_memory, sample_size=2000, output_dir=os.path.join(os.path.dirname(os.path.abspath(filepath)), "Data_Separability")) # Generate t-SNE plot
+         info["t-SNE Plot"] = tsne_file if tsne_file else "None" # Add t-SNE plot filename or "None"
+
+         report_rows.append(info) # Add the info to the report rows
+
+   if report_rows: # If there are report rows to write
+      for i, row in enumerate(report_rows, start=1): # For each report row
+         row["#"] = i # Add the counter value
+
+      write_report(report_rows, base_dir, output_filename)
+      return True # Return True indicating success
+   else: # If no report rows were generated
+      return False # Return False indicating failure
+
 def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memory=True, output_filename=None):
    """
    Generate a cross-dataset feature-compatibility report comparing dataset
@@ -974,69 +1037,6 @@ def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memo
          pass
 
    return saved_any
-
-def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME):
-   """
-   Generates a CSV report for the specified input path.
-   The Dataset Name column will include subdirectories if present.
-
-   :param input_path: Directory or file path containing the dataset
-   :param file_extension: File extension to filter (default: .csv)
-   :param low_memory: Whether to use low memory mode when loading CSVs (default: True)
-   :param output_filename: Name of the CSV file to save the report
-   :return: True if the report was generated successfully, False otherwise
-   """
-
-   report_rows = [] # List to store report rows
-   sorted_matching_files = [] # List to store matching files
-
-   if os.path.isdir(input_path): # If the input path is a directory
-      print(f"{BackgroundColors.GREEN}Scanning directory {BackgroundColors.CYAN}{input_path}{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files...{Style.RESET_ALL}") # Output scanning message
-      sorted_matching_files = collect_matching_files(input_path, file_extension) # Collect matching files
-      base_dir = os.path.abspath(input_path) # Get the absolute path of the base directory
-   elif os.path.isfile(input_path) and input_path.endswith(file_extension): # If the input path is a file
-      print(f"{BackgroundColors.GREEN}Processing single file...{Style.RESET_ALL}") # Output processing single file message
-      sorted_matching_files = [input_path] # Only process this single file
-      base_dir = os.path.dirname(os.path.abspath(input_path)) # Get the base directory of the file
-   else: # If the input path is neither a directory nor a valid file
-      print(f"{BackgroundColors.RED}Input path is neither a directory nor a valid {file_extension} file: {input_path}{Style.RESET_ALL}") # Output the error message
-      sorted_matching_files = [] # No files to process
-      base_dir = os.path.abspath(input_path) # Just use the input path as base_dir for error message
-
-   if not sorted_matching_files: # If no matching files were found
-      print(f"{BackgroundColors.RED}No matching {file_extension} files found in: {input_path}{Style.RESET_ALL}")
-      return False # Exit the function
-
-   headers_map = build_headers_map(sorted_matching_files, low_memory=low_memory) # Build headers map for all matching files
-   common_features, headers_match_all = compute_common_features(headers_map) # Compute common features and header match status
-
-   progress = tqdm(sorted_matching_files, desc=f"{BackgroundColors.GREEN}Processing files{Style.RESET_ALL}", unit="file") # Create a progress bar
-   for idx, filepath in enumerate(progress, 1): # Process each matching file
-      progress.set_description(f"{BackgroundColors.GREEN}Processing file {BackgroundColors.CYAN}{idx}/{len(sorted_matching_files)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{os.path.basename(filepath)}{Style.RESET_ALL}") # Update progress bar description
-      info = get_dataset_file_info(filepath, low_memory) # Get dataset info
-      if info: # If info was successfully retrieved
-         relative_path = os.path.relpath(filepath, base_dir) # Get path relative to base_dir
-         info["Dataset Name"] = relative_path.replace("\\", "/") # Use relative path for Dataset Name and normalize slashes
-
-         common_list, extras = get_file_common_and_extras(headers_map, filepath, common_features) # Get common and extra features for this file
-
-         info["Headers Match All Files"] = "Yes" if headers_match_all else "No" # Indicate if headers match all files
-         info["Common Features (in all files)"] = ", ".join(common_list) if common_list else "None" # Join common features into a string
-         info["Extra Features (not in all files)"] = ", ".join(extras) if extras else "None" # Join extra features into a string
-
-         tsne_file = generate_tsne_plot(filepath, low_memory=low_memory, sample_size=2000, output_dir=os.path.join(os.path.dirname(os.path.abspath(filepath)), "Data_Separability")) # Generate t-SNE plot
-         info["t-SNE Plot"] = tsne_file if tsne_file else "None" # Add t-SNE plot filename or "None"
-
-         report_rows.append(info) # Add the info to the report rows
-
-   if report_rows: # If there are report rows to write
-      for i, row in enumerate(report_rows, start=1): # For each report row
-         row["#"] = i # Add the counter value
-
-      write_report(report_rows, base_dir, output_filename)
-      return True # Return True indicating success
-   else: # If no report rows were generated
-      return False # Return False indicating failure
 
 def play_sound():
    """
