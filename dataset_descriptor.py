@@ -577,6 +577,39 @@ def scale_features(numeric_df):
    
    return X_scaled # Return the scaled array
 
+def allocate_remaining_budget(counts, allocations, remaining_budget):
+   """
+   Helper function to distribute remaining budget among classes proportionally,
+   using the fractional remainder method.
+
+   :param counts: pandas Series of class counts
+   :param allocations: dict of current allocations
+   :param remaining_budget: number of samples left to allocate
+   :return: dict of updated allocations including remaining budget
+   """
+   extras = {cls: max(0, int(counts[cls]) - allocations.get(cls, 0)) for cls in counts.index} # Extra samples available per class
+   total_extras = sum(extras.values()) # Total extra samples available
+
+   if total_extras > 0: # Only proceed if there are extras to allocate
+      float_alloc = {cls: remaining_budget * extras[cls] / total_extras for cls in extras} # Fractional allocation
+      base_alloc = {cls: int(float_alloc[cls]) for cls in float_alloc} # Base integer allocation
+
+      assigned = sum(base_alloc.values()) # Sum of base allocations
+      leftover = remaining_budget - assigned # Leftover samples to distribute
+
+      remainders = sorted(extras.keys(), key=lambda c: (float_alloc[c] - base_alloc[c]), reverse=True) # Order by fractional remainder
+      for cls in remainders: # Distribute leftover samples
+         if leftover <= 0: # Stop when no leftover remains
+            break # Exit loop
+         if base_alloc.get(cls, 0) < extras.get(cls, 0): # Only allocate if class can accept more
+            base_alloc[cls] = base_alloc.get(cls, 0) + 1 # Increment allocation for this class
+            leftover -= 1 # Decrease leftover count
+
+      for cls in counts.index: # Finalize allocations applying available caps
+         allocations[cls] = min(int(counts[cls]), allocations.get(cls, 0) + base_alloc.get(cls, 0)) # Cap addition by remaining available
+
+   return allocations # Return updated allocations
+
 def compute_class_aware_allocations(labels, sample_size, min_class_size=50):
    """
    Compute per-class sample allocations that preserve class distribution while
@@ -600,26 +633,7 @@ def compute_class_aware_allocations(labels, sample_size, min_class_size=50):
    remaining_budget = int(sample_size - sum(allocations.values())) # Remaining samples to allocate
 
    if remaining_budget > 0: # If there is remaining budget
-      extras = {cls: max(0, int(counts[cls]) - allocations.get(cls, 0)) for cls in counts.index} # Extra samples available per class
-      total_extras = sum(extras.values()) # Total extra samples available
-
-      if total_extras > 0: # Only proceed if there are extras to allocate
-         float_alloc = {cls: remaining_budget * extras[cls] / total_extras for cls in extras} # Fractional allocation
-         base_alloc = {cls: int(float_alloc[cls]) for cls in float_alloc} # Base integer allocation
-
-         assigned = sum(base_alloc.values()) # Sum of base allocations
-         leftover = remaining_budget - assigned # Leftover samples to distribute
-
-         remainders = sorted(extras.keys(), key=lambda c: (float_alloc[c] - base_alloc[c]), reverse=True) # Order by fractional remainder
-         for cls in remainders: # Distribute leftover samples
-            if leftover <= 0: # Stop when no leftover remains
-               break # Exit loop
-            if base_alloc.get(cls, 0) < extras.get(cls, 0): # Only allocate if class can accept more
-               base_alloc[cls] = base_alloc.get(cls, 0) + 1 # Increment allocation for this class
-               leftover -= 1 # Decrease leftover count
-
-         for cls in counts.index: # Finalize allocations applying available caps
-            allocations[cls] = min(int(counts[cls]), allocations.get(cls, 0) + base_alloc.get(cls, 0)) # Cap addition by remaining available
+      allocations = allocate_remaining_budget(counts, allocations, remaining_budget) # Distribute remaining budget
 
    total_alloc = sum(allocations.values()) # Total allocated samples
    if total_alloc > sample_size: # Safety check to reduce overallocation
