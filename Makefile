@@ -23,25 +23,26 @@ else
 	TIME_CMD := time
 endif
 
-# Run-and-log function, supports ARGS variable
-# If ARGS is empty -> run normally
-# If ARGS is set -> detach (nohup on Unix, start /B on Windows) and tail log
+# Run-and-log function, supports DETACH variable
+# If DETACH is set, runs the script in detached mode and tails the log file
+# Else, runs the script normally
+# Run-and-log function, DETACH controls detached execution
 ifeq ($(OS), Windows)
 RUN_AND_LOG = \
-if [ -z "$(ARGS)" ]; then \
+if [ -z "$(DETACH)" ]; then \
 	$(PYTHON) $(1); \
 else \
 	LOG_FILE=$(LOG_DIR)/$$(basename $(basename $(1))).log; \
-	start /B cmd /c "$(PYTHON) $(1) $(ARGS) > $$LOG_FILE 2>&1"; \
+	start /B cmd /c "$(PYTHON) $(1)"; \
 	powershell -Command "Get-Content -Path '$$LOG_FILE' -Wait"; \
 fi
 else
 RUN_AND_LOG = \
-if [ -z "$(ARGS)" ]; then \
+if [ -z "$(DETACH)" ]; then \
 	$(PYTHON) $(1); \
 else \
 	LOG_FILE=$(LOG_DIR)/$$(basename $(basename $(1))).log; \
-	nohup $(PYTHON) $(1) $(ARGS) > $$LOG_FILE 2>&1 & \
+	nohup $(PYTHON) $(1) > $$LOG_FILE 2>&1 & \
 	tail -f $$LOG_FILE; \
 fi
 endif
