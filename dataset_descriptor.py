@@ -44,6 +44,7 @@ Output:
 """
 
 import atexit # For playing a sound when the program finishes
+import datetime # For timestamping
 import gc # For explicit garbage collection
 import matplotlib.pyplot as plt # For plotting t-SNE results
 import numpy as np # For numerical operations
@@ -1119,6 +1120,7 @@ def main():
    """
 
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Dataset Descriptor{BackgroundColors.GREEN}!{Style.RESET_ALL}", end="\n\n") # Output the Welcome message
+   start_time = datetime.datetime.now() # Get the start time of the program
 
    for dataset_name, paths in DATASETS.items(): # For each dataset in the DATASETS dictionary
       print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")
@@ -1146,6 +1148,8 @@ def main():
       except Exception as e: # If an error occurs during cross-dataset validation
          print(f"{BackgroundColors.RED}Cross-dataset validation failed: {e}{Style.RESET_ALL}")
 
+   finish_time = datetime.datetime.now() # Get the finish time of the program
+   print(f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
 
    atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None # Register the play_sound function to be called when the program finishes
