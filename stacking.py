@@ -48,7 +48,6 @@ Dependencies:
    - Python >= 3.8
    - pandas, numpy, scikit-learn, colorama, lightgbm, xgboost
    - Optional: telegram_bot for notifications
-
 """
 
 import ast # For safely evaluating Python literals
