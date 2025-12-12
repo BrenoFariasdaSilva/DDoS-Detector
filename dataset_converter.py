@@ -72,8 +72,11 @@ import os # For running commands in the terminal
 import pandas as pd # For handling CSV and TXT file formats
 import platform # For getting the operating system name
 import shutil # For checking disk usage
+import sys # For system-specific parameters and functions
 from colorama import Style # For coloring the terminal output
 from fastparquet import ParquetFile # For handling Parquet file format
+from Logger import Logger # For logging output to both terminal and file
+from pathlib import Path # For handling file paths
 from scipy.io import arff as scipy_arff # used to read ARFF files
 from tqdm import tqdm # For showing a progress bar
 
@@ -91,7 +94,12 @@ class BackgroundColors: # Colors for the terminal
 VERBOSE = False # Set to True to output verbose messages
 INPUT_DIRECTORY = "./Input" # Input directory path
 OUTPUT_DIRECTORY = "./Output" # Output directory path
-IGNORE_DIRECTORY_NAMED_WITH = ["Results"] # List of directory names to ignore if they have any of this words in their name
+IGNORE_DIRECTORY_NAMED_WITH = ["Results"] # List of directory names to ignore if they have any of this words in their nameLOGGER = Logger(log_to_file=True, log_file_path="./Logs/dataset_converter.log")
+
+# Logger Setup:
+logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True) # Create a Logger instance
+sys.stdout = logger # Redirect stdout to the logger
+sys.stderr = logger # Redirect stderr to the logger
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # Sound play command
