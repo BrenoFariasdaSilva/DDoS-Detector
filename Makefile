@@ -23,6 +23,29 @@ else
 	TIME_CMD := time
 endif
 
+# Run-and-log function, supports ARGS variable
+# If ARGS is empty -> run normally
+# If ARGS is set -> detach (nohup on Unix, start /B on Windows) and tail log
+ifeq ($(OS), Windows)
+RUN_AND_LOG = \
+if [ -z "$(ARGS)" ]; then \
+	$(PYTHON) $(1); \
+else \
+	LOG_FILE=$(LOG_DIR)/$$(basename $(basename $(1))).log; \
+	start /B cmd /c "$(PYTHON) $(1) $(ARGS) > $$LOG_FILE 2>&1"; \
+	powershell -Command "Get-Content -Path '$$LOG_FILE' -Wait"; \
+fi
+else
+RUN_AND_LOG = \
+if [ -z "$(ARGS)" ]; then \
+	$(PYTHON) $(1); \
+else \
+	LOG_FILE=$(LOG_DIR)/$$(basename $(basename $(1))).log; \
+	nohup $(PYTHON) $(1) $(ARGS) > $$LOG_FILE 2>&1 & \
+	tail -f $$LOG_FILE; \
+fi
+endif
+
 # Default target
 all: main
 
