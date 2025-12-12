@@ -67,6 +67,7 @@ Assumptions & Notes:
 import arff # liac-arff, used to save ARFF files
 import argparse # For parsing command-line arguments
 import atexit # For playing a sound when the program finishes
+import datetime # For timestamping
 import io # For in-memory file operations
 import os # For running commands in the terminal
 import pandas as pd # For handling CSV and TXT file formats
@@ -806,7 +807,8 @@ def main():
    """
    
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Multi-Format Dataset Converter{BackgroundColors.GREEN}!{Style.RESET_ALL}\n") # Output the Welcome message
-
+   start_time = datetime.datetime.now() # Get the start time of the program
+   
    args = parse_cli_arguments() # Parse CLI arguments
 
    input_path, output_path = resolve_io_paths(args) # Resolve and validate paths
@@ -817,7 +819,9 @@ def main():
    
    batch_convert(input_path, output_path, formats=args.formats if args.formats else None) # Perform batch conversion of dataset files
 
-   print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Conversions completed!{Style.RESET_ALL}") # Output the completion message
+   finish_time = datetime.datetime.now() # Get the finish time of the program
+   print(f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
+   print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
 
    atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None # Register the play_sound function to be called when the program exits if RUN_FUNCTIONS["Play Sound"] is True
 
