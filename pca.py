@@ -1,61 +1,51 @@
 """
 ================================================================================
-Principal Component Analysis (PCA) Feature Extraction & Evaluation Tool
+Principal Component Analysis (PCA) Feature Extraction & Evaluation Tool (pca.py)
 ================================================================================
 Author      : Breno Farias da Silva
-Created     : 2025-11-08
+Created     : 2025-11-21
 Description :
-   This script automates the process of performing Principal Component Analysis (PCA)
-   for dimensionality reduction on structured datasets for classification tasks.
-   It provides a fully integrated pipeline from dataset loading and preprocessing
-   to PCA transformation, model evaluation with cross-validation, and export of results.
+	Utility to run PCA-based dimensionality reduction and evaluate downstream
+	classification performance. The script bundles dataset loading, cleaning,
+	scaling, PCA transformation, stratified cross-validation evaluation and
+	export of consolidated results for easy comparison between configurations.
 
-   Core functionalities include:
-      - Dataset validation and safe file handling
-      - Standardization of numeric features using z-score normalization
-      - PCA transformation with configurable number of components (8, 16, 24, 32)
-      - 10-fold Stratified Cross-Validation for robust performance evaluation
-      - Comprehensive metrics: Accuracy, Precision, Recall, F1-Score, FPR, FNR
-      - Generation of results files with performance metrics and explained variance
-      - Comparison of different PCA configurations
-      - Cross-platform sound notification upon completion
+Core features:
+	- Safe dataset loading and basic validation
+	- Z-score standardization of numeric features prior to PCA
+	- PCA transform with configurable `n_components` grid
+	- 10-fold Stratified CV on the training set and final evaluation on a held-out test split
+	- Aggregated metrics including Accuracy, Precision, Recall, F1, FPR and FNR
+	- Export of `PCA_Results.csv` (per-dataset `Feature_Analysis/`) with hardware metadata
+	- Optional parallel execution for multiple component configurations
 
 Usage:
-   1. Set the `csv_file` variable inside the `main()` function to the dataset path.
-   2. Configure the `n_components_list` to test different dimensionality reductions.
-   3. Run the script using:
-      $ python pca.py
-      or via Makefile if configured
-   4. The program will automatically:
-      - Load and clean the dataset
-      - Test PCA with different numbers of components (8, 16, 24, 32)
-      - Perform 10-fold CV for each configuration
-      - Save results and comparison to the `Feature_Analysis/` directory
-      - Optionally play a notification sound when finished
+	- Configure `csv_file` in `main()` or call `run_pca_analysis(csv_path, ...)`
+	- Adjust `n_components_list` to test desired component counts
+	- Run: `python3 pca.py` or via the repository Makefile
 
-Output:
-   - Text report (`PCA_Results.txt`) summarizing performance for each configuration
-   - CSV comparison of all PCA configurations
-   - Console output with detailed metrics and explained variance ratios
+Outputs:
+	- `Feature_Analysis/PCA_Results.csv` (one row per configuration)
+	- Saved PCA objects for reproducibility (optional)
+	- Console summary and best-configuration selection by CV F1-score
+
+Notes & conventions:
+	- The code expects the last column to be the target variable.
+	- Only numeric input columns are used for PCA (non-numeric columns are ignored).
+	- Defaults: 80/20 train-test split, 10-fold Stratified CV on training data,
+	  RandomForest (100 trees) used for evaluation.
+	- Toggle `VERBOSE = True` for extra diagnostic output.
 
 TODOs:
-   - Add visualization of explained variance ratio
-   - Implement automatic selection of optimal number of components
-   - Add support for kernel PCA (non-linear dimensionality reduction)
-   - Integrate feature importance analysis for original features
-   - Add parallel processing for multiple PCA configurations
-   - Implement CLI argument parsing for dataset paths and configuration options
-   - Add incremental PCA support for large datasets
+	- Add CLI argument parsing for dataset path, `n_components_list`, `parallel` and `max_workers`.
+	- Add visualization for explained variance and component loadings.
+	- Provide incremental / out-of-core PCA for very large datasets.
+	- Add unit tests for preprocessing and evaluation functions.
 
 Dependencies:
-   - Python >= 3.9
-   - pandas, numpy, scikit-learn, colorama
+	- Python >= 3.9
+	- pandas, numpy, scikit-learn, colorama
 
-Notes:
-   - The last column of the dataset is assumed to be the target variable.
-   - Only numeric columns are considered for PCA processing.
-   - PCA components are linear combinations of original features.
-   - Results use 10-fold Stratified Cross-Validation on training data only.
 """
 
 import atexit # For playing a sound when the program finishes
