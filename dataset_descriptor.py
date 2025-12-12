@@ -865,6 +865,79 @@ def write_report(report_rows, base_dir, output_filename):
    report_csv_path = os.path.join(results_dir, output_filename) # Path to save the report CSV
    report_df.to_csv(report_csv_path, index=False) # Save the report to a CSV file
 
+def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memory=True, output_filename=None):
+   """
+   Generate a cross-dataset feature-compatibility report comparing dataset
+   groups defined in `datasets_dict`. Produces pairwise comparisons between
+   dataset groups and writes a CSV report named `Cross_{RESULTS_FILENAME}` by
+   default into the `RESULTS_DIR`.
+
+   :param datasets_dict: dict mapping dataset group name -> list of paths
+   :param file_extension: extension to search for (default: .csv)
+   :param low_memory: passed to CSV loader when building headers
+   :param output_filename: optional filename to write; defaults to Cross_{RESULTS_FILENAME}
+   :return: True on success, False otherwise
+   """
+
+   if output_filename is None: # If no output filename is provided
+      output_filename = f"Cross_{RESULTS_FILENAME}" # Default to Cross_{RESULTS_FILENAME}
+
+   group_info = {} # Map group_name -> {"files": [...], "common": set(), "union": set()}
+   for group_name, paths in datasets_dict.items(): # Iterate over dataset groups
+      all_files = [] # Collect all matching files for this group
+      for p in paths: # Iterate over paths in the group
+         if os.path.isdir(p): # If the path is a directory
+            all_files.extend(collect_matching_files(p, file_extension)) # Collect matching files
+         elif os.path.isfile(p) and p.endswith(file_extension): # If the path is a file
+            all_files.append(p) # Add the single file
+      all_files = sorted(set(all_files)) # Remove duplicates and sort
+
+      if not all_files: # If no files found for this group
+         group_info[group_name] = {"files": [], "common": set(), "union": set()} # Empty info
+         continue # Proceed to next group
+
+      headers_map = build_headers_map(all_files, low_memory=low_memory) # Build headers map for this group's files
+      common_features, _ = compute_common_features(headers_map) # Compute common features
+      union_features = set() # Compute union of features
+      for cols in headers_map.values(): # Iterate over headers of each file
+         union_features.update(cols or []) # Add columns to union set
+
+      group_info[group_name] = {"files": all_files, "common": set(common_features), "union": union_features} # Store group info
+
+   report_rows = [] # List to store report rows
+   group_names = list(group_info.keys()) # List of group names
+   for i in range(len(group_names)): # Iterate over group pairs
+      for j in range(i + 1, len(group_names)): # Avoid duplicate pairs and self-comparison
+         a = group_names[i] # First group name
+         b = group_names[j] # Second group name
+         a_info = group_info[a] # Info for group A
+         b_info = group_info[b] # Info for group B
+
+         if not a_info["files"] and not b_info["files"]: # Skip if both groups have no files
+            continue # Proceed to next pair
+
+         common_between = sorted(list(a_info["union"] & b_info["union"])) # Common features between A and B
+         extras_a = sorted(list(a_info["union"] - b_info["union"])) # Extra features in A
+         extras_b = sorted(list(b_info["union"] - a_info["union"])) # Extra features in B
+
+         row = { # Create report row for this pair
+            "Dataset A": a, # First dataset group name
+            "Dataset B": b, # Second dataset group name
+            "Files in A": len(a_info["files"]), # Number of files in A
+            "Files in B": len(b_info["files"]), # Number of files in B
+            "Common Features (A ∩ B)": ", ".join(common_between) if common_between else "None", # Common features between A and B
+            "Extra Features in A (A \\ B)": ", ".join(extras_a) if extras_a else "None", # Extra features in A
+            "Extra Features in B (B \\ A)": ", ".join(extras_b) if extras_b else "None", # Extra features in B
+         }
+         report_rows.append(row) # Add the row to the report
+
+   if not report_rows: # If no report rows were generated
+      return False # Return False indicating failure
+
+   base_dir = os.getcwd() # Use current working directory as base_dir
+   write_report(report_rows, base_dir, output_filename) # Write the report to a CSV file
+   return True # Return True indicating success
+
 def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME):
    """
    Generates a CSV report for the specified input path.
