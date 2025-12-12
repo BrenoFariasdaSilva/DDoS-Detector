@@ -5,22 +5,8 @@ OS := $(shell uname 2>/dev/null || echo Windows)
 # Logs directory
 LOG_DIR := ./Logs
 
-# Ensure logs directory exists (cross-platform). Use as: $(ENSURE_LOG_DIR)
+# Ensure logs directory exists (cross-platform)
 ENSURE_LOG_DIR := @mkdir -p $(LOG_DIR) 2>/dev/null || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
-
-# Reusable run-and-log function: call with the script path, e.g. $(call RUN_AND_LOG, ./script.py)
-ifeq ($(OS), Windows)
-RUN_AND_LOG = (start /B $(PYTHON) $(1) 2>&1 | tee $(LOG_DIR)/$(notdir $(basename $(1))).raw.log) ; \
-					sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" \
-						$(LOG_DIR)/$(notdir $(basename $(1))).raw.log \
-						> $(LOG_DIR)/$(notdir $(basename $(1))).log ; \
-					rm $(LOG_DIR)/$(notdir $(basename $(1))).raw.log
-else
-RUN_AND_LOG = (nohup $(TIME_CMD) $(PYTHON) $(1) > $(LOG_DIR)/$(notdir $(basename $(1))).raw.log 2>&1 & \
-					tail -f $(LOG_DIR)/$(notdir $(basename $(1))).raw.log | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" \
-						> $(LOG_DIR)/$(notdir $(basename $(1))).log ; \
-					rm $(LOG_DIR)/$(notdir $(basename $(1))).raw.log)
-endif
 
 # Detect correct Python and Pip commands based on OS
 ifeq ($(OS), Windows)
