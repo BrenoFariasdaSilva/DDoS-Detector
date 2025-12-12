@@ -60,3 +60,82 @@ import sys # For replacing stdout/stderr
 ANSI_ESCAPE_REGEX = re.compile(r"\x1B\[[0-9;]*[a-zA-Z]") # Pattern to remove ANSI colors
 
 # Classes Definitions:
+
+class Logger:
+   """
+   Simple logger class that prints colored messages to the terminal and
+   writes a cleaned (ANSI-stripped) version to a log file.
+
+   Usage:
+      logger = Logger("./Logs/output.log", clean=True)
+      logger.info("\x1b[92mHello world\x1b[0m")
+
+   :param logfile_path: Path to the log file.
+   :param clean: If True, truncate the log file on init; otherwise append.
+   """
+
+   def __init__(self, logfile_path, clean=False):
+      self.logfile_path = logfile_path
+
+      # Ensure parent directory exists
+      parent = os.path.dirname(logfile_path)
+      if parent and not os.path.exists(parent):
+         os.makedirs(parent, exist_ok=True)
+
+      mode = "w" if clean else "a"
+      self.logfile = open(logfile_path, mode, encoding="utf-8")
+      self.is_tty = sys.stdout.isatty()
+
+   def _write(self, message):
+      # Accept None/empty strings gracefully
+      if message is None:
+         return
+
+      out = str(message)
+      if not out.endswith("\n"):
+         out += "\n"
+
+      clean_out = ANSI_ESCAPE_REGEX.sub("", out)
+
+      # Write to file (cleaned)
+      try:
+         self.logfile.write(clean_out)
+         self.logfile.flush()
+      except Exception:
+         # Fail silently to avoid breaking user code
+         pass
+
+      # Write to terminal: colored when TTY, cleaned otherwise
+      try:
+         if self.is_tty:
+            sys.__stdout__.write(out)
+            sys.__stdout__.flush()
+         else:
+            sys.__stdout__.write(clean_out)
+            sys.__stdout__.flush()
+      except Exception:
+         pass
+
+   def info(self, message):
+      """Write an informational message to terminal and log file."""
+      self._write(message)
+
+   def warn(self, message):
+      """Alias for warnings; kept for API familiarity."""
+      self._write(message)
+
+   def error(self, message):
+      """Alias for errors; kept for API familiarity."""
+      self._write(message)
+
+   def flush(self):
+      try:
+         self.logfile.flush()
+      except Exception:
+         pass
+
+   def close(self):
+      try:
+         self.logfile.close()
+      except Exception:
+         pass
