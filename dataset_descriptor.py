@@ -832,7 +832,7 @@ def get_dataset_file_info(filepath, low_memory=True):
 
 def get_file_common_and_extras(headers_map, filepath, common_features):
    """
-   Return the sorted common features list and extra columns for a specific file.
+   Return the sorted common features list and extra columns for a specific file, using normalized feature names (lowercase + strip).
 
    :param headers_map: dict mapping filepath -> list of column names
    :param filepath: path for which to compute extras
@@ -841,8 +841,15 @@ def get_file_common_and_extras(headers_map, filepath, common_features):
    """
 
    file_cols = headers_map.get(filepath, []) # Get headers for this file
-   extras = sorted(set(file_cols) - common_features) if file_cols is not None else [] # Compute non-common extras
-   common_list = sorted(common_features) if common_features else [] # Sorted list of shared features
+
+   if file_cols is not None: # Normalize file columns
+      normalized_file_cols = set(col.strip().lower() for col in file_cols) # Normalize file columns
+      normalized_common = set(col.strip().lower() for col in common_features) # Normalize common features
+      extras = sorted(normalized_file_cols - normalized_common) # Compute non-common extras
+   else: # If no columns found for this file
+      extras = [] # No extras
+
+   common_list = sorted(col.strip().lower() for col in common_features) if common_features else [] # Sorted normalized shared features
 
    return common_list, extras # Return common + extras lists
 
