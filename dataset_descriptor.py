@@ -974,6 +974,43 @@ def compute_group_features(files, low_memory=True):
 
    return set(common_features), union_features # Return both sets
 
+def generate_pairwise_report(group_info):
+   """
+   Generate pairwise comparison rows from group info.
+
+   :param group_info: Dict mapping group_name -> {"files": [...], "common": set(), "union": set()}
+   :return: List of dictionaries representing pairwise comparison rows
+   """
+
+   rows = [] # Initialize report row list
+   group_names = list(group_info.keys()) # List of group names
+
+   for i in range(len(group_names)): # Iterate over first group
+      for j in range(i + 1, len(group_names)): # Iterate over second group avoiding duplicates
+         a_name, b_name = group_names[i], group_names[j] # Group names
+         a_info, b_info = group_info[a_name], group_info[b_name] # Group info
+
+         if not a_info["files"] and not b_info["files"]: # Skip if both have no files
+            continue # Proceed to next pair
+
+         common_between = sorted(a_info["union"] & b_info["union"]) # Features common to both groups
+         extras_a = sorted(a_info["union"] - b_info["union"]) # Features in A not in B
+         extras_b = sorted(b_info["union"] - a_info["union"]) # Features in B not in A
+
+         row = { # Construct row dictionary
+            "Dataset A": a_name, # First dataset group name
+            "Dataset B": b_name, # Second dataset group name
+            "Files in A": len(a_info["files"]), # Number of files in A
+            "Files in B": len(b_info["files"]), # Number of files in B
+            "Common Features (A ∩ B)": ", ".join(common_between) or "None", # Common features between A and B
+            "Extra Features in A (A \\ B)": ", ".join(extras_a) or "None", # Extra features in A
+            "Extra Features in B (B \\ A)": ", ".join(extras_b) or "None", # Extra features in B
+         }
+
+         rows.append(row) # Append to report rows
+
+   return rows # Return the list of report rows
+
 def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memory=True, output_filename=None):
    """
    Generate a cross-dataset feature-compatibility report comparing dataset
@@ -998,33 +1035,7 @@ def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memo
 
       group_info[group_name] = {"files": all_files, "common": set(common_features), "union": union_features} # Store group info
 
-   report_rows = [] # List to store report rows
-   group_names = list(group_info.keys()) # List of group names
-   for i in range(len(group_names)): # Iterate over group pairs
-      for j in range(i + 1, len(group_names)): # Avoid duplicate pairs and self-comparison
-         a = group_names[i] # First group name
-         b = group_names[j] # Second group name
-         a_info = group_info[a] # Info for group A
-         b_info = group_info[b] # Info for group B
-
-         if not a_info["files"] and not b_info["files"]: # Skip if both groups have no files
-            continue # Proceed to next pair
-
-         common_between = sorted(list(a_info["union"] & b_info["union"])) # Common features between A and B
-         extras_a = sorted(list(a_info["union"] - b_info["union"])) # Extra features in A
-         extras_b = sorted(list(b_info["union"] - a_info["union"])) # Extra features in B
-
-         row = { # Create report row for this pair
-            "Dataset A": a, # First dataset group name
-            "Dataset B": b, # Second dataset group name
-            "Files in A": len(a_info["files"]), # Number of files in A
-            "Files in B": len(b_info["files"]), # Number of files in B
-            "Common Features (A ∩ B)": ", ".join(common_between) if common_between else "None", # Common features between A and B
-            "Extra Features in A (A \\ B)": ", ".join(extras_a) if extras_a else "None", # Extra features in A
-            "Extra Features in B (B \\ A)": ", ".join(extras_b) if extras_b else "None", # Extra features in B
-         }
-         report_rows.append(row) # Add the row to the report
-
+   report_rows = generate_pairwise_report(group_info) # Generate pairwise report rows
    if not report_rows: # If no report rows were generated
       return False # Return False indicating failure
 
