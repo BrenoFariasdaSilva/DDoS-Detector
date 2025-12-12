@@ -82,17 +82,20 @@ import os # For running a command in the terminal
 import pandas as pd # For data manipulation
 import pickle # For caching preprocessed data
 import platform # For getting the operating system name
-import subprocess # For running small system commands (sysctl/wmic)
 import random # For random number generation
 import re # For sanitizing filenames
 import seaborn as sns # For enhanced plotting
 import shutil # For checking disk usage
+import subprocess # For running small system commands (sysctl/wmic)
+import sys # For system-specific parameters and functions
 import threading # For optional background resource monitor
 import time # For measuring execution time
 import warnings # For suppressing warnings
 from colorama import Style # For coloring the terminal
 from deap import base, creator, tools, algorithms # For the genetic algorithm
 from functools import partial # For creating partial functions
+from Logger import Logger # For logging output to both terminal and file
+from pathlib import Path # For handling file paths
 from sklearn.ensemble import RandomForestClassifier # For the machine learning model
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix # For model evaluation
 from sklearn.model_selection import train_test_split, StratifiedKFold # For splitting the dataset and cross-validation
@@ -122,6 +125,11 @@ FILES_TO_IGNORE = [""] # List of files to ignore during processing
 GA_GENERATIONS_COMPLETED = 0 # Updated by GA loop to inform monitor when some generations have run
 RESOURCE_MONITOR_LAST_FILE = None # Path of the file currently being processed (monitor uses this)
 RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = False # Whether monitor already applied an update for the current file
+
+# Logger Setup:
+logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True) # Create a Logger instance
+sys.stdout = logger # Redirect stdout to the logger
+sys.stderr = logger # Redirect stderr to the logger
 
 # Fitness Cache:
 fitness_cache = {} # Cache for fitness results to avoid re-evaluating same feature masks
