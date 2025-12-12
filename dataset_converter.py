@@ -1,67 +1,46 @@
 """
 ================================================================================
-Multi-Format Dataset Converter (main.py)
+Multi-Format Dataset Converter (dataset_converter.py)
 ================================================================================
 Author      : Breno Farias da Silva
-Created     : 2025-12-11
+Created     : 2025-05-31
 
-Description:
-   Core script of the Multi-Format-Dataset-Converter. This tool recursively
-   scans the `Input` directory for ARFF, CSV, Parquet, and TXT files, applies
-   minimal structural cleanup to text-based formats (whitespace and basic
-   formatting adjustments), loads the cleaned data into pandas DataFrames,
-   and converts each dataset into all supported formats while preserving the
-   original directory structure inside `Output`.
+Short Description:
+   Command-line utility that discovers datasets (ARFF, CSV, Parquet, TXT)
+   under an input directory, applies lightweight structural cleaning to
+   text-based formats, loads them into pandas DataFrames, and writes
+   converted outputs (ARFF, CSV, Parquet, TXT) to a mirrored `Output`
+   directory structure.
 
-Purpose and Scope:
-   - Standardize datasets across ARFF, CSV, Parquet, and TXT formats.
-   - Provide consistent and readable outputs for experiments and data workflows.
-   - Automatically mirror the folder structure from `Input` to `Output`.
-   - Ensure deterministic and reproducible conversions.
-
-Key Features:
-   - Recursive file discovery under `Input/`.
-   - Structural cleanup for ARFF/CSV/TXT (domain-list cleanup and trimmed values).
-   - Parquet read-and-rewrite for structural consistency.
-   - Conversion to ARFF, CSV, Parquet, and TXT for every detected dataset.
-   - Preservation of directory hierarchy in all generated outputs.
-   - Optional platform-dependent completion sound.
+Defaults & Behavior:
+   - Default input directory: ./Input
+   - Default output directory: ./Output
+   - Supported input formats: .arff, .csv, .parquet, .txt
+   - Cleaning: minimal whitespace/domain-list normalization for ARFF/CSV/TXT
+   - Parquet files are rewritten via `fastparquet` for consistency
+   - Conversion preserves directory hierarchy relative to `Input`
+   - Optional completion sound (platform-dependent)
 
 Usage:
-   1. Place dataset files or directories inside `Input/`.
-   2. Run:
-         $ make
-      or
-         $ python3 main.py
-   3. The converter writes all generated files to the mirrored structure
-      inside `Output/`. Example:
-         Input/A/B/file.csv  →  Output/A/B/file.arff, file.parquet, file.txt, ...
+   - Run interactively:
+       python3 dataset_converter.py
+   - Or pass CLI args: `-i/--input`, `-o/--output`, `-f/--formats`, `-v/--verbose`
 
-Outputs:
-   - `Output/<mirrored-subdirs>/` containing all converted formats.
-   - Cleaned intermediate versions are automatically handled before conversion.
+Dependencies (non-exhaustive):
+   - Python 3.8+
+   - pandas, fastparquet, scipy, liac-arff (arff), colorama, tqdm
 
-TODOs:
-   - Add CLI arguments (input/output paths, format selection, verbosity).
-   - Improve CSV parsing for complex quoted/escaped cases.
-   - Add unit tests for cleaners, loaders, and end-to-end conversion.
-   - Optional parallel execution for large datasets.
+Notes and Caveats:
+   - The converter performs pragmatic cleaning only; do not rely on it to
+     fully sanitize malformed CSVs.
+   - The script uses both `scipy` and `liac-arff` as fallbacks for ARFF.
+   - Disk-space checks are performed before writing outputs.
+   - The module expects UTF-8 encoded text files.
 
-Dependencies:
-   - Python >= 3.8
-   - pandas
-   - fastparquet
-   - scipy
-   - liac-arff
-   - colorama
-   - tqdm
-
-Assumptions & Notes:
-   - Text files are expected to be UTF-8 encoded.
-   - ARFF loaders handle byte-decoding when necessary.
-   - Parquet processing uses `fastparquet` for read-and-write consistency.
-   - Completion sound is skipped on Windows.
-   - Cleaning is intentionally minimal and not a full CSV sanitization engine.
+TODOs (short):
+   - Add unit tests and more robust CSV parsing
+   - Add optional parallel conversion mode for large workloads
+   - Provide more granular CLI control for cleaning rules
 """
 
 import arff # liac-arff, used to save ARFF files
