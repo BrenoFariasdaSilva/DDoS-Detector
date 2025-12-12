@@ -203,23 +203,23 @@ def build_headers_map(filepaths, low_memory=True):
 def compute_common_features(headers_map):
    """
    Compute the intersection of headers across all files and determine
-   whether all headers match exactly (order and content).
+   whether all headers match exactly (ignoring case and surrounding whitespace).
 
    :param headers_map: dict mapping filepath -> list of column names
    :return: tuple (common_features_set, headers_match_all_bool)
    """
 
-   try: # Compute intersection of column sets
-      header_sets = [set(v) for v in headers_map.values() if v] # Convert lists to sets
-      if header_sets: # If there are valid header sets
-         common = set.intersection(*header_sets) # Compute intersection across all files
+   try: # Normalize all headers to lowercase and strip whitespace
+      normalized_sets = [set(col.strip().lower() for col in v) for v in headers_map.values() if v] # List of normalized header sets
+      if normalized_sets: # If there are valid header sets
+         common = set.intersection(*normalized_sets) # Compute intersection across all files
       else: # If no headers available
          common = set() # Empty intersection
    except Exception: # Catch unexpected failures
       common = set() # Fallback to empty set
 
-   unique_header_tuples = {tuple(v) for v in headers_map.values()} # Use tuple forms to detect exact-order differences
-   match_all = len(unique_header_tuples) <= 1 # True if all header sequences are identical
+   unique_normalized_sets = {frozenset(col.strip().lower() for col in v) for v in headers_map.values() if v} # Unique normalized header sets
+   match_all = len(unique_normalized_sets) <= 1 # True if all header sets are identical
 
    return common, match_all # Return shared features and match flag
 
