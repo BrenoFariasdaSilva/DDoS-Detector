@@ -2,20 +2,14 @@
 VENV := venv
 OS := $(shell uname 2>/dev/null || echo Windows)
 
-# Logs directory
-LOG_DIR := ./Logs
-
-# Ensure logs directory exists (cross-platform)
-ENSURE_LOG_DIR := @mkdir -p $(LOG_DIR) 2>/dev/null || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
-
 # Detect correct Python and Pip commands based on OS
-ifeq ($(OS), Windows)
+ifeq ($(OS), Windows) # Windows
 	PYTHON := $(VENV)/Scripts/python.exe
 	PIP := $(VENV)/Scripts/pip.exe
 	PYTHON_CMD := python
 	CLEAR_CMD := cls
 	TIME_CMD :=
-else
+else # Unix-like
 	PYTHON := $(VENV)/bin/python3
 	PIP := $(VENV)/bin/pip
 	PYTHON_CMD := python3
@@ -23,11 +17,17 @@ else
 	TIME_CMD := time
 endif
 
+# Logs directory
+LOG_DIR := ./Logs
+
+# Ensure logs directory exists (cross-platform)
+ENSURE_LOG_DIR := @mkdir -p $(LOG_DIR) 2>/dev/null || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
+
 # Run-and-log function, supports DETACH variable
 # If DETACH is set, runs the script in detached mode and tails the log file
 # Else, runs the script normally
 # Run-and-log function, DETACH controls detached execution
-ifeq ($(OS), Windows)
+ifeq ($(OS), Windows) # Windows
 RUN_AND_LOG = \
 if [ -z "$(DETACH)" ]; then \
 	$(PYTHON) $(1); \
@@ -36,7 +36,7 @@ else \
 	start /B cmd /c "$(PYTHON) $(1)"; \
 	powershell -Command "Get-Content -Path '$$LOG_FILE' -Wait"; \
 fi
-else
+else # Unix-like
 RUN_AND_LOG = \
 if [ -z "$(DETACH)" ]; then \
 	$(PYTHON) $(1); \
