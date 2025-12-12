@@ -67,9 +67,12 @@ import pandas as pd # For data manipulation and analysis
 import platform # For detecting the operating system
 import re # For regular expressions
 import shap # For SHAP value explanations
+import sys # For system-specific parameters and functions
 import time # For measuring time taken by operations
 from colorama import Style # For terminal text styling
 from lime.lime_tabular import LimeTabularExplainer # For LIME explanations
+from Logger import Logger # For logging output to both terminal and file
+from pathlib import Path # For handling file paths
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier # For Gradient Boosting model
 from sklearn.linear_model import LogisticRegression # For logistic regression model
 from sklearn.metrics import classification_report, confusion_matrix # For evaluating model performance
@@ -104,6 +107,11 @@ DATASETS = { # Dictionary containing dataset paths and feature files
 		]
 	}
 }
+
+# Logger Setup:
+logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True) # Create a Logger instance
+sys.stdout = logger # Redirect stdout to the logger
+sys.stderr = logger # Redirect stderr to the logger
 
 # Constants
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # Commands to play sound on different platforms
