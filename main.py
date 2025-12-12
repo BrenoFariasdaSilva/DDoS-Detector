@@ -920,6 +920,20 @@ def explain_with_multiple_methods(model, X_train, X_test, feature_names, model_n
 
 	explain_predictions_with_lime(model, X_train, X_test, feature_names, model_name=model_name) # Explain predictions using LIME, as it works with any model
 
+def calculate_execution_time(start_time, finish_time):
+   """
+   Calculates the execution time between start and finish times and formats it as hh:mm:ss.
+
+   :param start_time: The start datetime object
+   :param finish_time: The finish datetime object
+   :return: String formatted as hh:mm:ss representing the execution time
+   """
+
+   delta = finish_time - start_time # Calculate the time difference
+   hours, remainder = divmod(delta.seconds, 3600) # Calculate the hours, minutes and seconds
+   minutes, seconds = divmod(remainder, 60) # Calculate the minutes and seconds
+   return f"{hours:02d}:{minutes:02d}:{seconds:02d}" # Format the execution time
+
 def play_sound():
 	"""
 	Plays a sound when the program finishes.
