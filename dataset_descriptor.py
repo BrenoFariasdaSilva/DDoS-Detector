@@ -706,6 +706,38 @@ def downsample_with_class_awareness(numeric_df, labels, sample_size, random_stat
    except Exception: # On any error, fallback to random sampling
       return numeric_df.sample(n=sample_size, random_state=random_state), None # Return random sample and no labels
 
+def initialize_and_fit_tsne(X, perplexity=30, n_iter=1000, random_state=42):
+   """
+   Initialize t-SNE with proper parameters and compute 2D embedding.
+
+   Handles compatibility with different TSNE versions by inspecting the constructor
+   signature and setting 'n_iter' or 'max_iter' accordingly.
+
+   :param X: numpy array of scaled numeric features
+   :param perplexity: t-SNE perplexity parameter
+   :param n_iter: number of t-SNE optimization iterations
+   :param random_state: random seed for reproducibility
+   :return: 2D numpy array of t-SNE embeddings
+   """
+   
+   try: # Inspect TSNE init signature for compatibility
+      from inspect import signature # Import signature function
+      sig = signature(TSNE.__init__).parameters # Get TSNE init signature
+   except Exception: # If inspection fails
+      sig = {} # Fallback to empty signature
+
+   tsne_kwargs = {"n_components": 2, "perplexity": perplexity, "random_state": random_state, "init": "pca"} # Base t-SNE args
+   if "n_iter" in sig: # Check for n_iter parameter
+      tsne_kwargs["n_iter"] = n_iter # Set n_iter if supported
+   elif "max_iter" in sig: # Check for max_iter parameter
+      tsne_kwargs["max_iter"] = n_iter # Set max_iter if supported
+   else: # Neither parameter supported
+      tsne_kwargs["max_iter"] = n_iter # Default to max_iter
+
+   tsne = TSNE(**tsne_kwargs) # Initialize t-SNE with compatible args
+   X_emb = tsne.fit_transform(X) # Compute embedding
+   return X_emb # Return the 2D embedding
+
 def save_tsne_plot(X_emb, labels, output_path, title):
    """
    Create and save a 2D t-SNE scatter plot.
@@ -802,22 +834,7 @@ def generate_tsne_plot(filepath, low_memory=True, sample_size=5000, perplexity=3
       if n_rows <= max(3, int(perplexity) + 1): # Check t-SNE feasibility
          return None # Abort if too few samples for t-SNE
 
-      try: # Inspect TSNE init signature for compatibility
-         from inspect import signature # Import signature function
-         sig = signature(TSNE.__init__).parameters # Get TSNE init signature
-      except Exception: # If inspection fails
-         sig = {} # Fallback to empty signature
-
-      tsne_kwargs = {"n_components": 2, "perplexity": perplexity, "random_state": random_state, "init": "pca"} # Base t-SNE args
-      if "n_iter" in sig: # Check for n_iter parameter
-         tsne_kwargs["n_iter"] = n_iter # Set n_iter if supported
-      elif "max_iter" in sig: # Check for max_iter parameter
-         tsne_kwargs["max_iter"] = n_iter # Set max_iter if supported
-      else: # Neither parameter supported
-         tsne_kwargs["max_iter"] = n_iter # Default to max_iter
-
-      tsne = TSNE(**tsne_kwargs) # Initialize t-SNE with compatible args
-      X_emb = tsne.fit_transform(X) # Compute embedding
+      X_emb = initialize_and_fit_tsne(X, perplexity, n_iter, random_state) # Compute t-SNE embedding
 
       if output_dir is None: # Determine output directory
          output_dir = os.path.join(os.path.dirname(os.path.abspath(filepath)), "Data_Separability") # Default RESULTS_DIR under file folder
