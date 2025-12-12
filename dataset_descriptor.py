@@ -1011,6 +1011,36 @@ def generate_pairwise_report(group_info):
 
    return rows # Return the list of report rows
 
+def adjust_rows_for_group(report_rows, group_name):
+   """
+   Adjust pairwise rows so that the target group always appears as Dataset A.
+
+   :param report_rows: List of dictionaries representing pairwise report rows
+   :param group_name: Target group to appear as Dataset A
+   :return: List of adjusted report rows
+   """
+
+   adjusted = [] # Initialize adjusted row list
+
+   for row in report_rows: # Iterate over existing report rows
+      if row["Dataset A"] == group_name: # Already Dataset A
+         adjusted.append(dict(row)) # Keep as-is
+      elif row["Dataset B"] == group_name: # Swap A <-> B
+         swapped = { # Construct swapped row
+            "Dataset A": row["Dataset B"], # Swap Dataset A
+            "Dataset B": row["Dataset A"], # Swap Dataset B
+            "Files in A": row["Files in B"], # Swap file counts
+            "Files in B": row["Files in A"], # Swap file counts
+            "Common Features (A ∩ B)": row["Common Features (A ∩ B)"], # Keep common features
+            "Extra Features in A (A \\ B)": row["Extra Features in B (B \\ A)"], # Swap extra features
+            "Extra Features in B (B \\ A)": row["Extra Features in A (A \\ B)"], # Swap extra features
+         }
+         adjusted.append(swapped) # Append swapped row
+      else: # Unrelated row, keep as-is
+         adjusted.append(dict(row)) # Keep as-is
+
+   return adjusted # Return adjusted rows
+
 def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memory=True, output_filename=None):
    """
    Generate a cross-dataset feature-compatibility report comparing dataset
@@ -1039,44 +1069,17 @@ def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memo
    if not report_rows: # If no report rows were generated
       return False # Return False indicating failure
 
-   # Save one cross-report per dataset group. In each saved file the target
-   # group will always appear as "Dataset A" (swap fields when necessary).
-   saved_any = False
-   for group_name, info in group_info.items():
-      # Determine base_dir for this group: use directory of first file if present
-      if info["files"]:
-         first_file = info["files"][0]
-         base_dir = os.path.dirname(os.path.abspath(first_file))
-      else:
-         base_dir = os.getcwd()
+   saved_any = False # Flag to track if any report was saved
+   for group_name, info in group_info.items(): # Iterate over each group
+      base_dir = os.path.dirname(os.path.abspath(info["files"][0])) if info["files"] else os.getcwd() # Base dir from first file or current dir
+      adjusted_rows = adjust_rows_for_group(report_rows, group_name) # Adjust rows for this group
+      try: # Try to write the report
+         write_report(adjusted_rows, base_dir, output_filename) # Write the report
+         saved_any = True # Mark that at least one report was saved
+      except Exception: # Fail silently
+         pass # Do nothing on failure
 
-      adjusted_rows = []
-      for r in report_rows:
-         if r["Dataset A"] == group_name:
-            adjusted_rows.append(dict(r))
-         elif r["Dataset B"] == group_name:
-            # Swap A<->B fields so that this group appears as Dataset A
-            swapped = {
-               "Dataset A": r["Dataset B"],
-               "Dataset B": r["Dataset A"],
-               "Files in A": r["Files in B"],
-               "Files in B": r["Files in A"],
-               "Common Features (A ∩ B)": r["Common Features (A ∩ B)"],
-               "Extra Features in A (A \\ B)": r["Extra Features in B (B \\ A)"],
-               "Extra Features in B (B \\ A)": r["Extra Features in A (A \\ B)"],
-            }
-            adjusted_rows.append(swapped)
-         else:
-            # Pair unrelated to this group: keep as-is
-            adjusted_rows.append(dict(r))
-
-      try:
-         write_report(adjusted_rows, base_dir, output_filename)
-         saved_any = True
-      except Exception:
-         pass
-
-   return saved_any
+   return saved_any # Return whether any report was saved
 
 def play_sound():
    """
