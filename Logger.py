@@ -75,67 +75,76 @@ class Logger:
    """
 
    def __init__(self, logfile_path, clean=False):
-      self.logfile_path = logfile_path
+      """
+      Initialize the Logger.
+      
+      :param self: Description
+      :param logfile_path: Description
+      :param clean: Description
+      """
+      
+      self.logfile_path = logfile_path # Store log file path
 
-      # Ensure parent directory exists
-      parent = os.path.dirname(logfile_path)
-      if parent and not os.path.exists(parent):
-         os.makedirs(parent, exist_ok=True)
+      parent = os.path.dirname(logfile_path) # Ensure log directory exists
+      if parent and not os.path.exists(parent): # Create parent directories if needed
+         os.makedirs(parent, exist_ok=True) # Safe creation
 
-      mode = "w" if clean else "a"
-      self.logfile = open(logfile_path, mode, encoding="utf-8")
-      self.is_tty = sys.stdout.isatty()
+      mode = "w" if clean else "a" # Choose file mode based on 'clean' flag
+      self.logfile = open(logfile_path, mode, encoding="utf-8") # Open log file
+      self.is_tty = sys.stdout.isatty() # Verify if stdout is a TTY
 
-   def _write(self, message):
-      # Accept None/empty strings gracefully
-      if message is None:
-         return
+   def write(self, message):
+      """
+      Internal method to write messages to both terminal and log file.
+      
+      :param message: The message to log.
+      """
+      
+      if message is None: # Ignore None messages
+         return # Early exit
 
-      out = str(message)
-      if not out.endswith("\n"):
-         out += "\n"
+      out = str(message) # Convert message to string
+      if not out.endswith("\n"): # Ensure newline termination
+         out += "\n" # Append newline if missing
 
-      clean_out = ANSI_ESCAPE_REGEX.sub("", out)
+      clean_out = ANSI_ESCAPE_REGEX.sub("", out) # Strip ANSI sequences for log file
 
-      # Write to file (cleaned)
-      try:
-         self.logfile.write(clean_out)
-         self.logfile.flush()
-      except Exception:
-         # Fail silently to avoid breaking user code
-         pass
+      try: # Write to log file
+         self.logfile.write(clean_out) # Write cleaned message
+         self.logfile.flush() # Ensure immediate write
+      except Exception: # Fail silently to avoid breaking user code
+         pass # Silent fail
 
-      # Write to terminal: colored when TTY, cleaned otherwise
-      try:
-         if self.is_tty:
-            sys.__stdout__.write(out)
-            sys.__stdout__.flush()
-         else:
-            sys.__stdout__.write(clean_out)
-            sys.__stdout__.flush()
-      except Exception:
-         pass
-
-   def info(self, message):
-      """Write an informational message to terminal and log file."""
-      self._write(message)
-
-   def warn(self, message):
-      """Alias for warnings; kept for API familiarity."""
-      self._write(message)
-
-   def error(self, message):
-      """Alias for errors; kept for API familiarity."""
-      self._write(message)
+      try: # Write to terminal: colored when TTY, cleaned otherwise
+         if self.is_tty: # Terminal supports colors
+            sys.__stdout__.write(out) # Write colored message
+            sys.__stdout__.flush() # Flush immediately
+         else: # Terminal does not support colors
+            sys.__stdout__.write(clean_out) # Write cleaned message
+            sys.__stdout__.flush() # Flush immediately
+      except Exception: # Fail silently to avoid breaking user code
+         pass # Silent fail
 
    def flush(self):
-      try:
-         self.logfile.flush()
-      except Exception:
-         pass
+      """
+      Flush the log file.
+      
+      :param self: Description
+      """
+      
+      try: # Flush log file buffer
+         self.logfile.flush() # Flush log file
+      except Exception: # Fail silently
+         pass # Silent fail
 
    def close(self):
-      try:
-         self.logfile.close()
-      except Exception:
-         pass
+      """
+      Close the log file.
+      
+      :param self: Description
+      """
+      
+      try: # Close log file
+         self.logfile.close() # Close log file
+      except Exception: # Fail silently
+         pass # Silent fail
