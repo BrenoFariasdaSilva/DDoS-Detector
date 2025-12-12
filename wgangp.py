@@ -61,9 +61,12 @@ import os # For running a command in the terminal
 import pandas as pd # For CSV handling
 import platform # For getting the operating system name
 import random # For reproducibility
+import sys # For system-specific parameters and functions
 import torch # PyTorch core
 import torch.nn as nn # Neural network modules
 from colorama import Style # For coloring the terminal
+from Logger import Logger # For logging output to both terminal and file
+from pathlib import Path # For handling file paths
 from sklearn.preprocessing import StandardScaler, LabelEncoder # For data preprocessing
 from torch import autograd # For gradient penalty
 from torch.utils.data import Dataset, DataLoader # Dataset and DataLoader
@@ -81,6 +84,11 @@ class BackgroundColors: # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False # Set to True to output verbose messages
+
+# Logger Setup:
+logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True) # Create a Logger instance
+sys.stdout = logger # Redirect stdout to the logger
+sys.stderr = logger # Redirect stderr to the logger
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
