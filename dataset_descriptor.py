@@ -951,6 +951,29 @@ def collect_group_files(paths, file_extension=".csv"):
 
    return sorted(set(files)) # Remove duplicates and sort
 
+def compute_group_features(files, low_memory=True):
+   """
+   Compute common and union features for a list of dataset files.
+
+   :param files: List of dataset file paths
+   :param low_memory: Whether to optimize memory when reading CSV headers
+   :return: Tuple (common_features_set, union_features_set)
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Computing common and union features for dataset group...{Style.RESET_ALL}") # Output computation message
+
+   if not files: # No files, return empty sets
+      return set(), set() # Return empty sets
+
+   headers_map = build_headers_map(files, low_memory=low_memory) # Build headers map
+   common_features, _ = compute_common_features(headers_map) # Compute common features
+
+   union_features = set() # Initialize union set
+   for cols in headers_map.values(): # Iterate over each file's columns
+      union_features.update(cols or []) # Add columns to union set
+
+   return set(common_features), union_features # Return both sets
+
 def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memory=True, output_filename=None):
    """
    Generate a cross-dataset feature-compatibility report comparing dataset
@@ -970,26 +993,8 @@ def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memo
 
    group_info = {} # Map group_name -> {"files": [...], "common": set(), "union": set()}
    for group_name, paths in datasets_dict.items(): # Iterate over dataset groups
-      all_files = collect_group_files(paths, file_extension) # Collect all matching files for this group
-      if not all_files: # If no files found for this group
-         group_info[group_name] = {"files": [], "common": set(), "union": set()} # Empty info
-         continue # Proceed to next group
-
-      headers_map = build_headers_map(all_files, low_memory=low_memory) # Build headers map for this group's files
-      common_features, _ = compute_common_features(headers_map) # Compute common features
-      elif os.path.isfile(p) and p.endswith(file_extension): # If the path is a file
-         all_files.append(p) # Add the single file
-      all_files = sorted(set(all_files)) # Remove duplicates and sort
-
-      if not all_files: # If no files found for this group
-         group_info[group_name] = {"files": [], "common": set(), "union": set()} # Empty info
-         continue # Proceed to next group
-
-      headers_map = build_headers_map(all_files, low_memory=low_memory) # Build headers map for this group's files
-      common_features, _ = compute_common_features(headers_map) # Compute common features
-      union_features = set() # Compute union of features
-      for cols in headers_map.values(): # Iterate over headers of each file
-         union_features.update(cols or []) # Add columns to union set
+      all_files = collect_group_files(paths, file_extension) # Collect files for this group
+      common_features, union_features = compute_group_features(all_files, low_memory=low_memory) # Compute features
 
       group_info[group_name] = {"files": all_files, "common": set(common_features), "union": union_features} # Store group info
 
