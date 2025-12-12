@@ -60,6 +60,7 @@ Output:
 
 import arff as liac_arff # For loading ARFF files
 import atexit # For registering a function to run at exit
+import datetime # For timestamping
 import lightgbm as lgb # For LightGBM model
 import numpy as np # For numerical operations
 import os # For running a command in the terminal
@@ -944,8 +945,9 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
 	:param compare_feature_selection: Boolean flag to compare performance with/without feature selection (default is True if extract_features is True)
 	:return: None
 	"""
-
+ 
 	print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}DDoS Detector{BackgroundColors.GREEN} program!{Style.RESET_ALL}", end="\n\n")
+	start_time = datetime.datetime.now() # Get the start time of the program
 
 	sorted_datasets = sorted(DATASETS.items()) # Sort datasets alphabetically by keys
 
@@ -1043,7 +1045,9 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
 		comparison_output_path = os.path.join(os.getcwd(), OUTPUT_DIR) # Path for comparison report
 		generate_feature_selection_comparison(baseline_metrics, feature_selected_metrics, output_path=comparison_output_path, feat_extraction_method=feat_extraction_method) # Generate Feature Selection comparison
 
-	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished!{Style.RESET_ALL}\n")
+	finish_time = datetime.datetime.now() # Get the finish time of the program
+	print(f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
+	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
 
 	atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None # Register sound on exit if enabled
 
