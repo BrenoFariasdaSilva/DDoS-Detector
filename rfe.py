@@ -51,6 +51,7 @@ Notes:
 """
 
 import atexit # For playing a sound when the program finishes
+import datetime # For timestamping
 import json # For saving lists and dicts as JSON strings
 import matplotlib.pyplot as plt # For plotting
 import numpy as np # For numerical operations
@@ -512,10 +513,13 @@ def main():
    """
    
    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Recursive Feature Elimination (RFE){BackgroundColors.GREEN} program!{Style.RESET_ALL}") # Output the welcome message
+   start_time = datetime.datetime.now() # Get the start time of the program
 
    csv_file = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv" # Path to the CSV file
    run_rfe(csv_file) # Run RFE on the specified CSV file
 
+   finish_time = datetime.datetime.now() # Get the finish time of the program
+   print(f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
 
    atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None # Register play_sound at exit if enabled
