@@ -1,61 +1,67 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-Machine Learning Intrusion Detection Evaluation Framework
+Modular DDoS Detection Evaluation Framework (main.py)
 ================================================================================
 Author      : Breno Farias da Silva
-Created     : 2025-10-07
+Created     : 2025-10-06
 Description :
-	This script provides a modular framework for loading, preprocessing,
-	training, and evaluating multiple machine learning models on a variety
-	of cybersecurity intrusion detection datasets. It supports common formats
-	such as ARFF, CSV, TXT, and Parquet, and integrates model explainability
-	through SHAP and LIME.
+	This module implements a modular evaluation framework for DDoS
+	detection datasets. It centralizes dataset loading, preprocessing,
+	training and evaluation of multiple classifiers, and exports detailed
+	reports for reproducible experiments. The pipeline supports ARFF, CSV,
+	TXT and Parquet inputs and integrates explainability via SHAP and LIME.
 
-	The workflow includes:
-		- Data loading and preprocessing (scaling, encoding, label detection)
-		- Model initialization (Random Forest, XGBoost, LightGBM, etc.)
-		- Automated training with timing and evaluation metrics
-		- Generation of detailed classification and extended metrics reports
-		- Aggregation of performance results across datasets and models
+	Key features and behavior:
+		- Automatic detection of label column and common non-feature fields
+		- Optional feature selection support (Genetic Algorithm / RFE / PCA)
+		- Stratified train/test splits or k-fold cross-validation
+		- Per-dataset Results directory with classification and extended metrics
+		- SHAP / LIME explanation exports for selected models
+		- Robust ARFF loading with nominal value sanitization
+
+	Important configuration constants in this file:
+		- `SAMPLE_SIZE` (None|int): limit rows for quicker tests (None = full)
+		- `OUTPUT_DIR`: base directory for aggregated outputs
+		- `VERBOSE`: enable additional stdout diagnostics
+		- `RUN_FUNCTIONS` controls optional behaviors (e.g., play sound)
+		- Downsampling and t-SNE helpers enforce a per-class minimum of
+		  samples when requested (default min ≈ 50) to preserve minority classes
 
 Usage:
-	First, you must configure the DATASETS dictionary with the correct paths to your datasets.
-		DATASETS = {
-			"./CIC-IDS2017-Dataset": [
-				"./CIC-IDS2017-Dataset/Infiltration-Thursday-no-metadata.parquet",
-				"./CIC-IDS2017-Dataset/Infiltration-Thursday-no-metadata.parquet"
-			],
-			"./UNSW-NB15-Dataset": [
-				"./UNSW-NB15-Dataset/UNSW_NB15_training-set.parquet",
-				"./UNSW-NB15-Dataset/UNSW_NB15_testing-set.parquet"
-			],
-			...
-		}
-	
-	Now, in order to run the script, simply execute:
+	Configure the `DATASETS` mapping with dataset file paths and optional
+	feature files, then run via the provided Makefile target or directly:
+
+		python3 main.py
+		# or
 		make main
 
+Outputs:
+	- Per-model CSV reports: `NN-ModelName-Classification_report.csv`
+	- Per-model extended metrics: `NN-ModelName-Extended_metrics.csv`
+	- Aggregated `Overall_Performance*.csv` under the dataset Results folder
+
+Notes:
+	- The script is designed for reproducible experiments; results are saved
+	  per-dataset under a `Results` subfolder.
+	- The code includes compatibility workarounds for different versions of
+	  common libraries (e.g., sklearn t-SNE parameter name differences).
+	- For debugging t-SNE and downsampling behaviour, set `VERBOSE = True`.
+
 TODOs:
-	- Add cross-validation support for better generalization.
-	- Add multithreading to parallelize model training.
-	- Review the pipeline for potential overfitting issues.
-	- Implement correlation-based feature selection and LASSO regularization.
-		1. Remove low-variance (nearly constant) features.
-		2. Analyze correlation with target variable.
-		3. Remove highly correlated features (multicollinearity).
-		4. Apply LASSO (L1) regression for feature selection.
-	- Implement the feature selection function.
-	- Add unit tests for the feature selection process.
+	- Add CLI flags for `SAMPLE_SIZE`, `min_class_size`, and toggles such as
+	  `CROSS_DATASET_VALIDATE` to make experiments configurable from the CLI.
+	- Add automated unit tests for preprocessing and feature-selection flows.
+	- Optionally parallelize model training and add resumable checkpoints.
 
 Dependencies:
 	- Python >= 3.9
 	- pandas, numpy, scikit-learn, lightgbm, xgboost, shap, lime, colorama
 
-Output:
+Outputs (summary):
 	- Model performance reports (.csv)
 	- Extended confusion matrix with detailed class metrics
-	- Overall performance summary by dataset and algorithm
+	- Aggregated performance summaries by dataset and algorithm
 """
 
 import arff as liac_arff # For loading ARFF files
