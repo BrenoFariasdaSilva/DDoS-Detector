@@ -253,7 +253,7 @@ def preprocess_dataframe(df, remove_zero_variance=True):
    :return: cleaned DataFrame
    """
    
-   verbose_output(f"{BackgroundColors.GREEN}Preprocessing the DataFrame by removing NaN/infinite values and zero-variance features.{Style.RESET_ALL}") # Output the verbose message
+   verbose_output(f"{BackgroundColors.GREEN}Preprocessing the DataFrame by {BackgroundColors.CYAN}removing NaN/infinite values and zero-variance features{BackgroundColors.GREEN}.{Style.RESET_ALL}") # Output the verbose message
 
    if df is None: # If the DataFrame is None
       return df # Return None
@@ -377,7 +377,7 @@ def fill_replace_and_drop(numeric_df):
    :return: cleaned DataFrame (may be empty)
    """
    
-   verbose_output(f"{BackgroundColors.GREEN}Replacing infinities, dropping all-NaN columns, and filling NaNs with column medians.{Style.RESET_ALL}") # Output the verbose message
+   verbose_output(f"{BackgroundColors.GREEN}Replacing {BackgroundColors.CYAN}infinities, dropping all-NaN columns, and filling NaNs{BackgroundColors.GREEN} with column medians.{Style.RESET_ALL}") # Output the verbose message
 
    numeric_df = numeric_df.replace([np.inf, -np.inf], np.nan) # Replace +/-infinity with NaN
    numeric_df = numeric_df.loc[:, numeric_df.notna().any(axis=0)] # Drop columns that are entirely NaN
