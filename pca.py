@@ -60,6 +60,7 @@ Notes:
 
 import atexit # For playing a sound when the program finishes
 import concurrent.futures # For parallel execution
+import datetime # For timestamping
 import numpy as np # For numerical operations
 import os # For file and directory operations
 import pandas as pd # For data manipulation
@@ -599,15 +600,19 @@ def main():
 	:param: None
 	:return: None
 	"""
-	
+ 
+
 	print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}PCA Feature Extraction{BackgroundColors.GREEN} program!{Style.RESET_ALL}")
+	start_time = datetime.datetime.now() # Get the start time of the program
 	
 	csv_file = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv" # Path to the CSV dataset file
 	n_components_list = [8, 16, 32, 64] # List of PCA component counts to test
 	
 	run_pca_analysis(csv_file, n_components_list, max_workers=2) # Run the PCA analysis
 	
-	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}")
+	finish_time = datetime.datetime.now() # Get the finish time of the program
+	print(f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}") # Output the start and finish times
+	print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}") # Output the end of the program message
 	
 	atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None # Register the play_sound function to be called at exit if enabled
 
