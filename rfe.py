@@ -61,8 +61,11 @@ import psutil # For hardware information
 import re # For regular expressions
 import seaborn as sns # For advanced plots
 import subprocess # For executing system commands
+import sys # For system-specific parameters and functions
 import time # For measuring elapsed time
 from colorama import Style # For coloring the terminal
+from Logger import Logger # For logging output to both terminal and file
+from pathlib import Path # For handling file paths
 from sklearn.ensemble import RandomForestClassifier # For the Random Forest model
 from sklearn.feature_selection import RFE # For Recursive Feature Elimination
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix # For performance metrics
@@ -81,6 +84,11 @@ class BackgroundColors: # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False # Set to True to output verbose messages
+
+# Logger Setup:
+logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True) # Create a Logger instance
+sys.stdout = logger # Redirect stdout to the logger
+sys.stderr = logger # Redirect stderr to the logger
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
