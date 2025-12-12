@@ -74,8 +74,11 @@ import pickle # For loading PCA objects
 import platform # For getting the operating system name
 import psutil # For checking system RAM
 import subprocess # For running small system commands (sysctl/wmic)
+import sys # For system-specific parameters and functions
 import time # For measuring execution time
 from colorama import Style # For terminal text styling
+from Logger import Logger # For logging output to both terminal and file
+from pathlib import Path # For handling file paths
 from sklearn.decomposition import PCA # For Principal Component Analysis
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, StackingClassifier # For ensemble models
 from sklearn.linear_model import LogisticRegression # For logistic regression model
@@ -102,6 +105,11 @@ class BackgroundColors: # Colors for the terminal
 VERBOSE = False # Set to True to output verbose messages
 THREADS_LIMIT = 2 # Number of threads for parallel evaluation of individual classifiers
 FILES_TO_IGNORE = [""] # List of files to ignore during processing
+
+# Logger Setup:
+logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True) # Create a Logger instance
+sys.stdout = logger # Redirect stdout to the logger
+sys.stderr = logger # Redirect stderr to the logger
 
 # Sound Constants:
 SOUND_COMMANDS = {"Darwin": "afplay", "Linux": "aplay", "Windows": "start"} # The commands to play a sound for each operating system
