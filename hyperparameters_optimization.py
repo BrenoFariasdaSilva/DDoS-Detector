@@ -3,7 +3,7 @@
 Classifiers Hyperparameter Optimization
 ================================================================================
 Author      : Breno Farias da Silva
-Created     : 2025-12-06
+Created     : 2025-12-08
 Description :
    This script performs hyperparameter optimization for multiple machine learning
    classifiers using GridSearchCV on DDoS detection datasets. It uses only the
@@ -22,39 +22,27 @@ Description :
       - Sound notification upon completion
 
 Usage:
-   1. Configure the dataset path in the main() function (csv_path variable).
-   2. Execute the script via Python:
-         $ python hyperparameter_optimization.py
-   3. Check the output CSV file for optimized hyperparameters and scores.
+   - Configure `DATASETS` or edit `main()` to point to dataset directories.
+   - Run: `python hyperparameters_optimization.py` (or integrate from other code).
 
 Outputs:
-   - Hyperparameter_Optimization_Results.csv: Contains best parameters and CV scores for each model
-   - Terminal logs showing optimization progress and execution time
-   - Sound notification when processing completes
+   - Classifiers_Hyperparameters/<dataset>_Hyperparameter_Optimization_Results.csv
+     containing best parameters, best CV F1 and timing for each model tested.
 
 TODOs:
-   - Add CLI argument parsing for dataset path and output directory
-   - Implement Bayesian optimization for more efficient search
-   - Add support for custom parameter grids
-   - Extend to support additional classifiers
-   - Add visualization of hyperparameter importance
+   - Add `argparse` to control dataset selection, CV folds, and search strategy
+   - Add randomized/Bayesian search alternatives for large parameter grids
+   - Improve resumability for long-running searches and better exception traces
 
 Dependencies:
    - Python >= 3.8
-   - pandas
-   - numpy
-   - scikit-learn
-   - lightgbm
-   - xgboost
-   - tqdm
-   - colorama
+   - pandas, numpy, scikit-learn, xgboost, lightgbm, tqdm, colorama
+   - psutil (optional, used for hardware reporting)
 
 Assumptions & Notes:
-   - Dataset CSV files with last column as target variable
-   - Genetic Algorithm results available in Feature_Analysis/Genetic_Algorithm_Results.csv
-   - Numeric features only (non-numeric features are dropped)
-   - Uses weighted F1-score for multi-class classification
-   - Sound notification skipped on Windows platform
+   - Input CSV: last column is the target, numeric features only are used
+   - Genetic Algorithm results must be present under `Feature_Analysis/`
+   - Outputs are written next to each processed dataset directory
 """
 
 import atexit # For playing a sound when the program finishes
