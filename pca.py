@@ -45,7 +45,6 @@ TODOs:
 Dependencies:
 	- Python >= 3.9
 	- pandas, numpy, scikit-learn, colorama
-
 """
 
 import atexit # For playing a sound when the program finishes
