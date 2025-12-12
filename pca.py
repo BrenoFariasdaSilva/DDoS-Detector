@@ -573,6 +573,20 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
 	print(f"  {BackgroundColors.GREEN}CV F1-Score = {BackgroundColors.CYAN}{best_result['cv_f1_score']:.4f}{Style.RESET_ALL}")
 	print(f"  {BackgroundColors.GREEN}Explained Variance = {BackgroundColors.CYAN}{best_result['explained_variance']:.4f}{Style.RESET_ALL}")
 
+def calculate_execution_time(start_time, finish_time):
+   """
+   Calculates the execution time between start and finish times and formats it as hh:mm:ss.
+
+   :param start_time: The start datetime object
+   :param finish_time: The finish datetime object
+   :return: String formatted as hh:mm:ss representing the execution time
+   """
+
+   delta = finish_time - start_time # Calculate the time difference
+   hours, remainder = divmod(delta.seconds, 3600) # Calculate the hours, minutes and seconds
+   minutes, seconds = divmod(remainder, 60) # Calculate the minutes and seconds
+   return f"{hours:02d}:{minutes:02d}:{seconds:02d}" # Format the execution time
+
 def play_sound():
    """
    Plays a sound when the program finishes and skips if the operating system is Windows.
