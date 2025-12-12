@@ -558,6 +558,45 @@ def stratified_sample(numeric_df, labels, max_samples, random_state=42, min_per_
 
    return numeric_df.loc[sampled_idx].reset_index(drop=True), labels.loc[sampled_idx].reset_index(drop=True) # Return sampled DataFrame and labels
 
+def prepare_numeric_dataset(filepath, low_memory=True, sample_size=5000, random_state=42):
+   """
+   Load CSV dataset, clean it, extract numeric features, optionally downsample,
+   and return numeric DataFrame and labels.
+
+   :param filepath: path to CSV file
+   :param low_memory: whether to use low-memory mode when loading CSV
+   :param sample_size: maximum number of rows to keep (downsampling threshold)
+   :param random_state: random seed for reproducibility
+   :return: tuple (numeric_df, labels) or (None, None) on failure
+   """
+   
+   df = load_dataset(filepath, low_memory=low_memory) # Load CSV into DataFrame
+   if df is None: # If loading failed
+      return None, None # Abort
+
+   cleaned = preprocess_dataframe(df, remove_zero_variance=False) # Basic cleaning
+   if cleaned is None: # If cleaning failed
+      return None, None # Abort
+
+   numeric_df = coerce_numeric_columns(cleaned) # Extract numeric features
+   if numeric_df is None: # If extraction failed
+      return None, None # Abort
+
+   numeric_df = fill_replace_and_drop(numeric_df) # Clean numeric frame
+   if numeric_df is None: # If cleaning failed
+      return None, None # Abort
+
+   if numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0: # No numeric data
+      return None, None # Abort
+
+   label_col = detect_label_column(cleaned.columns) # Detect label column
+   labels = cleaned[label_col] if label_col in cleaned.columns else None # Extract labels if present
+
+   if numeric_df.shape[0] > sample_size: # Downsample if too many rows
+      numeric_df, labels = downsample_with_class_awareness(numeric_df, labels, sample_size, random_state) # Class-aware downsampling
+
+   return numeric_df, labels # Return numeric DataFrame and labels
+
 def scale_features(numeric_df):
    """
    Standardize numeric features to zero mean and unit variance. Fall back to
@@ -803,30 +842,9 @@ def generate_tsne_plot(filepath, low_memory=True, sample_size=5000, perplexity=3
    verbose_output(f"{BackgroundColors.GREEN}Generating t-SNE plot for: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output start message for t-SNE generation
 
    try: # Main try-catch block for overall failure handling
-      df = load_dataset(filepath, low_memory=low_memory) # Load CSV into DataFrame
-      if df is None: # If loading failed
-         return None # Abort
-
-      cleaned = preprocess_dataframe(df, remove_zero_variance=False) # Basic cleaning
-      if cleaned is None: # If cleaning failed
-         return None # Abort
-
-      numeric_df = coerce_numeric_columns(cleaned) # Extract numeric features
-      if numeric_df is None: # If extraction failed
-         return None # Abort
-      
-      numeric_df = fill_replace_and_drop(numeric_df) # Clean numeric frame
-      if numeric_df is None: # If cleaning failed
-         return None # Abort
-
-      if numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0: # No numeric data
-         return None # Abort
-
-      label_col = detect_label_column(cleaned.columns) # Detect label column
-      labels = cleaned[label_col] if label_col in cleaned.columns else None # Extract labels if present
-
-      if numeric_df.shape[0] > sample_size: # Downsample if too many rows
-         numeric_df, labels = downsample_with_class_awareness(numeric_df, labels, sample_size, random_state) # Class-aware downsampling
+      numeric_df, labels = prepare_numeric_dataset(filepath, low_memory, sample_size, random_state) # Prepare numeric dataset
+      if numeric_df is None: # Abort if preparation failed
+         return None
 
       X = scale_features(numeric_df) # Scale features for t-SNE
 
@@ -847,7 +865,7 @@ def generate_tsne_plot(filepath, low_memory=True, sample_size=5000, perplexity=3
       save_tsne_plot(X_emb, labels, out_path, f"t-SNE: {base}") # Create and save plot
 
       try: # Try to delete DataFrame to free memory
-         del df # Free raw DataFrame
+         del numeric_df # Free numeric DataFrame
       except Exception: # Ignore any exceptions during deletion
          pass # Do nothing
       gc.collect() # Force garbage collection
