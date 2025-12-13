@@ -104,6 +104,7 @@ class BackgroundColors: # Colors for the terminal
 OUTPUT_DIR = f"./Results" # Directory to save results
 VERBOSE = False # Set to True for verbose output
 SAMPLE_SIZE = None # Set to an integer (e.g., 100000) to sample data for faster testing, None to use full dataset
+N_JOBS = -1 # Number of parallel jobs for GridSearchCV (-1 uses all processors)
 DATASETS = { # Dictionary containing dataset paths and feature files
 	"CICDDoS2019-Dataset": {
 		"train": "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv",
