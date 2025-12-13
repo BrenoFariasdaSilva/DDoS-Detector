@@ -12,12 +12,12 @@ Description :
 
    Behavior:
       - When attached to `sys.stdout`/`sys.stderr` the logger writes colored
-        output to the controlling terminal (when available) and a color-free
-        record to the specified log file.
+         output to the controlling terminal (when available) and a color-free
+         record to the specified log file.
       - ANSI escape sequences are removed from the file output using a
-        conservative regex; lines are flushed immediately to keep logs live.
+         conservative regex; lines are flushed immediately to keep logs live.
       - Provides minimal API: `write()`, `flush()` and `close()` so it can be
-        used as a drop-in replacement for `sys.stdout`.
+         used as a drop-in replacement for `sys.stdout`.
 
 Usage:
    from Logger import Logger
