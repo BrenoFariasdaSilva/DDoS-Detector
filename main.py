@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 ================================================================================
 Modular DDoS Detection Evaluation Framework (main.py)
