@@ -93,6 +93,7 @@ class BackgroundColors: # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False # Set to True to output verbose messages
+N_JOBS = -1 # Number of parallel jobs for GridSearchCV (-1 uses all processors)
 THREADS_LIMIT = 2 # Number of threads for parallel evaluation of individual classifiers
 FILES_TO_IGNORE = [""] # List of files to ignore during processing
 
