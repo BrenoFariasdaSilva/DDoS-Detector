@@ -147,9 +147,9 @@ def set_threads_limit_based_on_ram():
    
    ram_gb = psutil.virtual_memory().total / (1024 ** 3) # Get total system RAM in GB
    
-   if ram_gb <= 64: # If RAM is less than or equal to 64GB
+   if ram_gb <= 128: # If RAM is less than or equal to 128GB
       THREADS_LIMIT = 1 # Set THREADS_LIMIT to 1
-      verbose_output(f"{BackgroundColors.YELLOW}System RAM is {ram_gb:.1f}GB (<=64GB). Setting THREADS_LIMIT to 1.{Style.RESET_ALL}")   
+      verbose_output(f"{BackgroundColors.YELLOW}System RAM is {ram_gb:.1f}GB (<=128GB). Setting THREADS_LIMIT to 1.{Style.RESET_ALL}")   
 
 def verify_filepath_exists(filepath):
    """
