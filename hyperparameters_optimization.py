@@ -73,6 +73,7 @@ from sklearn.neighbors import KNeighborsClassifier, NearestCentroid # For k-near
 from sklearn.neural_network import MLPClassifier # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler # For label encoding and feature scaling
 from sklearn.svm import SVC # For Support Vector Machine model
+from thundersvm import SVC as ThunderSVC # For ThunderSVM classifier
 from tqdm import tqdm # For progress bars
 from xgboost import XGBClassifier # For XGBoost classifier
 
@@ -389,6 +390,52 @@ def get_feature_subset(X_scaled, features, feature_names):
    else: # If no features are selected (or features is None)
       return np.empty((X_scaled.shape[0], 0)) # Return an empty array with correct number of rows
 
+def get_thundersvm_estimator():
+   """
+   Return a ThunderSVM estimator if available. Prioritize GPU when available
+   (detected via `nvidia-smi`), otherwise configure ThunderSVM to use multiple
+   CPU threads. Fall back to sklearn's SVC if ThunderSVM is not installed.
+   """
+   
+   if "ThunderSVC" not in globals(): # If ThunderSVM is not imported
+      verbose_output(f"{BackgroundColors.YELLOW}ThunderSVM not installed; falling back to sklearn SVC.{Style.RESET_ALL}") # Verbose message
+      return SVC(random_state=42, probability=True) # Fallback to sklearn SVCw
+
+   # Detect GPU presence via nvidia-smi (best-effort)
+   gpu_available = False # Assume no GPU by default
+   try: # Try to run nvidia-smi
+      res = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, check=False) # Run nvidia-smi to check for GPUs
+      if res.returncode == 0 and res.stdout.strip(): # If command succeeded and output is non-empty
+         gpu_available = True # GPU is available
+   except Exception: # Any error means no GPU
+      gpu_available = False # GPU is not available
+
+   if gpu_available: # If a GPU is available
+      try: # Attempt to create ThunderSVM with GPU
+         clf = ThunderSVC(random_state=42, probability=True, gpu_id=0) # Try to use GPU with gpu_id=0
+         verbose_output(f"{BackgroundColors.GREEN}Using ThunderSVM on GPU (gpu_id=0).{Style.RESET_ALL}") # Verbose message
+         return clf # Return the GPU-enabled classifier
+      except TypeError: # Constructor may not accept gpu_id; fall back to default constructor
+         try: # Attempt default ThunderSVM constructor
+            clf = ThunderSVC(random_state=42, probability=True) # Default constructor (may auto-detect GPU)
+            verbose_output(f"{BackgroundColors.GREEN}Using ThunderSVM (GPU preferred) with default constructor.{Style.RESET_ALL}") # Verbose message
+            return clf # Return the classifier
+         except Exception: # Any error means fall back to CPU
+            pass # Fall through to CPU handling
+
+   cpu_threads = max(1, (os.cpu_count() or 2) - 1) # Use all but one CPU core if no GPU is available
+   for param in ("n_jobs", "nthread", "nthreads", "nproc", "threads"): # Try common ThunderSVM CPU thread parameters
+      try: # Attempt to create ThunderSVM with CPU threads
+         clf = ThunderSVC(random_state=42, probability=True, **{param: cpu_threads}) # Set CPU threads
+         verbose_output(f"{BackgroundColors.GREEN}Using ThunderSVM on CPU with {cpu_threads} threads ({param}).{Style.RESET_ALL}") # Verbose message
+         return clf # Return the CPU-enabled classifier
+      except Exception: # Any error means try next parameter
+         continue # Try next parameter
+
+   verbose_output(f"{BackgroundColors.YELLOW}Using ThunderSVM default CPU instantiation.{Style.RESET_ALL}") # Verbose message
+   
+   return ThunderSVC(random_state=42, probability=True) # Default CPU ThunderSVM
+
 def get_models_and_param_grids():
    """
    Returns a dictionary of models with their corresponding hyperparameter grids for GridSearchCV.
@@ -411,7 +458,7 @@ def get_models_and_param_grids():
          }
       ),
       "SVM": (
-         SVC(random_state=42, probability=True), # Enable probability estimates for SVC
+         get_thundersvm_estimator(), # ThunderSVM (GPU preferred) or fallback to sklearn SVC
          {
             "C": [0.1, 1, 10, 100], # Regularization parameter
             "kernel": ["linear", "rbf", "poly"], # Kernel type to be used in the algorithm
