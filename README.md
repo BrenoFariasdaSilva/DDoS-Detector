@@ -127,8 +127,8 @@ The `make` utility is used to automate tasks such as setting up the virtual envi
 `make` is usually pre-installed. If not:
 
 ```bash
-sudo apt install build-essential -y  # Debian/Ubuntu
-sudo dnf install make -y            # Fedora/RHEL
+sudo apt install build-essential -y # Debian/Ubuntu
+sudo dnf install make -y # Fedora/RHEL
 make --version
 ```
 
