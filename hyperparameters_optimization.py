@@ -58,6 +58,7 @@ import subprocess # WMIC call
 import sys # For system-specific parameters and functions
 import time # For measuring execution time
 import warnings # For suppressing warnings
+import concurrent.futures # For parallel execution with progress updates
 from collections import OrderedDict # For deterministic results column ordering when saving
 from colorama import Style # For coloring the terminal
 from itertools import product # For generating parameter combinations
@@ -730,36 +731,38 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
    
    verbose_output(f"{BackgroundColors.GREEN}Using {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} parallel workers (Available RAM: {BackgroundColors.CYAN}{available_memory_gb:.1f}GB{BackgroundColors.GREEN}, Dataset: {BackgroundColors.CYAN}{data_size_gb:.2f}GB{BackgroundColors.GREEN}){Style.RESET_ALL}")
    
-   results = Parallel( # Parallel processing of parameter combinations
-      n_jobs=safe_n_jobs, # Use calculated safe number of workers
-      verbose=0, # Suppress joblib verbose output
-      max_nbytes=MAX_PARALLEL_MEMORY, # Memory-map large arrays instead of copying
-      pre_dispatch=PRE_DISPATCH # Limit queued tasks to control RAM usage
-   )(
-      delayed(evaluate_single_combination)( # Evaluate single combination
-         clone(model), # Isolated model instance per worker
-         keys, # Hyperparameter names
-         combination, # Current hyperparameter values
-         X_train, # Training features (shared via mmap)
-         y_train # Training labels (shared via mmap)
-      )
-      for combination in param_combinations # Iterate all combinations
-   )
+   # Use ProcessPoolExecutor so we can update the tqdm progress bar as each job completes
+   with concurrent.futures.ProcessPoolExecutor(max_workers=safe_n_jobs) as executor:
+      future_to_params = {executor.submit(evaluate_single_combination, clone(model), keys, combination, X_train, y_train): combination for combination in param_combinations}
 
-   for idx, (current_params, score, elapsed) in enumerate(results, start=1): # Iterate through results
-      global_counter += 1 # Increment overall combination counter
+      for future in concurrent.futures.as_completed(future_to_params):
+         try:
+            current_params, score, elapsed = future.result()
+         except Exception as e:
+            # If a worker failed, record the params and continue
+            combo = future_to_params.get(future)
+            current_params = dict(zip(keys, combo)) if combo is not None else {}
+            score = None
+            elapsed = 0.0
 
-      update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=model_index, total_combinations=total_combinations_all_models, total_models=total_models, overall=global_counter) if progress_bar is not None and csv_path is not None else None # Update progress bar
+         global_counter += 1 # Increment overall combination counter
 
-      all_results.append(OrderedDict([("params", json.dumps(current_params)), ("score", score), ("execution_time", elapsed)])) # Store result
+         if progress_bar is not None and csv_path is not None:
+            update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=model_index, total_combinations=total_combinations_all_models, total_models=total_models, overall=global_counter)
+            try:
+               progress_bar.update(1)
+            except Exception:
+               pass
 
-      if score is not None: # If score is valid
-         current_best_elapsed = next((r["execution_time"] for r in all_results if r["score"] == best_score), float("inf")) if best_score != -float("inf") else float("inf") # Get elapsed time for current best score
-         if (score > best_score) or (score == best_score and elapsed < current_best_elapsed): # Verify for new best (higher score or same score but faster)
-            best_score = score # Update best score
-            best_params = current_params # Update best parameters
-            best_elapsed = elapsed # Save execution time for best params
-            verbose_output(f"{BackgroundColors.GREEN}New best score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}") # Log new best
+         all_results.append(OrderedDict([("params", json.dumps(current_params)), ("score", score), ("execution_time", elapsed)])) # Store result
+
+         if score is not None: # If score is valid
+            current_best_elapsed = next((r["execution_time"] for r in all_results if r["score"] == best_score), float("inf")) if best_score != -float("inf") else float("inf") # Get elapsed time for current best score
+            if (score > best_score) or (score == best_score and elapsed < current_best_elapsed): # Verify for new best (higher score or same score but faster)
+               best_score = score # Update best score
+               best_params = current_params # Update best parameters
+               best_elapsed = elapsed # Save execution time for best params
+               verbose_output(f"{BackgroundColors.GREEN}New best score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}") # Log new best
 
    return best_params, best_score, best_elapsed, all_results, global_counter # Return best results, elapsed for best, all combinations, and final global counter
 
