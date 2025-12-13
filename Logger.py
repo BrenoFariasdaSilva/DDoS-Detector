@@ -22,7 +22,7 @@ Description :
 Usage:
    from Logger import Logger
    logger = Logger("./Logs/myrun.log", clean=True)
-   sys.stdout = logger  # optional: redirect all prints to logger
+   sys.stdout = logger # optional: redirect all prints to logger
 
 Notes & TODOs:
    - Consider adding timestamps, log rotation, and JSON output format.
