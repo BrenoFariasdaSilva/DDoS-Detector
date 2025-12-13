@@ -581,16 +581,16 @@ def get_models():
 	verbose_output(f"{BackgroundColors.GREEN}Initializing models for training...{Style.RESET_ALL}") # Output the verbose message
 
 	return { # Dictionary of models to train
-		"Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
-		"SVM": SVC(kernel="rbf", probability=True, random_state=42),
-		"XGBoost": XGBClassifier(eval_metric="mlogloss", random_state=42),
-		"Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
-		"KNN": KNeighborsClassifier(n_neighbors=5),
-		"Nearest Centroid": NearestCentroid(),
-		"Gradient Boosting": GradientBoostingClassifier(random_state=42),
-		"LightGBM": lgb.LGBMClassifier(force_row_wise=True, min_gain_to_split=0.01, random_state=42, verbosity=-1),
-		"MLP (Neural Net)": MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=42),
-	}
+      "Random Forest": RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS),
+      "SVM": SVC(kernel="rbf", probability=True, random_state=42),
+      "XGBoost": XGBClassifier(eval_metric="mlogloss", random_state=42, n_jobs=N_JOBS),
+      "Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
+      "KNN": KNeighborsClassifier(n_neighbors=5, n_jobs=N_JOBS),
+      "Nearest Centroid": NearestCentroid(),
+      "Gradient Boosting": GradientBoostingClassifier(random_state=42),
+      "LightGBM": lgb.LGBMClassifier(force_row_wise=True, min_gain_to_split=0.01, random_state=42, verbosity=-1, n_jobs=N_JOBS),
+      "MLP (Neural Net)": MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=42),
+   }
 
 def extract_hyperparameter_optimization_results(csv_path):
    """
@@ -1116,7 +1116,7 @@ def main():
 
             estimators = [(name, model) for name, model in base_models.items() if name != "SVM"] # Define estimators (excluding SVM)
             
-            stacking_model = StackingClassifier(estimators=estimators, final_estimator=RandomForestClassifier(n_estimators=50, random_state=42), cv=5, n_jobs=1) # Define the Stacking Classifier model
+            stacking_model = StackingClassifier(estimators=estimators, final_estimator=RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=N_JOBS), cv=5, n_jobs=N_JOBS) # Define the Stacking Classifier model
             
             X_train_pca, X_test_pca = apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file) # Apply PCA transformation if applicable
             
