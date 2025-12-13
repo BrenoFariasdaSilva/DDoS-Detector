@@ -73,7 +73,13 @@ from sklearn.neighbors import KNeighborsClassifier, NearestCentroid # For k-near
 from sklearn.neural_network import MLPClassifier # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler # For label encoding and feature scaling
 from sklearn.svm import SVC # For Support Vector Machine model
-from thundersvm import SVC as ThunderSVC # For ThunderSVM classifier
+try: # Attempt to import ThunderSVM
+   from thundersvm import SVC as ThunderSVC # For ThunderSVM classifier
+   THUNDERSVM_AVAILABLE = True # Flag indicating ThunderSVM is available
+except Exception as _th_err: # Import failed
+   ThunderSVC = None # ThunderSVM not available
+   THUNDERSVM_AVAILABLE = False
+   print(f"Warning: ThunderSVM import failed ({type(_th_err).__name__}: {_th_err}). Falling back to sklearn.SVC.")
 from tqdm import tqdm # For progress bars
 from xgboost import XGBClassifier # For XGBoost classifier
 
@@ -390,6 +396,25 @@ def get_feature_subset(X_scaled, features, feature_names):
    else: # If no features are selected (or features is None)
       return np.empty((X_scaled.shape[0], 0)) # Return an empty array with correct number of rows
 
+def detect_gpu_info():
+   """
+   Detect GPU brand/model using `nvidia-smi` (best-effort).
+
+   :return: String with GPU brand/model (e.g., 'NVIDIA GeForce RTX 2080 Ti') or None if not detected
+   """
+
+   try: # Try to detect GPU info via nvidia-smi
+      res = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, check=False) # Run nvidia-smi to get GPU list
+      if res.returncode == 0 and res.stdout.strip(): # If command succeeded and output is non-empty
+         first = res.stdout.strip().splitlines()[0] # Get the first line of output
+         if ":" in first: # If the line contains a colon
+            info = first.split(":", 1)[1].strip() # Extract GPU info after the colon
+            return info.split("(")[0].strip() # Clean up info (remove parentheses)
+   except Exception: # Any error means no GPU info
+      return None # GPU info is not available
+
+   return None # GPU info is not available
+
 def get_thundersvm_estimator():
    """
    Return a ThunderSVM estimator if available. Prioritize GPU when available
@@ -397,11 +422,16 @@ def get_thundersvm_estimator():
    CPU threads. Fall back to sklearn's SVC if ThunderSVM is not installed.
    """
    
-   if "ThunderSVC" not in globals(): # If ThunderSVM is not imported
-      verbose_output(f"{BackgroundColors.YELLOW}ThunderSVM not installed; falling back to sklearn SVC.{Style.RESET_ALL}") # Verbose message
-      return SVC(random_state=42, probability=True) # Fallback to sklearn SVCw
+   if not THUNDERSVM_AVAILABLE: # If ThunderSVM is not available
+      gpu_info = detect_gpu_info() # Best-effort GPU brand/model detection
 
-   # Detect GPU presence via nvidia-smi (best-effort)
+      if gpu_info: # If GPU info was detected
+         print(f"{BackgroundColors.YELLOW}ThunderSVM not available; falling back to sklearn.SVC. GPU detected: {BackgroundColors.CYAN}{gpu_info}{Style.RESET_ALL}")
+      else: # If no GPU info was detected
+         print(f"{BackgroundColors.YELLOW}ThunderSVM not available; falling back to sklearn.SVC.{Style.RESET_ALL}")
+
+      return SVC(random_state=42, probability=True) # Return sklearn's SVC as fallback
+
    gpu_available = False # Assume no GPU by default
    try: # Try to run nvidia-smi
       res = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, check=False) # Run nvidia-smi to check for GPUs
