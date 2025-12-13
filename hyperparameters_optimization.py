@@ -61,8 +61,10 @@ import warnings # For suppressing warnings
 from collections import OrderedDict # For deterministic results column ordering when saving
 from colorama import Style # For coloring the terminal
 from itertools import product # For generating parameter combinations
+from joblib import Parallel, delayed # For parallel processing of parameter combinations
 from Logger import Logger # For logging output to both terminal and file
 from pathlib import Path # For handling file paths
+from sklearn.base import clone # Import necessary modules for cloning
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier # For ensemble models
 from sklearn.linear_model import LogisticRegression # For logistic regression model
 from sklearn.metrics import make_scorer, f1_score # For custom scoring metrics
@@ -90,7 +92,9 @@ class BackgroundColors: # Colors for the terminal
 # Execution Constants:
 VERBOSE = False # Set to True to output verbose messages
 CV_FOLDS = 5 # Number of cross-validation folds for GridSearchCV
-N_JOBS = -1 # Number of parallel jobs for GridSearchCV (-1 uses all processors)
+N_JOBS = -2 # Number of parallel jobs (-1 uses all cores, -2 leaves one core free, or set specific number like 4)
+MAX_PARALLEL_MEMORY = '1G' # Maximum memory per joblib worker (e.g., '500M', '1G') to prevent excessive RAM usage
+PRE_DISPATCH = '2*n_jobs' # Number of batches to pre-dispatch to workers (controls memory usage)
 RESULTS_FILENAME = "Hyperparameter_Optimization_Results.csv" # Filename for saving results
 MATCH_FILENAMES_TO_PROCESS = [""] # List of specific filenames to search for a match (set to None to process all files)
 IGNORE_FILES = [RESULTS_FILENAME] # List of filenames to ignore when searching for datasets
@@ -567,9 +571,42 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_g
 
    except Exception: pass # Silently ignore any errors during update
 
+def evaluate_single_combination(model, keys, combination, X_train, y_train):
+   """
+   Helper function to evaluate a single parameter combination.
+   Designed to be called in parallel via joblib with memory safety.
+
+   :param model: Clone of the model instance
+   :param keys: Parameter names
+   :param combination: Parameter values for this combination
+   :param X_train: Training features
+   :param y_train: Training labels
+   :return: Tuple (current_params, score, elapsed)
+   """
+   
+   current_params = dict(zip(keys, combination)) # Build dict of current params
+   start_time = time.time() # Start timing
+   
+   try: # Try to train and evaluate
+      model.set_params(**current_params) # Apply hyperparameters
+      model.fit(X_train, y_train) # Train model
+      y_pred = model.predict(X_train) # Predict on training set
+      score = f1_score(y_train, y_pred, average="weighted") # Compute weighted F1 score
+   except MemoryError: # Catch memory errors specifically
+      print(f"{BackgroundColors.RED}MemoryError with params {current_params}. Consider reducing dataset size or n_jobs.{Style.RESET_ALL}")
+      score = None # Mark score as None
+   except Exception as e: # Catch any other errors during training/evaluation
+      score = None # Mark score as None
+   
+   elapsed = time.time() - start_time # Measure execution time
+   
+   return current_params, score, elapsed # Return results
+
 def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress_bar=None, csv_path=None, global_counter_start=0, total_combinations_all_models=None, model_index=None, total_models=None):
    """
    Performs manual grid search hyperparameter optimization with integrated progress bar.
+   Uses parallel processing via joblib to evaluate parameter combinations simultaneously,
+   significantly speeding up optimization for all classifiers.
 
    Updates the progress bar description and counter for each parameter combination
    tested, showing both the current combination index of this model and the
@@ -588,7 +625,7 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
    :return: Tuple (best_params, best_score, all_results, global_counter_end)
    """
 
-   verbose_output(f"{BackgroundColors.GREEN}Manually optimizing {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}...{Style.RESET_ALL}") # Output the verbose message
+   verbose_output(f"{BackgroundColors.GREEN}Manually optimizing {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN} using parallel processing...{Style.RESET_ALL}") # Output the verbose message
 
    if not param_grid: return None, None, None, global_counter_start # No hyperparameters to optimize
 
@@ -602,32 +639,42 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
    best_elapsed = 0.0 # Execution time for best parameters (seconds)
    all_results = [] # Store results for all combinations
    global_counter = global_counter_start # Initialize global counter
+   
+   available_memory_gb = psutil.virtual_memory().available / (1024**3) # Available RAM in GB
+   data_size_gb = (X_train.nbytes + y_train.nbytes) / (1024**3) # Dataset size in GB
+   
+   estimated_memory_per_worker = data_size_gb * 2 # 2x for model overhead
+   safe_n_jobs = max(1, min(abs(N_JOBS) if N_JOBS < 0 else N_JOBS, int(available_memory_gb / max(0.5, estimated_memory_per_worker)))) # Calculate safe n_jobs based on memory
+   
+   if N_JOBS == -2: # Leave one core free
+      safe_n_jobs = min(safe_n_jobs, max(1, psutil.cpu_count(logical=False) - 1)) # Use all but one physical core
+   elif N_JOBS == -1: # Use all cores but still respect memory limits
+      safe_n_jobs = min(safe_n_jobs, psutil.cpu_count(logical=False)) # Use all physical cores
+   
+   verbose_output(f"{BackgroundColors.GREEN}Using {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} parallel workers (Available RAM: {BackgroundColors.CYAN}{available_memory_gb:.1f}GB{BackgroundColors.GREEN}, Dataset: {BackgroundColors.CYAN}{data_size_gb:.2f}GB{BackgroundColors.GREEN}){Style.RESET_ALL}")
+   
+   results = Parallel( # Parallel processing of parameter combinations
+      n_jobs=safe_n_jobs, # Use calculated safe number of workers
+      verbose=0, # Suppress joblib verbose output
+      max_nbytes=MAX_PARALLEL_MEMORY, # Memory-map large arrays instead of copying
+      pre_dispatch=PRE_DISPATCH # Limit queued tasks to control RAM usage
+   )(
+      delayed(evaluate_single_combination)( # Evaluate single combination
+         clone(model), # Isolated model instance per worker
+         keys, # Hyperparameter names
+         combination, # Current hyperparameter values
+         X_train, # Training features (shared via mmap)
+         y_train # Training labels (shared via mmap)
+      )
+      for combination in param_combinations # Iterate all combinations
+   )
 
-   for idx, combination in enumerate(param_combinations, start=1): # Iterate all parameter combinations
-      current_params = dict(zip(keys, combination)) # Build dict of current params
+   for idx, (current_params, score, elapsed) in enumerate(results, start=1): # Iterate through results
       global_counter += 1 # Increment overall combination counter
 
       update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=model_index, total_combinations=total_combinations_all_models, total_models=total_models, overall=global_counter) if progress_bar is not None and csv_path is not None else None # Update progress bar
 
-      start_time = time.time() # Start timing
-
-      try: # Try to train and evaluate
-         model.set_params(**current_params) # Apply hyperparameters
-         model.fit(X_train, y_train) # Train model
-         y_pred = model.predict(X_train) # Predict on training set
-         score = f1_score(y_train, y_pred, average="weighted") # Compute weighted F1 score
-
-      except Exception as e: # Catch any errors during training/evaluation
-         print(f"{BackgroundColors.RED}Error with params {current_params}: {e}{Style.RESET_ALL}") # Log error
-         score = None # Mark score as None
-
-      elapsed = time.time() - start_time # Measure execution time
-
-      all_results.append(OrderedDict([ # Append results
-         ("params", json.dumps(current_params)), # Parameter combination
-         ("score", score), # F1 score
-         ("execution_time", elapsed) # Time in seconds
-      ]))
+      all_results.append(OrderedDict([("params", json.dumps(current_params)), ("score", score), ("execution_time", elapsed)])) # Store result
 
       if score is not None: # If score is valid
          current_best_elapsed = next((r["execution_time"] for r in all_results if r["score"] == best_score), float("inf")) if best_score != -float("inf") else float("inf") # Get elapsed time for current best score
