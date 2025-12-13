@@ -31,12 +31,13 @@ ENSURE_LOG_DIR := @mkdir -p $(LOG_DIR) 2>/dev/null || $(PYTHON_CMD) -c "import o
 ifeq ($(OS), Windows) # Windows
 RUN_AND_LOG = $(PYTHON) $(1)
 else
-RUN_AND_LOG = \ # Unix-like
+RUN_AND_LOG = \
 if [ -z "$(DETACH)" ]; then \
 	$(PYTHON) $(1); \
 else \
 	LOG_FILE=$(LOG_DIR)/$$(basename $(1) .py).log; \
-	nohup $(PYTHON) $(1) > $$LOG_FILE 2>&1 & \
+	nohup $(PYTHON) $(1) >/dev/null 2>&1 & \
+	sleep 2; \
 	tail -f $$LOG_FILE; \
 fi
 endif
