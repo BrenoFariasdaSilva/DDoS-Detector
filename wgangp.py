@@ -18,11 +18,11 @@ Description :
 		- Support for multi-class conditional generation
 
 Usage:
-	1. Prepare a CSV file with network flow features and labels.
-	2. Train the model using the train mode:
-			$ python wgangp.py --mode train --csv_path data.csv --epochs 60
-	3. Generate synthetic samples using a trained checkpoint:
-			$ python wgangp.py --mode gen --checkpoint outputs/generator_epoch60.pt --n_samples 1000
+   1. Prepare a CSV file with network flow features and labels.
+   2. Train the model using the train mode:
+      $ python wgangp.py --mode train --csv_path data.csv --epochs 60
+   3. Generate synthetic samples using a trained checkpoint:
+      $ python wgangp.py --mode gen --checkpoint outputs/generator_epoch60.pt --n_samples 1000
 
 Outputs:
 	- outputs/generator_epoch*.pt — Saved generator checkpoints with metadata
@@ -49,8 +49,6 @@ Assumptions & Notes:
 	- Labels are encoded via LabelEncoder (categorical to integer)
 	- Output features are inverse-transformed to original scale
 	- CUDA is used if available; use --force_cpu to disable
-
-================================================================================
 """
 
 import argparse # For CLI argument parsing
