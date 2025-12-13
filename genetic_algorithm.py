@@ -87,6 +87,7 @@ VERBOSE = False # Set to True to output verbose messages
 RUNS = 5 # Number of runs for Genetic Algorithm analysis
 EARLY_STOP_ACC_THRESHOLD = 0.75 # Minimum acceptable accuracy for an individual
 EARLY_STOP_FOLDS = 3 # Number of folds to check before early stopping
+N_JOBS = -1 # Number of parallel jobs for GridSearchCV (-1 uses all processors)
 CPU_PROCESSES = 1 # Initial number of worker processes; can be updated by monitor
 FILES_TO_IGNORE = [""] # List of files to ignore during processing
 GA_GENERATIONS_COMPLETED = 0 # Updated by GA loop to inform monitor when some generations have run
