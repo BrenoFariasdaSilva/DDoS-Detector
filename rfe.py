@@ -211,7 +211,7 @@ def run_rfe_selector(X_train, y_train, n_select=10, random_state=42):
    :return: selector (fitted RFE object)
    """
 
-   model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=-1) # Initialize the Random Forest model
+   model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=N_JOBS) # Initialize the Random Forest model
    n_features = X_train.shape[1] # Get the number of features
    n_select = n_select if n_features >= n_select else n_features # Adjust n_select if more than available features
 
@@ -239,7 +239,7 @@ def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state
    X_train_selected = X_train[:, support] # Select training features
    X_test_selected = X_test[:, support] # Select testing features
 
-   model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=-1) # Initialize the model
+   model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=N_JOBS) # Initialize the model
 
    start_time = time.time() # Start time measurement
    model.fit(X_train_selected, y_train) # Fit the model on selected features
