@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 ================================================================================
 Genetic Algorithm Feature Selection (genetic_algorithm.py)
