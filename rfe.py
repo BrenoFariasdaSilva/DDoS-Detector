@@ -78,6 +78,7 @@ class BackgroundColors: # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False # Set to True to output verbose messages
+N_JOBS = -1 # Number of parallel jobs for GridSearchCV (-1 uses all processors)
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True) # Create a Logger instance
