@@ -421,15 +421,15 @@ def get_models():
 	verbose_output(f"{BackgroundColors.GREEN}Initializing models for training...{Style.RESET_ALL}") # Output the verbose message
 
 	return { # Dictionary of models to train
-		"Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
-		"SVM": SVC(kernel="rbf", probability=True, random_state=42),
-		"XGBoost": XGBClassifier(eval_metric="mlogloss", random_state=42),
-		"Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
-		"KNN": KNeighborsClassifier(n_neighbors=5),
-		"Nearest Centroid": NearestCentroid(),
-		"Gradient Boosting": GradientBoostingClassifier(random_state=42),
-		"LightGBM": lgb.LGBMClassifier(force_row_wise=True, min_gain_to_split=0.01, random_state=42, verbosity=-1),
-		"MLP (Neural Net)": MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=42),
+		"Random Forest": RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS),
+      "SVM": SVC(kernel="rbf", probability=True, random_state=42),
+      "XGBoost": XGBClassifier(eval_metric="mlogloss", random_state=42, n_jobs=N_JOBS),
+      "Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
+      "KNN": KNeighborsClassifier(n_neighbors=5, n_jobs=N_JOBS),
+      "Nearest Centroid": NearestCentroid(),
+      "Gradient Boosting": GradientBoostingClassifier(random_state=42),
+      "LightGBM": lgb.LGBMClassifier(force_row_wise=True, min_gain_to_split=0.01, random_state=42, verbosity=-1, n_jobs=N_JOBS),
+      "MLP (Neural Net)": MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=42),
 		# "Few-Shot Learning": FewShotLearning(),
 		# "Contrastive Learning": ContrastiveLearning()
 	}
