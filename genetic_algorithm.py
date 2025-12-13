@@ -581,7 +581,7 @@ def print_ga_parameters(min_pop, max_pop, n_generations, feature_count):
    print(f"  {BackgroundColors.GREEN}Mutation probability: {BackgroundColors.CYAN}0.05{Style.RESET_ALL}")
    print(f"  {BackgroundColors.GREEN}Tournament size: {BackgroundColors.CYAN}3{Style.RESET_ALL}")
    print(f"  {BackgroundColors.GREEN}Fitness evaluation: {BackgroundColors.CYAN}10-fold Stratified CV on training set{Style.RESET_ALL}")
-   print(f"  {BackgroundColors.GREEN}Base estimator: {BackgroundColors.CYAN}RandomForestClassifier (n_estimators=100, n_jobs=1){Style.RESET_ALL}")
+   print(f"  {BackgroundColors.GREEN}Base estimator: {BackgroundColors.CYAN}RandomForestClassifier (n_estimators=100, n_jobs={N_JOBS}){Style.RESET_ALL}")
    print(f"  {BackgroundColors.GREEN}Optimization goal: {BackgroundColors.CYAN}Maximize F1-Score{Style.RESET_ALL}")
    print("") # Empty line for spacing
 
@@ -668,12 +668,12 @@ def instantiate_estimator(estimator_cls=None):
    """
 
    if estimator_cls is None: # If no estimator class is provided
-      return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=1) # Return a default RandomForestClassifier
+      return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS) # Return a default RandomForestClassifier
 
    try: # Try to instantiate the provided estimator class
       return estimator_cls() # Instantiate with default parameters
    except Exception: # If instantiation fails
-      return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=1) # Fallback to default RandomForestClassifier
+      return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS) # Fallback to default RandomForestClassifier
 
 def evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_cls=None, progress_bar=None, dataset_name=None, csv_path=None, pop_size=None, max_pop=None, gen=None, n_generations=None, run=None, runs=None, progress_state=None):
    """
