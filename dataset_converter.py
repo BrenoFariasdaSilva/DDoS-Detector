@@ -23,7 +23,7 @@ Defaults & Behavior:
 
 Usage:
    - Run interactively:
-       python3 dataset_converter.py
+      python3 dataset_converter.py
    - Or pass CLI args: `-i/--input`, `-o/--output`, `-f/--formats`, `-v/--verbose`
 
 Dependencies (non-exhaustive):
