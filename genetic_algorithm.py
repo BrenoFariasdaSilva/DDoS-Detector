@@ -1264,7 +1264,7 @@ def plot_ga_convergence(csv_path, pop_size, run, fitness_history, dataset_name=N
       plt.plot(gens, fitness_history, marker="o", linestyle="-", color="#1f77b4") # Plot the fitness history
       plt.xlabel("Generation") # X-axis label
       plt.ylabel("Best F1-Score") # Y-axis label
-      plt.title(f"GA Convergence - {base_dataset_name} (pop={pop_size}, run={run})") # Title
+      plt.title(f"GA Convergence - {base_dataset_name} (run={run}, pop={pop_size}, cx={cxpb}, mut={mutpb})") # Title
       plt.grid(True, linestyle="--", alpha=0.5) # Grid
       plt.tight_layout() # Adjust layout
       plt.savefig(fig_path, dpi=150) # Save the figure
