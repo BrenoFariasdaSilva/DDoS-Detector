@@ -46,6 +46,7 @@ Assumptions & Notes:
 """
 
 import atexit # For playing a sound when the program finishes
+import concurrent.futures # For parallel execution with progress updates
 import datetime # For getting the current date and time
 import json # For handling JSON strings
 import lightgbm as lgb # For LightGBM model
@@ -54,11 +55,14 @@ import os # For running a command in the terminal
 import pandas as pd # For data manipulation
 import platform # For getting the operating system name
 import psutil # RAM and CPU core info
+import shutil # For file operations
+import statistics # For calculating statistics
 import subprocess # WMIC call
 import sys # For system-specific parameters and functions
+import tempfile # For creating temporary files and directories
+import threading # For threading operations
 import time # For measuring execution time
 import warnings # For suppressing warnings
-import concurrent.futures # For parallel execution with progress updates
 from collections import OrderedDict # For deterministic results column ordering when saving
 from colorama import Style # For coloring the terminal
 from itertools import product # For generating parameter combinations
@@ -680,6 +684,63 @@ def evaluate_single_combination(model, keys, combination, X_train, y_train):
    
    return current_params, score, elapsed # Return results
 
+def evaluate_single_combination_from_files(model, keys, combination, X_path, y_path):
+   """
+   Worker wrapper that loads X/y from disk using mmap and calls
+   `evaluate_single_combination`. This avoids copying large arrays
+   into each worker process when using ProcessPoolExecutor.
+   """
+   
+   try: # Try to load data with memory mapping
+      X = np.load(X_path, mmap_mode="r") # Load features
+      y = np.load(y_path, mmap_mode="r") # Load labels
+   except Exception: # Catch any loading errors
+      current_params = dict(zip(keys, combination)) # Build dict of current params
+      return current_params, None, 0.0 # Return failure result
+
+   return evaluate_single_combination(model, keys, combination, X, y) # Call evaluation function
+
+def measure_resource_usage_for_combination(model, keys, combination, X, y, sample_interval=0.1):
+   """
+   Run a single parameter combination and sample memory and CPU usage
+   in a background thread. Returns peak memory (bytes) and average CPU percent.
+   """
+   
+   proc = psutil.Process(os.getpid()) # Current process
+   mem_samples = [] # Memory usage samples
+   cpu_samples = [] # CPU usage samples
+   stop_evt = threading.Event() # Event to stop monitoring thread
+
+   def monitor(): # Monitoring thread function
+      try: # Try to monitor resources
+         psutil.cpu_percent(interval=None) # Initialize CPU percent measurement
+         while not stop_evt.is_set(): # Loop until stop event is set
+            try: # Try to sample memory and CPU
+               mem_samples.append(proc.memory_info().rss) # Sample memory usage (RSS)
+               cpu_samples.append(psutil.cpu_percent(interval=sample_interval)) # Sample CPU percent
+            except Exception: # Catch sampling errors
+               break # Exit monitoring loop on error
+      except Exception: # Catch initialization errors
+         return # Exit monitoring thread on error
+
+   t = threading.Thread(target=monitor, daemon=True) # Start monitoring thread
+   t.start() # Start the thread
+
+   start = time.time() # Start timing
+   try: # Try to run the model with the parameter combination
+      model.set_params(**dict(zip(keys, combination))) # Apply hyperparameters
+      model.fit(X, y) # Train model
+   except Exception: # Catch any errors during training
+      pass # Ignore errors for resource measurement
+   finally: # Ensure monitoring thread is stopped
+      stop_evt.set() # Signal monitoring thread to stop
+      t.join(timeout=1.0) # Wait for thread to finish
+
+   elapsed = time.time() - start # Measure execution time
+   peak_mem = max(mem_samples) if mem_samples else proc.memory_info().rss # Peak memory usage
+   avg_cpu = statistics.mean(cpu_samples) if cpu_samples else 0.0 # Average CPU percent
+   return peak_mem, avg_cpu, elapsed # Return resource usage metrics
+
 def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress_bar=None, csv_path=None, global_counter_start=0, total_combinations_all_models=None, model_index=None, total_models=None):
    """
    Performs manual grid search hyperparameter optimization with integrated progress bar.
@@ -731,38 +792,76 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
    
    verbose_output(f"{BackgroundColors.GREEN}Using {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} parallel workers (Available RAM: {BackgroundColors.CYAN}{available_memory_gb:.1f}GB{BackgroundColors.GREEN}, Dataset: {BackgroundColors.CYAN}{data_size_gb:.2f}GB{BackgroundColors.GREEN}){Style.RESET_ALL}")
    
-   # Use ProcessPoolExecutor so we can update the tqdm progress bar as each job completes
-   with concurrent.futures.ProcessPoolExecutor(max_workers=safe_n_jobs) as executor:
-      future_to_params = {executor.submit(evaluate_single_combination, clone(model), keys, combination, X_train, y_train): combination for combination in param_combinations}
+   try: # Benchmark one combination to refine n_jobs based on actual resource usage
+      if len(param_combinations) > 1: # Only benchmark if multiple combinations exist
+         verbose_output(f"{BackgroundColors.GREEN}Benchmarking one parameter combination to estimate resource usage...{Style.RESET_ALL}")
+         sample_combo = param_combinations[0] # Take the first combination as a sample
+         peak_mem_bytes, avg_cpu_percent, sample_elapsed = measure_resource_usage_for_combination(clone(model), keys, sample_combo, X_train, y_train) # Measure resource usage
+         per_worker_mem_gb = max(0.05, peak_mem_bytes / (1024**3)) * 1.15 # Safety Margin
+         cores_per_worker = max(0.05, avg_cpu_percent / 100.0) # Estimate cores per worker
 
-      for future in concurrent.futures.as_completed(future_to_params):
-         try:
-            current_params, score, elapsed = future.result()
-         except Exception as e:
-            # If a worker failed, record the params and continue
-            combo = future_to_params.get(future)
-            current_params = dict(zip(keys, combo)) if combo is not None else {}
-            score = None
-            elapsed = 0.0
+         try: # Calculate max workers based on CPU cores
+            max_workers_cpu = max(1, int(psutil.cpu_count(logical=False) / cores_per_worker)) # Physical cores only
+         except Exception: # Fallback on error
+            max_workers_cpu = max(1, psutil.cpu_count(logical=False)) # Use all physical cores
+         max_workers_mem = max(1, int(available_memory_gb / max(0.05, per_worker_mem_gb))) # Calculate max workers based on memory
 
-         global_counter += 1 # Increment overall combination counter
+         computed_safe = min(max_workers_cpu, max_workers_mem) # Compute safe n_jobs based on both CPU and memory
 
-         if progress_bar is not None and csv_path is not None:
-            update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=model_index, total_combinations=total_combinations_all_models, total_models=total_models, overall=global_counter)
-            try:
-               progress_bar.update(1)
-            except Exception:
-               pass
+         if isinstance(N_JOBS, int) and N_JOBS > 0: # If N_JOBS is a positive integer
+            computed_safe = min(computed_safe, N_JOBS) # Limit to N_JOBS
+         elif N_JOBS == -2: # Leave one core free
+            computed_safe = min(computed_safe, max(1, psutil.cpu_count(logical=False) - 1)) # Use all but one physical core
+         elif N_JOBS == -1: # Use all cores but still respect memory limits
+            computed_safe = min(computed_safe, psutil.cpu_count(logical=False)) # Use all physical cores
 
-         all_results.append(OrderedDict([("params", json.dumps(current_params)), ("score", score), ("execution_time", elapsed)])) # Store result
+         safe_n_jobs = max(1, int(computed_safe)) # Final safe n_jobs
+         verbose_output(f"{BackgroundColors.GREEN}Estimated per-worker memory: {BackgroundColors.CYAN}{per_worker_mem_gb:.2f}GB{BackgroundColors.GREEN}, avg CPU%: {BackgroundColors.CYAN}{avg_cpu_percent:.1f}%{BackgroundColors.GREEN}. Using {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} workers.{Style.RESET_ALL}")
+   except Exception: # If benchmarking fails, continue with previous safe_n_jobs calculation
+      pass # Ignore benchmarking errors
 
-         if score is not None: # If score is valid
-            current_best_elapsed = next((r["execution_time"] for r in all_results if r["score"] == best_score), float("inf")) if best_score != -float("inf") else float("inf") # Get elapsed time for current best score
-            if (score > best_score) or (score == best_score and elapsed < current_best_elapsed): # Verify for new best (higher score or same score but faster)
-               best_score = score # Update best score
-               best_params = current_params # Update best parameters
-               best_elapsed = elapsed # Save execution time for best params
-               verbose_output(f"{BackgroundColors.GREEN}New best score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}") # Log new best
+   tmp_dir = tempfile.mkdtemp(prefix="hpopt_") # Temporary directory for memory-mapped files
+   X_path = os.path.join(tmp_dir, "X_train.npy") # Path for X_train
+   y_path = os.path.join(tmp_dir, "y_train.npy") # Path for y_train
+   try: # Ensure temporary files are cleaned up
+      np.save(X_path, X_train) # Save X_train to disk
+      np.save(y_path, y_train) # Save y_train to disk
+
+      with concurrent.futures.ProcessPoolExecutor(max_workers=safe_n_jobs) as executor: # Use ProcessPoolExecutor for parallel evaluation
+         future_to_params = {executor.submit(evaluate_single_combination_from_files, clone(model), keys, combination, X_path, y_path): combination for combination in param_combinations} # Submit all combinations
+
+         for future in concurrent.futures.as_completed(future_to_params): # Iterate as each future completes
+            try: # Try to get result
+               current_params, score, elapsed = future.result() # Get result from future
+            except Exception: # Catch any errors from the worker
+               combo = future_to_params.get(future) # Get the combination that caused the error
+               current_params = dict(zip(keys, combo)) if combo is not None else {} # Build current params dict
+               score = None # Mark score as None
+               elapsed = 0.0 # Mark elapsed as 0.0
+
+            global_counter += 1 # Increment overall combination counter
+
+            if progress_bar is not None and csv_path is not None: # Update progress bar if available
+               update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=model_index, total_combinations=total_combinations_all_models, total_models=total_models, overall=global_counter) # Update progress bar description
+               try: # Safely update progress bar
+                  progress_bar.update(1) # Increment progress bar
+               except Exception: # Ignore progress bar update errors
+                  pass # Ignore errors
+
+            all_results.append(OrderedDict([("params", json.dumps(current_params)), ("score", score), ("execution_time", elapsed)])) # Store result
+
+            if score is not None: # If score is valid
+               current_best_elapsed = next((r["execution_time"] for r in all_results if r["score"] == best_score), float("inf")) if best_score != -float("inf") else float("inf") # Get elapsed time for current best score
+               if (score > best_score) or (score == best_score and elapsed < current_best_elapsed): # Verify for new best (higher score or same score but faster)
+                  best_score = score # Update best score
+                  best_params = current_params # Update best parameters
+                  best_elapsed = elapsed # Save execution time for best params
+                  verbose_output(f"{BackgroundColors.GREEN}New best score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}") # Log new best
+   finally: # Cleanup temporary directory
+      try: # Remove temporary directory and files
+         shutil.rmtree(tmp_dir) # Delete temporary directory
+      except Exception: # Ignore cleanup errors
+         pass # Ignore errors during cleanup
 
    return best_params, best_score, best_elapsed, all_results, global_counter # Return best results, elapsed for best, all combinations, and final global counter
 
