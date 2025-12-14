@@ -1060,7 +1060,7 @@ def extract_elapsed_from_metrics(metrics, index=6):
    
    return None # Return None if extraction fails
 
-def build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking, elapsed_time_s=None):
+def build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking, elapsed_time_s=None, cxpb=None, mutpb=None):
    """
    Build the base dictionary row used for the consolidated GA CSV output.
 
@@ -1077,13 +1077,15 @@ def build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test
    return { # Base row for CSV
       "dataset": os.path.splitext(os.path.basename(csv_path))[0], # Dataset name
       "dataset_path": csv_path, # Dataset path
+      "run_index": "best", # Indicates best run
       "population_size": best_pop_size, # Population size
       "n_generations": n_generations, # Number of generations
+      "cxpb": cxpb, # Crossover probability used in GA
+      "mutpb": mutpb, # Mutation probability used in GA
       "n_train": n_train, # Number of training samples
       "n_test": n_test, # Number of testing samples
       "train_test_ratio": test_frac, # Train/test fraction
       "elapsed_time_s": int(round(elapsed_time_s)) if elapsed_time_s is not None else None, # Elapsed seconds for best-model training
-      "run_index": "best", # Indicates best run
       "rfe_ranking": json.dumps(rfe_ranking, ensure_ascii=False) # RFE ranking as JSON string
    }
 
@@ -1375,13 +1377,15 @@ def write_consolidated_csv(rows, output_dir):
       columns = [ # Define canonical column order for the consolidated CSV
          "dataset",
          "dataset_path",
+         "run_index",
          "population_size",
          "n_generations",
+         "cxpb",
+         "mutpb",
          "n_train",
          "n_test",
          "train_test_ratio",
          "hardware",
-         "run_index",
          "classifier",
          "accuracy",
          "precision",
@@ -1425,7 +1429,7 @@ def prepare_feature_dataframe(X, feature_names):
       
    return df_features # Return the prepared DataFrame
 
-def save_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=None, y_test=None, n_generations=None, best_pop_size=None, runs_list=None):
+def save_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=None, y_test=None, n_generations=None, best_pop_size=None, runs_list=None, cxpb=None, mutpb=None):
    """
    Persist the GA best-result information to disk (consolidated CSV and auxiliary files).
 
@@ -1482,7 +1486,7 @@ def save_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=N
 
    elapsed_for_base = extract_elapsed_from_metrics(rf_metrics)
 
-   base_row = build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking, elapsed_time_s=elapsed_for_base) # Base row for CSV
+   base_row = build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking, elapsed_time_s=elapsed_for_base, cxpb=cxpb, mutpb=mutpb) # Base row for CSV
    rows = build_rows_list(rf_metrics, best_features, runs_list, feature_names, base_row) # Build rows from metrics and runs
    write_consolidated_csv(rows, output_dir) # Persist consolidated CSV
 
@@ -1729,7 +1733,7 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=200, min_pop
       best_run = max(runs_list, key=lambda r: r["metrics"][3]) # Select the run with the best F1-Score
       best_ind = best_run["best_ind"] # Get the best individual from the best run
       best_metrics = best_run["metrics"] # Get the metrics from the best run
-      saved = save_results(best_ind, feature_names, X_train, y_train, csv_path, metrics=best_metrics, X_test=X_test, y_test=y_test, n_generations=n_generations, best_pop_size=best_pop_size, runs_list=runs_list) # Save the best results
+      saved = save_results(best_ind, feature_names, X_train, y_train, csv_path, metrics=best_metrics, X_test=X_test, y_test=y_test, n_generations=n_generations, best_pop_size=best_pop_size, runs_list=runs_list, cxpb=cxpb, mutpb=mutpb) # Save the best results
       analyze_results(saved, X_train, y_train, feature_names, csv_path) # Analyze the saved results
    else: # If no valid result was found
       print(f"{BackgroundColors.RED}No valid results found during the sweep.{Style.RESET_ALL}")
