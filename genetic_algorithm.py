@@ -787,7 +787,7 @@ def ga_fitness(ind, fitness_func):
    
    return (fitness_func(ind)[3],) # Return only the F1-score for GA optimization
 
-def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100, show_progress=False, progress_bar=None, dataset_name=None, csv_path=None, pop_size=None, max_pop=None, run=None, runs=None, progress_state=None):
+def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100, show_progress=False, progress_bar=None, dataset_name=None, csv_path=None, pop_size=None, max_pop=None, cxpb=0.5, mutpb=0.2, run=None, runs=None, progress_state=None):
    """
    Run Genetic Algorithm generations with a tqdm progress bar.
 
@@ -820,7 +820,7 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
    for gen in gen_range: # Loop for the specified number of generations
       update_progress_bar(progress_bar, dataset_name or "", csv_path or "", pop_size=pop_size, max_pop=max_pop, gen=gen, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
 
-      offspring = algorithms.varAnd(population, toolbox, cxpb=0.5, mutpb=0.2) # Apply crossover and mutation
+      offspring = algorithms.varAnd(population, toolbox, cxpb=cxpb, mutpb=mutpb) # Apply crossover and mutation
       fits = list(toolbox.map(toolbox.evaluate, offspring)) # Evaluate the offspring in parallel
       
       if progress_state and isinstance(progress_state, dict): # Update progress state if provided
@@ -861,8 +861,7 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
 
       gens_ran = gen # Update gens_ran each generation
       GA_GENERATIONS_COMPLETED = int(gen) # Update global variable
-
-   gens_ran = gen if gens_ran == 0 else gens_ran # Ensure gens_ran is set correctly if no early stopping occurred
+      gens_ran = gen if gens_ran == 0 else gens_ran # Ensure gens_ran is set correctly if no early stopping occurred
 
    if hasattr(toolbox, "map") and hasattr(toolbox.map, "close"): # If using multiprocessing pool
       toolbox.map.close() # Close the pool
@@ -1237,7 +1236,7 @@ def adjust_progress_for_early_stop(progress_state, n_generations, pop_size, gens
    except Exception: # Silently ignore failures when updating current_it
       pass # Do nothing on error
 
-def plot_ga_convergence(csv_path, pop_size, run, fitness_history, dataset_name=None):
+def plot_ga_convergence(csv_path, pop_size, run, fitness_history, dataset_name=None, n_generations=None, cxpb=0.5, mutpb=0.2):
    """
    Plot and save the GA convergence curve (best fitness per generation) for a
    specific run and population size.
@@ -1254,7 +1253,10 @@ def plot_ga_convergence(csv_path, pop_size, run, fitness_history, dataset_name=N
    os.makedirs(output_dir, exist_ok=True) # Ensure directory exists
 
    base_dataset_name = safe_filename(os.path.splitext(os.path.basename(csv_path))[0]) if not dataset_name else safe_filename(dataset_name) # Base name of the dataset
-   fig_path = os.path.join(output_dir, f"Convergence_{base_dataset_name}_pop{pop_size}_run{run}.png") # Path to save the figure
+   gens_part = f"gens{int(n_generations)}" if n_generations is not None else "gensNA"
+   cx_part = f"cx{int(cxpb*100)}"
+   mut_part = f"mut{int(mutpb*100)}"
+   fig_path = os.path.join(output_dir, f"{base_dataset_name}_run{run}_pop{pop_size}_{gens_part}_{cx_part}_{mut_part}_convergence.png") # Path to save the figure
 
    try: # Try to plot and save the figure
       plt.figure(figsize=(8, 4)) # Create a matplotlib figure
@@ -1564,7 +1566,7 @@ def prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations):
    
    return X_train, X_test, y_train, y_test, feature_names # Return prepared data
 
-def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names, pop_size, n_generations, run, runs, dataset_name, csv_path, max_pop, progress_bar, progress_state, folds):
+def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names, pop_size, n_generations, cxpb, mutpb, run, runs, dataset_name, csv_path, max_pop, progress_bar, progress_state, folds):
    """
    Execute one GA run for a specific population size.
    
@@ -1576,6 +1578,8 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    :param feature_names: List of feature names.
    :param pop_size: Population size for this iteration.
    :param n_generations: Number of generations.
+   :param cxpb: Crossover probability.
+   :param mutpb: Mutation probability.
    :param run: Current run number (1-based).
    :param runs: Total number of runs.
    :param dataset_name: Dataset name.
@@ -1594,7 +1598,7 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
    
    toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # Setup GA components
-   best_ind, gens_ran, fitness_history = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, run=run, runs=runs, progress_state=progress_state) # Run GA loop and get generations actually run and fitness history
+   best_ind, gens_ran, fitness_history = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, cxpb=cxpb, mutpb=mutpb, run=run, runs=runs, progress_state=progress_state) # Run GA loop and get generations actually run and fitness history
    
    if best_ind is None: # If GA failed
       return None # Exit early
@@ -1610,7 +1614,7 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    metrics_with_iteration_time = metrics + (iteration_elapsed_time,) # Add total iteration time as 7th element
 
    try: # Try to generate GA convergence plot
-      plot_ga_convergence(csv_path, pop_size, run, fitness_history, dataset_name) # Generate convergence plot
+      plot_ga_convergence(csv_path, pop_size, run, fitness_history, dataset_name, n_generations=n_generations, cxpb=cxpb, mutpb=mutpb) # Generate convergence plot
    except Exception as e: # On any plotting error
       verbose_output(f"{BackgroundColors.YELLOW}Failed to generate GA convergence plot: {e}{Style.RESET_ALL}") # Log warning
 
@@ -1666,7 +1670,7 @@ def aggregate_sweep_results(results, min_pop, max_pop, bot, dataset_name):
    
    return best_score, best_result, best_metrics, results # Return aggregated results
 
-def run_population_sweep(bot, dataset_name, csv_path, n_generations=200, min_pop=20, max_pop=20, runs=RUNS, progress_bar=None):
+def run_population_sweep(bot, dataset_name, csv_path, n_generations=200, min_pop=20, max_pop=20, cxpb=0.5, mutpb=0.01, runs=RUNS, progress_bar=None):
    """
    Executes a genetic algorithm (GA) for feature selection across multiple population sizes and runs.
 
@@ -1681,6 +1685,8 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=200, min_pop
    :param n_generations: Number of generations to run the GA for each population size.
    :param min_pop: Minimum population size to test.
    :param max_pop: Maximum population size to test.
+   :param cxpb: Crossover probability for the GA.
+   :param mutpb: Mutation probability for the GA.
    :param runs: Number of runs for each population size.
    :param progress_bar: Optional tqdm progress bar instance to update with progress.
    :return: Dictionary mapping population sizes to their results including runs and divergence.
@@ -1709,7 +1715,7 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=200, min_pop
    
    for run in range(runs): # For each run
       for pop_size in range(min_pop, max_pop + 1): # For each population size
-         result = run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names, pop_size, n_generations, run+1, runs, dataset_name, csv_path, max_pop, progress_bar, progress_state, folds) # Run GA iteration
+         result = run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names, pop_size, n_generations, cxpb, mutpb, run+1, runs, dataset_name, csv_path, max_pop, progress_bar, progress_state, folds) # Run GA iteration
          if result: # If result is valid
             results[pop_size]["runs"].append(result) # Append result to runs list
    
@@ -1795,7 +1801,7 @@ def main():
       signal_new_file(file) # Notify resource monitor a new file has started (one update allowed per file)
       update_progress_bar(progress_bar, dataset_name, file) # Update the description to show the dataset and filename consistently
 
-      sweep_results = run_population_sweep(bot, dataset_name, file, n_generations=200, min_pop=20, max_pop=20, runs=RUNS, progress_bar=progress_bar) # Run population sweep
+      sweep_results = run_population_sweep(bot, dataset_name, file, n_generations=200, min_pop=20, max_pop=20, cxpb = 0.5, mutpb = 0.01, runs=RUNS, progress_bar=progress_bar) # Run population sweep
 
       if VERBOSE and sweep_results: # If VERBOSE is True and there are results
          print(f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}") # Print detailed results
