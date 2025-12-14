@@ -594,7 +594,7 @@ def compute_total_param_combinations(models):
 
    return total_combinations_all_models, model_combinations_counts # Return total and per-model counts
 
-def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=None, current=None, total_models=None, total_combinations=None, overall=None):
+def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=None, combo_current=None, combo_total=None, current=None, total_models=None, total_combinations=None, overall=None):
    """
    Updates a tqdm progress bar during hyperparameter optimization.
 
@@ -605,6 +605,8 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_g
    :param csv_path: Path to dataset CSV
    :param model_name: Name of the model being optimized
    :param param_grid: Optional hyperparameter dictionary or summary
+   :param combo_current: Current hyperparameter combination index (1-based)
+   :param combo_total: Total hyperparameter combinations for the current model
    :param current: Current model index (1-based)
    :param total_models: Total number of models being optimized
    :param total_combinations: Total number of hyperparameter combinations across all models
@@ -621,9 +623,14 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_g
       else: # Parent same as filename or empty
          dataset_ref = f"{BackgroundColors.CYAN}{csv_name}{BackgroundColors.GREEN}" # Show only filename
 
-      idx_str = f"{BackgroundColors.GREEN}[{BackgroundColors.CYAN}{current}/{total_models}{BackgroundColors.GREEN}]" if current is not None and total_combinations is not None else "" # Progress index string
+      idx_str = f"{BackgroundColors.GREEN}[{BackgroundColors.CYAN}{current}/{total_models}{BackgroundColors.GREEN}]" if current is not None and total_models is not None else "" # Model index string
 
-      desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} - {idx_str} {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}:" # Base description
+      if combo_current is not None and combo_total is not None: # If combination indices are provided
+         combo_str = f" {BackgroundColors.GREEN}{{{BackgroundColors.CYAN}{combo_current}/{combo_total}{BackgroundColors.GREEN}}}" # Combination index string
+      else: # No combination indices
+         combo_str = "" # Empty combination string
+
+      desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} - {idx_str} {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}:{combo_str}" # Base description
 
       def _short(value, limit=30): return str(value) if len(str(value)) <= limit else str(value)[:limit-3] + "..." # Helper to truncate strings
 
@@ -829,6 +836,7 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
 
       with concurrent.futures.ProcessPoolExecutor(max_workers=safe_n_jobs) as executor: # Use ProcessPoolExecutor for parallel evaluation
          future_to_params = {executor.submit(evaluate_single_combination_from_files, clone(model), keys, combination, X_path, y_path): combination for combination in param_combinations} # Submit all combinations
+         local_counter = 0 # Local combination counter for this model
 
          for future in concurrent.futures.as_completed(future_to_params): # Iterate as each future completes
             try: # Try to get result
@@ -840,9 +848,10 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
                elapsed = 0.0 # Mark elapsed as 0.0
 
             global_counter += 1 # Increment overall combination counter
+            local_counter += 1 # Increment per-model combination counter
 
             if progress_bar is not None and csv_path is not None: # Update progress bar if available
-               update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, current=model_index, total_combinations=total_combinations_all_models, total_models=total_models, overall=global_counter) # Update progress bar description
+               update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=current_params, combo_current=local_counter, combo_total=total_combinations, current=model_index, total_combinations=total_combinations_all_models, total_models=total_models, overall=global_counter) # Update progress bar description
                try: # Safely update progress bar
                   progress_bar.update(1) # Increment progress bar
                except Exception: # Ignore progress bar update errors
