@@ -816,6 +816,7 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
    folds = 10 # Number of folds used in cross-validation
    gen_range = tqdm(range(1, n_generations + 1), desc=f"{BackgroundColors.GREEN}Generations{Style.RESET_ALL}") if show_progress else range(1, n_generations + 1)
    gens_ran = 0 # Track how many generations were actually executed
+   fitness_history = [] # List to record best fitness per generation for convergence plot
    for gen in gen_range: # Loop for the specified number of generations
       update_progress_bar(progress_bar, dataset_name or "", csv_path or "", pop_size=pop_size, max_pop=max_pop, gen=gen, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
 
@@ -836,6 +837,10 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
       hof.update(population) # Update the Hall of Fame
 
       current_best_fitness = hof[0].fitness.values[0] if hof and hof[0].fitness.values else None # Get current best fitness
+      try: # Try to append best fitness to history
+         fitness_history.append(float(current_best_fitness) if current_best_fitness is not None else np.nan) # Record best fitness
+      except Exception: # If conversion fails
+         fitness_history.append(np.nan) # Record NaN
       if best_fitness is None or (current_best_fitness is not None and current_best_fitness > best_fitness):
          best_fitness = current_best_fitness # Update best fitness
          gens_without_improvement = 0 # Reset counter
@@ -863,7 +868,7 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
       toolbox.map.close() # Close the pool
       toolbox.map.join() # Join the pool
 
-   return hof[0], gens_ran # Return the best individual and number of generations actually run
+   return hof[0], gens_ran, fitness_history # Return the best individual, gens ran and fitness history
 
 def safe_filename(name):
    """
@@ -874,6 +879,46 @@ def safe_filename(name):
    """
 
    return re.sub(r'[\\/*?:"<>|]', "_", name) # Replace invalid filename characters with underscores
+
+
+def plot_ga_convergence(csv_path, pop_size, run, fitness_history, dataset_name=None):
+   """
+   Plot and save the GA convergence curve (best fitness per generation) for a
+   specific run and population size.
+
+   :param csv_path: Path to the dataset CSV (used to determine output directory)
+   :param pop_size: Population size used in this run
+   :param run: Run index (1-based)
+   :param fitness_history: List of best fitness values per generation
+   :param dataset_name: Optional dataset name for title/filename
+   :return: Path to saved image
+   """
+
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis" # Directory to save outputs
+   os.makedirs(output_dir, exist_ok=True) # Ensure directory exists
+
+   base_dataset_name = safe_filename(os.path.splitext(os.path.basename(csv_path))[0]) if not dataset_name else safe_filename(dataset_name) # Base name of the dataset
+   fig_path = os.path.join(output_dir, f"Convergence_{base_dataset_name}_pop{pop_size}_run{run}.png") # Path to save the figure
+
+   try: # Try to plot and save the figure
+      plt.figure(figsize=(8, 4)) # Create a matplotlib figure
+      gens = list(range(1, len(fitness_history) + 1)) # Generation numbers
+      plt.plot(gens, fitness_history, marker="o", linestyle="-", color="#1f77b4") # Plot the fitness history
+      plt.xlabel("Generation") # X-axis label
+      plt.ylabel("Best F1-Score") # Y-axis label
+      plt.title(f"GA Convergence - {base_dataset_name} (pop={pop_size}, run={run})") # Title
+      plt.grid(True, linestyle="--", alpha=0.5) # Grid
+      plt.tight_layout() # Adjust layout
+      plt.savefig(fig_path, dpi=150) # Save the figure
+      plt.close() # Close the plot to free memory
+      verbose_output(f"{BackgroundColors.GREEN}Saved GA convergence plot to {BackgroundColors.CYAN}{fig_path}{Style.RESET_ALL}") # Notify user
+      return fig_path # Return the path to the saved figure
+   except Exception as e: # If any error occurs during plotting
+      try: # Try to close the plot if open
+         plt.close() # Close the plot to free memory
+      except Exception: # Ignore errors during plot closing
+         pass # Do nothing
+      raise # Reraise the original exception
 
 def analyze_top_features(df, y, top_features, csv_path="."):
    """
@@ -1550,7 +1595,7 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
    
    toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # Setup GA components
-   best_ind, gens_ran = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, run=run, runs=runs, progress_state=progress_state) # Run GA loop and get generations actually run
+   best_ind, gens_ran, fitness_history = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, run=run, runs=runs, progress_state=progress_state) # Run GA loop and get generations actually run and fitness history
    
    if best_ind is None: # If GA failed
       return None # Exit early
@@ -1564,7 +1609,12 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    
    iteration_elapsed_time = time.time() - iteration_start_time # Calculate total iteration time
    metrics_with_iteration_time = metrics + (iteration_elapsed_time,) # Add total iteration time as 7th element
-   
+
+   try: # Try to generate GA convergence plot
+      plot_ga_convergence(csv_path, pop_size, run, fitness_history, dataset_name) # Generate convergence plot
+   except Exception as e: # On any plotting error
+      verbose_output(f"{BackgroundColors.YELLOW}Failed to generate GA convergence plot: {e}{Style.RESET_ALL}") # Log warning
+
    return {"best_ind": best_ind, "metrics": metrics_with_iteration_time, "best_features": best_features} # Return results
 
 def aggregate_sweep_results(results, min_pop, max_pop, bot, dataset_name):
