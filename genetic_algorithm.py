@@ -880,46 +880,6 @@ def safe_filename(name):
 
    return re.sub(r'[\\/*?:"<>|]', "_", name) # Replace invalid filename characters with underscores
 
-
-def plot_ga_convergence(csv_path, pop_size, run, fitness_history, dataset_name=None):
-   """
-   Plot and save the GA convergence curve (best fitness per generation) for a
-   specific run and population size.
-
-   :param csv_path: Path to the dataset CSV (used to determine output directory)
-   :param pop_size: Population size used in this run
-   :param run: Run index (1-based)
-   :param fitness_history: List of best fitness values per generation
-   :param dataset_name: Optional dataset name for title/filename
-   :return: Path to saved image
-   """
-
-   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis" # Directory to save outputs
-   os.makedirs(output_dir, exist_ok=True) # Ensure directory exists
-
-   base_dataset_name = safe_filename(os.path.splitext(os.path.basename(csv_path))[0]) if not dataset_name else safe_filename(dataset_name) # Base name of the dataset
-   fig_path = os.path.join(output_dir, f"Convergence_{base_dataset_name}_pop{pop_size}_run{run}.png") # Path to save the figure
-
-   try: # Try to plot and save the figure
-      plt.figure(figsize=(8, 4)) # Create a matplotlib figure
-      gens = list(range(1, len(fitness_history) + 1)) # Generation numbers
-      plt.plot(gens, fitness_history, marker="o", linestyle="-", color="#1f77b4") # Plot the fitness history
-      plt.xlabel("Generation") # X-axis label
-      plt.ylabel("Best F1-Score") # Y-axis label
-      plt.title(f"GA Convergence - {base_dataset_name} (pop={pop_size}, run={run})") # Title
-      plt.grid(True, linestyle="--", alpha=0.5) # Grid
-      plt.tight_layout() # Adjust layout
-      plt.savefig(fig_path, dpi=150) # Save the figure
-      plt.close() # Close the plot to free memory
-      verbose_output(f"{BackgroundColors.GREEN}Saved GA convergence plot to {BackgroundColors.CYAN}{fig_path}{Style.RESET_ALL}") # Notify user
-      return fig_path # Return the path to the saved figure
-   except Exception as e: # If any error occurs during plotting
-      try: # Try to close the plot if open
-         plt.close() # Close the plot to free memory
-      except Exception: # Ignore errors during plot closing
-         pass # Do nothing
-      raise # Reraise the original exception
-
 def analyze_top_features(df, y, top_features, csv_path="."):
    """
    Analyze and visualize the top features.
@@ -1276,6 +1236,45 @@ def adjust_progress_for_early_stop(progress_state, n_generations, pop_size, gens
       progress_state["current_it"] = int(progress_state.get("current_it", 0)) + folds # Increment current_it for final re-eval
    except Exception: # Silently ignore failures when updating current_it
       pass # Do nothing on error
+
+def plot_ga_convergence(csv_path, pop_size, run, fitness_history, dataset_name=None):
+   """
+   Plot and save the GA convergence curve (best fitness per generation) for a
+   specific run and population size.
+
+   :param csv_path: Path to the dataset CSV (used to determine output directory)
+   :param pop_size: Population size used in this run
+   :param run: Run index (1-based)
+   :param fitness_history: List of best fitness values per generation
+   :param dataset_name: Optional dataset name for title/filename
+   :return: Path to saved image
+   """
+
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis" # Directory to save outputs
+   os.makedirs(output_dir, exist_ok=True) # Ensure directory exists
+
+   base_dataset_name = safe_filename(os.path.splitext(os.path.basename(csv_path))[0]) if not dataset_name else safe_filename(dataset_name) # Base name of the dataset
+   fig_path = os.path.join(output_dir, f"Convergence_{base_dataset_name}_pop{pop_size}_run{run}.png") # Path to save the figure
+
+   try: # Try to plot and save the figure
+      plt.figure(figsize=(8, 4)) # Create a matplotlib figure
+      gens = list(range(1, len(fitness_history) + 1)) # Generation numbers
+      plt.plot(gens, fitness_history, marker="o", linestyle="-", color="#1f77b4") # Plot the fitness history
+      plt.xlabel("Generation") # X-axis label
+      plt.ylabel("Best F1-Score") # Y-axis label
+      plt.title(f"GA Convergence - {base_dataset_name} (pop={pop_size}, run={run})") # Title
+      plt.grid(True, linestyle="--", alpha=0.5) # Grid
+      plt.tight_layout() # Adjust layout
+      plt.savefig(fig_path, dpi=150) # Save the figure
+      plt.close() # Close the plot to free memory
+      verbose_output(f"{BackgroundColors.GREEN}Saved GA convergence plot to {BackgroundColors.CYAN}{fig_path}{Style.RESET_ALL}") # Notify user
+      return fig_path # Return the path to the saved figure
+   except Exception as e: # If any error occurs during plotting
+      try: # Try to close the plot if open
+         plt.close() # Close the plot to free memory
+      except Exception: # Ignore errors during plot closing
+         pass # Do nothing
+      raise # Reraise the original exception
 
 def get_hardware_specifications():
    """
