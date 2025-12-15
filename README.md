@@ -44,6 +44,10 @@ Project-Description - @UPDATE.
         - [macOS](#macos)
         - [Windows](#windows)
     - [Clone the Repository](#clone-the-repository)
+    - [Python, Pip and Venv](#python-pip-and-venv)
+      - [Linux](#linux-1)
+      - [macOS](#macos-1)
+      - [Windows](#windows-1)
     - [6. Dataset](#6-dataset)
   - [Results - @UPDATE](#results---update)
   - [How to Cite?](#how-to-cite)
@@ -115,6 +119,38 @@ cd DDoS-Detector # Only if not in the repository root directory yet
 git submodule init
 git submodule update
 ```
+
+### Python, Pip and Venv
+
+You must have Python 3, Pip, and the `venv` module installed.
+
+#### Linux
+
+``` bash
+sudo apt install python3 python3-pip python3-venv -y
+```
+
+#### macOS
+
+``` bash
+brew install python3
+```
+
+#### Windows
+
+If you do not have Chocolatey installed, you can install it by running the following command in an **elevated PowerShell (Run as Administrator)**:
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+```
+
+Once Chocolatey is installed, you can install Python using:
+
+``` bash
+choco install python3
+```
+
+Or download the installer from the official Python website.
 
 ### 6. Dataset
 
