@@ -95,6 +95,7 @@ GA_GENERATIONS_COMPLETED = 0 # Updated by GA loop to inform monitor when some ge
 RESOURCE_MONITOR_LAST_FILE = None # Path of the file currently being processed (monitor uses this)
 RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = False # Whether monitor already applied an update for the current file
 PROGRESS_STATE_DIR_NAME = "ga_progress" # Subfolder under Feature_Analysis to store progress files
+PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL # Pickle protocol to use when saving state
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True) # Create a Logger instance
@@ -1447,6 +1448,32 @@ def state_file_paths(output_dir, state_id):
    except Exception: # If directory creation fails
       pass # Do nothing
    return os.path.join(state_dir, f"{state_id}_gen.pkl"), os.path.join(state_dir, f"{state_id}_run.pkl") # Return paths for generation and run state files
+
+def save_generation_state(output_dir, state_id, gen, population, hof_best, fitness_history):
+   """
+   Persist minimal generation state to disk (lists only).
+
+   :param output_dir: base output directory
+   :param state_id: deterministic id for run
+   :param gen: generation number
+   :param population: list of individuals
+   :param hof_best: best individual list or None
+   :param fitness_history: list of fitness history
+   :return: None
+   """
+   
+   try: # Attempt to save the generation state
+      gen_path, _ = state_file_paths(output_dir, state_id) # Get the path for the generation state file
+      payload = { # Prepare the payload dictionary
+         "gen": int(gen), # Current generation number
+         "population_lists": [list(ind) for ind in population], # List of population individuals as lists
+         "hof_best": list(hof_best) if hof_best is not None else None, # Best individual from hall of fame
+         "fitness_history": list(fitness_history) if fitness_history is not None else [], # History of fitness values
+      } # End of payload dictionary
+      with open(gen_path, "wb") as f: # Open the file for writing in binary mode
+         pickle.dump(payload, f, protocol=PICKLE_PROTOCOL) # Serialize and save the payload
+   except Exception: # If any error occurs during saving
+      pass # Do nothing
 
 def prepare_feature_dataframe(X, feature_names):
    """
