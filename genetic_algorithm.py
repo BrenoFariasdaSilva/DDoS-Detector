@@ -94,6 +94,7 @@ FILES_TO_IGNORE = [""] # List of files to ignore during processing
 GA_GENERATIONS_COMPLETED = 0 # Updated by GA loop to inform monitor when some generations have run
 RESOURCE_MONITOR_LAST_FILE = None # Path of the file currently being processed (monitor uses this)
 RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = False # Whether monitor already applied an update for the current file
+RESUME_PROGRESS = True # When True, attempt to resume progress from saved state files
 PROGRESS_STATE_DIR_NAME = "ga_progress" # Subfolder under Feature_Analysis to store progress files
 PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL # Pickle protocol to use when saving state
 
@@ -1516,6 +1517,41 @@ def recreate_population_from_lists(toolbox, pop_lists):
    except Exception: # If any error occurs during recreation
       return [] # Return an empty list
    return population # Return the recreated population
+
+def load_and_apply_generation_state(toolbox, population, output_dir, state_id, run=None):
+   """
+   Load a saved GA generation state and apply it to the provided population.
+
+   :param toolbox: DEAP toolbox used to recreate individuals
+   :param population: population list to modify in-place
+   :param output_dir: directory where generation state files live
+   :param state_id: deterministic id for the run state
+   :param run: optional run index for logging
+   :return: tuple (start_gen:int, fitness_history:list)
+   """
+
+   start_gen = 1 # Initialize starting generation to 1
+   fitness_history = [] # Initialize fitness history as empty list
+   if RESUME_PROGRESS and state_id is not None: # Check if resume is enabled and state_id is provided
+      try: # Attempt to load and apply the state
+         payload = load_generation_state(output_dir, state_id) # Load the generation state payload
+         if payload: # If payload exists
+            pop_lists = payload.get("population_lists") # Get the population lists from payload
+            if pop_lists: # If population lists exist
+               recreated = recreate_population_from_lists(toolbox, pop_lists) # Recreate population from lists
+               if recreated: # If recreation succeeded
+                  population[:] = recreated # Replace the population with recreated one
+               fitness_history = payload.get("fitness_history", []) # Get fitness history from payload
+            loaded_gen = int(payload.get("gen", 0)) # Get the loaded generation number
+            start_gen = loaded_gen + 1 if loaded_gen >= 1 else 1 # Set start_gen to loaded_gen + 1 or 1
+            try: # Try to log the resume message
+               verbose_output(f"{BackgroundColors.GREEN}Resuming GA from generation {start_gen} for run {run} (state id {state_id[:8]}){Style.RESET_ALL}") # Output resume message
+            except Exception: # If logging fails
+               pass # Do nothing
+      except Exception: # If any error occurs during loading/applying
+         pass # Do nothing
+
+   return start_gen, fitness_history # Return the starting generation and fitness history
 
 def prepare_feature_dataframe(X, feature_names):
    """
