@@ -94,6 +94,7 @@ FILES_TO_IGNORE = [""] # List of files to ignore during processing
 GA_GENERATIONS_COMPLETED = 0 # Updated by GA loop to inform monitor when some generations have run
 RESOURCE_MONITOR_LAST_FILE = None # Path of the file currently being processed (monitor uses this)
 RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = False # Whether monitor already applied an update for the current file
+PROGRESS_STATE_DIR_NAME = "ga_progress" # Subfolder under Feature_Analysis to store progress files
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True) # Create a Logger instance
@@ -1430,6 +1431,22 @@ def compute_state_id(csv_path, pop_size, n_generations, cxpb, mutpb, run, folds,
       return hashlib.sha256(key.encode("utf-8")).hexdigest() # Compute SHA256 hash of the key and return as hex string
    except Exception: # If any error occurs during computation
       return None # Return None to indicate failure
+
+def state_file_paths(output_dir, state_id):
+   """
+   Return (gen_state_path, run_state_path) for a given state id and ensure dir exists.
+
+   :param output_dir: base output directory
+   :param state_id: deterministic id for run
+   :return: tuple(gen_path, run_path)
+   """
+   
+   state_dir = os.path.join(output_dir, PROGRESS_STATE_DIR_NAME) # Construct the state directory path
+   try: # Try to create the state directory if it doesn't exist
+      os.makedirs(state_dir, exist_ok=True) # Create the directory, ignoring if it already exists
+   except Exception: # If directory creation fails
+      pass # Do nothing
+   return os.path.join(state_dir, f"{state_id}_gen.pkl"), os.path.join(state_dir, f"{state_id}_run.pkl") # Return paths for generation and run state files
 
 def prepare_feature_dataframe(X, feature_names):
    """
