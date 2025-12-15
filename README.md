@@ -255,6 +255,15 @@ This repository includes a shell script `download_datasets.sh` (at the repositor
 
    These datasets were chosen because they share similar feature definitions. This allows feature subsets extracted via the Genetic Algorithm to be reused across multiple datasets, avoiding the need to retrain models from scratch for each dataset/file.
 
+2. **Using other datasets**
+
+   You may use additional datasets as long as they are compatible with the project's preprocessing pipeline. Good sources include:
+
+   - Kaggle: https://www.kaggle.com/datasets
+   - UCI: https://archive.ics.uci.edu/ml/index.php
+
+   Ensure any new dataset is adapted to match the expected CSV format, column names (features), and label conventions used by the project. If necessary, use the provided dataset utilities (e.g., `dataset_converter.py` / `dataset_descriptor.py`) to convert or normalize new datasets to the project's expected format.
+
 ## Results - @UPDATE
 
 Discuss the results obtained in the project.
