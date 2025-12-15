@@ -220,7 +220,7 @@ If you use the Repository-Name in your research, please cite it using the follow
 
 ```
 @misc{softwareDDoS-Detector:2025,
-  title = {DDoS-Detector: A Tool for Detecting DDoS Attacks},
+  title = {A Framework for Detecting DDoS Attacks with Hyper-parameters Optimization, Feature Extraction, Classifiers Combination and Multi-Dataset Testing},
   author = {Breno Farias da Silva},
   year = {2025},
   howpublished = {https://github.com/BrenoFariasdaSilva/DDoS-Detector},
