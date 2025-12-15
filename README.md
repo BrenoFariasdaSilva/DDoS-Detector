@@ -184,18 +184,49 @@ Available via Cygwin, MSYS2, or WSL.
    This command will create a virtual environment in the `.venv` folder and install all required dependencies listed in the `requirements.txt` file.
 
 ### Datasets
-1. Download the dataset you want to use and place it in this project directory `(/DDoS-Detector)`, inside the `Datasets` folder. If the folder does not exist, create it with the following command inside the repository root directory:
+
+1. Download the dataset(s) you want to use and place them in the project root under the `Datasets` directory (`/DDoS-Detector/Datasets`). If the directory does not exist, create it from the repository root:
 
    ```bash
-   mkdir ./Datasets
+   mkdir -p Datasets
    ```
 
-Here are two of the used datasets . They can be found at:
+2. **Automated download (recommended)**  
+   This repository includes a helper script called `download_datasets.sh` that automatically downloads and extracts the CICDDoS2019 dataset.
+
+   The script:
+   - Creates the directory structure `Datasets/CICDDoS2019`
+   - Downloads the official CICDDoS2019 CSV ZIP files
+   - Extracts all CSV files into the dataset directory
+
+   To use it, from the repository root:
+
+   ```bash
+   chmod +x download_datasets.sh
+   ./download_datasets.sh
+   ```
+
+   After execution, the dataset files will be available at:
+
+   ```
+   Datasets/CICDDoS2019/
+   ```
+
+3. **Manually downloaded datasets**  
+   The primary datasets used in this project are:
+
    - [CICDDoS2019](https://www.unb.ca/cic/datasets/ddos-2019.html)
    - [CICIDS2017](https://www.unb.ca/cic/datasets/ids-2017.html)
 
-   This were the used datasets as they have very similar features, making it easier to test the model on multiple datasets, given a extracted feature set with Genetic Algorithm, avoiding the need to re-train the model for each file on each dataset.
-   If you want to use other datasets, you can always use [Kaggle](https://www.kaggle.com/datasets) or [UCI Machine Learning Repository](https://archive.ics.uci.edu/ml/index.php) to find datasets that suit your needs.
+   These datasets were chosen because they share very similar feature definitions. This allows feature subsets extracted via the Genetic Algorithm to be reused across multiple datasets, avoiding the need to retrain the model for each dataset and file.
+
+4. **Using other datasets**  
+   You may use additional datasets as long as they are compatible with the preprocessing pipeline. Good sources include:
+
+   - [Kaggle](https://www.kaggle.com/datasets)
+   - [UCI Machine Learning Repository](https://archive.ics.uci.edu/ml/index.php)
+
+   Ensure that any new dataset is adapted to match the expected CSV format, feature set, and label conventions used by the project.
 
 ## Results - @UPDATE
 
