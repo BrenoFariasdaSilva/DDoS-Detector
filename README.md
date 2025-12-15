@@ -150,7 +150,7 @@ Once Chocolatey is installed, you can install Python using:
 choco install python3
 ```
 
-Or download the installer from the official Python website.
+Or download the installer from the official website [here](https://www.python.org/downloads/windows/) and follow the installation instructions provided there. Make sure to check the option "Add Python to PATH" during installation ans restart your terminal/computer.
 
 ### 6. Dataset
 
