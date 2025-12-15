@@ -41,6 +41,7 @@ Dependencies:
 import atexit # For playing a sound when the program finishes
 import csv # For writing metrics/features CSVs
 import datetime # For timestamping
+import hashlib # For generating state identifiers
 import json # For structured JSON output and parsing
 import matplotlib.pyplot as plt # For plotting graphs
 import multiprocessing # For parallel fitness evaluation
@@ -1408,6 +1409,27 @@ def write_consolidated_csv(rows, output_dir):
       print(f"\n{BackgroundColors.GREEN}Genetic Algorithm consolidated results saved to {BackgroundColors.CYAN}{csv_out}{Style.RESET_ALL}") # Notify user of success
    except Exception as e:
       print(f"{BackgroundColors.RED}Failed to write consolidated GA CSV: {str(e)}{Style.RESET_ALL}") # Print failure message with exception
+
+def compute_state_id(csv_path, pop_size, n_generations, cxpb, mutpb, run, folds, test_frac=None):
+   """
+   Compute a deterministic short id for a particular run configuration.
+
+   :param csv_path: path to dataset CSV
+   :param pop_size: population size
+   :param n_generations: number of generations
+   :param cxpb: crossover probability
+   :param mutpb: mutation probability
+   :param run: run index
+   :param folds: CV folds
+   :param test_frac: train/test fraction
+   :return: hex string id or None on error
+   """
+   
+   try: # Attempt to compute the state id
+      key = f"{csv_path}|pop{pop_size}|gens{n_generations}|cx{cxpb}|mut{mutpb}|run{run}|folds{folds}|test{test_frac}" # Create a unique key string from run parameters
+      return hashlib.sha256(key.encode("utf-8")).hexdigest() # Compute SHA256 hash of the key and return as hex string
+   except Exception: # If any error occurs during computation
+      return None # Return None to indicate failure
 
 def prepare_feature_dataframe(X, feature_names):
    """
