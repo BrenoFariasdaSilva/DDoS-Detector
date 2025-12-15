@@ -1493,6 +1493,30 @@ def load_generation_state(output_dir, state_id):
    except Exception: # If any error occurs during loading
       return None # Return None to indicate failure
 
+def recreate_population_from_lists(toolbox, pop_lists):
+   """
+   Create DEAP individual objects from plain lists using registered toolbox.individual.
+
+   :param toolbox: DEAP toolbox with `individual` registered
+   :param pop_lists: iterable of bit-lists
+   :return: list of individuals or empty list on error
+   """
+   
+   population = [] # Initialize an empty list for the population
+   try: # Attempt to recreate the population
+      for bits in pop_lists: # Iterate over each bit list in pop_lists
+         ind = toolbox.individual() # Create a new individual using the toolbox
+         for i, b in enumerate(bits): # Iterate over each bit in the list
+            try: # Try to convert the bit to int
+               ind[i] = int(b) # Set the individual's gene to the integer value
+            except Exception: # If conversion fails
+               ind[i] = b # Set the individual's gene to the original value
+         ind.fitness.values = () # Initialize fitness values as empty tuple
+         population.append(ind) # Add the individual to the population
+   except Exception: # If any error occurs during recreation
+      return [] # Return an empty list
+   return population # Return the recreated population
+
 def prepare_feature_dataframe(X, feature_names):
    """
    Ensure features are available as a pandas DataFrame with appropriate column names.
