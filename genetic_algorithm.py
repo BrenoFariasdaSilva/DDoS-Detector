@@ -1605,6 +1605,24 @@ def save_run_result(output_dir, state_id, result):
    except Exception: # If any error occurs during saving
       pass # Do nothing
 
+def load_run_result(output_dir, state_id):
+   """
+   Load a previously saved run result if present.
+
+   :param output_dir: base output directory
+   :param state_id: deterministic id for run
+   :return: deserialized result or None
+   """
+   
+   try: # Attempt to load the run result
+      _, run_path = state_file_paths(output_dir, state_id) # Get the path for the run state file
+      if not os.path.exists(run_path): # Check if the file exists
+         return None # Return None if file does not exist
+      with open(run_path, "rb") as f: # Open the file for reading in binary mode
+         return pickle.load(f) # Deserialize and return the result
+   except Exception: # If any error occurs during loading
+      return None # Return None to indicate failure
+
 def prepare_feature_dataframe(X, feature_names):
    """
    Ensure features are available as a pandas DataFrame with appropriate column names.
