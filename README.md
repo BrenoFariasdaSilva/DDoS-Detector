@@ -209,7 +209,8 @@ Here are two of the used datasets . They can be found at:
    - [CICDDoS2019](https://www.unb.ca/cic/datasets/ddos-2019.html)
    - [CICIDS2017](https://www.unb.ca/cic/datasets/ids-2017.html)
 
-This were the used datasets as they have very similar features, making it easier to test the model on multiple datasets, given a extracted feature set with Genetic Algorithm, avoiding the need to re-train the model for each file on each dataset.
+   This were the used datasets as they have very similar features, making it easier to test the model on multiple datasets, given a extracted feature set with Genetic Algorithm, avoiding the need to re-train the model for each file on each dataset.
+   If you want to use other datasets, you can always use [Kaggle](https://www.kaggle.com/datasets) or [UCI Machine Learning Repository](https://archive.ics.uci.edu/ml/index.php) to find datasets that suit your needs.
 
 ## Results - @UPDATE
 
