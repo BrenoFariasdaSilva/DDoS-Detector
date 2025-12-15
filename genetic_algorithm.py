@@ -1475,6 +1475,24 @@ def save_generation_state(output_dir, state_id, gen, population, hof_best, fitne
    except Exception: # If any error occurs during saving
       pass # Do nothing
 
+def load_generation_state(output_dir, state_id):
+   """
+   Load generation state if present, returning the payload or None.
+
+   :param output_dir: base output directory
+   :param state_id: deterministic id for run
+   :return: payload dict or None
+   """
+   
+   try: # Attempt to load the generation state
+      gen_path, _ = state_file_paths(output_dir, state_id) # Get the path for the generation state file
+      if not os.path.exists(gen_path): # Check if the file exists
+         return None # Return None if file does not exist
+      with open(gen_path, "rb") as f: # Open the file for reading in binary mode
+         return pickle.load(f) # Deserialize and return the payload
+   except Exception: # If any error occurs during loading
+      return None # Return None to indicate failure
+
 def prepare_feature_dataframe(X, feature_names):
    """
    Ensure features are available as a pandas DataFrame with appropriate column names.
@@ -1666,7 +1684,7 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    feature_count = len(feature_names) if feature_names is not None else 0 # Count of features
    
    update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
-   
+
    toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # Setup GA components
    best_ind, gens_ran, fitness_history = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, cxpb=cxpb, mutpb=mutpb, run=run, runs=runs, progress_state=progress_state) # Run GA loop and get generations actually run and fitness history
    
