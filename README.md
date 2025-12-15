@@ -52,7 +52,7 @@ Project-Description - @UPDATE.
       - [macOS](#macos-2)
       - [Windows](#windows-2)
     - [Dependencies/Requirements](#dependenciesrequirements)
-    - [6. Dataset](#6-dataset)
+    - [Dataset](#dataset)
   - [Results - @UPDATE](#results---update)
   - [How to Cite?](#how-to-cite)
   - [Contributing](#contributing)
@@ -183,7 +183,7 @@ Available via Cygwin, MSYS2, or WSL.
 
    This command will create a virtual environment in the `.venv` folder and install all required dependencies listed in the `requirements.txt` file.
 
-### 6. Dataset
+### Dataset
 
 1. Download the dataset you want to use and place it in this project directory `(/DDoS-Detector)`, inside the `Datasets` folder. If the folder does not exist, create it with the following command inside the repository root directory:
 
