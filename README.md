@@ -229,6 +229,32 @@ This repository includes a shell script `download_datasets.sh` (at the repositor
 
    - To add another dataset: add a new key to `DATASET_URLS` with its URL, and add the same key to `DATASET_DIRS` with the desired target folder. Save the file and re-run `./download_datasets.sh`.
 
+1. **Manually downloaded datasets**
+
+   If you prefer to download datasets manually, create the `Datasets` directory (if needed):
+
+   ```bash
+   mkdir -p Datasets
+   ```
+
+   Then create a subfolder per dataset and place the downloaded CSV(s) or extracted files there. Example structure:
+
+   ```text
+   Datasets/
+      CICDDoS2019/
+         CSV-01-12/ # Extracted CSVs from the first archive
+         CSV-03-11/ # Extracted CSVs from the second archive
+      CICIDS2017/
+         TrafficLabelling/ # Extracted CSVs
+   ```
+
+   Primary datasets used in this project:
+
+   - https://www.unb.ca/cic/datasets/ddos-2019.html (CICDDoS2019)
+   - https://www.unb.ca/cic/datasets/ids-2017.html (CIC-IDS-2017)
+
+   These datasets were chosen because they share similar feature definitions. This allows feature subsets extracted via the Genetic Algorithm to be reused across multiple datasets, avoiding the need to retrain models from scratch for each dataset/file.
+
 ## Results - @UPDATE
 
 Discuss the results obtained in the project.
