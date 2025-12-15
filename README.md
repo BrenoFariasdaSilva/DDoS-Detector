@@ -38,6 +38,7 @@ Project-Description - @UPDATE.
   - [Table of Contents](#table-of-contents)
   - [Introduction - @UPDATE](#introduction---update)
   - [Requirements - @UPDATE](#requirements---update)
+  - [Setup](#setup)
     - [6. Dataset](#6-dataset)
   - [Results - @UPDATE](#results---update)
   - [How to Cite?](#how-to-cite)
@@ -54,6 +55,9 @@ Detailed project description.
 
 Bullet points of the requirements, such as languages, libraries, tools, etc.
 
+## Setup
+
+This section provides instructions for installing Git, Python, Pip, Make, then to clone the repository (if not done yet) and all required project dependencies. 
 
 ### 6. Dataset
 
