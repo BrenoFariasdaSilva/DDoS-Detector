@@ -185,14 +185,49 @@ Available via Cygwin, MSYS2, or WSL.
 
 ### Datasets
 
-1. Download the dataset you want to use and place it in this project directory `(/DDoS-Detector)`, inside the `Datasets` folder. 
+This repository includes a shell script `download_datasets.sh` (at the repository root) that can automatically download and extract several datasets used by the project. The current script downloads and extracts:
 
-Here are two of the used datasets . They can be found at:
-   - [CICDDoS2019](https://www.unb.ca/cic/datasets/ddos-2019.html)
-   - [CICIDS2017](https://www.unb.ca/cic/datasets/ids-2017.html)
+   - CICDDoS2019 (two CSV ZIPs: `CSV-01-12.zip` and `CSV-03-11.zip`) into `Datasets/CICDDoS2019`
+   - CIC-IDS-2017 (the labelled flows ZIP) into `Datasets/CICIDS2017`
 
-   This were the used datasets as they have very similar features, making it easier to test the model on multiple datasets, given a extracted feature set with Genetic Algorithm, avoiding the need to re-train the model for each file on each dataset.
-   If you want to use other datasets, you can always use [Kaggle](https://www.kaggle.com/datasets) or [UCI Machine Learning Repository](https://archive.ics.uci.edu/ml/index.php) to find datasets that suit your needs.
+   The script behavior:
+   - Creates the main `Datasets` directory if it does not exist.
+   - For each configured dataset it creates the target directory (from `DATASET_DIRS`).
+   - Downloads the configured ZIP file(s) with `wget -c` (resumable downloads).
+   - Extracts each ZIP using `unzip -o` into the dataset directory.
+
+   Requirements: `wget` and `unzip` must be installed and available on your PATH, and you must have an active internet connection.
+
+   Usage (from the repository root):
+
+   ```bash
+   make download_datasets
+   ```
+
+   After successful run the files will be available under the `Datasets` subfolders, for example:
+
+   - `Datasets/CICDDoS2019/CSV-01-12.zip` (unzipped CSV files will be inside this directory)
+   - `Datasets/CICDDoS2019/CSV-03-11.zip`
+   - `Datasets/CICIDS2017/GeneratedLabelledFlows.zip`
+
+   Note: the ZIP filenames and the exact extraction layout depend on the upstream archive contents; check the target folder after extraction.
+
+   Configuring the script
+   - The script is driven by two associative arrays at the top of `download_datasets.sh`:
+     - `DATASET_URLS`: maps a short dataset key to the download URL.
+     - `DATASET_DIRS`: maps the same dataset key to the local target directory under `Datasets/`.
+
+   - To select which datasets the script downloads, edit `download_datasets.sh` and comment/uncomment the relevant entries in `DATASET_URLS` (or remove entries you don't want). The script iterates over the keys present in `DATASET_URLS` and downloads whatever is configured there.
+
+   - To change where a dataset is extracted, update the corresponding value in `DATASET_DIRS` for that key. Example:
+
+   ```bash
+   # in download_datasets.sh
+   DATASET_URLS=( [CICDDoS2019_CSV_01_12]="http://.../CSV-01-12.zip" )
+   DATASET_DIRS=( [CICDDoS2019_CSV_01_12]="Datasets/CICDDoS2019" )
+   ```
+
+   - To add another dataset: add a new key to `DATASET_URLS` with its URL, and add the same key to `DATASET_DIRS` with the desired target folder. Save the file and re-run `./download_datasets.sh`.
 
 ## Results - @UPDATE
 
