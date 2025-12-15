@@ -789,7 +789,7 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
    available_memory_gb = psutil.virtual_memory().available / (1024**3) # Available RAM in GB
    data_size_gb = (X_train.nbytes + y_train.nbytes) / (1024**3) # Dataset size in GB
    
-   estimated_memory_per_worker = data_size_gb * 2 # 2x for model overhead
+   estimated_memory_per_worker = data_size_gb * 1.2 # 1.20x for model overhead
    safe_n_jobs = max(1, min(abs(N_JOBS) if N_JOBS < 0 else N_JOBS, int(available_memory_gb / max(0.5, estimated_memory_per_worker)))) # Calculate safe n_jobs based on memory
    
    if N_JOBS == -2: # Leave one core free
