@@ -185,7 +185,12 @@ Available via Cygwin, MSYS2, or WSL.
 
 ### 6. Dataset
 
-1. Download the dataset you want to use and place it in this project directory `(/DDoS-Detector)`, inside the `Datasets` folder.
+1. Download the dataset you want to use and place it in this project directory `(/DDoS-Detector)`, inside the `Datasets` folder. If the folder does not exist, create it with the following command inside the repository root directory:
+
+   ```bash
+   mkdir ./Datasets
+   ```
+
 Here are two of the used datasets . They can be found at:
    - [CICDDoS2019](https://www.unb.ca/cic/datasets/ddos-2019.html)
    - [CICIDS2017](https://www.unb.ca/cic/datasets/ids-2017.html)
