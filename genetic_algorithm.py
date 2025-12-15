@@ -1623,6 +1623,26 @@ def load_run_result(output_dir, state_id):
    except Exception: # If any error occurs during loading
       return None # Return None to indicate failure
 
+def cleanup_state_for_id(output_dir, state_id):
+   """
+   Remove progress files for a finished run/generation (best-effort).
+
+   :param output_dir: base output directory
+   :param state_id: deterministic id for run
+   :return: None
+   """
+   
+   try: # Attempt to clean up state files
+      gen_path, run_path = state_file_paths(output_dir, state_id) # Get paths for generation and run state files
+      for p in (gen_path, run_path): # Iterate over the file paths
+         try: # Try to remove each file
+            if os.path.exists(p): # Check if the file exists
+               os.remove(p) # Remove the file
+         except Exception: # If removal fails
+            pass # Do nothing
+   except Exception: # If any error occurs during cleanup
+      pass # Do nothing
+
 def prepare_feature_dataframe(X, feature_names):
    """
    Ensure features are available as a pandas DataFrame with appropriate column names.
@@ -1814,7 +1834,7 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    feature_count = len(feature_names) if feature_names is not None else 0 # Count of features
    
    update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
-
+   
    toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # Setup GA components
    best_ind, gens_ran, fitness_history = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, cxpb=cxpb, mutpb=mutpb, run=run, runs=runs, progress_state=progress_state) # Run GA loop and get generations actually run and fitness history
    
