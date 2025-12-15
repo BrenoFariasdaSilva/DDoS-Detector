@@ -818,9 +818,15 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
    early_stop_gens = 10 # Number of generations to wait for improvement before stopping
 
    folds = 10 # Number of folds used in cross-validation
-   gen_range = tqdm(range(1, n_generations + 1), desc=f"{BackgroundColors.GREEN}Generations{Style.RESET_ALL}") if show_progress else range(1, n_generations + 1)
-   gens_ran = 0 # Track how many generations were actually executed
+
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis" if csv_path else os.path.join(".", "Feature_Analysis") # Output directory for Feature_Analysis outputs
+   state_id = compute_state_id(csv_path or "", pop_size or 0, n_generations, cxpb, mutpb, run or 0, folds, test_frac=None) # Deterministic state id for resume/caching
+   start_gen = 1 # Starting generation index
    fitness_history = [] # List to record best fitness per generation for convergence plot
+   start_gen, fitness_history = load_and_apply_generation_state(toolbox, population, output_dir, state_id, run=run) # Load and apply saved generation state if available, updating start generation and fitness history
+
+   gen_range = tqdm(range(start_gen, n_generations + 1), desc=f"{BackgroundColors.GREEN}Generations{Style.RESET_ALL}") if show_progress else range(start_gen, n_generations + 1) # Create generation range with progress bar if show_progress is enabled, otherwise use plain range
+   gens_ran = 0 # Track how many generations were actually executed
    for gen in gen_range: # Loop for the specified number of generations
       update_progress_bar(progress_bar, dataset_name or "", csv_path or "", pop_size=pop_size, max_pop=max_pop, gen=gen, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
 
@@ -848,11 +854,11 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
       if best_fitness is None or (current_best_fitness is not None and current_best_fitness > best_fitness):
          best_fitness = current_best_fitness # Update best fitness
          gens_without_improvement = 0 # Reset counter
-      else:
+      else: # If no improvement in best fitness
          gens_without_improvement += 1 # Increment counter
 
          if gens_without_improvement >= early_stop_gens: # Verify early-stop condition
-            print(f"{BackgroundColors.YELLOW}Early stopping: No improvement in best fitness for {early_stop_gens} generations. Stopping at generation {gen}.{Style.RESET_ALL}")
+            print(f"{BackgroundColors.YELLOW}Early stopping: No improvement in best fitness for {early_stop_gens} generations. Stopping at generation {gen}.{Style.RESET_ALL}") # Print early stopping message
             gens_ran = gen # Record how many generations were executed before early stopping
             GA_GENERATIONS_COMPLETED = int(gen) # Update global variable
             break # Stop the loop early
@@ -866,6 +872,12 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
       gens_ran = gen # Update gens_ran each generation
       GA_GENERATIONS_COMPLETED = int(gen) # Update global variable
       gens_ran = gen if gens_ran == 0 else gens_ran # Ensure gens_ran is set correctly if no early stopping occurred
+      
+      try: # Persist per-generation progress so runs can be resumed
+         if RESUME_PROGRESS and state_id is not None: # If resume progress is enabled and state id is available
+            save_generation_state(output_dir, state_id, gen, population, hof[0] if hof and len(hof) > 0 else None, fitness_history)
+      except Exception: # If saving fails
+         pass # Do nothing
 
    if hasattr(toolbox, "map") and hasattr(toolbox.map, "close"): # If using multiprocessing pool
       toolbox.map.close() # Close the pool
@@ -1835,6 +1847,11 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    
    update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
    
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis" if csv_path else os.path.join(".", "Feature_Analysis") # Output directory for Feature_Analysis outputs
+   cached, state_id = load_cached_run_if_any(output_dir, csv_path, pop_size, n_generations, cxpb, mutpb, run, folds, y_train, y_test) # Try to load cached run result and state id
+   if cached: # If cached result found
+      return cached # Return cached result immediately
+   
    toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size) # Setup GA components
    best_ind, gens_ran, fitness_history = run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations, show_progress=False, progress_bar=progress_bar, dataset_name=dataset_name, csv_path=csv_path, pop_size=pop_size, max_pop=max_pop, cxpb=cxpb, mutpb=mutpb, run=run, runs=runs, progress_state=progress_state) # Run GA loop and get generations actually run and fitness history
    
@@ -1855,8 +1872,16 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
       plot_ga_convergence(csv_path, pop_size, run, fitness_history, dataset_name, n_generations=n_generations, cxpb=cxpb, mutpb=mutpb) # Generate convergence plot
    except Exception as e: # On any plotting error
       verbose_output(f"{BackgroundColors.YELLOW}Failed to generate GA convergence plot: {e}{Style.RESET_ALL}") # Log warning
+      result = {"best_ind": best_ind, "metrics": metrics_with_iteration_time, "best_features": best_features} # Build result dict
+      
+      try: # Try to save run result
+         if RESUME_PROGRESS and state_id is not None: # If resume is enabled and state_id exists
+            save_run_result(output_dir, state_id, result) # Save the run result
+            cleanup_state_for_id(output_dir, state_id) # Cleanup state files
+      except Exception: # On any saving error
+         pass # Do nothing
 
-   return {"best_ind": best_ind, "metrics": metrics_with_iteration_time, "best_features": best_features} # Return results
+      return result # Return results
 
 def aggregate_sweep_results(results, min_pop, max_pop, bot, dataset_name):
    """
