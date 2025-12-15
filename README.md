@@ -48,6 +48,10 @@ Project-Description - @UPDATE.
       - [Linux](#linux-1)
       - [macOS](#macos-1)
       - [Windows](#windows-1)
+    - [Make](#make)
+      - [Linux](#linux-2)
+      - [macOS](#macos-2)
+      - [Windows](#windows-2)
     - [6. Dataset](#6-dataset)
   - [Results - @UPDATE](#results---update)
   - [How to Cite?](#how-to-cite)
@@ -151,6 +155,26 @@ choco install python3
 ```
 
 Or download the installer from the official website [here](https://www.python.org/downloads/windows/) and follow the installation instructions provided there. Make sure to check the option "Add Python to PATH" during installation ans restart your terminal/computer.
+
+### Make 
+
+`Make` is used to run automated tasks defined in the project's Makefile, such as setting up environments, executing scripts, and managing Python dependencies.
+
+#### Linux
+
+``` bash
+sudo apt install make -y
+```
+
+#### macOS
+
+``` bash
+brew install make
+```
+
+#### Windows
+
+Available via Cygwin, MSYS2, or WSL.
 
 ### 6. Dataset
 
