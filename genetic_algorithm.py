@@ -1553,6 +1553,41 @@ def load_and_apply_generation_state(toolbox, population, output_dir, state_id, r
 
    return start_gen, fitness_history # Return the starting generation and fitness history
 
+def load_cached_run_if_any(output_dir, csv_path, pop_size, n_generations, cxpb, mutpb, run, folds, y_train=None, y_test=None):
+   """
+   Check for and load a previously saved run result for the given parameters.
+
+   :param output_dir: base Feature_Analysis output directory
+   :param csv_path: dataset CSV path
+   :param pop_size: population size
+   :param n_generations: number of generations
+   :param cxpb: crossover probability
+   :param mutpb: mutation probability
+   :param run: run index
+   :param folds: CV folds
+   :param y_train: training labels (optional, used to compute test_frac)
+   :param y_test: testing labels (optional, used to compute test_frac)
+   :return: tuple (result or None, state_id or None)
+   """
+
+   try: # Attempt to check for cached run result
+      n_train = len(y_train) if y_train is not None else 0 # Get number of training samples
+      n_test = len(y_test) if y_test is not None else 0 # Get number of test samples
+      test_frac = float(n_test) / float(n_train + n_test) if (n_train + n_test) > 0 else None # Calculate test fraction
+      state_id = compute_state_id(csv_path or "", pop_size, n_generations, cxpb, mutpb, run, folds, test_frac=test_frac) # Compute state id for the run
+      if RESUME_PROGRESS and state_id is not None: # If resume is enabled and state_id exists
+         prev = load_run_result(output_dir, state_id) # Load previous run result
+         if prev: # If previous result exists
+            try: # Try to log the cached result message
+               verbose_output(f"{BackgroundColors.GREEN}Found cached run result for run {run} (state id {state_id[:8]}). Skipping execution.{Style.RESET_ALL}") # Output cached result message
+            except Exception: # If logging fails
+               pass # Do nothing
+            return prev, state_id # Return the cached result and state_id
+   except Exception: # If any error occurs during checking
+      pass # Do nothing
+
+   return None, None # Return None for both result and state_id
+
 def prepare_feature_dataframe(X, feature_names):
    """
    Ensure features are available as a pandas DataFrame with appropriate column names.
