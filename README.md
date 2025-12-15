@@ -52,6 +52,7 @@ Project-Description - @UPDATE.
       - [Linux](#linux-2)
       - [macOS](#macos-2)
       - [Windows](#windows-2)
+    - [Dependencies](#dependencies)
     - [6. Dataset](#6-dataset)
   - [Results - @UPDATE](#results---update)
   - [How to Cite?](#how-to-cite)
@@ -175,6 +176,17 @@ brew install make
 #### Windows
 
 Available via Cygwin, MSYS2, or WSL.
+
+### Dependencies
+
+1. Install the project dependencies with the following command:
+
+   ```bash
+   cd DDoS-Detector # Only if not in the repository root directory yet
+   make dependencies
+   ```
+
+   This command will create a virtual environment in the `.venv` folder and install all required dependencies listed in the `requirements.txt` file.
 
 ### 6. Dataset
 
