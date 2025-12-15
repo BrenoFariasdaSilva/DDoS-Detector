@@ -39,6 +39,10 @@ Project-Description - @UPDATE.
   - [Introduction - @UPDATE](#introduction---update)
   - [Requirements - @UPDATE](#requirements---update)
   - [Setup](#setup)
+    - [Git](#git)
+        - [Linux](#linux)
+        - [macOS](#macos)
+        - [Windows](#windows)
     - [6. Dataset](#6-dataset)
   - [Results - @UPDATE](#results---update)
   - [How to Cite?](#how-to-cite)
@@ -58,6 +62,36 @@ Bullet points of the requirements, such as languages, libraries, tools, etc.
 ## Setup
 
 This section provides instructions for installing Git, Python, Pip, Make, then to clone the repository (if not done yet) and all required project dependencies. 
+
+### Git
+
+`git` is a distributed version control system that is widely used for tracking changes in source code during software development. In this project, `git` is used to download and manage the analyzed repositories, as well as to clone the project and its submodules. To install `git`, follow the instructions below based on your operating system:
+
+##### Linux
+
+To install `git` on Linux, run:
+
+```bash
+sudo apt install git -y # For Debian-based distributions (e.g., Ubuntu)
+```
+
+##### macOS
+
+If you don't have Homebrew installed, you can install it by running the following command in your terminal:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+To install `git` on MacOS, you can use Homebrew:
+
+```bash
+brew install git
+```
+
+##### Windows
+
+On Windows, you can download `git` from the official website [here](https://git-scm.com/downloads) and follow the installation instructions provided there.
 
 ### 6. Dataset
 
