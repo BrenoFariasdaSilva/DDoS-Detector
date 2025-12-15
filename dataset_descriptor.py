@@ -102,8 +102,8 @@ DATASETS = { # Dictionary containing dataset paths and feature files
 		"./Datasets/CICDDoS2019/01-12/",
 		"./Datasets/CICDDoS2019/03-11/",
    ],
-   "CICDDoS2017-Dataset": [ # List of paths to the CICDDoS2017 dataset
-      "./Datasets/CIC-IDS2017/Converted/",
+   "CICIDS2017-Dataset": [ # List of paths to the CICIDS2017 dataset
+      "./Datasets/CIC-IDS2017/TrafficLabelling/Converted/",
    ],
 }
 
