@@ -184,11 +184,8 @@ Available via Cygwin, MSYS2, or WSL.
    This command will create a virtual environment in the `.venv` folder and install all required dependencies listed in the `requirements.txt` file.
 
 ### Datasets
-1. Download the dataset you want to use and place it in this project directory `(/DDoS-Detector)`, inside the `Datasets` folder. If the folder does not exist, create it with the following command inside the repository root directory:
 
-   ```bash
-   mkdir ./Datasets
-   ```
+1. Download the dataset you want to use and place it in this project directory `(/DDoS-Detector)`, inside the `Datasets` folder. 
 
 Here are two of the used datasets . They can be found at:
    - [CICDDoS2019](https://www.unb.ca/cic/datasets/ddos-2019.html)
