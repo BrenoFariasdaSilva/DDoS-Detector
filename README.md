@@ -51,7 +51,7 @@ Project-Description - @UPDATE.
       - [Linux](#linux-2)
       - [macOS](#macos-2)
       - [Windows](#windows-2)
-    - [Dependencies](#dependencies)
+    - [Dependencies/Requirements](#dependenciesrequirements)
     - [6. Dataset](#6-dataset)
   - [Results - @UPDATE](#results---update)
   - [How to Cite?](#how-to-cite)
@@ -172,7 +172,7 @@ brew install make
 
 Available via Cygwin, MSYS2, or WSL.
 
-### Dependencies
+### Dependencies/Requirements
 
 1. Install the project dependencies with the following command:
 
