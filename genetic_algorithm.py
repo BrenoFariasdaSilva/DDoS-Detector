@@ -131,6 +131,73 @@ def verbose_output(true_string="", false_string=""):
    elif false_string != "": # If the false_string is set
       print(false_string) # Output the false statement string
  
+def verify_filepath_exists(filepath):
+   """
+   Verify if a file or folder exists at the specified path.
+
+   :param filepath: Path to the file or folder
+   :return: True if the file or folder exists, False otherwise
+   """
+
+   verbose_output(f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output the verbose message
+
+   return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
+
+def get_files_to_process(directory_path, file_extension=".csv"):
+   """
+   Get all of the specified files in a directory (non-recursive).
+   
+   :param directory_path: Path to the directory to search
+   :param file_extension: File extension to filter (default: .csv)
+   :return: List of files with the specified extension
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Getting all {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files in the directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}") # Output the verbose message
+
+   verify_filepath_exists(directory_path) # Verify if the directory exists
+
+   if not os.path.isdir(directory_path): # If the path is not a directory
+      verbose_output(f"{BackgroundColors.RED}The specified path is not a directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}") # Output the verbose message
+      return [] # Return an empty list
+
+   files = [] # List to store the files
+
+   for item in os.listdir(directory_path): # List all items in the directory
+      item_path = os.path.join(directory_path, item) # Get the full path of the item
+      filename = os.path.basename(item_path) # Get the filename
+      
+      if any(ignore and (ignore == filename or ignore == item_path) for ignore in FILES_TO_IGNORE): # If the file is in the FILES_TO_IGNORE list
+         verbose_output(f"{BackgroundColors.YELLOW}Ignoring file {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} listed in FILES_TO_IGNORE{Style.RESET_ALL}")
+         continue # Skip this file
+      
+      if os.path.isfile(item_path) and item.lower().endswith(file_extension): # If the item is a file and has the specified extension
+         files.append(item_path) # Add the file to the list
+
+   return sorted(files) # Return sorted list for consistency
+
+def get_dataset_name(input_path):
+   """
+   Extract the dataset name from CSVs path.
+
+   :param input_path: Path to the CSVs files
+   :return: Dataset name
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Extracting dataset name from CSV path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}") # Output the verbose message
+   
+   datasets_pos = input_path.find("/Datasets/") # Find the position of "/Datasets/" in the path
+   if datasets_pos != -1: # If "/Datasets/" is found in the path
+      after_datasets = input_path[datasets_pos + len("/Datasets/"):] # Get the substring after "/Datasets/"
+      next_slash = after_datasets.find("/") # Find the next "/"
+      if next_slash != -1: # If there is another "/"
+         dataset_name = after_datasets[:next_slash] # Take until the next "/"
+      else: # If there is no other "/"
+         dataset_name = after_datasets.split("/")[0] if "/" in after_datasets else after_datasets # No more "/", take the first part if any
+   else: # If "/Datasets/" is not found in the path
+      dataset_name = os.path.basename(input_path) # Fallback to basename if "Datasets" not in path
+
+   return dataset_name # Return the dataset name
+
 def get_logical_cpu_count():
    """
    Get logical CPU count, preferring psutil when available.
@@ -224,7 +291,7 @@ def compute_optimal_processes(reserve_cpu_frac=0.15, reserve_mem_frac=0.15, min_
 
    try: # Try to output verbose message and a visible print for auditing
       print(f"{BackgroundColors.GREEN}Optimal worker suggestion: {candidate} (total_cpus={total_cpus}, reserved={reserved}, cpu_bound={cpu_bound}, mem_bound={mem_bound}){Style.RESET_ALL}") # Verbose output
-      print(f"{BackgroundColors.GREEN}[Resource Monitor] Using {BackgroundColors.CYAN}{candidate}{BackgroundColors.GREEN} worker(s)  , cpu={BackgroundColors.CYAN}{total_cpus}{BackgroundColors.GREEN}, reserved={BackgroundColors.CYAN}{reserved}{BackgroundColors.GREEN}, cpu_bound={BackgroundColors.CYAN}{cpu_bound}{BackgroundColors.GREEN}, mem_bound={BackgroundColors.CYAN}{mem_bound}{Style.RESET_ALL}") # Visible runtime message
+      print(f"{BackgroundColors.GREEN}[Resource Monitor] Using {BackgroundColors.CYAN}{candidate}{BackgroundColors.GREEN} worker(s), cpu={BackgroundColors.CYAN}{total_cpus}{BackgroundColors.GREEN}, reserved={BackgroundColors.CYAN}{reserved}{BackgroundColors.GREEN}, cpu_bound={BackgroundColors.CYAN}{cpu_bound}{BackgroundColors.GREEN}, mem_bound={BackgroundColors.CYAN}{mem_bound}{Style.RESET_ALL}") # Visible runtime message
    except Exception: # Do not fail on any print errors
       pass # Silently ignore printing failures
 
@@ -304,73 +371,6 @@ def signal_new_file(file_path):
    except Exception: # Ignore any errors during signaling
       pass # Do nothing
 
-def verify_filepath_exists(filepath):
-   """
-   Verify if a file or folder exists at the specified path.
-
-   :param filepath: Path to the file or folder
-   :return: True if the file or folder exists, False otherwise
-   """
-
-   verbose_output(f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}") # Output the verbose message
-
-   return os.path.exists(filepath) # Return True if the file or folder exists, False otherwise
-
-def get_files_to_process(directory_path, file_extension=".csv"):
-   """
-   Get all of the specified files in a directory (non-recursive).
-   
-   :param directory_path: Path to the directory to search
-   :param file_extension: File extension to filter (default: .csv)
-   :return: List of files with the specified extension
-   """
-   
-   verbose_output(f"{BackgroundColors.GREEN}Getting all {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files in the directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}") # Output the verbose message
-
-   verify_filepath_exists(directory_path) # Verify if the directory exists
-
-   if not os.path.isdir(directory_path): # If the path is not a directory
-      verbose_output(f"{BackgroundColors.RED}The specified path is not a directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}") # Output the verbose message
-      return [] # Return an empty list
-
-   files = [] # List to store the files
-
-   for item in os.listdir(directory_path): # List all items in the directory
-      item_path = os.path.join(directory_path, item) # Get the full path of the item
-      filename = os.path.basename(item_path) # Get the filename
-      
-      if any(ignore and (ignore == filename or ignore == item_path) for ignore in FILES_TO_IGNORE): # If the file is in the FILES_TO_IGNORE list
-         verbose_output(f"{BackgroundColors.YELLOW}Ignoring file {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} listed in FILES_TO_IGNORE{Style.RESET_ALL}")
-         continue # Skip this file
-      
-      if os.path.isfile(item_path) and item.lower().endswith(file_extension): # If the item is a file and has the specified extension
-         files.append(item_path) # Add the file to the list
-
-   return sorted(files) # Return sorted list for consistency
-
-def get_dataset_name(input_path):
-   """
-   Extract the dataset name from CSVs path.
-
-   :param input_path: Path to the CSVs files
-   :return: Dataset name
-   """
-   
-   verbose_output(f"{BackgroundColors.GREEN}Extracting dataset name from CSV path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}") # Output the verbose message
-   
-   datasets_pos = input_path.find("/Datasets/") # Find the position of "/Datasets/" in the path
-   if datasets_pos != -1: # If "/Datasets/" is found in the path
-      after_datasets = input_path[datasets_pos + len("/Datasets/"):] # Get the substring after "/Datasets/"
-      next_slash = after_datasets.find("/") # Find the next "/"
-      if next_slash != -1: # If there is another "/"
-         dataset_name = after_datasets[:next_slash] # Take until the next "/"
-      else: # If there is no other "/"
-         dataset_name = after_datasets.split("/")[0] if "/" in after_datasets else after_datasets # No more "/", take the first part if any
-   else: # If "/Datasets/" is not found in the path
-      dataset_name = os.path.basename(input_path) # Fallback to basename if "Datasets" not in path
-
-   return dataset_name # Return the dataset name
-
 def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max_pop=None, gen=None, n_generations=None, run=None, runs=None, progress_state=None):
    """
    Update a tqdm `progress_bar` description and postfix consistently.
@@ -437,6 +437,16 @@ def update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=None, max
    except Exception: # Silently ignore progress bar update failures
       pass # Do nothing
 
+def normalize_feature_name(name):
+   """
+   Normalize feature name by stripping whitespace, replacing double spaces with single spaces, and lowercasing.
+
+   :param name: The feature name to normalize.
+   :return: Normalized feature name
+   """
+
+   return name.strip().replace("  ", " ").lower() # Strip whitespace, replace double spaces, and lowercase
+
 def load_dataset(csv_path):
    """
    Load CSV and return DataFrame.
@@ -454,6 +464,7 @@ def load_dataset(csv_path):
    df = pd.read_csv(csv_path, low_memory=False) # Load the dataset
 
    df.columns = df.columns.str.strip() # Clean column names by stripping leading/trailing whitespace
+   df.columns = [normalize_feature_name(col) for col in df.columns] # Normalize feature names by stripping, replacing spaces, and lowercasing
 
    if df.shape[1] < 2: # If there are less than 2 columns
       print(f"{BackgroundColors.RED}CSV must have at least 1 feature and 1 target.{Style.RESET_ALL}")
@@ -500,9 +511,7 @@ def cache_preprocessed_data(result, cache_file, csv_path):
    """
    
    X_train_scaled, X_test_scaled, y_train_np, y_test_np, X_columns = result # Unpack the result tuple
-   estimated_size = (X_train_scaled.nbytes + X_test_scaled.nbytes + 
-                     y_train_np.nbytes + y_test_np.nbytes + 
-                     len(pickle.dumps(X_columns))) # Estimate the size of the data to cache
+   estimated_size = (X_train_scaled.nbytes + X_test_scaled.nbytes + y_train_np.nbytes + y_test_np.nbytes + len(pickle.dumps(X_columns))) # Estimate the size of the data to cache
    cache_dir = os.path.dirname(cache_file) # Get the directory of the cache file
    total, used, free = shutil.disk_usage(cache_dir) # Get disk usage information
    if free < estimated_size * 1.1: # 10% margin
@@ -513,7 +522,6 @@ def cache_preprocessed_data(result, cache_file, csv_path):
          pickle.dump(result, f) # Dump the result to cache file
       verbose_output(f"{BackgroundColors.GREEN}Saved preprocessed data to cache {cache_file}.{Style.RESET_ALL}") # Output the verbose message
 
-      # Compare sizes
       pickle_size = os.path.getsize(cache_file) # Get the size of the pickle file
       csv_size = os.path.getsize(csv_path) # Get the size of the original CSV file
       if csv_size > 0: # If CSV size is available
@@ -589,6 +597,42 @@ def print_ga_parameters(min_pop, max_pop, n_generations, feature_count):
    print(f"  {BackgroundColors.GREEN}Optimization goal: {BackgroundColors.CYAN}Maximize F1-Score{Style.RESET_ALL}")
    print("") # Empty line for spacing
 
+def prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations):
+   """
+   Load and preprocess dataset for GA sweep.
+   
+   :param csv_path: Path to the CSV dataset.
+   :param dataset_name: Name of the dataset.
+   :param min_pop: Minimum population size.
+   :param max_pop: Maximum population size.
+   :param n_generations: Number of generations.
+   :return: Tuple (X_train, X_test, y_train, y_test, feature_names) or None if failed.
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Preparing dataset '{dataset_name}' for Genetic Algorithm sweep.{Style.RESET_ALL}") # Output the verbose message
+   
+   df = load_dataset(csv_path) # Load dataset
+   if df is None: # If loading failed
+      return None # Exit early
+   
+   cleaned_df = preprocess_dataframe(df) # Preprocess dataset
+   
+   if cleaned_df is None or cleaned_df.empty: # If preprocessing failed or dataset is empty
+      print(f"{BackgroundColors.RED}Dataset empty after preprocessing. Exiting.{Style.RESET_ALL}")
+      return None # Exit early
+   
+   X_train, X_test, y_train, y_test, feature_names = split_dataset(cleaned_df, csv_path) # Split dataset
+   if X_train is None: # If splitting failed
+      return None # Exit early
+   
+   print_ga_parameters(min_pop, max_pop, n_generations, len(feature_names) if feature_names is not None else 0) if VERBOSE else None # Print GA parameters if verbose
+   
+   train_count = len(y_train) if y_train is not None else 0 # Count training samples
+   test_count = len(y_test) if y_test is not None else 0 # Count testing samples
+   verbose_output(f"  {BackgroundColors.GREEN}  Dataset: {BackgroundColors.CYAN}{dataset_name} - {train_count} training / {test_count} testing  (80/20){Style.RESET_ALL}\n")
+   
+   return X_train, X_test, y_train, y_test, feature_names # Return prepared data
+
 def compute_progress_state(min_pop, max_pop, n_generations, runs, progress_bar, folds=10):
    """
    Compute an estimated progress_state dictionary for the population sweep.
@@ -621,6 +665,96 @@ def compute_progress_state(min_pop, max_pop, n_generations, runs, progress_bar, 
       return {"current_it": 0, "total_it": total_it} # Return the progress state dictionary
    except Exception: # If any error occurs
       return {"current_it": 0, "total_it": 0} # Return a default progress state
+
+def compute_state_id(csv_path, pop_size, n_generations, cxpb, mutpb, run, folds, test_frac=None):
+   """
+   Compute a deterministic short id for a particular run configuration.
+
+   :param csv_path: path to dataset CSV
+   :param pop_size: population size
+   :param n_generations: number of generations
+   :param cxpb: crossover probability
+   :param mutpb: mutation probability
+   :param run: run index
+   :param folds: CV folds
+   :param test_frac: train/test fraction
+   :return: hex string id or None on error
+   """
+   
+   try: # Attempt to compute the state id
+      key = f"{csv_path}|pop{pop_size}|gens{n_generations}|cx{cxpb}|mut{mutpb}|run{run}|folds{folds}|test{test_frac}" # Create a unique key string from run parameters
+      return hashlib.sha256(key.encode("utf-8")).hexdigest() # Compute SHA256 hash of the key and return as hex string
+   except Exception: # If any error occurs during computation
+      return None # Return None to indicate failure
+
+def state_file_paths(output_dir, state_id):
+   """
+   Return (gen_state_path, run_state_path) for a given state id and ensure dir exists.
+
+   :param output_dir: base output directory
+   :param state_id: deterministic id for run
+   :return: tuple(gen_path, run_path)
+   """
+   
+   state_dir = os.path.join(output_dir, PROGRESS_STATE_DIR_NAME) # Construct the state directory path
+   try: # Try to create the state directory if it doesn't exist
+      os.makedirs(state_dir, exist_ok=True) # Create the directory, ignoring if it already exists
+   except Exception: # If directory creation fails
+      pass # Do nothing
+   return os.path.join(state_dir, f"{state_id}_gen.pkl"), os.path.join(state_dir, f"{state_id}_run.pkl") # Return paths for generation and run state files
+
+def load_run_result(output_dir, state_id):
+   """
+   Load a previously saved run result if present.
+
+   :param output_dir: base output directory
+   :param state_id: deterministic id for run
+   :return: deserialized result or None
+   """
+   
+   try: # Attempt to load the run result
+      _, run_path = state_file_paths(output_dir, state_id) # Get the path for the run state file
+      if not os.path.exists(run_path): # Check if the file exists
+         return None # Return None if file does not exist
+      with open(run_path, "rb") as f: # Open the file for reading in binary mode
+         return pickle.load(f) # Deserialize and return the result
+   except Exception: # If any error occurs during loading
+      return None # Return None to indicate failure
+
+def load_cached_run_if_any(output_dir, csv_path, pop_size, n_generations, cxpb, mutpb, run, folds, y_train=None, y_test=None):
+   """
+   Check for and load a previously saved run result for the given parameters.
+
+   :param output_dir: base Feature_Analysis output directory
+   :param csv_path: dataset CSV path
+   :param pop_size: population size
+   :param n_generations: number of generations
+   :param cxpb: crossover probability
+   :param mutpb: mutation probability
+   :param run: run index
+   :param folds: CV folds
+   :param y_train: training labels (optional, used to compute test_frac)
+   :param y_test: testing labels (optional, used to compute test_frac)
+   :return: tuple (result or None, state_id or None)
+   """
+
+   try: # Attempt to check for cached run result
+      n_train = len(y_train) if y_train is not None else 0 # Get number of training samples
+      n_test = len(y_test) if y_test is not None else 0 # Get number of test samples
+      test_frac = float(n_test) / float(n_train + n_test) if (n_train + n_test) > 0 else None # Calculate test fraction
+      state_id = compute_state_id(csv_path or "", pop_size, n_generations, cxpb, mutpb, run, folds, test_frac=test_frac) # Compute state id for the run
+      if RESUME_PROGRESS and state_id is not None: # If resume is enabled and state_id exists
+         prev = load_run_result(output_dir, state_id) # Load previous run result
+         if prev: # If previous result exists
+            try: # Try to log the cached result message
+               verbose_output(f"{BackgroundColors.GREEN}Found cached run result for run {run} (state id {state_id[:8]}). Skipping execution.{Style.RESET_ALL}") # Output cached result message
+            except Exception: # If logging fails
+               pass # Do nothing
+            return prev, state_id # Return the cached result and state_id
+   except Exception: # If any error occurs during checking
+      pass # Do nothing
+
+   return None, None # Return None for both result and state_id
 
 def setup_genetic_algorithm(n_features, population_size=None):
    """
@@ -791,6 +925,109 @@ def ga_fitness(ind, fitness_func):
    
    return (fitness_func(ind)[3],) # Return only the F1-score for GA optimization
 
+def load_generation_state(output_dir, state_id):
+   """
+   Load generation state if present, returning the payload or None.
+
+   :param output_dir: base output directory
+   :param state_id: deterministic id for run
+   :return: payload dict or None
+   """
+   
+   try: # Attempt to load the generation state
+      gen_path, _ = state_file_paths(output_dir, state_id) # Get the path for the generation state file
+      if not os.path.exists(gen_path): # Check if the file exists
+         return None # Return None if file does not exist
+      with open(gen_path, "rb") as f: # Open the file for reading in binary mode
+         return pickle.load(f) # Deserialize and return the payload
+   except Exception: # If any error occurs during loading
+      return None # Return None to indicate failure
+
+def recreate_population_from_lists(toolbox, pop_lists):
+   """
+   Create DEAP individual objects from plain lists using registered toolbox.individual.
+
+   :param toolbox: DEAP toolbox with `individual` registered
+   :param pop_lists: iterable of bit-lists
+   :return: list of individuals or empty list on error
+   """
+   
+   population = [] # Initialize an empty list for the population
+   try: # Attempt to recreate the population
+      for bits in pop_lists: # Iterate over each bit list in pop_lists
+         ind = toolbox.individual() # Create a new individual using the toolbox
+         for i, b in enumerate(bits): # Iterate over each bit in the list
+            try: # Try to convert the bit to int
+               ind[i] = int(b) # Set the individual's gene to the integer value
+            except Exception: # If conversion fails
+               ind[i] = b # Set the individual's gene to the original value
+         ind.fitness.values = () # Initialize fitness values as empty tuple
+         population.append(ind) # Add the individual to the population
+   except Exception: # If any error occurs during recreation
+      return [] # Return an empty list
+   return population # Return the recreated population
+
+def load_and_apply_generation_state(toolbox, population, output_dir, state_id, run=None):
+   """
+   Load a saved GA generation state and apply it to the provided population.
+
+   :param toolbox: DEAP toolbox used to recreate individuals
+   :param population: population list to modify in-place
+   :param output_dir: directory where generation state files live
+   :param state_id: deterministic id for the run state
+   :param run: optional run index for logging
+   :return: tuple (start_gen:int, fitness_history:list)
+   """
+
+   start_gen = 1 # Initialize starting generation to 1
+   fitness_history = [] # Initialize fitness history as empty list
+   if RESUME_PROGRESS and state_id is not None: # Check if resume is enabled and state_id is provided
+      try: # Attempt to load and apply the state
+         payload = load_generation_state(output_dir, state_id) # Load the generation state payload
+         if payload: # If payload exists
+            pop_lists = payload.get("population_lists") # Get the population lists from payload
+            if pop_lists: # If population lists exist
+               recreated = recreate_population_from_lists(toolbox, pop_lists) # Recreate population from lists
+               if recreated: # If recreation succeeded
+                  population[:] = recreated # Replace the population with recreated one
+               fitness_history = payload.get("fitness_history", []) # Get fitness history from payload
+            loaded_gen = int(payload.get("gen", 0)) # Get the loaded generation number
+            start_gen = loaded_gen + 1 if loaded_gen >= 1 else 1 # Set start_gen to loaded_gen + 1 or 1
+            try: # Try to log the resume message
+               verbose_output(f"{BackgroundColors.GREEN}Resuming GA from generation {start_gen} for run {run} (state id {state_id[:8]}){Style.RESET_ALL}") # Output resume message
+            except Exception: # If logging fails
+               pass # Do nothing
+      except Exception: # If any error occurs during loading/applying
+         pass # Do nothing
+
+   return start_gen, fitness_history # Return the starting generation and fitness history
+
+def save_generation_state(output_dir, state_id, gen, population, hof_best, fitness_history):
+   """
+   Persist minimal generation state to disk (lists only).
+
+   :param output_dir: base output directory
+   :param state_id: deterministic id for run
+   :param gen: generation number
+   :param population: list of individuals
+   :param hof_best: best individual list or None
+   :param fitness_history: list of fitness history
+   :return: None
+   """
+   
+   try: # Attempt to save the generation state
+      gen_path, _ = state_file_paths(output_dir, state_id) # Get the path for the generation state file
+      payload = { # Prepare the payload dictionary
+         "gen": int(gen), # Current generation number
+         "population_lists": [list(ind) for ind in population], # List of population individuals as lists
+         "hof_best": list(hof_best) if hof_best is not None else None, # Best individual from hall of fame
+         "fitness_history": list(fitness_history) if fitness_history is not None else [], # History of fitness values
+      } # End of payload dictionary
+      with open(gen_path, "wb") as f: # Open the file for writing in binary mode
+         pickle.dump(payload, f, protocol=PICKLE_PROTOCOL) # Serialize and save the payload
+   except Exception: # If any error occurs during saving
+      pass # Do nothing
+
 def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, X_test, y_test, n_generations=100, show_progress=False, progress_bar=None, dataset_name=None, csv_path=None, pop_size=None, max_pop=None, cxpb=0.5, mutpb=0.2, run=None, runs=None, progress_state=None):
    """
    Run Genetic Algorithm generations with a tqdm progress bar.
@@ -885,343 +1122,6 @@ def run_genetic_algorithm_loop(bot, toolbox, population, hof, X_train, y_train, 
 
    return hof[0], gens_ran, fitness_history # Return the best individual, gens ran and fitness history
 
-def safe_filename(name):
-   """
-   Sanitize a string to be safe for use as a filename.
-
-   :param name: The string to be sanitized.
-   :return: A sanitized string safe for use as a filename.
-   """
-
-   return re.sub(r'[\\/*?:"<>|]', "_", name) # Replace invalid filename characters with underscores
-
-def analyze_top_features(df, y, top_features, csv_path="."):
-   """
-   Analyze and visualize the top features.
-
-   :param df: DataFrame containing the features.
-   :param y: Target variable.
-   :param top_features: List of top feature names.
-   :param csv_path: Path to the original CSV file for saving outputs.
-   :return: None
-   """
-
-   df_analysis = df[top_features].copy() # Create a copy of the DataFrame with only the top features
-   df_analysis["Target"] = pd.Series(y, index=df_analysis.index).astype(str) # Add the target variable to the DataFrame
-
-   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis" # Directory to save outputs
-   os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
-
-   base_dataset_name = os.path.splitext(os.path.basename(csv_path))[0] # Base name of the dataset
-
-   summary = df_analysis.groupby("Target")[top_features].agg(["mean", "std"]) # Calculate mean and std for each feature grouped by target
-   summary.columns = [f"{col}_{stat}" for col, stat in summary.columns] # Flatten MultiIndex columns
-   summary = summary.round(3) # Round to 3 decimal places
-
-   summary_csv_path = f"{output_dir}/{base_dataset_name}_feature_summary.csv" # Path to save the summary CSV
-   summary.to_csv(summary_csv_path, encoding="utf-8") # Save the summary to a CSV file
-   print(f"\n{BackgroundColors.GREEN}Features summary saved to {BackgroundColors.CYAN}{summary_csv_path}{Style.RESET_ALL}") # Notify user
-
-   for feature in top_features: # For each top feature
-      plt.figure(figsize=(8, 5)) # Create a new figure
-      sns.boxplot(x="Target", y=feature, data=df_analysis, hue="Target", palette="Set2", dodge=False) # Boxplot
-      plt.title(f"Distribution of '{feature}' by class") # Title
-      plt.xlabel("Traffic Type") # X-axis label
-      plt.ylabel(feature) # Y-axis label
-      plt.tight_layout() # Adjust layout
-      plt.savefig(f"{output_dir}/{base_dataset_name}-{safe_filename(feature)}.png") # Save the plot
-      plt.close() # Close the plot to free memory
-
-def normalize_feature_name(name):
-   """
-   Normalize feature name by stripping whitespace and replacing double spaces with single spaces.
-
-   :param name: The feature name to normalize.
-   :return: Normalized feature name
-   """
-
-   return name.strip().replace("  ", " ") # Strip whitespace and replace double spaces with single spaces
-
-def extract_rfe_ranking(csv_path):
-   """
-   Extract RFE rankings from the RFE results file.
-
-   :param csv_path: Path to the original CSV file for saving outputs.
-   :return: Dictionary of feature names and their RFE rankings.
-   """
-   
-   verbose_output(f"{BackgroundColors.GREEN}Extracting RFE rankings from results file.{Style.RESET_ALL}") # Output the verbose message
-
-   rfe_ranking = {} # Dictionary to store feature names and their RFE rankings
-   dir_path = os.path.dirname(csv_path) # Directory that contains Feature_Analysis
-   json_path = f"{dir_path}/Feature_Analysis/RFE_Summary.json" # Path to new JSON summary
-   csv_path_runs = f"{dir_path}/Feature_Analysis/RFE_Runs_Summary.csv" # Path to runs summary CSV
-   legacy_txt = f"{dir_path}/Feature_Analysis/RFE_results_RandomForestClassifier.txt" # Legacy TXT path (fallback)
-
-   if verify_filepath_exists(json_path): # If JSON summary exists
-      try: # Attempt to parse JSON
-         with open(json_path, "r", encoding="utf-8") as jf: # Open JSON file
-            data = json.load(jf) # Load JSON content
-         if isinstance(data, dict): # Ensure data is a dictionary
-            if "rfe_ranking" in data and isinstance(data["rfe_ranking"], dict): # rfe_ranking key
-               rfe_ranking = data["rfe_ranking"] # Use provided ranking
-            elif "per_run" in data and isinstance(data["per_run"], list) and len(data["per_run"])>0: # per_run list exists
-               first = data["per_run"][0] # First run entry
-               if isinstance(first, dict) and "ranking" in first and isinstance(first["ranking"], dict): # ranking dict
-                  rfe_ranking = first["ranking"] # Use ranking
-      except Exception as e: # If parsing JSON fails
-         print(f"{BackgroundColors.YELLOW}Failed to parse RFE JSON summary: {str(e)}. Skipping RFE ranking extraction.{Style.RESET_ALL}") # Warn user
-         return rfe_ranking # Return whatever we have (likely empty)
-      return rfe_ranking # Return ranking extracted from JSON
-
-   if verify_filepath_exists(csv_path_runs): # If CSV summary exists
-      try: # Attempt to parse CSV
-         with open(csv_path_runs, "r", encoding="utf-8") as cf: # Open CSV file
-            reader = csv.DictReader(cf) # Use DictReader to parse headered CSV
-            for row in reader: # Iterate rows
-               for key, val in row.items(): # For each column value
-                  if val and isinstance(val, str) and val.strip().startswith("{"): # Looks like JSON
-                     try: # Try parse JSON string
-                        parsed = json.loads(val) # Parse JSON string
-                        if isinstance(parsed, dict) and all(isinstance(k, str) for k in parsed.keys()): # Likely ranking
-                           rfe_ranking = parsed # Use parsed dict as ranking
-                           return rfe_ranking # Return early
-                     except Exception: # ignore parse errors and continue
-                        pass
-      except Exception as e: # If reading CSV fails
-         print(f"{BackgroundColors.YELLOW}Failed to parse RFE CSV summary: {str(e)}. Skipping RFE ranking extraction.{Style.RESET_ALL}") # Warn user
-
-   if not verify_filepath_exists(legacy_txt): # If no legacy file either
-      print(f"{BackgroundColors.YELLOW}RFE results not found (tried JSON/CSV/TXT). Skipping RFE ranking extraction.{Style.RESET_ALL}") # Notify user
-      return rfe_ranking # Return empty dictionary
-
-   try: # Attempt to parse TXT file
-      with open(legacy_txt, "r", encoding="utf-8") as f: # Open legacy TXT
-         lines = f.readlines() # Read lines
-      for line in lines: # Iterate lines
-         line = line.strip() # Strip whitespace
-         if not line: # Skip empty lines
-            continue # Continue
-         m = re.match(r"^\s*(\d+)\.?\s+(.+?)\s*$", line) # Try numeric prefix
-         if m: # If matched numbered list
-            rank = int(m.group(1)) # Get rank number
-            feat = m.group(2).strip() # Get feature name
-            rfe_ranking[feat] = rank # Store ranking
-   except Exception as e: # If parsing fails
-      print(f"{BackgroundColors.YELLOW}Failed to parse legacy RFE TXT: {str(e)}. Returning empty ranking.{Style.RESET_ALL}") # Notify user
-
-   return rfe_ranking # Return the RFE rankings dictionary
-
-def print_metrics(metrics):
-   """
-   Print performance metrics.
-
-   :param metrics: Dictionary or tuple containing evaluation metrics.
-   :return: None
-   """
-
-   if not metrics: # If metrics is None or empty
-      return # Do nothing
-   
-   acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics
-   print(f"\n{BackgroundColors.GREEN}Performance Metrics for the Random Forest Classifier using the best feature subset:{Style.RESET_ALL}")
-   print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{acc:.4f}{Style.RESET_ALL}")
-   print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{prec:.4f}{Style.RESET_ALL}")
-   print(f"   {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{rec:.4f}{Style.RESET_ALL}")
-   print(f"   {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{f1:.4f}{Style.RESET_ALL}")
-   print(f"   {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{fpr:.4f}{Style.RESET_ALL}")
-   print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{fnr:.4f}{Style.RESET_ALL}")
-   print(f"   {BackgroundColors.GREEN}Elapsed Time (s): {BackgroundColors.CYAN}{int(elapsed_time)}{Style.RESET_ALL}")
-
-def metrics_to_dict(metrics):
-   """
-   Convert a metrics tuple to a standardized dictionary.
-
-   :param metrics: Metrics tuple in the form (accuracy, precision, recall, f1, fpr, fnr, elapsed_time)
-             or None.
-   :return: Dictionary with float values for each metric or None when input is falsy.
-   """
-   
-   if not metrics: # If metrics is None or falsy, return explicit keys with None
-      return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None, "elapsed_time_s": None}
-
-   acc, prec, rec, f1, fpr, fnr, elapsed = metrics # Unpack metrics
-
-   return {
-      "accuracy": float(round(acc, 4)), # Accuracy
-      "precision": float(round(prec, 4)), # Precision
-      "recall": float(round(rec, 4)), # Recall
-      "f1_score": float(round(f1, 4)), # F1 Score
-      "fpr": float(round(fpr, 4)), # False Positive Rate
-      "fnr": float(round(fnr, 4)), # False Negative Rate
-      "elapsed_time_s": int(round(elapsed)) # Elapsed time in seconds
-   }
-
-def extract_elapsed_from_metrics(metrics, index=6):
-   """
-   Safely extract an elapsed-time value from a metrics tuple.
-
-   :param metrics: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed) or None
-   :param index: Index within the tuple where elapsed time is expected (default 6)
-   :return: elapsed value (float) if available, otherwise None
-   """
-   
-   if not metrics: # If metrics is None or falsy
-      return None # Return None
-   try: # Try to extract elapsed time
-      if isinstance(metrics, (list, tuple)) and len(metrics) > index: # Verify index is valid
-         return metrics[index] # Return elapsed time
-   except Exception: # On any error
-      pass # Ignore errors
-   
-   return None # Return None if extraction fails
-
-def build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking, elapsed_time_s=None, cxpb=None, mutpb=None):
-   """
-   Build the base dictionary row used for the consolidated GA CSV output.
-
-   :param csv_path: Path to the original dataset CSV.
-   :param best_pop_size: Population size that produced the best result.
-   :param n_generations: Number of generations used in the GA.
-   :param n_train: Number of training samples.
-   :param n_test: Number of testing samples.
-   :param test_frac: Train/test fraction.
-   :param rfe_ranking: Dictionary with RFE rankings (will be JSON-encoded).
-   :return: Dictionary representing the base row for CSV output.
-   """
-   
-   return { # Base row for CSV
-      "dataset": os.path.splitext(os.path.basename(csv_path))[0], # Dataset name
-      "dataset_path": csv_path, # Dataset path
-      "run_index": "best", # Indicates best run
-      "population_size": best_pop_size, # Population size
-      "n_generations": n_generations, # Number of generations
-      "cxpb": cxpb, # Crossover probability used in GA
-      "mutpb": mutpb, # Mutation probability used in GA
-      "n_train": n_train, # Number of training samples
-      "n_test": n_test, # Number of testing samples
-      "train_test_ratio": test_frac, # Train/test fraction
-      "elapsed_time_s": int(round(elapsed_time_s)) if elapsed_time_s is not None else None, # Elapsed seconds for best-model training
-      "rfe_ranking": json.dumps(rfe_ranking, ensure_ascii=False) # RFE ranking as JSON string
-   }
-
-def build_rows_list(rf_metrics, best_features, runs_list, feature_names, base_row):
-   """
-   Build the list of rows (dictionaries) that will be written to the consolidated GA CSV.
-
-   :param rf_metrics: Metrics tuple for the best RandomForest evaluation (or None).
-   :param best_features: List of features selected by the GA best individual.
-   :param runs_list: Optional list of per-run dictionaries with keys 'metrics', 'best_features', 'best_ind'.
-   :param feature_names: Original feature names list (used if per-run data includes binary masks).
-   :param base_row: Base row dictionary produced by `build_base_row`.
-   :return: List of dictionaries ready to be converted into a DataFrame.
-   """
-   
-   rows = [] # List to hold CSV rows
-   rf_row = dict(base_row) # Create Random Forest row
-   rf_row.update({"classifier": "RandomForest",}) # Set classifier
-   rf_row.update(metrics_to_dict(rf_metrics)) # Add RF metrics
-   rf_row.update({"best_features": json.dumps(best_features, ensure_ascii=False),}) # Add best features as JSON string
-   rows.append(rf_row) # Add RF row to rows
-
-   if runs_list: # If multiple runs data is provided
-      for idx, run_data in enumerate(runs_list, start=1): # For each run
-         run_metrics = run_data.get("metrics") if run_data.get("metrics") is not None else None
-         run_features = run_data.get("best_features") if run_data.get("best_features") is not None else [f for f, bit in zip(feature_names if feature_names is not None else [], run_data.get("best_ind", [])) if bit == 1] # Extract features for this run
-         run_row = dict(base_row) # Create row for this run
-
-         run_row.update({"classifier": "RandomForest"}) # Set classifier
-         run_row.update(metrics_to_dict(run_metrics)) # Add run metrics
-         run_row.update({"best_features": json.dumps(run_features, ensure_ascii=False), "run_index": idx}) # Add best features and run index
-         rows.append(run_row) # Add run row to rows
-
-   return rows # Return consolidated rows
-
-def normalize_elapsed_column_df(df):
-   """
-   Normalize elapsed time column name to `elapsed_time_s` if the legacy
-   `elapsed_time` column is present.
-
-   :param df: pandas DataFrame
-   :return: DataFrame with `elapsed_time_s` column
-   """
-   
-   if "elapsed_time" in df.columns and "elapsed_time_s" not in df.columns: # If legacy column present and new column missing
-      df["elapsed_time_s"] = df["elapsed_time"] # Copy legacy elapsed_time into the new elapsed_time_s column
-      df.drop(columns=["elapsed_time"], inplace=True) # Remove the legacy elapsed_time column to avoid duplication
-   return df # Return DataFrame with normalized elapsed time column
-
-def load_existing_results(csv_out):
-   """
-   Load an existing consolidated CSV if present, returning an empty
-   DataFrame on error or when file is missing.
-
-   :param csv_out: path to consolidated CSV
-   :return: pandas.DataFrame
-   """
-   
-   if os.path.exists(csv_out): # If the consolidated CSV exists
-      try: # Try to read the file into a DataFrame
-         return pd.read_csv(csv_out, dtype=object) # Read CSV preserving types as object
-      except Exception: # On any read error
-         return pd.DataFrame() # Return empty DataFrame as a fallback
-   return pd.DataFrame() # File not present — return empty DataFrame
-
-def merge_replace_existing(df_existing, df_new):
-   """
-   Merge `df_new` into `df_existing` using replace-by-`dataset_path`
-   semantics: any existing rows whose `dataset_path` appears in `df_new`
-   are removed before appending `df_new`.
-
-   :param df_existing: existing DataFrame (may be empty)
-   :param df_new: incoming DataFrame with new rows
-   :return: merged DataFrame
-   """
-   
-   if not df_existing.empty and "dataset_path" in df_new.columns: # If existing rows present and incoming rows include dataset_path
-      new_paths = df_new["dataset_path"].unique().tolist() # Compute unique dataset paths from incoming rows
-      df_existing = df_existing[~df_existing["dataset_path"].isin(new_paths)] # Remove any existing rows that match those paths
-   df_combined = pd.concat([df_existing, df_new], ignore_index=True, sort=False) # Concatenate remaining existing rows with new rows
-   return df_combined # Return the merged DataFrame
-
-def ensure_expected_columns(df_combined, columns):
-   """
-   Ensure the expected columns exist on the combined DataFrame; add
-   missing columns with None values.
-
-   :param df_combined: pandas.DataFrame
-   :param columns: list of expected column names
-   :return: DataFrame with ensured columns
-   """
-   
-   for column in columns: # Iterate over expected column names
-      if column not in df_combined.columns: # If the column is missing from the DataFrame
-         df_combined[column] = None # Add the missing column and fill with None
-   return df_combined # Return DataFrame with ensured columns
-
-def sort_run_index_first(df_combined):
-   """
-   Sort by `dataset`, `dataset_path` and a numeric-coded `run_index`
-   where the string "best" is forced to come before numeric runs.
-
-   :param df_combined: pandas.DataFrame
-   :return: sorted DataFrame
-   """
-   
-   def run_index_sort(val): # Helper that maps run_index values to sortable integers
-      try: # Try to normalize and parse the run index
-         s = str(val).strip() # Convert the value to string and strip whitespace
-         if s.lower() == "best": # If value is the literal 'best'
-            return -1 # Force 'best' to sort before numeric indices
-         return int(float(s)) # Convert numeric-like strings to integer for sorting
-      except Exception: # On any parsing error
-         return 10**9 # Use a very large number to push malformed values to the end
-
-   df_combined["run_index_sort"] = df_combined["run_index"].apply(run_index_sort) # Create temporary numeric sort key
-   df_combined.sort_values(by=["dataset", "dataset_path", "run_index_sort"], inplace=True, ascending=[True, True, True]) # Sort by dataset, path, then run order
-   df_combined.drop(columns=["run_index_sort"], inplace=True) # Remove temporary sort key column
-   return df_combined # Return the sorted DataFrame
-
 def adjust_progress_for_early_stop(progress_state, n_generations, pop_size, gens_ran, folds):
    """
    Adjust `progress_state` when a GA run finishes early.
@@ -1253,6 +1153,16 @@ def adjust_progress_for_early_stop(progress_state, n_generations, pop_size, gens
       progress_state["current_it"] = int(progress_state.get("current_it", 0)) + folds # Increment current_it for final re-eval
    except Exception: # Silently ignore failures when updating current_it
       pass # Do nothing on error
+
+def safe_filename(name):
+   """
+   Sanitize a string to be safe for use as a filename.
+
+   :param name: The string to be sanitized.
+   :return: A sanitized string safe for use as a filename.
+   """
+
+   return re.sub(r'[\\/*?:"<>|]', "_", name) # Replace invalid filename characters with underscores
 
 def plot_ga_convergence(csv_path, pop_size, run, fitness_history, dataset_name=None, n_generations=None, cxpb=0.5, mutpb=0.2):
    """
@@ -1296,310 +1206,6 @@ def plot_ga_convergence(csv_path, pop_size, run, fitness_history, dataset_name=N
          pass # Do nothing
       raise # Reraise the original exception
 
-def get_hardware_specifications():
-   """
-   Returns system specs: real CPU model (Windows/Linux/macOS), physical cores,
-   RAM in GB, and OS name/version.
-   
-   :return: Dictionary with keys: cpu_model, cores, ram_gb, os
-   """
-   
-   verbose_output(f"{BackgroundColors.GREEN}Fetching system specifications...{Style.RESET_ALL}") # Output the verbose message
-   
-   system = platform.system() # Identify OS type
-
-   try: # Try to fetch real CPU model using OS-specific methods
-      if system == "Windows": # Windows: use WMIC
-         out = subprocess.check_output("wmic cpu get Name", shell=True).decode(errors="ignore") # Run WMIC
-         cpu_model = out.strip().split("\n")[1].strip() # Extract model line
-
-      elif system == "Linux": # Linux: read from /proc/cpuinfo
-         cpu_model = "Unknown" # Default
-         with open("/proc/cpuinfo") as f: # Open cpuinfo
-            for line in f: # Iterate lines
-               if "model name" in line: # Model name entry
-                  cpu_model = line.split(":",1)[1].strip() # Extract name
-                  break # Stop after first match
-
-      elif system == "Darwin": # macOS: use sysctl
-         out = subprocess.check_output(["sysctl","-n","machdep.cpu.brand_string"]) # Run sysctl
-         cpu_model = out.decode().strip() # Extract model string
-
-      else: # Unsupported OS
-         cpu_model = "Unknown" # Fallback
-
-   except Exception: # If any method fails
-      cpu_model = "Unknown" # Fallback on failure
-
-   cores = psutil.cpu_count(logical=False) if psutil else None # Physical core count
-   ram_gb = round(psutil.virtual_memory().total / (1024**3), 1) if psutil else None # Total RAM in GB
-   os_name = f"{platform.system()} {platform.release()}" # OS name + version
-
-   return { # Build final dictionary
-      "cpu_model": cpu_model, # CPU model string
-      "cores": cores, # Physical cores
-      "ram_gb": ram_gb, # RAM in gigabytes
-      "os": os_name # Operating system
-   }
-
-def populate_hardware_column(df, column_name="hardware"):
-   """
-   Populate `df[column_name]` with a readable hardware description built from
-   `get_hardware_specifications()`. On failure the column will be set to None.
-
-   :param df: pandas.DataFrame to modify in-place
-   :param column_name: Name of the column to set (default: "hardware")
-   :return: None
-   """
-   
-   try: # Try to fetch hardware specifications
-      hardware_specs = get_hardware_specifications() # Get system specs
-      hardware_str = ( # Build readable hardware string
-         f"{hardware_specs.get('cpu_model','Unknown')} | Cores: {hardware_specs.get('cores', 'N/A')}"
-         f" | RAM: {hardware_specs.get('ram_gb', 'N/A')} GB | OS: {hardware_specs.get('os','Unknown')}"
-      )
-      df[column_name] = hardware_str # Set the hardware column
-   except Exception: # On any failure
-      df[column_name] = None # Set hardware column to None
-
-def write_consolidated_csv(rows, output_dir):
-   """
-   Write the consolidated GA results rows to a CSV file inside `output_dir`.
-
-   :param rows: List of dictionaries representing rows.
-   :param output_dir: Directory where `Genetic_Algorithm_Results.csv` will be saved.
-   :return: None
-   """
-   
-   verbose_output(f"{BackgroundColors.GREEN}Writing consolidated Genetic Algorithm results CSV.{Style.RESET_ALL}") # Output the verbose message
-   
-   try: # Try to write the consolidated CSV
-      os.makedirs(output_dir, exist_ok=True) # Ensure output directory exists
-
-      df_new = pd.DataFrame(rows) # Create DataFrame from provided rows
-
-      df_new = normalize_elapsed_column_df(df_new) # Normalize legacy elapsed_time to elapsed_time_s in new rows
-
-      csv_out = os.path.join(output_dir, "Genetic_Algorithm_Results.csv") # Build path for consolidated CSV
-
-      df_existing = load_existing_results(csv_out) # Load existing consolidated CSV if available
-      df_existing = normalize_elapsed_column_df(df_existing) # Normalize legacy elapsed_time to elapsed_time_s in existing rows
-
-      if df_existing.empty: # If there is no existing consolidated CSV
-         df_combined = df_new.copy() # Use the new DataFrame as the combined result
-      else: # If existing consolidated CSV rows were loaded
-         df_combined = merge_replace_existing(df_existing, df_new) # Merge new rows, replacing by dataset_path where needed
-
-      columns = [ # Define canonical column order for the consolidated CSV
-         "dataset",
-         "dataset_path",
-         "run_index",
-         "population_size",
-         "n_generations",
-         "cxpb",
-         "mutpb",
-         "n_train",
-         "n_test",
-         "train_test_ratio",
-         "hardware",
-         "classifier",
-         "accuracy",
-         "precision",
-         "recall",
-         "f1_score",
-         "fpr",
-         "fnr",
-         "elapsed_time_s",
-         "best_features",
-         "rfe_ranking",
-      ]
-
-      populate_hardware_column(df_combined, column_name="hardware") # Populate hardware column using system specs
-
-      df_combined = ensure_expected_columns(df_combined, columns) # Add any missing expected columns with None values
-      df_combined = sort_run_index_first(df_combined) # Sort so that 'best' run_index appears first for each dataset/dataset_path
-
-      df_combined = df_combined[columns] # Reorder columns into the canonical order
-      df_combined.to_csv(csv_out, index=False, encoding="utf-8") # Persist the consolidated CSV to disk
-      print(f"\n{BackgroundColors.GREEN}Genetic Algorithm consolidated results saved to {BackgroundColors.CYAN}{csv_out}{Style.RESET_ALL}") # Notify user of success
-   except Exception as e:
-      print(f"{BackgroundColors.RED}Failed to write consolidated GA CSV: {str(e)}{Style.RESET_ALL}") # Print failure message with exception
-
-def compute_state_id(csv_path, pop_size, n_generations, cxpb, mutpb, run, folds, test_frac=None):
-   """
-   Compute a deterministic short id for a particular run configuration.
-
-   :param csv_path: path to dataset CSV
-   :param pop_size: population size
-   :param n_generations: number of generations
-   :param cxpb: crossover probability
-   :param mutpb: mutation probability
-   :param run: run index
-   :param folds: CV folds
-   :param test_frac: train/test fraction
-   :return: hex string id or None on error
-   """
-   
-   try: # Attempt to compute the state id
-      key = f"{csv_path}|pop{pop_size}|gens{n_generations}|cx{cxpb}|mut{mutpb}|run{run}|folds{folds}|test{test_frac}" # Create a unique key string from run parameters
-      return hashlib.sha256(key.encode("utf-8")).hexdigest() # Compute SHA256 hash of the key and return as hex string
-   except Exception: # If any error occurs during computation
-      return None # Return None to indicate failure
-
-def state_file_paths(output_dir, state_id):
-   """
-   Return (gen_state_path, run_state_path) for a given state id and ensure dir exists.
-
-   :param output_dir: base output directory
-   :param state_id: deterministic id for run
-   :return: tuple(gen_path, run_path)
-   """
-   
-   state_dir = os.path.join(output_dir, PROGRESS_STATE_DIR_NAME) # Construct the state directory path
-   try: # Try to create the state directory if it doesn't exist
-      os.makedirs(state_dir, exist_ok=True) # Create the directory, ignoring if it already exists
-   except Exception: # If directory creation fails
-      pass # Do nothing
-   return os.path.join(state_dir, f"{state_id}_gen.pkl"), os.path.join(state_dir, f"{state_id}_run.pkl") # Return paths for generation and run state files
-
-def save_generation_state(output_dir, state_id, gen, population, hof_best, fitness_history):
-   """
-   Persist minimal generation state to disk (lists only).
-
-   :param output_dir: base output directory
-   :param state_id: deterministic id for run
-   :param gen: generation number
-   :param population: list of individuals
-   :param hof_best: best individual list or None
-   :param fitness_history: list of fitness history
-   :return: None
-   """
-   
-   try: # Attempt to save the generation state
-      gen_path, _ = state_file_paths(output_dir, state_id) # Get the path for the generation state file
-      payload = { # Prepare the payload dictionary
-         "gen": int(gen), # Current generation number
-         "population_lists": [list(ind) for ind in population], # List of population individuals as lists
-         "hof_best": list(hof_best) if hof_best is not None else None, # Best individual from hall of fame
-         "fitness_history": list(fitness_history) if fitness_history is not None else [], # History of fitness values
-      } # End of payload dictionary
-      with open(gen_path, "wb") as f: # Open the file for writing in binary mode
-         pickle.dump(payload, f, protocol=PICKLE_PROTOCOL) # Serialize and save the payload
-   except Exception: # If any error occurs during saving
-      pass # Do nothing
-
-def load_generation_state(output_dir, state_id):
-   """
-   Load generation state if present, returning the payload or None.
-
-   :param output_dir: base output directory
-   :param state_id: deterministic id for run
-   :return: payload dict or None
-   """
-   
-   try: # Attempt to load the generation state
-      gen_path, _ = state_file_paths(output_dir, state_id) # Get the path for the generation state file
-      if not os.path.exists(gen_path): # Check if the file exists
-         return None # Return None if file does not exist
-      with open(gen_path, "rb") as f: # Open the file for reading in binary mode
-         return pickle.load(f) # Deserialize and return the payload
-   except Exception: # If any error occurs during loading
-      return None # Return None to indicate failure
-
-def recreate_population_from_lists(toolbox, pop_lists):
-   """
-   Create DEAP individual objects from plain lists using registered toolbox.individual.
-
-   :param toolbox: DEAP toolbox with `individual` registered
-   :param pop_lists: iterable of bit-lists
-   :return: list of individuals or empty list on error
-   """
-   
-   population = [] # Initialize an empty list for the population
-   try: # Attempt to recreate the population
-      for bits in pop_lists: # Iterate over each bit list in pop_lists
-         ind = toolbox.individual() # Create a new individual using the toolbox
-         for i, b in enumerate(bits): # Iterate over each bit in the list
-            try: # Try to convert the bit to int
-               ind[i] = int(b) # Set the individual's gene to the integer value
-            except Exception: # If conversion fails
-               ind[i] = b # Set the individual's gene to the original value
-         ind.fitness.values = () # Initialize fitness values as empty tuple
-         population.append(ind) # Add the individual to the population
-   except Exception: # If any error occurs during recreation
-      return [] # Return an empty list
-   return population # Return the recreated population
-
-def load_and_apply_generation_state(toolbox, population, output_dir, state_id, run=None):
-   """
-   Load a saved GA generation state and apply it to the provided population.
-
-   :param toolbox: DEAP toolbox used to recreate individuals
-   :param population: population list to modify in-place
-   :param output_dir: directory where generation state files live
-   :param state_id: deterministic id for the run state
-   :param run: optional run index for logging
-   :return: tuple (start_gen:int, fitness_history:list)
-   """
-
-   start_gen = 1 # Initialize starting generation to 1
-   fitness_history = [] # Initialize fitness history as empty list
-   if RESUME_PROGRESS and state_id is not None: # Check if resume is enabled and state_id is provided
-      try: # Attempt to load and apply the state
-         payload = load_generation_state(output_dir, state_id) # Load the generation state payload
-         if payload: # If payload exists
-            pop_lists = payload.get("population_lists") # Get the population lists from payload
-            if pop_lists: # If population lists exist
-               recreated = recreate_population_from_lists(toolbox, pop_lists) # Recreate population from lists
-               if recreated: # If recreation succeeded
-                  population[:] = recreated # Replace the population with recreated one
-               fitness_history = payload.get("fitness_history", []) # Get fitness history from payload
-            loaded_gen = int(payload.get("gen", 0)) # Get the loaded generation number
-            start_gen = loaded_gen + 1 if loaded_gen >= 1 else 1 # Set start_gen to loaded_gen + 1 or 1
-            try: # Try to log the resume message
-               verbose_output(f"{BackgroundColors.GREEN}Resuming GA from generation {start_gen} for run {run} (state id {state_id[:8]}){Style.RESET_ALL}") # Output resume message
-            except Exception: # If logging fails
-               pass # Do nothing
-      except Exception: # If any error occurs during loading/applying
-         pass # Do nothing
-
-   return start_gen, fitness_history # Return the starting generation and fitness history
-
-def load_cached_run_if_any(output_dir, csv_path, pop_size, n_generations, cxpb, mutpb, run, folds, y_train=None, y_test=None):
-   """
-   Check for and load a previously saved run result for the given parameters.
-
-   :param output_dir: base Feature_Analysis output directory
-   :param csv_path: dataset CSV path
-   :param pop_size: population size
-   :param n_generations: number of generations
-   :param cxpb: crossover probability
-   :param mutpb: mutation probability
-   :param run: run index
-   :param folds: CV folds
-   :param y_train: training labels (optional, used to compute test_frac)
-   :param y_test: testing labels (optional, used to compute test_frac)
-   :return: tuple (result or None, state_id or None)
-   """
-
-   try: # Attempt to check for cached run result
-      n_train = len(y_train) if y_train is not None else 0 # Get number of training samples
-      n_test = len(y_test) if y_test is not None else 0 # Get number of test samples
-      test_frac = float(n_test) / float(n_train + n_test) if (n_train + n_test) > 0 else None # Calculate test fraction
-      state_id = compute_state_id(csv_path or "", pop_size, n_generations, cxpb, mutpb, run, folds, test_frac=test_frac) # Compute state id for the run
-      if RESUME_PROGRESS and state_id is not None: # If resume is enabled and state_id exists
-         prev = load_run_result(output_dir, state_id) # Load previous run result
-         if prev: # If previous result exists
-            try: # Try to log the cached result message
-               verbose_output(f"{BackgroundColors.GREEN}Found cached run result for run {run} (state id {state_id[:8]}). Skipping execution.{Style.RESET_ALL}") # Output cached result message
-            except Exception: # If logging fails
-               pass # Do nothing
-            return prev, state_id # Return the cached result and state_id
-   except Exception: # If any error occurs during checking
-      pass # Do nothing
-
-   return None, None # Return None for both result and state_id
-
 def save_run_result(output_dir, state_id, result):
    """
    Save a completed run result so future identical runs can be skipped.
@@ -1616,24 +1222,6 @@ def save_run_result(output_dir, state_id, result):
          pickle.dump(result, f, protocol=PICKLE_PROTOCOL) # Serialize and save the result
    except Exception: # If any error occurs during saving
       pass # Do nothing
-
-def load_run_result(output_dir, state_id):
-   """
-   Load a previously saved run result if present.
-
-   :param output_dir: base output directory
-   :param state_id: deterministic id for run
-   :return: deserialized result or None
-   """
-   
-   try: # Attempt to load the run result
-      _, run_path = state_file_paths(output_dir, state_id) # Get the path for the run state file
-      if not os.path.exists(run_path): # Check if the file exists
-         return None # Return None if file does not exist
-      with open(run_path, "rb") as f: # Open the file for reading in binary mode
-         return pickle.load(f) # Deserialize and return the result
-   except Exception: # If any error occurs during loading
-      return None # Return None to indicate failure
 
 def cleanup_state_for_id(output_dir, state_id):
    """
@@ -1654,167 +1242,6 @@ def cleanup_state_for_id(output_dir, state_id):
             pass # Do nothing
    except Exception: # If any error occurs during cleanup
       pass # Do nothing
-
-def prepare_feature_dataframe(X, feature_names):
-   """
-   Ensure features are available as a pandas DataFrame with appropriate column names.
-
-   :param X: Feature matrix (DataFrame or numpy array).
-   :param feature_names: Optional iterable of feature names.
-   :return: pandas.DataFrame with feature columns.
-   """
-   
-   if not isinstance(X, pd.DataFrame): # If X is not a pandas DataFrame
-      try: # Try to create a DataFrame with original feature names
-         df_features = pd.DataFrame(X, columns=list(feature_names)) # Create DataFrame with original feature names
-      except Exception: # If creating DataFrame with original feature names fails
-         df_features = pd.DataFrame(X) # Create DataFrame without original feature names
-         df_features.columns = [f"feature_{i}" for i in range(df_features.shape[1])] # Generic feature names
-   else: # If X is already a pandas DataFrame
-      df_features = X.copy() # Use the DataFrame as is
-      
-   return df_features # Return the prepared DataFrame
-
-def save_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=None, y_test=None, n_generations=None, best_pop_size=None, runs_list=None, cxpb=None, mutpb=None):
-   """
-   Persist the GA best-result information to disk (consolidated CSV and auxiliary files).
-
-   This function performs the saving responsibilities previously embedded inside
-   `save_and_analyze_results`: it determines the selected features, extracts RFE
-   rankings, optionally re-evaluates the best individual on a provided test set,
-   builds the consolidated CSV rows and writes them to disk.
-
-   :param best_ind: Best individual from the Genetic Algorithm (binary mask/list).
-   :param feature_names: List of feature names corresponding to bits in `best_ind`.
-   :param X: Feature set (DataFrame or numpy array) used during GA/training.
-   :param y: Target variable (Series or array) used during GA/training.
-   :param csv_path: Path to the original CSV file for saving outputs.
-   :param metrics: Optional precomputed metrics tuple for the best individual.
-   :param X_test: Optional test features to evaluate the best individual if `metrics` is None.
-   :param y_test: Optional test labels to evaluate the best individual if `metrics` is None.
-   :param n_generations: Number of GA generations used (for metadata only).
-   :param best_pop_size: Population size that yielded the best result (for metadata only).
-   :param runs_list: Optional list of per-run results (each a dict with keys 'metrics','best_features' or 'best_ind').
-   :return: Dictionary with saved metadata: {
-               "best_features": list,
-               "rf_metrics": tuple or None,
-               "output_dir": str,
-               "rfe_ranking": dict,
-               "n_train": int or None,
-               "n_test": int or None,
-               "test_frac": float or None,
-               "n_generations": int or None,
-               "best_pop_size": int or None,
-               "runs_list": list or None
-            }
-   """
-
-   best_features = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1] # Extract best features
-   rfe_ranking = extract_rfe_ranking(csv_path) # Extract RFE rankings
-
-   print(f"\n{BackgroundColors.GREEN}Best features subset found: {BackgroundColors.CYAN}{best_features}{Style.RESET_ALL}")
-
-   dataset_name = os.path.splitext(os.path.basename(csv_path))[0] # Get the base name of the dataset
-   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Directory to save outputs
-   os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
-
-   rf_metrics = metrics if metrics is not None else None # Use provided metrics if available
-
-   if rf_metrics is None and X_test is not None and y_test is not None: # If no metrics provided, evaluate on test set
-      rf_metrics = evaluate_individual(best_ind, X, y, X_test, y_test) # Evaluate best individual
-
-   n_train = len(y) if y is not None else None # Number of training samples
-   n_test = len(y_test) if y_test is not None else None # Number of testing samples
-
-   test_frac = None # Initialize train/test fraction
-   if n_train is not None and n_test is not None and (n_train + n_test) > 0: # If both lengths are valid
-      test_frac = float(n_test) / float(n_train + n_test) # Calculate train/test fraction
-
-   elapsed_for_base = extract_elapsed_from_metrics(rf_metrics)
-
-   base_row = build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking, elapsed_time_s=elapsed_for_base, cxpb=cxpb, mutpb=mutpb) # Base row for CSV
-   rows = build_rows_list(rf_metrics, best_features, runs_list, feature_names, base_row) # Build rows from metrics and runs
-   write_consolidated_csv(rows, output_dir) # Persist consolidated CSV
-
-   return { # Return saved metadata
-      "best_features": best_features,
-      "rf_metrics": rf_metrics,
-      "output_dir": output_dir,
-      "rfe_ranking": rfe_ranking,
-      "n_train": n_train,
-      "n_test": n_test,
-      "test_frac": test_frac,
-      "n_generations": n_generations,
-      "best_pop_size": best_pop_size,
-      "runs_list": runs_list,
-      "elapsed_time_s": int(round(elapsed_for_base)) if elapsed_for_base is not None else None,
-   }
-
-def analyze_results(saved_info, X, y, feature_names, csv_path):
-   """
-   Analyze and visualize results that were previously saved by `save_results`.
-
-   :param saved_info: Dictionary returned from `save_results` (must contain key "best_features").
-   :param X: Feature set (DataFrame or numpy array) used during GA/training.
-   :param y: Target variable (Series or array) used during GA/training.
-   :param feature_names: List of original feature names used to construct the DataFrame.
-   :param csv_path: Path to the original CSV file for saving outputs (used by analyzers).
-   :return: None
-   """
-   
-   verbose_output(f"{BackgroundColors.GREEN}Analyzing saved results from Genetic Algorithm feature selection.{Style.RESET_ALL}") # Output the verbose message
-
-   best_features = saved_info.get("best_features", []) if isinstance(saved_info, dict) else [] # Extract best features
-   if not best_features: # Nothing to analyze
-      return # Exit early
-
-   df_features = prepare_feature_dataframe(X, feature_names) # Prepare DataFrame for analysis
-
-   if not isinstance(y, pd.Series): # If y is not a pandas Series
-      try: # Try to create a Series with original indices
-         y_series = pd.Series(y, index=df_features.index) # Create Series with original indices
-      except Exception: # If creating Series with original indices fails
-         y_series = pd.Series(y) # Create Series without original indices
-   else: # If y is already a pandas Series
-      y_series = y.reindex(df_features.index) if not df_features.index.equals(y.index) else y # Align indices if necessary
-
-   analyze_top_features(df_features, y_series, best_features, csv_path=csv_path) # Analyze and visualize the top features
-
-def prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations):
-   """
-   Load and preprocess dataset for GA sweep.
-   
-   :param csv_path: Path to the CSV dataset.
-   :param dataset_name: Name of the dataset.
-   :param min_pop: Minimum population size.
-   :param max_pop: Maximum population size.
-   :param n_generations: Number of generations.
-   :return: Tuple (X_train, X_test, y_train, y_test, feature_names) or None if failed.
-   """
-   
-   verbose_output(f"{BackgroundColors.GREEN}Preparing dataset '{dataset_name}' for Genetic Algorithm sweep.{Style.RESET_ALL}") # Output the verbose message
-   
-   df = load_dataset(csv_path) # Load dataset
-   if df is None: # If loading failed
-      return None # Exit early
-   
-   cleaned_df = preprocess_dataframe(df) # Preprocess dataset
-   
-   if cleaned_df is None or cleaned_df.empty: # If preprocessing failed or dataset is empty
-      print(f"{BackgroundColors.RED}Dataset empty after preprocessing. Exiting.{Style.RESET_ALL}")
-      return None # Exit early
-   
-   X_train, X_test, y_train, y_test, feature_names = split_dataset(cleaned_df, csv_path) # Split dataset
-   if X_train is None: # If splitting failed
-      return None # Exit early
-   
-   print_ga_parameters(min_pop, max_pop, n_generations, len(feature_names) if feature_names is not None else 0) if VERBOSE else None # Print GA parameters if verbose
-   
-   train_count = len(y_train) if y_train is not None else 0 # Count training samples
-   test_count = len(y_test) if y_test is not None else 0 # Count testing samples
-   verbose_output(f"  {BackgroundColors.GREEN}  Dataset: {BackgroundColors.CYAN}{dataset_name} - {train_count} training / {test_count} testing  (80/20){Style.RESET_ALL}\n")
-   
-   return X_train, X_test, y_train, y_test, feature_names # Return prepared data
 
 def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names, pop_size, n_generations, cxpb, mutpb, run, runs, dataset_name, csv_path, max_pop, progress_bar, progress_state, folds):
    """
@@ -1846,7 +1273,7 @@ def run_single_ga_iteration(bot, X_train, y_train, X_test, y_test, feature_names
    feature_count = len(feature_names) if feature_names is not None else 0 # Count of features
    
    update_progress_bar(progress_bar, dataset_name, csv_path, pop_size=pop_size, max_pop=max_pop, n_generations=n_generations, run=run, runs=runs, progress_state=progress_state) if progress_bar else None # Update progress bar if provided
-   
+
    output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis" if csv_path else os.path.join(".", "Feature_Analysis") # Output directory for Feature_Analysis outputs
    cached, state_id = load_cached_run_if_any(output_dir, csv_path, pop_size, n_generations, cxpb, mutpb, run, folds, y_train, y_test) # Try to load cached run result and state id
    if cached: # If cached result found
@@ -1933,6 +1360,585 @@ def aggregate_sweep_results(results, min_pop, max_pop, bot, dataset_name):
    
    return best_score, best_result, best_metrics, results # Return aggregated results
 
+def print_metrics(metrics):
+   """
+   Print performance metrics.
+
+   :param metrics: Dictionary or tuple containing evaluation metrics.
+   :return: None
+   """
+
+   if not metrics: # If metrics is None or empty
+      return # Do nothing
+   
+   acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics
+   print(f"\n{BackgroundColors.GREEN}Performance Metrics for the Random Forest Classifier using the best feature subset:{Style.RESET_ALL}")
+   print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{acc:.4f}{Style.RESET_ALL}")
+   print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{prec:.4f}{Style.RESET_ALL}")
+   print(f"   {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{rec:.4f}{Style.RESET_ALL}")
+   print(f"   {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{f1:.4f}{Style.RESET_ALL}")
+   print(f"   {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{fpr:.4f}{Style.RESET_ALL}")
+   print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{fnr:.4f}{Style.RESET_ALL}")
+   print(f"   {BackgroundColors.GREEN}Elapsed Time (s): {BackgroundColors.CYAN}{int(elapsed_time)}{Style.RESET_ALL}")
+
+def extract_rfe_ranking(csv_path):
+   """
+   Extract RFE rankings from the RFE results file.
+
+   :param csv_path: Path to the original CSV file for saving outputs.
+   :return: Dictionary of feature names and their RFE rankings.
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Extracting RFE rankings from results file.{Style.RESET_ALL}") # Output the verbose message
+
+   rfe_ranking = {} # Dictionary to store feature names and their RFE rankings
+   dir_path = os.path.dirname(csv_path) # Directory that contains Feature_Analysis
+   json_path = f"{dir_path}/Feature_Analysis/RFE_Summary.json" # Path to new JSON summary
+   csv_path_runs = f"{dir_path}/Feature_Analysis/RFE_Runs_Summary.csv" # Path to runs summary CSV
+   legacy_txt = f"{dir_path}/Feature_Analysis/RFE_results_RandomForestClassifier.txt" # Legacy TXT path (fallback)
+
+   if verify_filepath_exists(json_path): # If JSON summary exists
+      try: # Attempt to parse JSON
+         with open(json_path, "r", encoding="utf-8") as jf: # Open JSON file
+            data = json.load(jf) # Load JSON content
+         if isinstance(data, dict): # Ensure data is a dictionary
+            if "rfe_ranking" in data and isinstance(data["rfe_ranking"], dict): # rfe_ranking key
+               rfe_ranking = data["rfe_ranking"] # Use provided ranking
+            elif "per_run" in data and isinstance(data["per_run"], list) and len(data["per_run"])>0: # per_run list exists
+               first = data["per_run"][0] # First run entry
+               if isinstance(first, dict) and "ranking" in first and isinstance(first["ranking"], dict): # ranking dict
+                  rfe_ranking = first["ranking"] # Use ranking
+      except Exception as e: # If parsing JSON fails
+         print(f"{BackgroundColors.YELLOW}Failed to parse RFE JSON summary: {str(e)}. Skipping RFE ranking extraction.{Style.RESET_ALL}") # Warn user
+         return rfe_ranking # Return whatever we have (likely empty)
+      return rfe_ranking # Return ranking extracted from JSON
+
+   if verify_filepath_exists(csv_path_runs): # If CSV summary exists
+      try: # Attempt to parse CSV
+         with open(csv_path_runs, "r", encoding="utf-8") as cf: # Open CSV file
+            reader = csv.DictReader(cf) # Use DictReader to parse headered CSV
+            for row in reader: # Iterate rows
+               for key, val in row.items(): # For each column value
+                  if val and isinstance(val, str) and val.strip().startswith("{"): # Looks like JSON
+                     try: # Try parse JSON string
+                        parsed = json.loads(val) # Parse JSON string
+                        if isinstance(parsed, dict) and all(isinstance(k, str) for k in parsed.keys()): # Likely ranking
+                           rfe_ranking = parsed # Use parsed dict as ranking
+                           return rfe_ranking # Return early
+                     except Exception: # ignore parse errors and continue
+                        pass
+      except Exception as e: # If reading CSV fails
+         print(f"{BackgroundColors.YELLOW}Failed to parse RFE CSV summary: {str(e)}. Skipping RFE ranking extraction.{Style.RESET_ALL}") # Warn user
+
+   if not verify_filepath_exists(legacy_txt): # If no legacy file either
+      print(f"{BackgroundColors.YELLOW}RFE results not found (tried JSON/CSV/TXT). Skipping RFE ranking extraction.{Style.RESET_ALL}") # Notify user
+      return rfe_ranking # Return empty dictionary
+
+   try: # Attempt to parse TXT file
+      with open(legacy_txt, "r", encoding="utf-8") as f: # Open legacy TXT
+         lines = f.readlines() # Read lines
+      for line in lines: # Iterate lines
+         line = line.strip() # Strip whitespace
+         if not line: # Skip empty lines
+            continue # Continue
+         m = re.match(r"^\s*(\d+)\.?\s+(.+?)\s*$", line) # Try numeric prefix
+         if m: # If matched numbered list
+            rank = int(m.group(1)) # Get rank number
+            feat = m.group(2).strip() # Get feature name
+            rfe_ranking[feat] = rank # Store ranking
+   except Exception as e: # If parsing fails
+      print(f"{BackgroundColors.YELLOW}Failed to parse legacy RFE TXT: {str(e)}. Returning empty ranking.{Style.RESET_ALL}") # Notify user
+
+   return rfe_ranking # Return the RFE rankings dictionary
+
+def extract_elapsed_from_metrics(metrics, index=6):
+   """
+   Safely extract an elapsed-time value from a metrics tuple.
+
+   :param metrics: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed) or None
+   :param index: Index within the tuple where elapsed time is expected (default 6)
+   :return: elapsed value (float) if available, otherwise None
+   """
+   
+   if not metrics: # If metrics is None or falsy
+      return None # Return None
+   try: # Try to extract elapsed time
+      if isinstance(metrics, (list, tuple)) and len(metrics) > index: # Verify index is valid
+         return metrics[index] # Return elapsed time
+   except Exception: # On any error
+      pass # Ignore errors
+   
+   return None # Return None if extraction fails
+
+def build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking, elapsed_time_s=None, cxpb=None, mutpb=None):
+   """
+   Build the base dictionary row used for the consolidated GA CSV output.
+
+   :param csv_path: Path to the original dataset CSV.
+   :param best_pop_size: Population size that produced the best result.
+   :param n_generations: Number of generations used in the GA.
+   :param n_train: Number of training samples.
+   :param n_test: Number of testing samples.
+   :param test_frac: Train/test fraction.
+   :param rfe_ranking: Dictionary with RFE rankings (will be JSON-encoded).
+   :return: Dictionary representing the base row for CSV output.
+   """
+   
+   return { # Base row for CSV
+      "dataset": os.path.splitext(os.path.basename(csv_path))[0], # Dataset name
+      "dataset_path": csv_path, # Dataset path
+      "run_index": "best", # Indicates best run
+      "population_size": best_pop_size, # Population size
+      "n_generations": n_generations, # Number of generations
+      "cxpb": cxpb, # Crossover probability used in GA
+      "mutpb": mutpb, # Mutation probability used in GA
+      "n_train": n_train, # Number of training samples
+      "n_test": n_test, # Number of testing samples
+      "train_test_ratio": test_frac, # Train/test fraction
+      "elapsed_time_s": int(round(elapsed_time_s)) if elapsed_time_s is not None else None, # Elapsed seconds for best-model training
+      "rfe_ranking": json.dumps(rfe_ranking, ensure_ascii=False) # RFE ranking as JSON string
+   }
+
+def build_rows_list(rf_metrics, best_features, runs_list, feature_names, base_row):
+   """
+   Build the list of rows (dictionaries) that will be written to the consolidated GA CSV.
+
+   :param rf_metrics: Metrics tuple for the best RandomForest evaluation (or None).
+   :param best_features: List of features selected by the GA best individual.
+   :param runs_list: Optional list of per-run dictionaries with keys 'metrics', 'best_features', 'best_ind'.
+   :param feature_names: Original feature names list (used if per-run data includes binary masks).
+   :param base_row: Base row dictionary produced by `build_base_row`.
+   :return: List of dictionaries ready to be converted into a DataFrame.
+   """
+   
+   rows = [] # List to hold CSV rows
+   rf_row = dict(base_row) # Create Random Forest row
+   rf_row.update({"classifier": "RandomForest",}) # Set classifier
+   rf_row.update(metrics_to_dict(rf_metrics)) # Add RF metrics
+   rf_row.update({"best_features": json.dumps(best_features, ensure_ascii=False),}) # Add best features as JSON string
+   rows.append(rf_row) # Add RF row to rows
+
+   if runs_list: # If multiple runs data is provided
+      for idx, run_data in enumerate(runs_list, start=1): # For each run
+         run_metrics = run_data.get("metrics") if run_data.get("metrics") is not None else None
+         run_features = run_data.get("best_features") if run_data.get("best_features") is not None else [f for f, bit in zip(feature_names if feature_names is not None else [], run_data.get("best_ind", [])) if bit == 1] # Extract features for this run
+         run_row = dict(base_row) # Create row for this run
+
+         run_row.update({"classifier": "RandomForest"}) # Set classifier
+         run_row.update(metrics_to_dict(run_metrics)) # Add run metrics
+         run_row.update({"best_features": json.dumps(run_features, ensure_ascii=False), "run_index": idx}) # Add best features and run index
+         rows.append(run_row) # Add run row to rows
+
+   return rows # Return consolidated rows
+
+def metrics_to_dict(metrics):
+   """
+   Convert a metrics tuple to a standardized dictionary.
+
+   :param metrics: Metrics tuple in the form (accuracy, precision, recall, f1, fpr, fnr, elapsed_time)
+             or None.
+   :return: Dictionary with float values for each metric or None when input is falsy.
+   """
+   
+   if not metrics: # If metrics is None or falsy, return explicit keys with None
+      return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None, "elapsed_time_s": None}
+
+   acc, prec, rec, f1, fpr, fnr, elapsed = metrics # Unpack metrics
+
+   return {
+      "accuracy": float(round(acc, 4)), # Accuracy
+      "precision": float(round(prec, 4)), # Precision
+      "recall": float(round(rec, 4)), # Recall
+      "f1_score": float(round(f1, 4)), # F1 Score
+      "fpr": float(round(fpr, 4)), # False Positive Rate
+      "fnr": float(round(fnr, 4)), # False Negative Rate
+      "elapsed_time_s": int(round(elapsed)) # Elapsed time in seconds
+   }
+
+def normalize_elapsed_column_df(df):
+   """
+   Normalize elapsed time column name to `elapsed_time_s` if the legacy
+   `elapsed_time` column is present.
+
+   :param df: pandas DataFrame
+   :return: DataFrame with `elapsed_time_s` column
+   """
+   
+   if "elapsed_time" in df.columns and "elapsed_time_s" not in df.columns: # If legacy column present and new column missing
+      df["elapsed_time_s"] = df["elapsed_time"] # Copy legacy elapsed_time into the new elapsed_time_s column
+      df.drop(columns=["elapsed_time"], inplace=True) # Remove the legacy elapsed_time column to avoid duplication
+   return df # Return DataFrame with normalized elapsed time column
+
+def load_existing_results(csv_out):
+   """
+   Load an existing consolidated CSV if present, returning an empty
+   DataFrame on error or when file is missing.
+
+   :param csv_out: path to consolidated CSV
+   :return: pandas.DataFrame
+   """
+   
+   if os.path.exists(csv_out): # If the consolidated CSV exists
+      try: # Try to read the file into a DataFrame
+         return pd.read_csv(csv_out, dtype=object) # Read CSV preserving types as object
+      except Exception: # On any read error
+         return pd.DataFrame() # Return empty DataFrame as a fallback
+   return pd.DataFrame() # File not present — return empty DataFrame
+
+def merge_replace_existing(df_existing, df_new):
+   """
+   Merge `df_new` into `df_existing` using replace-by-`dataset_path`
+   semantics: any existing rows whose `dataset_path` appears in `df_new`
+   are removed before appending `df_new`.
+
+   :param df_existing: existing DataFrame (may be empty)
+   :param df_new: incoming DataFrame with new rows
+   :return: merged DataFrame
+   """
+   
+   if not df_existing.empty and "dataset_path" in df_new.columns: # If existing rows present and incoming rows include dataset_path
+      new_paths = df_new["dataset_path"].unique().tolist() # Compute unique dataset paths from incoming rows
+      df_existing = df_existing[~df_existing["dataset_path"].isin(new_paths)] # Remove any existing rows that match those paths
+   df_combined = pd.concat([df_existing, df_new], ignore_index=True, sort=False) # Concatenate remaining existing rows with new rows
+   return df_combined # Return the merged DataFrame
+
+def get_hardware_specifications():
+   """
+   Returns system specs: real CPU model (Windows/Linux/macOS), physical cores,
+   RAM in GB, and OS name/version.
+   
+   :return: Dictionary with keys: cpu_model, cores, ram_gb, os
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Fetching system specifications...{Style.RESET_ALL}") # Output the verbose message
+   
+   system = platform.system() # Identify OS type
+
+   try: # Try to fetch real CPU model using OS-specific methods
+      if system == "Windows": # Windows: use WMIC
+         out = subprocess.check_output("wmic cpu get Name", shell=True).decode(errors="ignore") # Run WMIC
+         cpu_model = out.strip().split("\n")[1].strip() # Extract model line
+
+      elif system == "Linux": # Linux: read from /proc/cpuinfo
+         cpu_model = "Unknown" # Default
+         with open("/proc/cpuinfo") as f: # Open cpuinfo
+            for line in f: # Iterate lines
+               if "model name" in line: # Model name entry
+                  cpu_model = line.split(":",1)[1].strip() # Extract name
+                  break # Stop after first match
+
+      elif system == "Darwin": # macOS: use sysctl
+         out = subprocess.check_output(["sysctl","-n","machdep.cpu.brand_string"]) # Run sysctl
+         cpu_model = out.decode().strip() # Extract model string
+
+      else: # Unsupported OS
+         cpu_model = "Unknown" # Fallback
+
+   except Exception: # If any method fails
+      cpu_model = "Unknown" # Fallback on failure
+
+   cores = psutil.cpu_count(logical=False) if psutil else None # Physical core count
+   ram_gb = round(psutil.virtual_memory().total / (1024**3), 1) if psutil else None # Total RAM in GB
+   os_name = f"{platform.system()} {platform.release()}" # OS name + version
+
+   return { # Build final dictionary
+      "cpu_model": cpu_model, # CPU model string
+      "cores": cores, # Physical cores
+      "ram_gb": ram_gb, # RAM in gigabytes
+      "os": os_name # Operating system
+   }
+
+def populate_hardware_column(df, column_name="hardware"):
+   """
+   Populate `df[column_name]` with a readable hardware description built from
+   `get_hardware_specifications()`. On failure the column will be set to None.
+
+   :param df: pandas.DataFrame to modify in-place
+   :param column_name: Name of the column to set (default: "hardware")
+   :return: None
+   """
+   
+   try: # Try to fetch hardware specifications
+      hardware_specs = get_hardware_specifications() # Get system specs
+      hardware_str = ( # Build readable hardware string
+         f"{hardware_specs.get('cpu_model','Unknown')} | Cores: {hardware_specs.get('cores', 'N/A')}"
+         f" | RAM: {hardware_specs.get('ram_gb', 'N/A')} GB | OS: {hardware_specs.get('os','Unknown')}"
+      )
+      df[column_name] = hardware_str # Set the hardware column
+   except Exception: # On any failure
+      df[column_name] = None # Set hardware column to None
+
+def ensure_expected_columns(df_combined, columns):
+   """
+   Ensure the expected columns exist on the combined DataFrame; add
+   missing columns with None values.
+
+   :param df_combined: pandas.DataFrame
+   :param columns: list of expected column names
+   :return: DataFrame with ensured columns
+   """
+   
+   for column in columns: # Iterate over expected column names
+      if column not in df_combined.columns: # If the column is missing from the DataFrame
+         df_combined[column] = None # Add the missing column and fill with None
+   return df_combined # Return DataFrame with ensured columns
+
+def run_index_sort(val):
+   """
+   Convert run_index values into sortable numeric keys where "best"
+   sorts before numeric indices.
+   
+   :param val: run_index value (string or numeric)
+   :return: numeric sort key
+   """
+   
+   try: # Try to normalize and parse the run index
+      s = str(val).strip() # Convert the value to string and strip whitespace
+      if s.lower() == "best": # If value is the literal 'best'
+         return -1 # Force 'best' to sort before numeric indices
+      return int(float(s)) # Convert numeric-like strings to integer for sorting
+   except Exception: # On any parsing error
+      return 10**9 # Use a very large number to push malformed values to the end
+
+def sort_run_index_first(df_combined):
+   """
+   Sort by `dataset`, `dataset_path` and a numeric-coded `run_index`
+   where the string "best" is forced to come before numeric runs.
+
+   :param df_combined: pandas.DataFrame
+   :return: sorted DataFrame
+   """
+
+   df_combined["run_index_sort"] = df_combined["run_index"].apply(run_index_sort) # Create temporary numeric sort key
+   df_combined.sort_values(by=["dataset", "dataset_path", "run_index_sort"], inplace=True, ascending=[True, True, True]) # Sort by dataset, path, then run order
+   df_combined.drop(columns=["run_index_sort"], inplace=True) # Remove temporary sort key column
+   return df_combined # Return the sorted DataFrame
+
+def write_consolidated_csv(rows, output_dir):
+   """
+   Write the consolidated GA results rows to a CSV file inside `output_dir`.
+
+   :param rows: List of dictionaries representing rows.
+   :param output_dir: Directory where `Genetic_Algorithm_Results.csv` will be saved.
+   :return: None
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Writing consolidated Genetic Algorithm results CSV.{Style.RESET_ALL}") # Output the verbose message
+   
+   try: # Try to write the consolidated CSV
+      os.makedirs(output_dir, exist_ok=True) # Ensure output directory exists
+
+      df_new = pd.DataFrame(rows) # Create DataFrame from provided rows
+
+      df_new = normalize_elapsed_column_df(df_new) # Normalize legacy elapsed_time to elapsed_time_s in new rows
+
+      csv_out = os.path.join(output_dir, "Genetic_Algorithm_Results.csv") # Build path for consolidated CSV
+
+      df_existing = load_existing_results(csv_out) # Load existing consolidated CSV if available
+      df_existing = normalize_elapsed_column_df(df_existing) # Normalize legacy elapsed_time to elapsed_time_s in existing rows
+
+      if df_existing.empty: # If there is no existing consolidated CSV
+         df_combined = df_new.copy() # Use the new DataFrame as the combined result
+      else: # If existing consolidated CSV rows were loaded
+         df_combined = merge_replace_existing(df_existing, df_new) # Merge new rows, replacing by dataset_path where needed
+
+      columns = [ # Define canonical column order for the consolidated CSV
+         "dataset",
+         "dataset_path",
+         "run_index",
+         "population_size",
+         "n_generations",
+         "cxpb",
+         "mutpb",
+         "n_train",
+         "n_test",
+         "train_test_ratio",
+         "hardware",
+         "classifier",
+         "accuracy",
+         "precision",
+         "recall",
+         "f1_score",
+         "fpr",
+         "fnr",
+         "elapsed_time_s",
+         "best_features",
+         "rfe_ranking",
+      ]
+
+      populate_hardware_column(df_combined, column_name="hardware") # Populate hardware column using system specs
+
+      df_combined = ensure_expected_columns(df_combined, columns) # Add any missing expected columns with None values
+      df_combined = sort_run_index_first(df_combined) # Sort so that 'best' run_index appears first for each dataset/dataset_path
+
+      df_combined = df_combined[columns] # Reorder columns into the canonical order
+      df_combined.to_csv(csv_out, index=False, encoding="utf-8") # Persist the consolidated CSV to disk
+      print(f"\n{BackgroundColors.GREEN}Genetic Algorithm consolidated results saved to {BackgroundColors.CYAN}{csv_out}{Style.RESET_ALL}") # Notify user of success
+   except Exception as e:
+      print(f"{BackgroundColors.RED}Failed to write consolidated GA CSV: {str(e)}{Style.RESET_ALL}") # Print failure message with exception
+
+def save_results(best_ind, feature_names, X, y, csv_path, metrics=None, X_test=None, y_test=None, n_generations=None, best_pop_size=None, runs_list=None, cxpb=None, mutpb=None):
+   """
+   Persist the GA best-result information to disk (consolidated CSV and auxiliary files).
+
+   This function performs the saving responsibilities previously embedded inside
+   `save_and_analyze_results`: it determines the selected features, extracts RFE
+   rankings, optionally re-evaluates the best individual on a provided test set,
+   builds the consolidated CSV rows and writes them to disk.
+
+   :param best_ind: Best individual from the Genetic Algorithm (binary mask/list).
+   :param feature_names: List of feature names corresponding to bits in `best_ind`.
+   :param X: Feature set (DataFrame or numpy array) used during GA/training.
+   :param y: Target variable (Series or array) used during GA/training.
+   :param csv_path: Path to the original CSV file for saving outputs.
+   :param metrics: Optional precomputed metrics tuple for the best individual.
+   :param X_test: Optional test features to evaluate the best individual if `metrics` is None.
+   :param y_test: Optional test labels to evaluate the best individual if `metrics` is None.
+   :param n_generations: Number of GA generations used (for metadata only).
+   :param best_pop_size: Population size that yielded the best result (for metadata only).
+   :param runs_list: Optional list of per-run results (each a dict with keys 'metrics','best_features' or 'best_ind').
+   :return: Dictionary with saved metadata: {
+               "best_features": list,
+               "rf_metrics": tuple or None,
+               "output_dir": str,
+               "rfe_ranking": dict,
+               "n_train": int or None,
+               "n_test": int or None,
+               "test_frac": float or None,
+               "n_generations": int or None,
+               "best_pop_size": int or None,
+               "runs_list": list or None
+            }
+   """
+
+   best_features = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1] # Extract best features
+   rfe_ranking = extract_rfe_ranking(csv_path) # Extract RFE rankings
+
+   print(f"\n{BackgroundColors.GREEN}Best features subset found: {BackgroundColors.CYAN}{best_features}{Style.RESET_ALL}")
+
+   dataset_name = os.path.splitext(os.path.basename(csv_path))[0] # Get the base name of the dataset
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/" # Directory to save outputs
+   os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
+
+   rf_metrics = metrics if metrics is not None else None # Use provided metrics if available
+
+   if rf_metrics is None and X_test is not None and y_test is not None: # If no metrics provided, evaluate on test set
+      rf_metrics = evaluate_individual(best_ind, X, y, X_test, y_test) # Evaluate best individual
+
+   n_train = len(y) if y is not None else None # Number of training samples
+   n_test = len(y_test) if y_test is not None else None # Number of testing samples
+
+   test_frac = None # Initialize train/test fraction
+   if n_train is not None and n_test is not None and (n_train + n_test) > 0: # If both lengths are valid
+      test_frac = float(n_test) / float(n_train + n_test) # Calculate train/test fraction
+
+   elapsed_for_base = extract_elapsed_from_metrics(rf_metrics)
+
+   base_row = build_base_row(csv_path, best_pop_size, n_generations, n_train, n_test, test_frac, rfe_ranking, elapsed_time_s=elapsed_for_base, cxpb=cxpb, mutpb=mutpb) # Base row for CSV
+   rows = build_rows_list(rf_metrics, best_features, runs_list, feature_names, base_row) # Build rows from metrics and runs
+   write_consolidated_csv(rows, output_dir) # Persist consolidated CSV
+
+   return { # Return saved metadata
+      "best_features": best_features,
+      "rf_metrics": rf_metrics,
+      "output_dir": output_dir,
+      "rfe_ranking": rfe_ranking,
+      "n_train": n_train,
+      "n_test": n_test,
+      "test_frac": test_frac,
+      "n_generations": n_generations,
+      "best_pop_size": best_pop_size,
+      "runs_list": runs_list,
+      "elapsed_time_s": int(round(elapsed_for_base)) if elapsed_for_base is not None else None,
+   }
+
+def prepare_feature_dataframe(X, feature_names):
+   """
+   Ensure features are available as a pandas DataFrame with appropriate column names.
+
+   :param X: Feature matrix (DataFrame or numpy array).
+   :param feature_names: Optional iterable of feature names.
+   :return: pandas.DataFrame with feature columns.
+   """
+   
+   if not isinstance(X, pd.DataFrame): # If X is not a pandas DataFrame
+      try: # Try to create a DataFrame with original feature names
+         df_features = pd.DataFrame(X, columns=list(feature_names)) # Create DataFrame with original feature names
+      except Exception: # If creating DataFrame with original feature names fails
+         df_features = pd.DataFrame(X) # Create DataFrame without original feature names
+         df_features.columns = [f"feature_{i}" for i in range(df_features.shape[1])] # Generic feature names
+   else: # If X is already a pandas DataFrame
+      df_features = X.copy() # Use the DataFrame as is
+      
+   return df_features # Return the prepared DataFrame
+
+def analyze_top_features(df, y, top_features, csv_path="."):
+   """
+   Analyze and visualize the top features.
+
+   :param df: DataFrame containing the features.
+   :param y: Target variable.
+   :param top_features: List of top feature names.
+   :param csv_path: Path to the original CSV file for saving outputs.
+   :return: None
+   """
+
+   df_analysis = df[top_features].copy() # Create a copy of the DataFrame with only the top features
+   df_analysis["Target"] = pd.Series(y, index=df_analysis.index).astype(str) # Add the target variable to the DataFrame
+
+   output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis" # Directory to save outputs
+   os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
+
+   base_dataset_name = os.path.splitext(os.path.basename(csv_path))[0] # Base name of the dataset
+
+   summary = df_analysis.groupby("Target")[top_features].agg(["mean", "std"]) # Calculate mean and std for each feature grouped by target
+   summary.columns = [f"{col}_{stat}" for col, stat in summary.columns] # Flatten MultiIndex columns
+   summary = summary.round(3) # Round to 3 decimal places
+
+   summary_csv_path = f"{output_dir}/{base_dataset_name}_feature_summary.csv" # Path to save the summary CSV
+   summary.to_csv(summary_csv_path, encoding="utf-8") # Save the summary to a CSV file
+   print(f"\n{BackgroundColors.GREEN}Features summary saved to {BackgroundColors.CYAN}{summary_csv_path}{Style.RESET_ALL}") # Notify user
+
+   for feature in top_features: # For each top feature
+      plt.figure(figsize=(8, 5)) # Create a new figure
+      sns.boxplot(x="Target", y=feature, data=df_analysis, hue="Target", palette="Set2", dodge=False) # Boxplot
+      plt.title(f"Distribution of '{feature}' by class") # Title
+      plt.xlabel("Traffic Type") # X-axis label
+      plt.ylabel(feature) # Y-axis label
+      plt.tight_layout() # Adjust layout
+      plt.savefig(f"{output_dir}/{base_dataset_name}-{safe_filename(feature)}.png") # Save the plot
+      plt.close() # Close the plot to free memory
+
+def analyze_results(saved_info, X, y, feature_names, csv_path):
+   """
+   Analyze and visualize results that were previously saved by `save_results`.
+
+   :param saved_info: Dictionary returned from `save_results` (must contain key "best_features").
+   :param X: Feature set (DataFrame or numpy array) used during GA/training.
+   :param y: Target variable (Series or array) used during GA/training.
+   :param feature_names: List of original feature names used to construct the DataFrame.
+   :param csv_path: Path to the original CSV file for saving outputs (used by analyzers).
+   :return: None
+   """
+   
+   verbose_output(f"{BackgroundColors.GREEN}Analyzing saved results from Genetic Algorithm feature selection.{Style.RESET_ALL}") # Output the verbose message
+
+   best_features = saved_info.get("best_features", []) if isinstance(saved_info, dict) else [] # Extract best features
+   if not best_features: # Nothing to analyze
+      return # Exit early
+
+   df_features = prepare_feature_dataframe(X, feature_names) # Prepare DataFrame for analysis
+
+   if not isinstance(y, pd.Series): # If y is not a pandas Series
+      try: # Try to create a Series with original indices
+         y_series = pd.Series(y, index=df_features.index) # Create Series with original indices
+      except Exception: # If creating Series with original indices fails
+         y_series = pd.Series(y) # Create Series without original indices
+   else: # If y is already a pandas Series
+      y_series = y.reindex(df_features.index) if not df_features.index.equals(y.index) else y # Align indices if necessary
+
+   analyze_top_features(df_features, y_series, best_features, csv_path=csv_path) # Analyze and visualize the top features
+
 def run_population_sweep(bot, dataset_name, csv_path, n_generations=200, min_pop=20, max_pop=20, cxpb=0.5, mutpb=0.01, runs=RUNS, progress_bar=None):
    """
    Executes a genetic algorithm (GA) for feature selection across multiple population sizes and runs.
@@ -1953,7 +1959,7 @@ def run_population_sweep(bot, dataset_name, csv_path, n_generations=200, min_pop
    :param runs: Number of runs for each population size.
    :param progress_bar: Optional tqdm progress bar instance to update with progress.
    :return: Dictionary mapping population sizes to their results including runs and divergence.
-   """
+   """ 
    
    verbose_output(f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {min_pop} to {max_pop}, running {n_generations} generations and {runs} runs each.{Style.RESET_ALL}")
 
@@ -2051,7 +2057,7 @@ def main():
    start_time = datetime.datetime.now() # Get the start time of the program
 
    input_path = "./Datasets/CICDDoS2019/01-12/" # Path to the input dataset directory
-   files_to_process = get_files_to_process(input_path, file_extension=".csv") # Get list of CSV files to process
+   files_to_process = get_files_to_process(input_path, file_extension=".csv") if os.path.isdir(input_path) else [input_path] # Get list of files to process
    
    dataset_name = get_dataset_name(input_path) # Get the dataset name from the input path
    
