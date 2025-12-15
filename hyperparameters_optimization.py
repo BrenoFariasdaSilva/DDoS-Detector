@@ -594,6 +594,94 @@ def compute_total_param_combinations(models):
 
    return total_combinations_all_models, model_combinations_counts # Return total and per-model counts
 
+def measure_resource_usage_for_combination(model, keys, combination, X, y, sample_interval=0.1):
+   """
+   Run a single parameter combination and sample memory and CPU usage
+   in a background thread. Returns peak memory (bytes) and average CPU percent.
+   """
+   
+   proc = psutil.Process(os.getpid()) # Current process
+   mem_samples = [] # Memory usage samples
+   cpu_samples = [] # CPU usage samples
+   stop_evt = threading.Event() # Event to stop monitoring thread
+
+   def monitor(): # Monitoring thread function
+      try: # Try to monitor resources
+         psutil.cpu_percent(interval=None) # Initialize CPU percent measurement
+         while not stop_evt.is_set(): # Loop until stop event is set
+            try: # Try to sample memory and CPU
+               mem_samples.append(proc.memory_info().rss) # Sample memory usage (RSS)
+               cpu_samples.append(psutil.cpu_percent(interval=sample_interval)) # Sample CPU percent
+            except Exception: # Catch sampling errors
+               break # Exit monitoring loop on error
+      except Exception: # Catch initialization errors
+         return # Exit monitoring thread on error
+
+   t = threading.Thread(target=monitor, daemon=True) # Start monitoring thread
+   t.start() # Start the thread
+
+   start = time.time() # Start timing
+   try: # Try to run the model with the parameter combination
+      model.set_params(**dict(zip(keys, combination))) # Apply hyperparameters
+      model.fit(X, y) # Train model
+   except Exception: # Catch any errors during training
+      pass # Ignore errors for resource measurement
+   finally: # Ensure monitoring thread is stopped
+      stop_evt.set() # Signal monitoring thread to stop
+      t.join(timeout=1.0) # Wait for thread to finish
+
+   elapsed = time.time() - start # Measure execution time
+   peak_mem = max(mem_samples) if mem_samples else proc.memory_info().rss # Peak memory usage
+   avg_cpu = statistics.mean(cpu_samples) if cpu_samples else 0.0 # Average CPU percent
+   return peak_mem, avg_cpu, elapsed # Return resource usage metrics
+
+def evaluate_single_combination(model, keys, combination, X_train, y_train):
+   """
+   Helper function to evaluate a single parameter combination.
+   Designed to be called in parallel via joblib with memory safety.
+
+   :param model: Clone of the model instance
+   :param keys: Parameter names
+   :param combination: Parameter values for this combination
+   :param X_train: Training features
+   :param y_train: Training labels
+   :return: Tuple (current_params, score, elapsed)
+   """
+   
+   current_params = dict(zip(keys, combination)) # Build dict of current params
+   start_time = time.time() # Start timing
+   
+   try: # Try to train and evaluate
+      model.set_params(**current_params) # Apply hyperparameters
+      model.fit(X_train, y_train) # Train model
+      y_pred = model.predict(X_train) # Predict on training set
+      score = f1_score(y_train, y_pred, average="weighted") # Compute weighted F1 score
+   except MemoryError: # Catch memory errors specifically
+      print(f"{BackgroundColors.RED}MemoryError with params {current_params}. Consider reducing dataset size or n_jobs.{Style.RESET_ALL}")
+      score = None # Mark score as None
+   except Exception as e: # Catch any other errors during training/evaluation
+      score = None # Mark score as None
+   
+   elapsed = time.time() - start_time # Measure execution time
+   
+   return current_params, score, elapsed # Return results
+
+def evaluate_single_combination_from_files(model, keys, combination, X_path, y_path):
+   """
+   Worker wrapper that loads X/y from disk using mmap and calls
+   `evaluate_single_combination`. This avoids copying large arrays
+   into each worker process when using ProcessPoolExecutor.
+   """
+   
+   try: # Try to load data with memory mapping
+      X = np.load(X_path, mmap_mode="r") # Load features
+      y = np.load(y_path, mmap_mode="r") # Load labels
+   except Exception: # Catch any loading errors
+      current_params = dict(zip(keys, combination)) # Build dict of current params
+      return current_params, None, 0.0 # Return failure result
+
+   return evaluate_single_combination(model, keys, combination, X, y) # Call evaluation function
+
 def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_grid=None, combo_current=None, combo_total=None, current=None, total_models=None, total_combinations=None, overall=None):
    """
    Updates a tqdm progress bar during hyperparameter optimization.
@@ -659,94 +747,6 @@ def update_optimization_progress_bar(progress_bar, csv_path, model_name, param_g
       progress_bar.refresh() # Force refresh of the progress bar
 
    except Exception: pass # Silently ignore any errors during update
-
-def evaluate_single_combination(model, keys, combination, X_train, y_train):
-   """
-   Helper function to evaluate a single parameter combination.
-   Designed to be called in parallel via joblib with memory safety.
-
-   :param model: Clone of the model instance
-   :param keys: Parameter names
-   :param combination: Parameter values for this combination
-   :param X_train: Training features
-   :param y_train: Training labels
-   :return: Tuple (current_params, score, elapsed)
-   """
-   
-   current_params = dict(zip(keys, combination)) # Build dict of current params
-   start_time = time.time() # Start timing
-   
-   try: # Try to train and evaluate
-      model.set_params(**current_params) # Apply hyperparameters
-      model.fit(X_train, y_train) # Train model
-      y_pred = model.predict(X_train) # Predict on training set
-      score = f1_score(y_train, y_pred, average="weighted") # Compute weighted F1 score
-   except MemoryError: # Catch memory errors specifically
-      print(f"{BackgroundColors.RED}MemoryError with params {current_params}. Consider reducing dataset size or n_jobs.{Style.RESET_ALL}")
-      score = None # Mark score as None
-   except Exception as e: # Catch any other errors during training/evaluation
-      score = None # Mark score as None
-   
-   elapsed = time.time() - start_time # Measure execution time
-   
-   return current_params, score, elapsed # Return results
-
-def evaluate_single_combination_from_files(model, keys, combination, X_path, y_path):
-   """
-   Worker wrapper that loads X/y from disk using mmap and calls
-   `evaluate_single_combination`. This avoids copying large arrays
-   into each worker process when using ProcessPoolExecutor.
-   """
-   
-   try: # Try to load data with memory mapping
-      X = np.load(X_path, mmap_mode="r") # Load features
-      y = np.load(y_path, mmap_mode="r") # Load labels
-   except Exception: # Catch any loading errors
-      current_params = dict(zip(keys, combination)) # Build dict of current params
-      return current_params, None, 0.0 # Return failure result
-
-   return evaluate_single_combination(model, keys, combination, X, y) # Call evaluation function
-
-def measure_resource_usage_for_combination(model, keys, combination, X, y, sample_interval=0.1):
-   """
-   Run a single parameter combination and sample memory and CPU usage
-   in a background thread. Returns peak memory (bytes) and average CPU percent.
-   """
-   
-   proc = psutil.Process(os.getpid()) # Current process
-   mem_samples = [] # Memory usage samples
-   cpu_samples = [] # CPU usage samples
-   stop_evt = threading.Event() # Event to stop monitoring thread
-
-   def monitor(): # Monitoring thread function
-      try: # Try to monitor resources
-         psutil.cpu_percent(interval=None) # Initialize CPU percent measurement
-         while not stop_evt.is_set(): # Loop until stop event is set
-            try: # Try to sample memory and CPU
-               mem_samples.append(proc.memory_info().rss) # Sample memory usage (RSS)
-               cpu_samples.append(psutil.cpu_percent(interval=sample_interval)) # Sample CPU percent
-            except Exception: # Catch sampling errors
-               break # Exit monitoring loop on error
-      except Exception: # Catch initialization errors
-         return # Exit monitoring thread on error
-
-   t = threading.Thread(target=monitor, daemon=True) # Start monitoring thread
-   t.start() # Start the thread
-
-   start = time.time() # Start timing
-   try: # Try to run the model with the parameter combination
-      model.set_params(**dict(zip(keys, combination))) # Apply hyperparameters
-      model.fit(X, y) # Train model
-   except Exception: # Catch any errors during training
-      pass # Ignore errors for resource measurement
-   finally: # Ensure monitoring thread is stopped
-      stop_evt.set() # Signal monitoring thread to stop
-      t.join(timeout=1.0) # Wait for thread to finish
-
-   elapsed = time.time() - start # Measure execution time
-   peak_mem = max(mem_samples) if mem_samples else proc.memory_info().rss # Peak memory usage
-   avg_cpu = statistics.mean(cpu_samples) if cpu_samples else 0.0 # Average CPU percent
-   return peak_mem, avg_cpu, elapsed # Return resource usage metrics
 
 def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress_bar=None, csv_path=None, global_counter_start=0, total_combinations_all_models=None, model_index=None, total_models=None):
    """
