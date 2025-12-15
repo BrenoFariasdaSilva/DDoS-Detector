@@ -37,7 +37,6 @@ Project-Description - @UPDATE.
 - [DDoS-Detector. ](#ddos-detector-)
   - [Table of Contents](#table-of-contents)
   - [Introduction - @UPDATE](#introduction---update)
-  - [Requirements - @UPDATE](#requirements---update)
   - [Setup](#setup)
     - [Git](#git)
         - [Linux](#linux)
@@ -64,10 +63,6 @@ Project-Description - @UPDATE.
 ## Introduction - @UPDATE
 
 Detailed project description.
-
-## Requirements - @UPDATE
-
-Bullet points of the requirements, such as languages, libraries, tools, etc.
 
 ## Setup
 
