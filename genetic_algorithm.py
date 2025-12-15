@@ -1588,6 +1588,23 @@ def load_cached_run_if_any(output_dir, csv_path, pop_size, n_generations, cxpb, 
 
    return None, None # Return None for both result and state_id
 
+def save_run_result(output_dir, state_id, result):
+   """
+   Save a completed run result so future identical runs can be skipped.
+
+   :param output_dir: base output directory
+   :param state_id: deterministic id for run
+   :param result: serializable run result
+   :return: None
+   """
+   
+   try: # Attempt to save the run result
+      _, run_path = state_file_paths(output_dir, state_id) # Get the path for the run state file
+      with open(run_path, "wb") as f: # Open the file for writing in binary mode
+         pickle.dump(result, f, protocol=PICKLE_PROTOCOL) # Serialize and save the result
+   except Exception: # If any error occurs during saving
+      pass # Do nothing
+
 def prepare_feature_dataframe(X, feature_names):
    """
    Ensure features are available as a pandas DataFrame with appropriate column names.
