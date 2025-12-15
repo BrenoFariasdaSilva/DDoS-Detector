@@ -22,7 +22,6 @@ declare -A DATASET_DIRS=(
 )
 
 # DOWNLOAD AND EXTRACT DATASETS
-mkdir -p Datasets # Create main Datasets directory if it doesn't exist
 for DATASET in "${!DATASET_URLS[@]}"; do
 	URL="${DATASET_URLS[$DATASET]}"
 	TARGET_DIR="${DATASET_DIRS[$DATASET]}"
