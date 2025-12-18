@@ -594,46 +594,50 @@ def compute_total_param_combinations(models):
 
    return total_combinations_all_models, model_combinations_counts # Return total and per-model counts
 
-def measure_resource_usage_for_combination(model, keys, combination, X, y, sample_interval=0.1):
-   """
-   Run a single parameter combination and sample memory and CPU usage
-   in a background thread. Returns peak memory (bytes) and average CPU percent.
-   """
-   
-   proc = psutil.Process(os.getpid()) # Current process
-   mem_samples = [] # Memory usage samples
-   cpu_samples = [] # CPU usage samples
-   stop_evt = threading.Event() # Event to stop monitoring thread
+def measure_resource_usage_for_combination(model, keys, combination, X, y, sample_interval=0.05):
+	"""
+	Run a single parameter combination and sample memory and CPU usage
+	in a background thread. Returns memory delta (bytes), average CPU percent, and elapsed time.
+	Memory delta = peak_mem_during_training - baseline_mem_before_training
+	"""
+	
+	proc = psutil.Process(os.getpid()) # Current process
+	baseline_mem = proc.memory_info().rss # Baseline memory before training
+	mem_samples = [] # Memory usage samples during training
+	cpu_samples = [] # CPU usage samples
+	stop_evt = threading.Event() # Event to stop monitoring thread
 
-   def monitor(): # Monitoring thread function
-      try: # Try to monitor resources
-         psutil.cpu_percent(interval=None) # Initialize CPU percent measurement
-         while not stop_evt.is_set(): # Loop until stop event is set
-            try: # Try to sample memory and CPU
-               mem_samples.append(proc.memory_info().rss) # Sample memory usage (RSS)
-               cpu_samples.append(psutil.cpu_percent(interval=sample_interval)) # Sample CPU percent
-            except Exception: # Catch sampling errors
-               break # Exit monitoring loop on error
-      except Exception: # Catch initialization errors
-         return # Exit monitoring thread on error
+	def monitor(): # Monitoring thread function
+		try: # Try to monitor resources
+			psutil.cpu_percent(interval=None) # Initialize CPU percent measurement
+			time.sleep(0.01) # Small delay for CPU measurement initialization
+			while not stop_evt.is_set(): # Loop until stop event is set
+				try: # Try to sample memory and CPU
+					mem_samples.append(proc.memory_info().rss) # Sample memory usage (RSS)
+					cpu_samples.append(psutil.cpu_percent(interval=sample_interval)) # Sample CPU percent
+				except Exception: # Catch sampling errors
+					break # Exit monitoring loop on error
+		except Exception: # Catch initialization errors
+			return # Exit monitoring thread on error
 
-   t = threading.Thread(target=monitor, daemon=True) # Start monitoring thread
-   t.start() # Start the thread
+	t = threading.Thread(target=monitor, daemon=True) # Start monitoring thread
+	t.start() # Start the thread
 
-   start = time.time() # Start timing
-   try: # Try to run the model with the parameter combination
-      model.set_params(**dict(zip(keys, combination))) # Apply hyperparameters
-      model.fit(X, y) # Train model
-   except Exception: # Catch any errors during training
-      pass # Ignore errors for resource measurement
-   finally: # Ensure monitoring thread is stopped
-      stop_evt.set() # Signal monitoring thread to stop
-      t.join(timeout=1.0) # Wait for thread to finish
+	start = time.time() # Start timing
+	try: # Try to run the model with the parameter combination
+		model.set_params(**dict(zip(keys, combination))) # Apply hyperparameters
+		model.fit(X, y) # Train model
+	except Exception: # Catch any errors during training
+		pass # Ignore errors for resource measurement
+	finally: # Ensure monitoring thread is stopped
+		stop_evt.set() # Signal monitoring thread to stop
+		t.join(timeout=1.0) # Wait for thread to finish
 
-   elapsed = time.time() - start # Measure execution time
-   peak_mem = max(mem_samples) if mem_samples else proc.memory_info().rss # Peak memory usage
-   avg_cpu = statistics.mean(cpu_samples) if cpu_samples else 0.0 # Average CPU percent
-   return peak_mem, avg_cpu, elapsed # Return resource usage metrics
+	elapsed = time.time() - start # Measure execution time
+	peak_mem = max(mem_samples) if mem_samples else proc.memory_info().rss # Peak memory during training
+	mem_delta = max(0, peak_mem - baseline_mem) # Memory increase during training (non-negative)
+	avg_cpu = statistics.mean(cpu_samples) if cpu_samples else 0.0 # Average CPU percent
+	return mem_delta, avg_cpu, elapsed # Return memory delta, CPU percent, and elapsed time
 
 def evaluate_single_combination(model, keys, combination, X_train, y_train):
    """
@@ -803,30 +807,44 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
       if len(param_combinations) > 1: # Only benchmark if multiple combinations exist
          verbose_output(f"{BackgroundColors.GREEN}Benchmarking one parameter combination to estimate resource usage...{Style.RESET_ALL}")
          sample_combo = param_combinations[0] # Take the first combination as a sample
-         peak_mem_bytes, avg_cpu_percent, sample_elapsed = measure_resource_usage_for_combination(clone(model), keys, sample_combo, X_train, y_train) # Measure resource usage
-         per_worker_mem_gb = max(0.05, peak_mem_bytes / (1024**3)) * 1.15 # Safety Margin
-         cores_per_worker = max(0.05, avg_cpu_percent / 100.0) # Estimate cores per worker
+         mem_delta_bytes, avg_cpu_percent, sample_elapsed = measure_resource_usage_for_combination(clone(model), keys, sample_combo, X_train, y_train) # Measure resource usage
+
+         per_worker_mem_gb = max(0.1, mem_delta_bytes / (1024**3)) * 1.05 # 5% safety margin
+
+         if mem_delta_bytes < 100 * 1024 * 1024: # Less than 100MB
+            verbose_output(f"{BackgroundColors.YELLOW}Memory delta too small ({mem_delta_bytes / (1024**2):.1f}MB), using dataset size fallback{Style.RESET_ALL}")
+            per_worker_mem_gb = max(0.1, data_size_gb * 1.3) # Use 1.3x dataset size as estimate
+
+         if avg_cpu_percent < 10.0: # Less than 10% CPU usage detected
+            verbose_output(f"{BackgroundColors.YELLOW}CPU% too low ({avg_cpu_percent:.1f}%), assuming 25% per worker{Style.RESET_ALL}")
+            avg_cpu_percent = 25.0 # Assume at least 25% of one core per worker
+
+         cores_per_worker = max(0.25, avg_cpu_percent / 100.0) # Estimate cores per worker (min 0.25 = 25% of one core)
+
+         total_cores = psutil.cpu_count(logical=True) # Use logical cores
+         physical_cores = psutil.cpu_count(logical=False) or total_cores # Fallback to logical if physical unavailable
 
          try: # Calculate max workers based on CPU cores
-            max_workers_cpu = max(1, int(psutil.cpu_count(logical=False) / cores_per_worker)) # Physical cores only
+            max_workers_cpu = max(1, int((total_cores - 2) / cores_per_worker)) # Leave 2 cores free for OS
          except Exception: # Fallback on error
-            max_workers_cpu = max(1, psutil.cpu_count(logical=False)) # Use all physical cores
-         max_workers_mem = max(1, int(available_memory_gb / max(0.05, per_worker_mem_gb))) # Calculate max workers based on memory
+            max_workers_cpu = max(1, total_cores - 2) # Use all but 2 cores
 
-         computed_safe = min(max_workers_cpu, max_workers_mem) # Compute safe n_jobs based on both CPU and memory
+         usable_memory_gb = available_memory_gb * 0.90 # Reserve 10% for OS
+         max_workers_mem = max(1, int(usable_memory_gb / per_worker_mem_gb)) # Max workers based on memory
+
+         computed_safe = min(max_workers_cpu, max_workers_mem) # Initial safe n_jobs based on CPU and memory
 
          if isinstance(N_JOBS, int) and N_JOBS > 0: # If N_JOBS is a positive integer
             computed_safe = min(computed_safe, N_JOBS) # Limit to N_JOBS
          elif N_JOBS == -2: # Leave one core free
-            computed_safe = min(computed_safe, max(1, psutil.cpu_count(logical=False) - 1)) # Use all but one physical core
+            computed_safe = min(computed_safe, max(1, physical_cores - 1)) # Use all but one physical core
          elif N_JOBS == -1: # Use all cores but still respect memory limits
-            computed_safe = min(computed_safe, psutil.cpu_count(logical=False)) # Use all physical cores
+            computed_safe = min(computed_safe, physical_cores) # Use all physical cores
 
          safe_n_jobs = max(1, int(computed_safe)) # Final safe n_jobs
-         verbose_output(f"{BackgroundColors.GREEN}Estimated per-worker memory: {BackgroundColors.CYAN}{per_worker_mem_gb:.2f}GB{BackgroundColors.GREEN}, avg CPU%: {BackgroundColors.CYAN}{avg_cpu_percent:.1f}%{BackgroundColors.GREEN}. Using {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} workers.{Style.RESET_ALL}")
-   except Exception: # If benchmarking fails, continue with previous safe_n_jobs calculation
-      pass # Ignore benchmarking errors
-
+         verbose_output(f"{BackgroundColors.GREEN}Measured: mem_delta={BackgroundColors.CYAN}{mem_delta_bytes/(1024**3):.2f}GB{BackgroundColors.GREEN}, CPU={BackgroundColors.CYAN}{avg_cpu_percent:.1f}%{BackgroundColors.GREEN}. Per-worker: mem={BackgroundColors.CYAN}{per_worker_mem_gb:.2f}GB{BackgroundColors.GREEN}, cores={BackgroundColors.CYAN}{cores_per_worker:.2f}{BackgroundColors.GREEN}. Max workers: CPU={BackgroundColors.CYAN}{max_workers_cpu}{BackgroundColors.GREEN}, RAM={BackgroundColors.CYAN}{max_workers_mem}{BackgroundColors.GREEN}. Using {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} workers (total cores: {BackgroundColors.CYAN}{total_cores}{BackgroundColors.GREEN}, usable RAM: {BackgroundColors.CYAN}{usable_memory_gb:.1f}GB{BackgroundColors.GREEN}){Style.RESET_ALL}")
+   except Exception as benchmark_err: # If benchmarking fails, continue with previous safe_n_jobs calculation
+      verbose_output(f"{BackgroundColors.YELLOW}Benchmarking failed ({benchmark_err}), using initial estimate{Style.RESET_ALL}")
    tmp_dir = tempfile.mkdtemp(prefix="hpopt_") # Temporary directory for memory-mapped files
    X_path = os.path.join(tmp_dir, "X_train.npy") # Path for X_train
    y_path = os.path.join(tmp_dir, "y_train.npy") # Path for y_train
