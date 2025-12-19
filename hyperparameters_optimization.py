@@ -843,7 +843,19 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
             computed_safe = min(computed_safe, total_cores) # Use all logical cores
 
          safe_n_jobs = max(1, int(computed_safe)) # Final safe n_jobs
-         verbose_output(f"{BackgroundColors.GREEN}Measured Sample:\n  - Peak Memory Increase: {BackgroundColors.CYAN}{mem_delta_bytes/(1024**3):.2f} GB{BackgroundColors.GREEN} (Per-Worker Est.: {BackgroundColors.CYAN}{per_worker_mem_gb:.2f} GB{BackgroundColors.GREEN}, Incl. Safety)\n  - AVG CPU During Sample: {BackgroundColors.CYAN}{avg_cpu_percent:.1f}%{BackgroundColors.GREEN} → Cores/Worker: {BackgroundColors.CYAN}{cores_per_worker:.2f}{BackgroundColors.GREEN}\n  - System: Logical Cores {BackgroundColors.CYAN}{total_cores}{BackgroundColors.GREEN}, Usable RAM {BackgroundColors.CYAN}{usable_memory_gb:.1f} GB{BackgroundColors.GREEN}\n  - Max Workers (CPU / RAM): {BackgroundColors.CYAN}{max_workers_cpu}{BackgroundColors.GREEN} / {BackgroundColors.CYAN}{max_workers_mem}{BackgroundColors.GREEN} → Using {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} Workers{Style.RESET_ALL}")
+         mem_delta_gb = mem_delta_bytes / (1024**3) # Convert memory delta to GB
+         njobs_desc = f"N_JOBS={N_JOBS}" if isinstance(N_JOBS, int) else ("N_JOBS=-1 (all cores)" if N_JOBS == -1 else "N_JOBS=-2 (all but one core)") # Describe N_JOBS setting
+         verbose_output(
+            f"{BackgroundColors.GREEN}Measured Sample:\n"
+            f"  - Peak memory increase (sample): {BackgroundColors.CYAN}{mem_delta_gb:.2f} GB{BackgroundColors.GREEN}\n"
+            f"  - Per-worker memory (with safety): {BackgroundColors.CYAN}{per_worker_mem_gb:.2f} GB{BackgroundColors.GREEN} (computed from peak * safety factor)\n"
+            f"  - Avg CPU during sample: {BackgroundColors.CYAN}{avg_cpu_percent:.1f}%{BackgroundColors.GREEN} → cores/worker = {BackgroundColors.CYAN}{cores_per_worker:.2f}{BackgroundColors.GREEN}\n"
+            f"  - Applied CPU limit from N_JOBS semantics: {BackgroundColors.CYAN}{configured_cpu_limit}{BackgroundColors.GREEN} ({njobs_desc})\n"
+            f"  - CPU formula: max_workers_cpu = floor(configured_cpu_limit / cores_per_worker) = floor({configured_cpu_limit} / {cores_per_worker:.2f}) = {BackgroundColors.CYAN}{max_workers_cpu}{BackgroundColors.GREEN}\n"
+            f"  - Memory formula: usable_memory_gb = available_memory_gb * 0.90 = {BackgroundColors.CYAN}{available_memory_gb:.2f}{BackgroundColors.GREEN} * 0.90 = {BackgroundColors.CYAN}{usable_memory_gb:.2f} GB{BackgroundColors.GREEN}\n"
+            f"  - max_workers_mem = floor(usable_memory_gb / per_worker_mem_gb) = floor({usable_memory_gb:.2f} / {per_worker_mem_gb:.2f}) = {BackgroundColors.CYAN}{max_workers_mem}{BackgroundColors.GREEN}\n"
+            f"  - Final choice: safe_n_jobs = min(max_workers_cpu, max_workers_mem) = min({max_workers_cpu}, {max_workers_mem}) = {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN}{Style.RESET_ALL}"
+         )
    except Exception as benchmark_err: # If benchmarking fails, continue with previous safe_n_jobs calculation
       verbose_output(f"{BackgroundColors.YELLOW}Benchmarking failed ({benchmark_err}), using initial estimate{Style.RESET_ALL}")
    tmp_dir = tempfile.mkdtemp(prefix="hpopt_") # Temporary directory for memory-mapped files
