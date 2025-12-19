@@ -16,6 +16,7 @@ Project-Description - @UPDATE.
 
 <div align="center">
 
+![Lines of Code](docs/loc-badge.svg)
 ![GitHub Code Size in Bytes](https://img.shields.io/github/languages/code-size/BrenoFariasdaSilva/DDoS-Detector)
 ![GitHub Commits](https://img.shields.io/github/commit-activity/t/BrenoFariasDaSilva/DDoS-Detector/main)
 ![GitHub Last Commit](https://img.shields.io/github/last-commit/BrenoFariasdaSilva/DDoS-Detector)
