@@ -12,6 +12,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
 
       - name: Make Code Badge
         uses: shadowmoose/GHA-LoC-Badge@1.0.0
@@ -19,15 +22,24 @@ jobs:
         with:
           debug: true
           directory: ./
-          badge: ./docs/loc-badge.svg
+          badge: ./output/badge.svg
           patterns: "**/*.py|**/*.sh|Makefile"
           ignore: ".venv|venv|env|node_modules|.git"
 
-      - name: Commit generated badge
-        uses: stefanzweifel/git-auto-commit-action@v4
-        with:
-          commit_message: "chore: update LoC badge"
-          file_pattern: "docs/loc-badge.svg"
-          branch: main
-          commit_user_name: github-actions
-          commit_user_email: actions@github.com
+      - name: Push badge to image-data branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Ensure git identity
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Prepare a minimal repo containing only the badge and push it to image-data
+          mkdir -p badge-tmp
+          cp output/badge.svg badge-tmp/badge.svg
+          cd badge-tmp
+          git init
+          git add badge.svg
+          git commit -m "chore: update LoC badge"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+          git push --force origin HEAD:image-data
