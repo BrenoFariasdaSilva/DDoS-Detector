@@ -960,8 +960,6 @@ def process_single_csv_file(csv_path, dir_results_list):
       print(f"{BackgroundColors.YELLOW}No GA features found for {csv_path}. Skipping file.{Style.RESET_ALL}")
       return # Exit early
 
-   print(f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(ga_selected_features)}{BackgroundColors.GREEN} GA selected features{Style.RESET_ALL}") # Output feature count
-
    dataset_bundle = load_and_prepare_dataset(csv_path) # Load, preprocess, split, scale
    if dataset_bundle is None: # If loading/preprocessing failed
       return # Exit early
