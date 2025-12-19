@@ -112,6 +112,19 @@ dependencies: $(VENV)
 	@echo "Installing/Updating Python dependencies..."
 	$(PIP) install -r requirements.txt
 
+# Run code quality checks: syntax, lint, and type checking
+check-build: dependencies
+	@echo "Running syntax check, flake8 linting, and mypy type checks..."
+	# Ensure linters are installed in the venv
+	$(PIP) install --upgrade flake8 mypy
+	# Python syntax check (compile all .py files, excluding venv/.git/.github/.assets)
+	find . -name "*.py" \
+		-not -path "./venv/*" -not -path "./.venv/*" -not -path "./.git/*" -not -path "./.github/*" -not -path "./.assets/*" -print0 | xargs -0 -n1 $(PYTHON) -m py_compile
+	# Run flake8 (excluding common directories)
+	$(PYTHON) -m flake8 . --max-line-length=120 --exclude=.git,venv,.venv,.github,.assets
+	# Run mypy (exclude via regex)
+	$(PYTHON) -m mypy . --exclude '(^\.venv/|^venv/|^\.git/|^\.github/|^\.assets/)'
+
 # Generate requirements.txt from current venv
 generate_requirements: $(VENV)
 	$(PIP) freeze > requirements.txt
@@ -122,4 +135,4 @@ clean:
 	find . -type f -name '*.pyc' -delete || del /S /Q *.pyc 2>nul
 	find . -type d -name '__pycache__' -delete || rmdir /S /Q __pycache__ 2>nul
 
-.PHONY: all main clean dependencies generate_requirements dataset_converter dataset_descriptor download_datasets genetic_algorithm hyperparameters_optimization pca rfe stacking telegram wgangp
+.PHONY: all main clean dependencies check-build generate_requirements dataset_converter dataset_descriptor download_datasets genetic_algorithm hyperparameters_optimization pca rfe stacking telegram wgangp
