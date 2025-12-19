@@ -1,0 +1,33 @@
+name: Generate LoC Badge
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  generate:
+    name: Generate Lines-of-Code Badge
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Make Code Badge
+        uses: shadowmoose/GHA-LoC-Badge@1.0.0
+        id: badge
+        with:
+          debug: true
+          directory: ./
+          badge: ./docs/loc-badge.svg
+          patterns: "**/*.py|**/*.sh|Makefile"
+          ignore: ".venv|venv|env|node_modules|.git"
+
+      - name: Commit generated badge
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "chore: update LoC badge"
+          file_pattern: "docs/loc-badge.svg"
+          branch: main
+          commit_user_name: github-actions
+          commit_user_email: actions@github.com
