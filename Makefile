@@ -125,6 +125,20 @@ check-build: dependencies
 	# Run mypy (exclude via regex)
 	$(PYTHON) -m mypy . --exclude '(^\.venv/|^venv/|^\.git/|^\.github/|^\.assets/)'
 
+# Auto-fix Python style issues using ruff and black, then normalize tabs -> spaces
+fix-style: dependencies
+	@echo "Auto-fixing style with ruff and black, converting tabs to spaces..."
+	# Ensure formatters are installed in the venv
+	$(PIP) install --upgrade ruff black
+	# Run ruff auto-fixes (exclude large/non-source dirs)
+	$(PYTHON) -m ruff --fix . --extend-exclude venv,.venv,.git,.github,.assets || true
+	# Run black to reformat and wrap long lines to the project's max length
+	$(PYTHON) -m black . --line-length 120 --exclude 'venv|\.venv|\.git|\.github|\.assets' || true
+	# Convert any remaining tabs to 4-space indentation for .py files (excluding venv/.git/.github/.assets)
+	find . -name "*.py" \
+		-not -path "./venv/*" -not -path "./.venv/*" -not -path "./.git/*" -not -path "./.github/*" -not -path "./.assets/*" -print0 \
+		| xargs -0 -I {} sh -c 'expand -t 4 "{}" > "{}.exp" && mv "{}.exp" "{}"' || true
+
 # Generate requirements.txt from current venv
 generate_requirements: $(VENV)
 	$(PIP) freeze > requirements.txt
@@ -135,4 +149,4 @@ clean:
 	find . -type f -name '*.pyc' -delete || del /S /Q *.pyc 2>nul
 	find . -type d -name '__pycache__' -delete || rmdir /S /Q __pycache__ 2>nul
 
-.PHONY: all main clean dependencies check-build generate_requirements dataset_converter dataset_descriptor download_datasets genetic_algorithm hyperparameters_optimization pca rfe stacking telegram wgangp
+.PHONY: all main clean dependencies check-build fix-style generate_requirements dataset_converter dataset_descriptor download_datasets genetic_algorithm hyperparameters_optimization pca rfe stacking telegram wgangp
