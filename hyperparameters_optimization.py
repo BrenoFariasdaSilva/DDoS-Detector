@@ -815,10 +815,6 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
             verbose_output(f"{BackgroundColors.YELLOW}Memory delta too small ({mem_delta_bytes / (1024**2):.1f}MB), using dataset size fallback{Style.RESET_ALL}")
             per_worker_mem_gb = max(0.1, data_size_gb * 1.3) # Use 1.3x dataset size as estimate
 
-         if avg_cpu_percent < 10.0: # Less than 10% CPU usage detected
-            verbose_output(f"{BackgroundColors.YELLOW}CPU% too low ({avg_cpu_percent:.1f}%), assuming 25% per worker{Style.RESET_ALL}")
-            avg_cpu_percent = 25.0 # Assume at least 25% of one core per worker
-
          cores_per_worker = max(0.25, avg_cpu_percent / 100.0) # Estimate cores per worker (min 0.25 = 25% of one core)
 
          total_cores = psutil.cpu_count(logical=True) # Use logical cores
