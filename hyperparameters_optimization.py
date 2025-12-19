@@ -813,13 +813,22 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
 
          cores_per_worker = max(0.25, avg_cpu_percent / 100.0) # Estimate cores per worker (min 0.25 = 25% of one core)
 
-         total_cores = psutil.cpu_count(logical=True) # Use logical cores
+         total_cores = psutil.cpu_count(logical=True) or 1 # Use logical cores
          physical_cores = psutil.cpu_count(logical=False) or total_cores # Fallback to logical if physical unavailable
 
-         try: # Calculate max workers based on CPU cores
-            max_workers_cpu = max(1, int((total_cores - 2) / cores_per_worker)) # Leave 2 cores free for OS
+         if isinstance(N_JOBS, int) and N_JOBS > 0: # If N_JOBS is a positive integer
+            configured_cpu_limit = min(N_JOBS, total_cores) # Limit to N_JOBS
+         elif N_JOBS == -2: # Leave one logical core free
+            configured_cpu_limit = max(1, total_cores - 1) # Use all but one logical core
+         elif N_JOBS == -1: # Use all logical cores
+            configured_cpu_limit = total_cores # Use all logical cores
+         else: # Default behavior
+            configured_cpu_limit = max(1, total_cores - 1) # Default: leave one core free
+
+         try: # Calculate max workers based on configured CPU limit and per-worker core estimate
+            max_workers_cpu = max(1, int(max(1, configured_cpu_limit) / cores_per_worker))
          except Exception: # Fallback on error
-            max_workers_cpu = max(1, total_cores - 2) # Use all but 2 cores
+            max_workers_cpu = max(1, configured_cpu_limit) # Fallback to configured CPU limit
 
          usable_memory_gb = available_memory_gb * 0.90 # Reserve 10% for OS
          max_workers_mem = max(1, int(usable_memory_gb / per_worker_mem_gb)) # Max workers based on memory
@@ -828,10 +837,10 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
 
          if isinstance(N_JOBS, int) and N_JOBS > 0: # If N_JOBS is a positive integer
             computed_safe = min(computed_safe, N_JOBS) # Limit to N_JOBS
-         elif N_JOBS == -2: # Leave one core free
-            computed_safe = min(computed_safe, max(1, physical_cores - 1)) # Use all but one physical core
+         elif N_JOBS == -2: # Leave one logical core free
+            computed_safe = min(computed_safe, max(1, total_cores - 1)) # Use all but one logical core
          elif N_JOBS == -1: # Use all cores but still respect memory limits
-            computed_safe = min(computed_safe, physical_cores) # Use all physical cores
+            computed_safe = min(computed_safe, total_cores) # Use all logical cores
 
          safe_n_jobs = max(1, int(computed_safe)) # Final safe n_jobs
          verbose_output(f"{BackgroundColors.GREEN}Measured: mem_delta={BackgroundColors.CYAN}{mem_delta_bytes/(1024**3):.2f}GB{BackgroundColors.GREEN}, CPU={BackgroundColors.CYAN}{avg_cpu_percent:.1f}%{BackgroundColors.GREEN}. Per-worker: mem={BackgroundColors.CYAN}{per_worker_mem_gb:.2f}GB{BackgroundColors.GREEN}, cores={BackgroundColors.CYAN}{cores_per_worker:.2f}{BackgroundColors.GREEN}. Max workers: CPU={BackgroundColors.CYAN}{max_workers_cpu}{BackgroundColors.GREEN}, RAM={BackgroundColors.CYAN}{max_workers_mem}{BackgroundColors.GREEN}. Using {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} workers (total cores: {BackgroundColors.CYAN}{total_cores}{BackgroundColors.GREEN}, usable RAM: {BackgroundColors.CYAN}{usable_memory_gb:.1f}GB{BackgroundColors.GREEN}){Style.RESET_ALL}")
