@@ -805,7 +805,7 @@ def manual_grid_search(model_name, model, param_grid, X_train, y_train, progress
    
    try: # Benchmark one combination to refine n_jobs based on actual resource usage
       if len(param_combinations) > 1: # Only benchmark if multiple combinations exist
-         verbose_output(f"{BackgroundColors.GREEN}Benchmarking one parameter combination to estimate resource usage...{Style.RESET_ALL}")
+         verbose_output(f"{BackgroundColors.GREEN}Benchmarking One Parameter Combination to Estimate Resource Usage for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}...{Style.RESET_ALL}")
          sample_combo = param_combinations[0] # Take the first combination as a sample
          mem_delta_bytes, avg_cpu_percent, sample_elapsed = measure_resource_usage_for_combination(clone(model), keys, sample_combo, X_train, y_train) # Measure resource usage
 
