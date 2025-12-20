@@ -24,6 +24,7 @@ Project-Description - @UPDATE.
 ![GitHub Language Count](https://img.shields.io/github/languages/count/BrenoFariasDaSilva/DDoS-Detector)
 ![GitHub License](https://img.shields.io/github/license/BrenoFariasdaSilva/DDoS-Detector)
 ![GitHub Stars](https://img.shields.io/github/stars/BrenoFariasdaSilva/DDoS-Detector)
+![GitHub Contributors](https://img.shields.io/github/contributors/BrenoFariasdaSilva/DDoS-Detector)
 ![wakatime](https://wakatime.com/badge/github/BrenoFariasdaSilva/DDoS-Detector.svg)
 
 </div>
