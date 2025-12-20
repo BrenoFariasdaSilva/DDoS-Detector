@@ -323,8 +323,8 @@ We thank the following people who contributed to this project:
 <table>
   <tr>
     <td align="center">
-      <a href="#" title="defina o titulo do link">
-        <img src="https://github.com/BrenoFariasdaSilva.svg" width="100px;" alt="My Profile Picture"/><br>
+      <a href="https://github.com/BrenoFariasdaSilva" title="Breno Farias da Silva (Founder)">
+        <img src="https://github.com/BrenoFariasdaSilva.png" width="100px;" alt="Breno Farias da Silva (Founder)"/><br>
         <sub>
           <b>Breno Farias da Silva</b>
         </sub>
