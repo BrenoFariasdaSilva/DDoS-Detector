@@ -275,7 +275,7 @@ If you use the Repository-Name in your research, please cite it using the follow
 
 ```
 @misc{softwareDDoS-Detector:2025,
-  title = {A Framework for Detecting DDoS Attacks with Hyper-parameters Optimization, Feature Extraction, Classifiers Combination and Multi-Dataset Testing},
+  title = {A Framework for DDoS Attack Detection Using Hyperparameter Optimization, WGAN-GP–Based Data Augmentation, Feature Extraction via Genetic Algorithms, RFE, and PCA, with Ensemble Classifiers and Multi-Dataset Evaluation},
   author = {Breno Farias da Silva},
   year = {2025},
   howpublished = {https://github.com/BrenoFariasdaSilva/DDoS-Detector},
