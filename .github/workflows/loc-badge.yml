@@ -27,7 +27,7 @@ jobs:
           debug: true
           directory: ./
           badge: ./output/badge.svg
-          patterns: "**/*.py|**/*.sh|Makefile"
+          patterns: "**/*.py|**/*.sh|**/*.md|Makefile"
           ignore: ".venv|venv|env|node_modules|.git"
 
       - name: Push badge to image-data branch
