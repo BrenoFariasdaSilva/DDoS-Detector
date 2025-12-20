@@ -18,10 +18,10 @@ Project-Description - @UPDATE.
 
 ![GitHub Code Size in Bytes](https://img.shields.io/github/languages/code-size/BrenoFariasdaSilva/DDoS-Detector)
 ![Lines Of Code](https://raw.githubusercontent.com/BrenoFariasdaSilva/DDoS-Detector/image-data/badge.svg)
-![GitHub Commits](https://img.shields.io/github/commit-activity/t/BrenoFariasDaSilva/DDoS-Detector/main)
+![GitHub Commits](https://img.shields.io/github/commit-activity/t/BrenoFariasdaSilva/DDoS-Detector/main)
 ![GitHub Last Commit](https://img.shields.io/github/last-commit/BrenoFariasdaSilva/DDoS-Detector)
-![GitHub Forks](https://img.shields.io/github/forks/BrenoFariasDaSilva/DDoS-Detector)
-![GitHub Language Count](https://img.shields.io/github/languages/count/BrenoFariasDaSilva/DDoS-Detector)
+![GitHub Forks](https://img.shields.io/github/forks/BrenoFariasdaSilva/DDoS-Detector)
+![GitHub Language Count](https://img.shields.io/github/languages/count/BrenoFariasdaSilva/DDoS-Detector)
 ![GitHub License](https://img.shields.io/github/license/BrenoFariasdaSilva/DDoS-Detector)
 ![GitHub Stars](https://img.shields.io/github/stars/BrenoFariasdaSilva/DDoS-Detector)
 ![GitHub Contributors](https://img.shields.io/github/contributors/BrenoFariasdaSilva/DDoS-Detector)
