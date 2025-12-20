@@ -51,6 +51,9 @@ Icon? # match Icon<CR>
 !requirements.txt
 !README.md
 
+# Generated code-grade artifacts (raw linter outputs, JSON). Badge SVG lives under .assets/Icons and is tracked.
+code-grade-results/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
