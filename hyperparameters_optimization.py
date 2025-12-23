@@ -133,6 +133,19 @@ IGNORE_DIRS = [
     "Feature_Analysis",
 ]  # List of directory names to ignore when searching for datasets
 
+# Enabled Models Configuration:
+ENABLED_MODELS = [
+    "Random Forest",
+    "SVM",
+    "XGBoost",
+    "Logistic Regression",
+    "KNN",
+    "Nearest Centroid",
+    "Gradient Boosting",
+    "LightGBM",
+    "MLP (Neural Net)",
+]  # List of model names to run (comment out models you want to skip)
+
 DATASETS = {  # Dictionary containing dataset paths and feature files
     "CICDDoS2019-Dataset": [  # List of paths to the CICDDoS2019 dataset
         "./Datasets/CICDDoS2019/01-12/",
@@ -695,7 +708,7 @@ def get_models_and_param_grids():
         f"{BackgroundColors.GREEN}Initializing models and parameter grids for hyperparameter optimization...{Style.RESET_ALL}"
     )  # Output the verbose message
 
-    return {  # Dictionary of models and their parameter grids
+    all_models = {  # Dictionary of all available models and their parameter grids
         "Random Forest": (
             RandomForestClassifier(random_state=42, n_jobs=N_JOBS),  # Random Forest classifier
             {
@@ -788,6 +801,27 @@ def get_models_and_param_grids():
             },
         ),
     }
+
+
+    enabled_models = {model_name: model_config for model_name, model_config in all_models.items() if model_name in ENABLED_MODELS}  # Filter enabled models
+
+    if not enabled_models:  # If no models are enabled
+        print(
+            f"{BackgroundColors.RED}Error: No models enabled in ENABLED_MODELS configuration. Please enable at least one model.{Style.RESET_ALL}"
+        )
+        return {}  # Return empty dict
+
+    disabled_models = [name for name in all_models.keys() if name not in ENABLED_MODELS]  # List of disabled models
+    if disabled_models:  # If there are disabled models
+        print(
+            f"{BackgroundColors.YELLOW}Disabled models: {BackgroundColors.CYAN}{', '.join(disabled_models)}{Style.RESET_ALL}"
+        )
+
+    print(
+        f"{BackgroundColors.GREEN}Enabled models ({len(enabled_models)}): {BackgroundColors.CYAN}{', '.join(enabled_models.keys())}{Style.RESET_ALL}"
+    )
+
+    return enabled_models  # Return enabled models and their parameter grids
 
 
 def compute_total_param_combinations(models):
