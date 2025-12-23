@@ -42,6 +42,7 @@ A machine learning framework for Distributed Denial of Service (DDoS) attack det
   - [Introduction](#introduction)
     - [Project Architecture](#project-architecture)
     - [Key Technical Features](#key-technical-features)
+    - [Workflow Integration](#workflow-integration)
   - [Setup](#setup)
     - [Git](#git)
         - [Linux](#linux)
@@ -102,6 +103,20 @@ The system is organized into several interconnected modules, each addressing a c
 - **Progress Persistence**: Checkpoint saving and caching for resumable long-running optimizations
 - **Hardware Awareness**: Automatic detection of CPU model, cores, RAM, GPU availability (ThunderSVM), and memory-safe parallel worker allocation
 - **Cross-Platform**: Unified codebase with OS-specific adaptations for sound notifications, path handling, and system information retrieval
+
+### Workflow Integration
+
+The typical pipeline execution follows this sequence:
+
+1. **Download/Convert Datasets**: Obtain raw data using `download_datasets.sh` or convert existing formats with `dataset_converter.py`
+2. **Describe Datasets**: Generate metadata reports and t-SNE visualizations using `dataset_descriptor.py`
+3. **Feature Selection**: Run `genetic_algorithm.py`, `rfe.py`, and `pca.py` to extract optimal feature subsets
+4. **Hyperparameter Tuning**: Optimize individual classifiers with `hyperparameters_optimization.py` using GA-selected features
+5. **Ensemble Evaluation**: Compare stacking and individual models across feature sets with `stacking.py`
+6. **Optional Augmentation**: Generate synthetic samples using `wgangp.py` for dataset balancing
+7. **Results Analysis**: Consolidated CSV outputs in `Feature_Analysis/` and `Classifiers_Hyperparameters/` directories
+
+This modular architecture enables researchers to execute the complete pipeline end-to-end or run individual components for targeted analysis.
 
 ## Setup
 
