@@ -754,7 +754,7 @@ def measure_resource_usage_for_combination(model, keys, combination, X, y, sampl
 def evaluate_single_combination(model, keys, combination, X_train, y_train):
     """
     Helper function to evaluate a single parameter combination.
-    Designed to be called in parallel via joblib with memory safety.
+    Designed to be called in parallel via ThreadPoolExecutor with memory safety.
 
     :param model: Clone of the model instance
     :param keys: Parameter names
@@ -777,7 +777,12 @@ def evaluate_single_combination(model, keys, combination, X_train, y_train):
             f"{BackgroundColors.RED}MemoryError with params {current_params}. Consider reducing dataset size or n_jobs.{Style.RESET_ALL}"
         )
         score = None  # Mark score as None
+    except KeyboardInterrupt:  # Allow graceful interruption
+        raise  # Re-raise keyboard interrupt
     except Exception as e:  # Catch any other errors during training/evaluation
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Error evaluating params {current_params}: {type(e).__name__}: {e}{Style.RESET_ALL}"
+        )
         score = None  # Mark score as None
 
     elapsed = time.time() - start_time  # Measure execution time
@@ -958,7 +963,7 @@ def manual_grid_search(
     available_memory_gb = psutil.virtual_memory().available / (1024**3)  # Available RAM in GB
     data_size_gb = (X_train.nbytes + y_train.nbytes) / (1024**3)  # Dataset size in GB
 
-    estimated_memory_per_worker = data_size_gb * 1.2  # 1.20x for model overhead
+    estimated_memory_per_worker = data_size_gb * 0.3  # Lower multiplier for shared memory
     safe_n_jobs = max(
         1, min(abs(N_JOBS) if N_JOBS < 0 else N_JOBS, int(available_memory_gb / max(0.5, estimated_memory_per_worker)))
     )  # Calculate safe n_jobs based on memory
@@ -968,105 +973,42 @@ def manual_grid_search(
     elif N_JOBS == -1:  # Use all cores but still respect memory limits
         safe_n_jobs = min(safe_n_jobs, psutil.cpu_count(logical=False))  # Use all physical cores
 
+    safe_n_jobs = min(safe_n_jobs, 8)  # Cap at 8 workers to prevent excessive thread contention
+
     verbose_output(
         f"{BackgroundColors.GREEN}Using {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} parallel workers (Available RAM: {BackgroundColors.CYAN}{available_memory_gb:.1f}GB{BackgroundColors.GREEN}, Dataset: {BackgroundColors.CYAN}{data_size_gb:.2f}GB{BackgroundColors.GREEN}){Style.RESET_ALL}"
     )
 
-    try:  # Benchmark one combination to refine n_jobs based on actual resource usage
-        if len(param_combinations) > 1:  # Only benchmark if multiple combinations exist
-            verbose_output(
-                f"{BackgroundColors.GREEN}Benchmarking One Parameter Combination to Estimate Resource Usage for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}...{Style.RESET_ALL}"
-            )
-            sample_combo = param_combinations[0]  # Take the first combination as a sample
-            mem_delta_bytes, avg_cpu_percent, sample_elapsed = measure_resource_usage_for_combination(
-                clone(model), keys, sample_combo, X_train, y_train
-            )  # Measure resource usage
 
-            per_worker_mem_gb = max(0.1, mem_delta_bytes / (1024**3)) * 1.05  # 5% safety margin
+    # Use ThreadPoolExecutor for better memory management and to avoid ProcessPoolExecutor deadlocks
+    verbose_output(
+        f"{BackgroundColors.GREEN}Starting parallel evaluation with {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} workers...{Style.RESET_ALL}"
+    )
 
-            cores_per_worker = max(
-                0.25, avg_cpu_percent / 100.0
-            )  # Estimate cores per worker (min 0.25 = 25% of one core)
+    with concurrent.futures.ThreadPoolExecutor(  # ThreadPoolExecutor for parallel evaluation
+        max_workers=safe_n_jobs  # Set number of parallel workers
+    ) as executor:  # Use ThreadPoolExecutor for parallel evaluation
+        future_to_params = {  # Map futures to parameter combinations
+            executor.submit(  # Submit evaluation task
+                evaluate_single_combination, clone(model), keys, combination, X_train, y_train  # Pass cloned model and data
+            ): combination  # Map future to combination
+            for combination in param_combinations  # Iterate all combinations
+        }  # Submit all combinations
+        local_counter = 0  # Local combination counter for this model
 
-            total_cores = psutil.cpu_count(logical=True) or 1  # Use logical cores
-            physical_cores = (
-                psutil.cpu_count(logical=False) or total_cores
-            )  # Fallback to logical if physical unavailable
-
-            if isinstance(N_JOBS, int) and N_JOBS > 0:  # If N_JOBS is a positive integer
-                configured_cpu_limit = min(N_JOBS, total_cores)  # Limit to N_JOBS
-            elif N_JOBS == -2:  # Leave one logical core free
-                configured_cpu_limit = max(1, total_cores - 1)  # Use all but one logical core
-            elif N_JOBS == -1:  # Use all logical cores
-                configured_cpu_limit = total_cores  # Use all logical cores
-            else:  # Default behavior
-                configured_cpu_limit = max(1, total_cores - 1)  # Default: leave one core free
-
-            try:  # Calculate max workers based on configured CPU limit and per-worker core estimate
-                max_workers_cpu = max(1, int(max(1, configured_cpu_limit) / cores_per_worker))
-            except Exception:  # Fallback on error
-                max_workers_cpu = max(1, configured_cpu_limit)  # Fallback to configured CPU limit
-
-            usable_memory_gb = available_memory_gb * 0.90  # Reserve 10% for OS
-            max_workers_mem = max(1, int(usable_memory_gb / per_worker_mem_gb))  # Max workers based on memory
-
-            computed_safe = min(max_workers_cpu, max_workers_mem)  # Initial safe n_jobs based on CPU and memory
-
-            if isinstance(N_JOBS, int) and N_JOBS > 0:  # If N_JOBS is a positive integer
-                computed_safe = min(computed_safe, N_JOBS)  # Limit to N_JOBS
-            elif N_JOBS == -2:  # Leave one logical core free
-                computed_safe = min(computed_safe, max(1, total_cores - 1))  # Use all but one logical core
-            elif N_JOBS == -1:  # Use all cores but still respect memory limits
-                computed_safe = min(computed_safe, total_cores)  # Use all logical cores
-
-            safe_n_jobs = max(1, int(computed_safe))  # Final safe n_jobs
-            mem_delta_gb = mem_delta_bytes / (1024**3)  # Convert memory delta to GB
-            njobs_desc = (
-                f"N_JOBS={N_JOBS}"
-                if isinstance(N_JOBS, int)
-                else ("N_JOBS=-1 (all cores)" if N_JOBS == -1 else "N_JOBS=-2 (all but one core)")
-            )  # Describe N_JOBS setting
-            verbose_output(
-                f"{BackgroundColors.GREEN}Measured Sample:\n"
-                f"  - Peak Memory Increase (Sample): {BackgroundColors.CYAN}{mem_delta_gb:.2f} GB{BackgroundColors.GREEN}\n"
-                f"  - Per-Worker Memory (With Safety): {BackgroundColors.CYAN}{per_worker_mem_gb:.2f} GB{BackgroundColors.GREEN} (Computed From Peak * Safety Factor)\n"
-                f"  - Avg CPU During Sample: {BackgroundColors.CYAN}{avg_cpu_percent:.1f}%{BackgroundColors.GREEN} → Cores/Worker = {BackgroundColors.CYAN}{cores_per_worker:.2f}{BackgroundColors.GREEN}\n"
-                f"  - Applied CPU Limit From N_JOBS Semantics: {BackgroundColors.CYAN}{configured_cpu_limit}{BackgroundColors.GREEN} ({njobs_desc})\n"
-                f"  - CPU Formula: max_workers_cpu = floor(configured_cpu_limit / cores_per_worker) = floor({configured_cpu_limit} / {cores_per_worker:.2f}) = {BackgroundColors.CYAN}{max_workers_cpu}{BackgroundColors.GREEN}\n"
-                f"  - Memory Formula: usable_memory_gb = available_memory_gb * 0.90 = {BackgroundColors.CYAN}{available_memory_gb:.2f}{BackgroundColors.GREEN} * 0.90 = {BackgroundColors.CYAN}{usable_memory_gb:.2f} GB{BackgroundColors.GREEN}\n"
-                f"  - Max_Workers_Mem = floor(usable_memory_gb / per_worker_mem_gb) = floor({usable_memory_gb:.2f} / {per_worker_mem_gb:.2f}) = {BackgroundColors.CYAN}{max_workers_mem}{BackgroundColors.GREEN}\n"
-                f"  - Final Choice: safe_n_jobs = min(max_workers_cpu, Max_Workers_Mem) = min({max_workers_cpu}, {max_workers_mem}) = {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN}{Style.RESET_ALL}"
-            )
-    except Exception as benchmark_err:  # If benchmarking fails, continue with previous safe_n_jobs calculation
-        verbose_output(
-            f"{BackgroundColors.YELLOW}Benchmarking failed ({benchmark_err}), using initial estimate{Style.RESET_ALL}"
-        )
-    tmp_dir = tempfile.mkdtemp(prefix="hpopt_")  # Temporary directory for memory-mapped files
-    X_path = os.path.join(tmp_dir, "X_train.npy")  # Path for X_train
-    y_path = os.path.join(tmp_dir, "y_train.npy")  # Path for y_train
-    try:  # Ensure temporary files are cleaned up
-        np.save(X_path, X_train)  # Save X_train to disk
-        np.save(y_path, y_train)  # Save y_train to disk
-
-        with concurrent.futures.ProcessPoolExecutor(
-            max_workers=safe_n_jobs
-        ) as executor:  # Use ProcessPoolExecutor for parallel evaluation
-            future_to_params = {
-                executor.submit(
-                    evaluate_single_combination_from_files, clone(model), keys, combination, X_path, y_path
-                ): combination
-                for combination in param_combinations
-            }  # Submit all combinations
-            local_counter = 0  # Local combination counter for this model
-
-            for future in concurrent.futures.as_completed(future_to_params):  # Iterate as each future completes
-                try:  # Try to get result
-                    current_params, score, elapsed = future.result()  # Get result from future
-                except Exception:  # Catch any errors from the worker
-                    combo = future_to_params.get(future)  # Get the combination that caused the error
-                    current_params = dict(zip(keys, combo)) if combo is not None else {}  # Build current params dict
-                    score = None  # Mark score as None
-                    elapsed = 0.0  # Mark elapsed as 0.0
+        for future in concurrent.futures.as_completed(  # Iterate as each future completes
+            future_to_params  # Futures to monitor
+        ):  # Iterate as each future completes
+            try:  # Try to get result
+                current_params, score, elapsed = future.result()  # Get result from future
+            except Exception as worker_err:  # Catch any errors from the worker
+                combo = future_to_params.get(future)  # Get the combination that caused the error
+                current_params = dict(zip(keys, combo)) if combo is not None else {}  # Build current params dict
+                score = None  # Mark score as None
+                elapsed = 0.0  # Mark elapsed as 0.0
+                print(
+                    f"{BackgroundColors.YELLOW}Warning: Combination {current_params} failed: {worker_err}{Style.RESET_ALL}"
+                )
 
                 global_counter += 1  # Increment overall combination counter
                 local_counter += 1  # Increment per-model combination counter
@@ -1108,11 +1050,10 @@ def manual_grid_search(
                         verbose_output(
                             f"{BackgroundColors.GREEN}New best score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}"
                         )  # Log new best
-    finally:  # Cleanup temporary directory
-        try:  # Remove temporary directory and files
-            shutil.rmtree(tmp_dir)  # Delete temporary directory
-        except Exception:  # Ignore cleanup errors
-            pass  # Ignore errors during cleanup
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Completed optimization for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Best score: {BackgroundColors.CYAN}{best_score:.4f}{Style.RESET_ALL}"
+    )
 
     return (
         best_params,
@@ -1151,19 +1092,25 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
         unit="comb",
     ) as pbar:  # Progress bar
         for model_index, (model_name, (model, param_grid)) in enumerate(models, start=1):  # Iterate models with index
-            best_params, best_score, best_elapsed, all_results, global_counter = manual_grid_search(
-                model_name,
-                model,
-                param_grid,
-                X_train_ga,
-                y_train,
-                progress_bar=pbar,
-                csv_path=csv_path,
-                global_counter_start=global_counter,
-                total_combinations_all_models=total_combinations_all_models,
-                model_index=model_index,
-                total_models=len(models),
-            )  # Manual grid search instead of GridSearchCV
+            try:  # Wrap each model optimization in try-except to prevent one failure from stopping all
+                best_params, best_score, best_elapsed, all_results, global_counter = manual_grid_search(
+                    model_name,
+                    model,
+                    param_grid,
+                    X_train_ga,
+                    y_train,
+                    progress_bar=pbar,
+                    csv_path=csv_path,
+                    global_counter_start=global_counter,
+                    total_combinations_all_models=total_combinations_all_models,
+                    model_index=model_index,
+                    total_models=len(models),
+                )  # Manual grid search instead of GridSearchCV
+            except Exception as model_err:  # Catch any errors during model optimization
+                print(
+                    f"{BackgroundColors.RED}Error optimizing {model_name}: {model_err}{Style.RESET_ALL}"
+                )
+                continue  # Skip to next model
 
             if best_params is not None:  # If optimization succeeded
                 elapsed_time = float(best_elapsed or 0.0)  # Elapsed time for best params
@@ -1184,9 +1131,15 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
                         ]
                     )
                 )  # End of append
+            else:  # If optimization failed
+                print(
+                    f"{BackgroundColors.YELLOW}Warning: No valid results for {model_name}{Style.RESET_ALL}"
+                )
 
-        print()  # Line spacing between models
+            # Refresh progress bar between models to prevent display issues
+            pbar.refresh()
 
+        print()  # Line spacing after all models complete
 
 def process_single_csv_file(csv_path, dir_results_list):
     """
