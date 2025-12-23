@@ -488,6 +488,29 @@ def get_feature_subset(X_scaled, features, feature_names):
         return np.empty((X_scaled.shape[0], 0))  # Return an empty array with correct number of rows
 
 
+def get_cache_path(csv_path, model_name):
+    """
+    Generate cache file path for a specific dataset and model.
+
+    :param csv_path: Path to the CSV dataset file
+    :param model_name: Name of the model being optimized
+    :return: Absolute path to the cache file
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Generating cache path for model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    csv_basename = os.path.splitext(os.path.basename(csv_path))[0]  # Get CSV filename without extension
+    parent_dir = os.path.basename(os.path.dirname(csv_path))  # Get parent directory name
+    safe_model_name = model_name.replace(" ", "_").replace("/", "_")  # Make model name filesystem-safe
+
+    cache_subdir = os.path.join(CACHE_DIR, parent_dir, csv_basename)  # Cache subdirectory
+    cache_file = os.path.join(cache_subdir, f"{safe_model_name}.json")  # Cache file path
+
+    return cache_file  # Return the cache file path
+
+
 def detect_gpu_info():
     """
     Detect GPU brand/model using `nvidia-smi` (best-effort).
