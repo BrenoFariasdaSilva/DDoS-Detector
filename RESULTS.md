@@ -202,3 +202,14 @@ This section presents the comprehensive outputs and achievements of each module 
 - Optional Telegram bot integration for long-running experiments
 - Sound notifications on completion (platform-dependent: afplay/aplay/start)
 - Useful for overnight runs and batch processing
+
+## Reproducibility and Portability
+
+- **Deterministic Results**: Fixed random seeds, consistent train/test splits, stable cross-validation folds
+  - RFE and PCA are inherently deterministic methods producing identical results across runs
+  - GA uses randomized search but results are reproducible with fixed random seeds
+- **Cross-Platform**: Tested on Windows, Linux (Ubuntu), and macOS with unified codebase
+- **Logging**: Dual-channel logs (colored terminal + clean file) for debugging and archival
+- **Version Control**: All dependencies tracked in `requirements.txt`
+- **Documentation**: Comprehensive docstrings, inline comments, and README guidance
+- **Numeric Precision**: All metrics formatted consistently (4 decimal places for scores/rates, 2 for execution time)
