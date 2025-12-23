@@ -72,7 +72,17 @@ from pathlib import Path  # For handling file paths
 from sklearn.base import clone  # Import necessary modules for cloning
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier  # For ensemble models
 from sklearn.linear_model import LogisticRegression  # For logistic regression model
-from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, make_scorer, precision_score, recall_score  # For custom scoring metrics
+from sklearn.metrics import (
+    accuracy_score,
+    cohen_kappa_score,
+    confusion_matrix,
+    f1_score,
+    make_scorer,
+    matthews_corrcoef,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)  # For custom scoring metrics
 from sklearn.model_selection import GridSearchCV, train_test_split  # For hyperparameter search and data splitting
 from sklearn.neighbors import KNeighborsClassifier, NearestCentroid  # For k-nearest neighbors model
 from sklearn.neural_network import MLPClassifier  # For neural network model
@@ -879,6 +889,19 @@ def evaluate_single_combination(model, keys, combination, X_train, y_train):
         precision = precision_score(y_train, y_pred, average="weighted", zero_division=0)  # Weighted precision
         recall = recall_score(y_train, y_pred, average="weighted", zero_division=0)  # Weighted recall
 
+        mcc = matthews_corrcoef(y_train, y_pred)  # MCC for binary/multiclass
+
+        try:  # Try to compute ROC-AUC
+            if hasattr(model, "predict_proba"):  # If model supports probability predictions
+                y_pred_proba = model.predict_proba(X_train)  # Get probability predictions
+                roc_auc = roc_auc_score(y_train, y_pred_proba, multi_class="ovr", average="weighted")  # ROC-AUC OVR
+            else:  # Model does not support probability predictions
+                roc_auc = None  # Model doesn't support probability predictions
+        except Exception:  # Catch any errors during ROC-AUC calculation
+            roc_auc = None  # ROC-AUC calculation failed
+
+        kappa = cohen_kappa_score(y_train, y_pred)  # Cohen's Kappa
+
         cm = confusion_matrix(y_train, y_pred)  # Confusion matrix
         n_classes = cm.shape[0]  # Number of classes
 
@@ -911,7 +934,12 @@ def evaluate_single_combination(model, keys, combination, X_train, y_train):
             "false_negative_rate": float(np.mean(fnr_list)),
             "true_positive_rate": float(np.mean(tpr_list)),
             "true_negative_rate": float(np.mean(tnr_list)),
+            "matthews_corrcoef": float(mcc),
+            "cohen_kappa": float(kappa),
         }
+
+        if roc_auc is not None:  # If ROC-AUC was computed successfully
+            metrics["roc_auc_score"] = float(roc_auc)  # Add ROC-AUC to metrics
 
     except MemoryError:  # Catch memory errors specifically
         print(
@@ -1127,7 +1155,8 @@ def manual_grid_search(
             result_entry = OrderedDict([("params", params_key), ("execution_time", elapsed)])  # Basic result entry
             
             for key in ["f1_score", "accuracy", "precision", "recall", "false_positive_rate",
-                        "false_negative_rate", "true_positive_rate", "true_negative_rate"]:
+                        "false_negative_rate", "true_positive_rate", "true_negative_rate",
+                        "matthews_corrcoef", "roc_auc_score", "cohen_kappa"]:  # Metrics to include
                 if key in cached_data:  # If metric exists in cache
                     result_entry[key] = cached_data[key]  # Add metric to result entry
 
@@ -1322,30 +1351,43 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
 
             if best_params is not None:  # If optimization succeeded
                 elapsed_time = float(best_elapsed or 0.0)  # Elapsed time for best params
-                dir_results_list.append(
-                    OrderedDict(
-                        [  # Append only the best result
-                            ("base_csv", os.path.basename(csv_path)),  # Base CSV filename
-                            ("model", model_name),  # Model name
-                            ("best_params", json.dumps(best_params)),  # Best parameters as JSON string
-                            ("best_cv_f1_score", best_score),  # Best F1 score
-                            ("n_features", X_train_ga.shape[1]),  # Number of features after GA selection
-                            ("feature_selection_method", "Genetic Algorithm"),  # Feature selection method
-                            ("dataset", os.path.basename(csv_path)),  # Dataset filename
-                            (
-                                "elapsed_time_s",
-                                round(float(elapsed_time), 2),
-                            ),  # Elapsed training time (seconds) for best params
-                        ]
-                    )
-                )  # End of append
+                
+                best_result = None  # Initialize best result entry
+                for result in all_results:  # Find the best result entry
+                    if result.get("params") == json.dumps(best_params):  # Match best params
+                        best_result = result  # Assign best result
+                        break  # Exit loop once found
+                
+                result_dict = OrderedDict(
+                    [  # Append only the best result
+                        ("base_csv", os.path.basename(csv_path)),  # Base CSV filename
+                        ("model", model_name),  # Model name
+                        ("best_params", json.dumps(best_params)),  # Best parameters as JSON string
+                        ("best_cv_f1_score", best_score),  # Best F1 score
+                        ("n_features", X_train_ga.shape[1]),  # Number of features after GA selection
+                        ("feature_selection_method", "Genetic Algorithm"),  # Feature selection method
+                        ("dataset", os.path.basename(csv_path)),  # Dataset filename
+                        (
+                            "elapsed_time_s",
+                            round(float(elapsed_time), 2),
+                        ),  # Elapsed training time (seconds) for best params
+                    ]
+                )
+                
+                if best_result:  # If best result entry was found
+                    for metric_key in ["accuracy", "precision", "recall", "false_positive_rate",
+                                       "false_negative_rate", "true_positive_rate", "true_negative_rate",
+                                       "matthews_corrcoef", "roc_auc_score", "cohen_kappa"]:  # Metrics to include
+                        if metric_key in best_result:  # If metric exists in best result
+                            result_dict[metric_key] = best_result[metric_key]  # Add metric to result dict
+                
+                dir_results_list.append(result_dict)  # Append to results list
             else:  # If optimization failed
                 print(
                     f"{BackgroundColors.YELLOW}Warning: No valid results for {model_name}{Style.RESET_ALL}"
                 )
 
-            # Refresh progress bar between models to prevent display issues
-            pbar.refresh()
+            pbar.refresh()  # Refresh progress bar after each model
 
         print()  # Line spacing after all models complete
 
