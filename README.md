@@ -59,7 +59,7 @@ A machine learning framework for Distributed Denial of Service (DDoS) attack det
       - [Windows](#windows-2)
     - [Dependencies/Requirements](#dependenciesrequirements)
     - [Datasets](#datasets)
-  - [Results - @UPDATE](#results---update)
+  - [Results](#results)
   - [How to Cite?](#how-to-cite)
   - [Contributing](#contributing)
   - [Collaborators](#collaborators)
@@ -318,9 +318,19 @@ This repository includes a shell script `download_datasets.sh` (at the repositor
 
    Ensure any new dataset is adapted to match the expected CSV format, column names (features), and label conventions used by the project. If necessary, use the provided dataset utilities (e.g., `dataset_converter.py` / `dataset_descriptor.py`) to convert or normalize new datasets to the project's expected format.
 
-## Results - @UPDATE
+## Results
 
-Discuss the results obtained in the project.
+**📊 For detailed experimental results and performance benchmarks, please see [RESULTS.md](RESULTS.md).**
+
+The Results document contains comprehensive outputs from all modules including:
+- Dataset preparation and cross-dataset compatibility analysis
+- Feature engineering results (Genetic Algorithm, RFE, PCA) with actual performance metrics
+- Model optimization results across nine classifiers (Random Forest, SVM, XGBoost, Logistic Regression, KNN, Nearest Centroid, Gradient Boosting, LightGBM, MLP)
+- Stacking ensemble evaluation results
+- Benchmark performance summary with detailed comparison tables
+- Methodological notes on reproducibility and deterministic methods
+
+*Note: The results section has been moved to a separate file as it contains extensive technical details and experimental data that may not be of interest to all readers.*
 
 ## How to Cite?
 
