@@ -613,8 +613,8 @@ def save_combination_result(csv_path, model_name, params, score, elapsed, cached
     params_key = json.dumps(params, sort_keys=True)  # Serialize parameters as JSON string
 
     cached_results[params_key] = {  # Update cached results
-        "score": score,  # F1 score
-        "elapsed": elapsed,  # Execution time
+        "score": round(float(score), 4) if score is not None else None,  # F1 score formatted to 4 decimals
+        "elapsed": round(float(elapsed), 2),  # Execution time formatted to 2 decimals
         "timestamp": datetime.datetime.now().isoformat(),  # Timestamp
     }
 
@@ -1216,9 +1216,11 @@ def run_parallel_evaluation(
                     except Exception:
                         pass  # Ignore update errors
 
-                result_entry = OrderedDict([("params", json.dumps(current_params)), ("execution_time", elapsed)])  # Build result entry
+                result_entry = OrderedDict([("params", json.dumps(current_params)), ("execution_time", round(float(elapsed), 2))])  # Build result entry with formatted time
                 if metrics is not None:
-                    result_entry.update(metrics)  # Include metrics
+                    # Format all metrics to 4 decimal places
+                    formatted_metrics = {k: round(float(v), 4) if v is not None else None for k, v in metrics.items()}
+                    result_entry.update(formatted_metrics)  # Include formatted metrics
                 all_results.append(result_entry)  # Append to list
 
                 if metrics is not None and "f1_score" in metrics:  # Update best if improved
@@ -1310,7 +1312,7 @@ def manual_grid_search(
             f1 = cached_data.get("f1_score")  # Cached F1 if present
             elapsed = cached_data.get("elapsed", 0.0)  # Cached elapsed time
 
-            result_entry = OrderedDict([("params", params_key), ("execution_time", elapsed)])  # Base result entry
+            result_entry = OrderedDict([("params", params_key), ("execution_time", round(float(elapsed), 2))])  # Base result entry with formatted time
 
             for key in [
                 "f1_score",
@@ -1326,7 +1328,7 @@ def manual_grid_search(
                 "cohen_kappa",
             ]:  # Metrics to include
                 if key in cached_data:  # If metric present
-                    result_entry[key] = cached_data[key]  # Include cached metric
+                    result_entry[key] = round(float(cached_data[key]), 4) if cached_data[key] is not None else None  # Include cached metric formatted to 4 decimals
 
             all_results.append(result_entry)  # Append cached result
 
@@ -1401,7 +1403,7 @@ def build_result_entry_from_best(csv_path, model_name, best_params, best_score, 
             ("base_csv", os.path.basename(csv_path)),
             ("model", model_name),
             ("best_params", json.dumps(best_params)),
-            ("best_cv_f1_score", best_score),
+            ("best_cv_f1_score", round(float(best_score), 4) if best_score is not None else None),
             ("n_features", X_train_ga.shape[1]),
             ("feature_selection_method", "Genetic Algorithm"),
             ("dataset", os.path.basename(csv_path)),
@@ -1423,7 +1425,7 @@ def build_result_entry_from_best(csv_path, model_name, best_params, best_score, 
             "cohen_kappa",
         ]:
             if metric_key in best_result:  # If metric present
-                result_dict[metric_key] = best_result[metric_key]  # Add to result dict
+                result_dict[metric_key] = round(float(best_result[metric_key]), 4) if best_result[metric_key] is not None else None  # Add to result dict formatted to 4 decimals
 
     return result_dict  # Return assembled result dict
 
