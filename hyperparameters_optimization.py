@@ -45,6 +45,7 @@ Assumptions & Notes:
    - Outputs are written next to each processed dataset directory
 """
 
+import argparse  # For command-line arguments
 import atexit  # For playing a sound when the program finishes
 import concurrent.futures  # For parallel execution with progress updates
 import datetime  # For getting the current date and time
@@ -110,7 +111,7 @@ class BackgroundColors:  # Colors for the terminal
 
 
 # Execution Constants:
-VERBOSE = False  # Set to True to output verbose messages
+VERBOSE = False  # Default verbose setting (can be overridden via CLI args)
 N_JOBS = -2  # Number of parallel jobs (-1 uses all cores, -2 leaves one core free, or set specific number like 4)
 RESULTS_FILENAME = "Hyperparameter_Optimization_Results.csv"  # Filename for saving results
 CACHE_DIR = "Cache/Hyperparameter_Optimization"  # Directory for saving progress cache
@@ -178,6 +179,35 @@ def verbose_output(true_string="", false_string=""):
         print(true_string)  # Output the true statement string
     elif false_string != "":  # If the false_string is set
         print(false_string)  # Output the false statement string
+
+
+def parse_args(default_verbose=False):
+    """
+    Parse command-line arguments to set the VERBOSE constant.
+
+    :param default_verbose: default boolean used when no flag is provided
+    :return: resulting VERBOSE boolean
+    """
+    
+    parser = argparse.ArgumentParser(description="Hyperparameter optimization runner")  # Create argument parser
+    parser.add_argument(  # Add verbose flag
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="Enable verbose output (overrides VERBOSE)",
+    )
+    parser.add_argument(  # Add no-verbose flag
+        "--no-verbose",
+        dest="verbose",
+        action="store_false",
+        help="Disable verbose output (overrides VERBOSE)",
+    )
+    
+    global VERBOSE  # Access the global VERBOSE constant
+    parser.set_defaults(verbose=default_verbose)  # Set default value for verbose argument
+    args = parser.parse_args()  # Parse command-line arguments
+    VERBOSE = bool(args.verbose)  # Set the VERBOSE constant based on parsed argument
+    return VERBOSE  # Return the resulting VERBOSE boolean
 
 
 def iterate_dataset_directories():
@@ -1564,6 +1594,8 @@ def main():
     :param: None
     :return: None
     """
+
+    parse_args(VERBOSE)  # Parse command-line arguments
 
     print(
         f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Classifiers Hyperparameters Optimization{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
