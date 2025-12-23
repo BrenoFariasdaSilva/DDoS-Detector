@@ -40,6 +40,7 @@ A machine learning framework for Distributed Denial of Service (DDoS) attack det
 - [DDoS-Detector. ](#ddos-detector-)
   - [Table of Contents](#table-of-contents)
   - [Introduction](#introduction)
+    - [Project Architecture](#project-architecture)
   - [Setup](#setup)
     - [Git](#git)
         - [Linux](#linux)
@@ -66,6 +67,31 @@ A machine learning framework for Distributed Denial of Service (DDoS) attack det
 ## Introduction
 
 This project provides a complete end-to-end machine learning pipeline for DDoS (Distributed Denial of Service) attack detection and classification using network flow data. The framework integrates state-of-the-art techniques for data preprocessing, feature engineering, model optimization, and evaluation to achieve robust and accurate intrusion detection across multiple benchmark datasets.
+
+### Project Architecture
+
+The system is organized into several interconnected modules, each addressing a critical aspect of the machine learning workflow:
+
+**1. Data Preparation and Exploration**
+- **Dataset Converter** (`dataset_converter.py`): Multi-format conversion utility supporting ARFF, CSV, Parquet, and TXT formats. Performs lightweight structural cleaning and maintains directory hierarchy during conversion.
+- **Dataset Descriptor** (`dataset_descriptor.py`): Generates comprehensive metadata reports including feature types, missing values, class distributions, and 2D t-SNE visualizations for data separability analysis. Produces cross-dataset compatibility reports comparing feature unions and intersections.
+
+**2. Feature Engineering**
+- **Genetic Algorithm** (`genetic_algorithm.py`): DEAP-based binary-mask genetic algorithm for optimal feature selection. Uses RandomForest-based fitness evaluation with multi-objective metrics (accuracy, precision, recall, F1, FPR, FNR). Supports population sweeps and exports consolidated results with feature importance rankings.
+- **Recursive Feature Elimination** (`rfe.py`): Automated RFE workflow using RandomForestClassifier to iteratively eliminate less important features. Exports structured run results with feature rankings and performance metrics.
+- **Principal Component Analysis** (`pca.py`): PCA-based dimensionality reduction with configurable component counts. Performs 10-fold Stratified CV evaluation and saves PCA objects for reproducibility.
+
+**3. Data Augmentation**
+- **WGAN-GP** (`wgangp.py`): Wasserstein Generative Adversarial Network with Gradient Penalty for generating synthetic network flow data. Implements conditional generation with residual blocks (DRCGAN-style architecture) for multi-class attack scenarios. Produces high-quality synthetic samples to balance datasets and augment training data.
+
+**4. Model Optimization and Evaluation**
+- **Hyperparameter Optimization** (`hyperparameters_optimization.py`): Comprehensive hyperparameter tuning for nine classifiers (Random Forest, SVM, XGBoost, Logistic Regression, KNN, Nearest Centroid, Gradient Boosting, LightGBM, MLP). Features parallel evaluation with ThreadPoolExecutor, progress caching, memory-safe worker allocation, and detailed metric tracking (F1, accuracy, precision, recall, MCC, Cohen's kappa, ROC-AUC, FPR, FNR, TPR, TNR).
+- **Stacking Ensemble** (`stacking.py`): Evaluates individual classifiers and stacking meta-classifiers across GA, RFE, and PCA feature sets. Produces consolidated CSV results with hardware metadata for reproducibility.
+
+**5. Utilities and Infrastructure**
+- **Logger** (`Logger.py`): Dual-channel logger preserving ANSI color codes for terminal output while maintaining clean log files.
+- **Telegram Bot** (`telegram_bot.py`): Notification system for long-running experiments, supporting message splitting for Telegram's character limits.
+- **Makefile**: Automation for all pipeline stages with cross-platform support (Windows, Linux, macOS) and detached execution modes.
 
 ## Setup
 
