@@ -1092,12 +1092,12 @@ def manual_grid_search(
     total_combinations = len(param_combinations)  # Total number of combinations for this model
 
     cached_results = load_cached_results(csv_path, model_name) if csv_path else {}  # Load cached results
-    cached_count = len(cached_results)  # Number of cached results
+    cached_count = len(cached_results)  # Number of cached combinations
 
-    combinations_to_test = []  # Combinations that need to be tested
+    combinations_to_test = []  # Combinations that need testing
     for combo in param_combinations:  # Iterate all combinations
         params_dict = dict(zip(keys, combo))  # Build parameter dict
-        params_key = json.dumps(params_dict, sort_keys=True)  # Serialize parameters
+        params_key = json.dumps(params_dict, sort_keys=True)  # Serialize to JSON string
         if params_key not in cached_results:  # If not cached
             combinations_to_test.append(combo)  # Add to test list
 
@@ -1113,19 +1113,24 @@ def manual_grid_search(
     global_counter = global_counter_start  # Initialize global counter
 
     for params_key, cached_data in cached_results.items():  # Process cached results
-        try:  # Try to parse cached result
-            params_dict = json.loads(params_key)  # Deserialize parameters
-            score = cached_data.get("score")  # F1 score
-            elapsed = cached_data.get("elapsed", 0.0)  # Execution time
+        try:  # Try to parse cached data
+            params_dict = json.loads(params_key)  # Deserialize JSON string
+            f1 = cached_data.get("f1_score")  # Get F1 score (new key name)
+            elapsed = cached_data.get("elapsed", 0.0)  # Get elapsed time from cache
 
-            all_results.append(  # Store cached result
-                OrderedDict([("params", params_key), ("score", score), ("execution_time", elapsed)])
-            )
+            result_entry = OrderedDict([("params", params_key), ("execution_time", elapsed)])  # Basic result entry
+            
+            for key in ["f1_score", "accuracy", "precision", "recall", "false_positive_rate",
+                        "false_negative_rate", "true_positive_rate", "true_negative_rate"]:
+                if key in cached_data:  # If metric exists in cache
+                    result_entry[key] = cached_data[key]  # Add metric to result entry
 
-            if score is not None and score > best_score:  # Update best if cached score is better
-                best_score = score  # Update best score
+            all_results.append(result_entry)  # Append to all results
+
+            if f1 is not None and f1 > best_score:  # Update best score if applicable
+                best_score = f1  # Update best score
                 best_params = params_dict  # Update best parameters
-                best_elapsed = elapsed  # Update best execution time
+                best_elapsed = elapsed  # Update elapsed time for best parameters
 
             global_counter += 1  # Increment overall combination counter
         except Exception:  # Skip malformed cache entries
@@ -1157,8 +1162,8 @@ def manual_grid_search(
     )
 
     if progress_bar is not None and cached_count > 0:  # Update progress bar for cached results
-        for i in range(cached_count):  # Iterate over cached results
-            if progress_bar is not None:  # If progress bar is available
+        for i in range(cached_count):  # Iterate cached results
+            if progress_bar is not None:  # Update progress bar if available
                 try:  # Safely update progress bar
                     progress_bar.update(1)  # Increment progress bar
                 except Exception:  # Ignore progress bar update errors
@@ -1185,18 +1190,18 @@ def manual_grid_search(
             future_to_params  # Futures to monitor
         ):  # Iterate as each future completes
             try:  # Try to get result
-                current_params, score, elapsed = future.result()  # Get result from future
+                current_params, metrics, elapsed = future.result()  # Get result from future (params, metrics_dict, elapsed)
             except Exception as worker_err:  # Catch any errors from the worker
                 combo = future_to_params.get(future)  # Get the combination that caused the error
                 current_params = dict(zip(keys, combo)) if combo is not None else {}  # Build current params dict
-                score = None  # Mark score as None
+                metrics = None  # Mark metrics as None
                 elapsed = 0.0  # Mark elapsed as 0.0
                 print(
                     f"{BackgroundColors.YELLOW}Warning: Combination {current_params} failed: {worker_err}{Style.RESET_ALL}"
                 )
-                
-                if csv_path:  # If CSV path is provided
-                    save_combination_result(csv_path, model_name, current_params, score, elapsed, cached_results)  # Save to cache
+
+            if csv_path:  # Save result to CSV if path is provided
+                save_combination_result(csv_path, model_name, current_params, metrics, elapsed, cached_results)  # Save result
 
                 global_counter += 1  # Increment overall combination counter
                 local_counter += 1  # Increment per-model combination counter
@@ -1219,24 +1224,27 @@ def manual_grid_search(
                     except Exception:  # Ignore progress bar update errors
                         pass  # Ignore errors
 
-                all_results.append(
-                    OrderedDict([("params", json.dumps(current_params)), ("score", score), ("execution_time", elapsed)])
-                )  # Store result
+                result_entry = OrderedDict([("params", json.dumps(current_params)), ("execution_time", elapsed)])  # Basic result entry
+                if metrics is not None:  # If metrics are valid
+                    result_entry.update(metrics)  # Add all metrics (f1_score, accuracy, etc.)
+                all_results.append(result_entry)  # Append to all results
 
-                if score is not None:  # If score is valid
-                    current_best_elapsed = (
-                        next((r["execution_time"] for r in all_results if r["score"] == best_score), float("inf"))
-                        if best_score != -float("inf")
-                        else float("inf")
-                    )  # Get elapsed time for current best score
-                    if (score > best_score) or (
-                        score == best_score and elapsed < current_best_elapsed
-                    ):  # Verify for new best (higher score or same score but faster)
-                        best_score = score  # Update best score
+                if metrics is not None and "f1_score" in metrics:  # If metrics are valid
+                    f1 = metrics["f1_score"]  # Extract F1 score
+                    current_best_elapsed = (  # Get elapsed time for current best F1 score
+                        next((r["execution_time"] for r in all_results
+                              if r.get("f1_score") == best_score), float("inf"))  # Find elapsed time for best score
+                        if best_score != -float("inf")  # Only if best score is valid
+                        else float("inf")  # Default to infinity
+                    )  # Get elapsed time for current best F1 score
+                    if (f1 > best_score) or (
+                        f1 == best_score and elapsed < current_best_elapsed
+                    ):  # Verify for new best (higher F1 or same F1 but faster)
+                        best_score = f1  # Update best F1 score
                         best_params = current_params  # Update best parameters
                         best_elapsed = elapsed  # Save execution time for best params
                         verbose_output(
-                            f"{BackgroundColors.GREEN}New best score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}"
+                            f"{BackgroundColors.GREEN}New best F1 score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}"
                         )  # Log new best
 
     verbose_output(
