@@ -55,18 +55,13 @@ import os  # For running a command in the terminal
 import pandas as pd  # For data manipulation
 import platform  # For getting the operating system name
 import psutil  # RAM and CPU core info
-import shutil  # For file operations
-import statistics  # For calculating statistics
 import subprocess  # WMIC call
 import sys  # For system-specific parameters and functions
-import tempfile  # For creating temporary files and directories
-import threading  # For threading operations
 import time  # For measuring execution time
 import warnings  # For suppressing warnings
 from collections import OrderedDict  # For deterministic results column ordering when saving
 from colorama import Style  # For coloring the terminal
 from itertools import product  # For generating parameter combinations
-from joblib import Parallel, delayed  # For parallel processing of parameter combinations
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.base import clone  # Import necessary modules for cloning
@@ -77,13 +72,12 @@ from sklearn.metrics import (
     cohen_kappa_score,
     confusion_matrix,
     f1_score,
-    make_scorer,
     matthews_corrcoef,
     precision_score,
     recall_score,
     roc_auc_score,
 )  # For custom scoring metrics
-from sklearn.model_selection import GridSearchCV, train_test_split  # For hyperparameter search and data splitting
+from sklearn.model_selection import train_test_split  # For hyperparameter search and data splitting
 from sklearn.neighbors import KNeighborsClassifier, NearestCentroid  # For k-nearest neighbors model
 from sklearn.neural_network import MLPClassifier  # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For label encoding and feature scaling
@@ -117,10 +111,7 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
-CV_FOLDS = 5  # Number of cross-validation folds for GridSearchCV
 N_JOBS = -2  # Number of parallel jobs (-1 uses all cores, -2 leaves one core free, or set specific number like 4)
-MAX_PARALLEL_MEMORY = "1G"  # Maximum memory per joblib worker (e.g., '500M', '1G') to prevent excessive RAM usage
-PRE_DISPATCH = "2*n_jobs"  # Number of batches to pre-dispatch to workers (controls memory usage)
 RESULTS_FILENAME = "Hyperparameter_Optimization_Results.csv"  # Filename for saving results
 CACHE_DIR = "Cache/Hyperparameter_Optimization"  # Directory for saving progress cache
 ENABLE_PROGRESS_CACHE = True  # Set to False to disable progress caching and recompute all combinations
@@ -838,7 +829,6 @@ def compute_total_param_combinations(models):
 
     for model_name, (model, param_grid) in models:  # Iterate models
         if param_grid:  # If there is a param grid
-            keys = list(param_grid.keys())  # Parameter names
             values = [v if isinstance(v, (list, tuple)) else [v] for v in param_grid.values()]  # Ensure lists
             count = len(list(product(*values)))  # Count combinations
         else:  # No hyperparameters
@@ -849,51 +839,6 @@ def compute_total_param_combinations(models):
 
     return total_combinations_all_models, model_combinations_counts  # Return total and per-model counts
 
-
-def measure_resource_usage_for_combination(model, keys, combination, X, y, sample_interval=0.05):
-    """
-    Run a single parameter combination and sample memory and CPU usage
-    in a background thread. Returns memory delta (bytes), average CPU percent, and elapsed time.
-    Memory delta = peak_mem_during_training - baseline_mem_before_training
-    """
-
-    proc = psutil.Process(os.getpid())  # Current process
-    baseline_mem = proc.memory_info().rss  # Baseline memory before training
-    mem_samples = []  # Memory usage samples during training
-    cpu_samples = []  # CPU usage samples
-    stop_evt = threading.Event()  # Event to stop monitoring thread
-
-    def monitor():  # Monitoring thread function
-        try:  # Try to monitor resources
-            psutil.cpu_percent(interval=None)  # Initialize CPU percent measurement
-            time.sleep(0.01)  # Small delay for CPU measurement initialization
-            while not stop_evt.is_set():  # Loop until stop event is set
-                try:  # Try to sample memory and CPU
-                    mem_samples.append(proc.memory_info().rss)  # Sample memory usage (RSS)
-                    cpu_samples.append(psutil.cpu_percent(interval=sample_interval))  # Sample CPU percent
-                except Exception:  # Catch sampling errors
-                    break  # Exit monitoring loop on error
-        except Exception:  # Catch initialization errors
-            return  # Exit monitoring thread on error
-
-    t = threading.Thread(target=monitor, daemon=True)  # Start monitoring thread
-    t.start()  # Start the thread
-
-    start = time.time()  # Start timing
-    try:  # Try to run the model with the parameter combination
-        model.set_params(**dict(zip(keys, combination)))  # Apply hyperparameters
-        model.fit(X, y)  # Train model
-    except Exception:  # Catch any errors during training
-        pass  # Ignore errors for resource measurement
-    finally:  # Ensure monitoring thread is stopped
-        stop_evt.set()  # Signal monitoring thread to stop
-        t.join(timeout=1.0)  # Wait for thread to finish
-
-    elapsed = time.time() - start  # Measure execution time
-    peak_mem = max(mem_samples) if mem_samples else proc.memory_info().rss  # Peak memory during training
-    mem_delta = max(0, peak_mem - baseline_mem)  # Memory increase during training (non-negative)
-    avg_cpu = statistics.mean(cpu_samples) if cpu_samples else 0.0  # Average CPU percent
-    return mem_delta, avg_cpu, elapsed  # Return memory delta, CPU percent, and elapsed time
 
 
 def evaluate_single_combination(model, keys, combination, X_train, y_train):
@@ -993,21 +938,7 @@ def evaluate_single_combination(model, keys, combination, X_train, y_train):
     return current_params, metrics, elapsed  # Return results
 
 
-def evaluate_single_combination_from_files(model, keys, combination, X_path, y_path):
-    """
-    Worker wrapper that loads X/y from disk using mmap and calls
-    `evaluate_single_combination`. This avoids copying large arrays
-    into each worker process when using ProcessPoolExecutor.
-    """
 
-    try:  # Try to load data with memory mapping
-        X = np.load(X_path, mmap_mode="r")  # Load features
-        y = np.load(y_path, mmap_mode="r")  # Load labels
-    except Exception:  # Catch any loading errors
-        current_params = dict(zip(keys, combination))  # Build dict of current params
-        return current_params, None, 0.0  # Return failure result (params, metrics=None, elapsed=0)
-
-    return evaluate_single_combination(model, keys, combination, X, y)  # Call evaluation function
 
 
 def update_optimization_progress_bar(
@@ -1476,7 +1407,6 @@ def process_single_csv_file(csv_path, dir_results_list):
     )  # Output header
 
     models = list(models_and_grids.items())  # Convert dict to list
-    total_models = len(models)  # Count models
 
     run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list)  # Run optimizations
 
