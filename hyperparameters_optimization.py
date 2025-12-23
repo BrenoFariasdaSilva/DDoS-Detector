@@ -545,7 +545,7 @@ def load_cached_results(csv_path, model_name):
         return {}  # Return empty dict on error
 
 
-def save_combination_result(csv_path, model_name, params, score, elapsed, cached_results):
+def save_combination_result(csv_path, model_name, params, score, elapsed, cached_results, hardware_specs=None):
     """
     Save a single combination result to the cache file immediately.
 
@@ -555,6 +555,7 @@ def save_combination_result(csv_path, model_name, params, score, elapsed, cached
     :param score: F1 score achieved
     :param elapsed: Execution time in seconds
     :param cached_results: Dictionary of all cached results (will be updated and saved)
+    :param hardware_specs: Dictionary of hardware specifications (optional)
     :return: None
     """
 
@@ -572,6 +573,9 @@ def save_combination_result(csv_path, model_name, params, score, elapsed, cached
         "elapsed": elapsed,  # Execution time
         "timestamp": datetime.datetime.now().isoformat(),  # Timestamp
     }
+
+    if hardware_specs is not None:  # If hardware specifications are provided
+        cached_results[params_key]["hardware"] = hardware_specs  # Add hardware specifications
 
     # Save to file
     try:  # Try to save cached results
@@ -1056,6 +1060,7 @@ def manual_grid_search(
     total_combinations_all_models=None,
     model_index=None,
     total_models=None,
+    hardware_specs=None,
 ):
     """
     Performs manual grid search hyperparameter optimization with integrated progress bar.
@@ -1076,6 +1081,7 @@ def manual_grid_search(
     :param global_counter_start: Starting counter of overall combination index
     :param total_combinations_all_models: Total number of parameter combinations across all models
     :param total_models: Total number of models being optimized
+    :param hardware_specs: Dictionary of hardware specifications (optional)
     :return: Tuple (best_params, best_score, all_results, global_counter_end)
     """
 
@@ -1201,7 +1207,7 @@ def manual_grid_search(
                 )
 
             if csv_path:  # Save result to CSV if path is provided
-                save_combination_result(csv_path, model_name, current_params, metrics, elapsed, cached_results)  # Save result
+                save_combination_result(csv_path, model_name, current_params, metrics, elapsed, cached_results, hardware_specs)  # Save result
 
                 global_counter += 1  # Increment overall combination counter
                 local_counter += 1  # Increment per-model combination counter
@@ -1280,6 +1286,11 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
         f"{BackgroundColors.GREEN}Starting hyperparameter optimizations for {BackgroundColors.CYAN}{len(models)}{BackgroundColors.GREEN} models with a total of {BackgroundColors.CYAN}{total_combinations_all_models}{BackgroundColors.GREEN} parameter combinations...{Style.RESET_ALL}"
     )  # Output verbose message
 
+    hardware_specs = get_hardware_specifications()  # Fetch system specs
+    verbose_output(
+        f"{BackgroundColors.GREEN}Hardware: {BackgroundColors.CYAN}{hardware_specs['cpu_model']}{BackgroundColors.GREEN} | Cores: {BackgroundColors.CYAN}{hardware_specs['cores']}{BackgroundColors.GREEN} | RAM: {BackgroundColors.CYAN}{hardware_specs['ram_gb']}GB{Style.RESET_ALL}"
+    )  # Output hardware info
+
     global_counter = 0  # Initialize global combination counter
 
     with tqdm(
@@ -1301,6 +1312,7 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
                     total_combinations_all_models=total_combinations_all_models,
                     model_index=model_index,
                     total_models=len(models),
+                    hardware_specs=hardware_specs,
                 )  # Manual grid search instead of GridSearchCV
             except Exception as model_err:  # Catch any errors during model optimization
                 print(
