@@ -172,3 +172,33 @@ This section presents the comprehensive outputs and achievements of each module 
   - Data augmentation to improve model generalization
   - Testing classifier robustness on synthetic variations
 - Quality metrics can be computed offline: statistical distance (Kolmogorov-Smirnov), mode coverage, feature correlation preservation
+
+## System Performance and Efficiency
+
+**Parallel Execution**
+- ThreadPoolExecutor-based parallelism significantly reduces runtime:
+  - Hyperparameter optimization: 10-100x speedup depending on worker count and grid size
+  - Genetic algorithm: 5-20x speedup with parallel fitness evaluation
+- Memory-safe worker allocation prevents OOM crashes on large datasets
+- Progress bars provide real-time feedback with ETA estimates
+
+**Progress Persistence**
+- Checkpoint systems enable resumable experiments:
+  - Hyperparameter optimization caching: resume after interruption without recomputation
+  - WGAN-GP epoch checkpoints: continue training from any saved epoch
+  - GA population state saving: restart mid-generation (planned feature)
+- JSON-based cache formats for cross-platform compatibility
+
+**Hardware Reporting**
+- All result CSVs include hardware specifications:
+  - CPU model (Windows via WMIC, Linux via /proc/cpuinfo, macOS via sysctl)
+  - Physical core count (psutil-based)
+  - Total RAM in GB
+  - Operating system name and version
+  - GPU detection for ThunderSVM (nvidia-smi when available)
+- Enables reproducibility analysis and performance comparisons across systems
+
+**Notification System**
+- Optional Telegram bot integration for long-running experiments
+- Sound notifications on completion (platform-dependent: afplay/aplay/start)
+- Useful for overnight runs and batch processing
