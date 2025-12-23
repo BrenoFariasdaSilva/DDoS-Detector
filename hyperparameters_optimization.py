@@ -545,6 +545,43 @@ def load_cached_results(csv_path, model_name):
         return {}  # Return empty dict on error
 
 
+def save_combination_result(csv_path, model_name, params, score, elapsed, cached_results):
+    """
+    Save a single combination result to the cache file immediately.
+
+    :param csv_path: Path to the CSV dataset file
+    :param model_name: Name of the model being optimized
+    :param params: Dictionary of hyperparameters for this combination
+    :param score: F1 score achieved
+    :param elapsed: Execution time in seconds
+    :param cached_results: Dictionary of all cached results (will be updated and saved)
+    :return: None
+    """
+
+    if not ENABLE_PROGRESS_CACHE:  # If caching is disabled
+        return  # Caching disabled
+
+    cache_file = get_cache_path(csv_path, model_name)  # Get cache file path
+
+    os.makedirs(os.path.dirname(cache_file), exist_ok=True)  # Ensure cache directory exists
+
+    params_key = json.dumps(params, sort_keys=True)  # Serialize parameters as JSON string
+
+    cached_results[params_key] = {  # Update cached results
+        "score": score,  # F1 score
+        "elapsed": elapsed,  # Execution time
+        "timestamp": datetime.datetime.now().isoformat(),  # Timestamp
+    }
+
+    # Save to file
+    try:  # Try to save cached results
+        with open(cache_file, "w") as f:  # Open cache file for writing
+            json.dump(cached_results, f, indent=2)  # Write JSON data
+    except Exception as e:  # Catch any errors during saving
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Warning: Failed to save cache: {e}{Style.RESET_ALL}"
+        )
+
 
 def detect_gpu_info():
     """
