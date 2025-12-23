@@ -334,7 +334,7 @@ The Results document contains comprehensive outputs from all modules including:
 
 ## How to Cite?
 
-If you use the Repository-Name in your research, please cite it using the following BibTeX entry:
+If you use the DDoS-Detector in your research, please cite it using the following BibTeX entry:
 
 ```
 @misc{softwareDDoS-Detector:2025,
