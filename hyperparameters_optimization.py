@@ -532,6 +532,34 @@ def get_feature_subset(X_scaled, features, feature_names):
         return np.empty((X_scaled.shape[0], 0))  # Return an empty array with correct number of rows
 
 
+def _is_valid_combination(model_name_local, params_local):
+    """
+    Check if the given hyperparameter combination is valid for the specified model.
+    
+    :param model_name_local: Name of the model
+    :param params_local: Dictionary of hyperparameters
+    :return: True if the combination is valid, False otherwise
+    """
+    
+    if model_name_local != "Logistic Regression":  # Only validate for Logistic Regression
+        return True  # All combinations valid for other models
+
+    solver = params_local.get("solver")  # Get solver parameter
+    penalty = params_local.get("penalty")  # Get penalty parameter
+    l1_ratio = params_local.get("l1_ratio", 0.0)  # Get l1_ratio parameter (default to 0.0)
+
+    if solver == "lbfgs" and penalty in ("l1", "elasticnet"):
+        return False
+    if penalty == "elasticnet" and solver != "saga":
+        return False
+    if penalty == "l1" and solver != "saga":
+        return False
+    if penalty is None and l1_ratio not in (None, 0.0):
+        return False
+
+    return True  # Valid combination
+
+
 def get_cache_path(csv_path, model_name):
     """
     Generate cache file path for a specific dataset and model.
@@ -763,11 +791,11 @@ def get_models_and_param_grids():
             },
         ),
         "Logistic Regression": (
-            LogisticRegression(max_iter=1000, random_state=42, n_jobs=N_JOBS),  # Logistic Regression classifier
+            LogisticRegression(max_iter=5000, random_state=42, n_jobs=N_JOBS),  # Logistic Regression classifier
             {
                 "C": [0.001, 0.01, 0.1, 1, 10, 100],  # Inverse of regularization strength
                 "penalty": ["l1", "l2", "elasticnet", None],  # Norm used in the penalization
-                "solver": ["lbfgs", "liblinear", "saga"],  # Algorithm to use in the optimization problem
+                "solver": ["lbfgs", "saga"],  # Algorithm to use in the optimization problem (liblinear removed)
                 "l1_ratio": [0.0, 0.5, 1.0],  # The Elastic-Net mixing parameter
             },
         ),
@@ -1294,7 +1322,7 @@ def manual_grid_search(
     for combo in param_combinations:  # Iterate all combos
         params_dict = dict(zip(keys, combo))  # Build params dict
         params_key = json.dumps(params_dict, sort_keys=True)  # Canonical JSON key
-        if params_key not in cached_results:  # Skip if cached
+        if params_key not in cached_results and _is_valid_combination(model_name, params_dict):  # Skip if cached or invalid
             combinations_to_test.append(combo)  # Schedule for testing
 
     if cached_count > 0:  # Report cached count
