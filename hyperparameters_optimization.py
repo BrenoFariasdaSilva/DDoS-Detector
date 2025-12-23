@@ -511,6 +511,41 @@ def get_cache_path(csv_path, model_name):
     return cache_file  # Return the cache file path
 
 
+def load_cached_results(csv_path, model_name):
+    """
+    Load cached hyperparameter optimization results for a specific dataset and model.
+
+    :param csv_path: Path to the CSV dataset file
+    :param model_name: Name of the model being optimized
+    :return: Dictionary mapping parameter combinations (as JSON strings) to results, or empty dict if no cache
+    """
+
+    if not ENABLE_PROGRESS_CACHE:  # If caching is disabled
+        return {}  # Caching disabled
+
+    cache_file = get_cache_path(csv_path, model_name)  # Get cache file path
+
+    if not os.path.exists(cache_file):  # If cache file does not exist
+        verbose_output(
+            f"{BackgroundColors.YELLOW}No cache found for {model_name} on {os.path.basename(csv_path)}{Style.RESET_ALL}"
+        )
+        return {}  # No cache file exists
+
+    try:  # Try to load cached results
+        with open(cache_file, "r") as f:  # Open cache file
+            cached_data = json.load(f)  # Load JSON data
+        verbose_output(
+            f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(cached_data)}{BackgroundColors.GREEN} cached results for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
+        )
+        return cached_data  # Return cached results
+    except Exception as e:  # Catch any errors during loading
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Failed to load cache for {model_name}: {e}{Style.RESET_ALL}"
+        )
+        return {}  # Return empty dict on error
+
+
+
 def detect_gpu_info():
     """
     Detect GPU brand/model using `nvidia-smi` (best-effort).
