@@ -870,6 +870,88 @@ def compute_total_param_combinations(models):
     return total_combinations_all_models, model_combinations_counts  # Return total and per-model counts
 
 
+def compute_confusion_rates(cm):
+    """
+    Compute average FPR, FNR, TPR, TNR from a confusion matrix.
+
+    :param cm: confusion matrix (numpy array)
+    :return: tuple(mean_fpr, mean_fnr, mean_tpr, mean_tnr)
+    """
+    
+    n_classes = cm.shape[0]  # Number Of classes from confusion matrix shape
+    fpr_list, fnr_list, tpr_list, tnr_list = [], [], [], []  # Initialize lists to collect rates
+
+    for i in range(n_classes):  # Iterate each class index
+        tp = cm[i, i]  # True positives for class i
+        fn = cm[i, :].sum() - tp  # False negatives for class i
+        fp = cm[:, i].sum() - tp  # False positives for class i
+        tn = cm.sum() - tp - fn - fp  # True negatives for class i
+
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # False positive rate computation
+        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # False negative rate computation
+        tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0  # True positive rate (recall) computation
+        tnr = tn / (tn + fp) if (tn + fp) > 0 else 0.0  # True negative rate computation
+
+        fpr_list.append(fpr)  # Collect FPR
+        fnr_list.append(fnr)  # Collect FNR
+        tpr_list.append(tpr)  # Collect TPR
+        tnr_list.append(tnr)  # Collect TNR
+
+    return float(np.mean(fpr_list)), float(np.mean(fnr_list)), float(np.mean(tpr_list)), float(
+        np.mean(tnr_list)
+    )  # Return mean rates as floats
+
+
+def compute_metrics_from_predictions(model, y_true, y_pred, X=None):
+    """
+    Compute a standard metrics dict from true/predicted labels and model.
+
+    :param model: trained estimator (may provide predict_proba)
+    :param y_true: true labels (array-like)
+    :param y_pred: predicted labels (array-like)
+    :param X: feature matrix (optional, used for predict_proba)
+    :return: dict with metrics
+    """
+    
+    metrics = {}  # Container for computed metrics
+
+    f1 = f1_score(y_true, y_pred, average="weighted")  # Weighted F1 score
+    accuracy = accuracy_score(y_true, y_pred)  # Accuracy score
+    precision = precision_score(y_true, y_pred, average="weighted", zero_division=0)  # Precision
+    recall = recall_score(y_true, y_pred, average="weighted", zero_division=0)  # Recall
+    mcc = matthews_corrcoef(y_true, y_pred)  # Matthews correlation coefficient
+    kappa = cohen_kappa_score(y_true, y_pred)  # Cohen's kappa
+
+    metrics.update({
+        "f1_score": float(f1),  # Store F1 as float
+        "accuracy": float(accuracy),  # Store accuracy
+        "precision": float(precision),  # Store precision
+        "recall": float(recall),  # Store recall
+        "matthews_corrcoef": float(mcc),  # Store MCC
+        "cohen_kappa": float(kappa),  # Store Cohen's kappa
+    })
+
+    try:  # Compute confusion matrix-based metrics
+        cm = confusion_matrix(y_true, y_pred)  # Compute confusion matrix
+        fpr, fnr, tpr, tnr = compute_confusion_rates(cm)  # Compute averaged rates
+        metrics["false_positive_rate"] = fpr  # Add FPR to metrics
+        metrics["false_negative_rate"] = fnr  # Add FNR
+        metrics["true_positive_rate"] = tpr  # Add TPR
+        metrics["true_negative_rate"] = tnr  # Add TNR
+    except Exception:  # If confusion matrix computation fails
+        pass  # Ignore if confusion-based metrics fail
+
+    try:  # Attempt to compute ROC-AUC if possible
+        if X is not None and hasattr(model, "predict_proba"):  # Check if model supports predict_proba
+            y_pred_proba = model.predict_proba(X)  # Get predicted probabilities
+            roc_auc = roc_auc_score(y_true, y_pred_proba, multi_class="ovr", average="weighted")  # Compute ROC-AUC
+            metrics["roc_auc_score"] = float(roc_auc)  # Store ROC-AUC
+    except Exception:  # If ROC-AUC computation fails
+        pass  # Ignore ROC-AUC computation errors
+
+    return metrics  # Return assembled metrics dict
+
+
 def evaluate_single_combination(model, keys, combination, X_train, y_train):
     """
     Helper function to evaluate a single parameter combination.
@@ -886,88 +968,29 @@ def evaluate_single_combination(model, keys, combination, X_train, y_train):
     current_params = dict(zip(keys, combination))  # Build dict of current params
     start_time = time.time()  # Start timing
     metrics = None  # Initialize metrics as None
+    try:  # Try to train and evaluate using extracted helpers for clarity
+        model.set_params(**current_params)  # Apply hyperparameters to model
+        model.fit(X_train, y_train)  # Fit model on training data
+        y_pred = model.predict(X_train)  # Predict labels on training data
 
-    try:  # Try to train and evaluate
-        model.set_params(**current_params)  # Apply hyperparameters
-        model.fit(X_train, y_train)  # Train model
-        y_pred = model.predict(X_train)  # Predict on training set
-
-        f1 = f1_score(y_train, y_pred, average="weighted")  # Weighted F1 score
-        accuracy = accuracy_score(y_train, y_pred)  # Accuracy
-        precision = precision_score(y_train, y_pred, average="weighted", zero_division=0)  # Weighted precision
-        recall = recall_score(y_train, y_pred, average="weighted", zero_division=0)  # Weighted recall
-
-        mcc = matthews_corrcoef(y_train, y_pred)  # MCC for binary/multiclass
-
-        try:  # Try to compute ROC-AUC
-            if hasattr(model, "predict_proba"):  # If model supports probability predictions
-                y_pred_proba = model.predict_proba(X_train)  # Get probability predictions
-                roc_auc = roc_auc_score(y_train, y_pred_proba, multi_class="ovr", average="weighted")  # ROC-AUC OVR
-            else:  # Model does not support probability predictions
-                roc_auc = None  # Model doesn't support probability predictions
-        except Exception:  # Catch any errors during ROC-AUC calculation
-            roc_auc = None  # ROC-AUC calculation failed
-
-        kappa = cohen_kappa_score(y_train, y_pred)  # Cohen's Kappa
-
-        cm = confusion_matrix(y_train, y_pred)  # Confusion matrix
-        n_classes = cm.shape[0]  # Number of classes
-
-        fpr_list, fnr_list, tpr_list, tnr_list = [], [], [], []  # Initialize lists for rates
-
-        for i in range(n_classes):  # Calculate rates for each class
-            tp = cm[i, i]  # True Positives
-            fn = cm[i, :].sum() - tp  # False Negatives
-            fp = cm[:, i].sum() - tp  # False Positives
-            tn = cm.sum() - tp - fn - fp  # True Negatives
-
-            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # False Positive Rate: FP / (FP + TN)
-            fpr_list.append(fpr)  # Append FPR
-
-            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # False Negative Rate: FN / (FN + TP)
-            fnr_list.append(fnr)  # Append FNR
-
-            tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0  # True Positive Rate (Recall): TP / (TP + FN)
-            tpr_list.append(tpr)  # Append TPR
-
-            tnr = tn / (tn + fp) if (tn + fp) > 0 else 0.0  # True Negative Rate: TN / (TN + FP)
-            tnr_list.append(tnr)  # Append TNR
-
-        metrics = {  # Store all metrics
-            "f1_score": float(f1),
-            "accuracy": float(accuracy),
-            "precision": float(precision),
-            "recall": float(recall),
-            "false_positive_rate": float(np.mean(fpr_list)),
-            "false_negative_rate": float(np.mean(fnr_list)),
-            "true_positive_rate": float(np.mean(tpr_list)),
-            "true_negative_rate": float(np.mean(tnr_list)),
-            "matthews_corrcoef": float(mcc),
-            "cohen_kappa": float(kappa),
-        }
-
-        if roc_auc is not None:  # If ROC-AUC was computed successfully
-            metrics["roc_auc_score"] = float(roc_auc)  # Add ROC-AUC to metrics
+        metrics = compute_metrics_from_predictions(model, y_train, y_pred, X_train)  # Compute metrics from predictions
 
     except MemoryError:  # Catch memory errors specifically
         print(
             f"{BackgroundColors.RED}MemoryError with params {current_params}. Consider reducing dataset size or n_jobs.{Style.RESET_ALL}"
-        )
-        metrics = None  # Mark metrics as None
-    except KeyboardInterrupt:  # Allow graceful interruption
-        raise  # Re-raise keyboard interrupt
-    except Exception as e:  # Catch any other errors during training/evaluation
+        )  # Print error message
+        metrics = None  # Set metrics to None on memory error
+    except KeyboardInterrupt:  # User interrupted execution
+        raise  # Re-raise KeyboardInterrupt
+    except Exception as e:  # Catch any other exceptions
         verbose_output(
             f"{BackgroundColors.YELLOW}Error evaluating params {current_params}: {type(e).__name__}: {e}{Style.RESET_ALL}"
-        )
-        metrics = None  # Mark metrics as None
+        )  # Output verbose error message
+        metrics = None  # Set metrics to None on error
 
-    elapsed = time.time() - start_time  # Measure execution time
+    elapsed = time.time() - start_time  # Compute elapsed time
 
-    return current_params, metrics, elapsed  # Return results
-
-
-
+    return current_params, metrics, elapsed  # Return params, metrics and elapsed
 
 
 def update_optimization_progress_bar(
@@ -1001,73 +1024,218 @@ def update_optimization_progress_bar(
     """
 
     if progress_bar is None:
-        return  # Nothing to update if progress bar is None
+        return  # Nothing to update when progress bar is None
 
     try:  # Protect against unexpected errors
-        csv_name = os.path.basename(csv_path)  # Extract CSV filename
-        parent_dir = os.path.basename(os.path.dirname(csv_path))  # Extract parent directory
-        if parent_dir and parent_dir.lower() != csv_name.lower():  # Parent differs from filename
-            dataset_ref = (
-                f"{BackgroundColors.CYAN}{parent_dir}/{csv_name}{BackgroundColors.GREEN}"  # Show parent/filename
-            )
-        else:  # Parent same as filename or empty
+        csv_name = os.path.basename(csv_path)  # Base filename from path
+        parent_dir = os.path.basename(os.path.dirname(csv_path))  # Parent directory name
+        if parent_dir and parent_dir.lower() != csv_name.lower():  # If parent differs from filename
+            dataset_ref = f"{BackgroundColors.CYAN}{parent_dir}/{csv_name}{BackgroundColors.GREEN}"  # Show parent/filename
+        else:  # Otherwise
             dataset_ref = f"{BackgroundColors.CYAN}{csv_name}{BackgroundColors.GREEN}"  # Show only filename
 
         idx_str = (
-            f"{BackgroundColors.GREEN}[{BackgroundColors.CYAN}{current}/{total_models}{BackgroundColors.GREEN}]"
-            if current is not None and total_models is not None
-            else ""
-        )  # Model index string
+            f"{BackgroundColors.GREEN}[{BackgroundColors.CYAN}{current}/{total_models}{BackgroundColors.GREEN}]" if current is not None and total_models is not None else ""
+        )  # Formatted model index string
 
-        if combo_current is not None and combo_total is not None:  # If combination indices are provided
-            combo_str = f" {BackgroundColors.GREEN}{{{BackgroundColors.CYAN}{combo_current}/{combo_total}{BackgroundColors.GREEN}}}"  # Combination index string
-        else:  # No combination indices
-            combo_str = ""  # Empty combination string
+        if combo_current is not None and combo_total is not None:  # If combination indices supplied
+            combo_str = f" {BackgroundColors.GREEN}{{{BackgroundColors.CYAN}{combo_current}/{combo_total}{BackgroundColors.GREEN}}}"  # Combination progress
+        else:  # No combination info
+            combo_str = ""  # No combination info
 
-        desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} - {idx_str} {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}:{combo_str}"  # Base description
+        desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} - {idx_str} {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}:{combo_str}"  # Base description for progress
 
-        def _short(value, limit=30):
-            return (
-                str(value) if len(str(value)) <= limit else str(value)[: limit - 3] + "..."
-            )  # Helper to truncate strings
+        def _short(value, limit=30):  # Helper to create short string representations
+            return str(value) if len(str(value)) <= limit else str(value)[: limit - 3] + "..."  # Truncate helper
 
-        if isinstance(param_grid, dict):  # If param_grid is a dictionary
-            parts = []  # Collect formatted hyperparameters
-            for i, (k, v) in enumerate(param_grid.items()):  # Iterate over hyperparameters
+        if isinstance(param_grid, dict):  # If param_grid is dict, prepare compact display
+            parts = []  # List to accumulate parameter summaries
+            for i, (k, v) in enumerate(param_grid.items()):  # Iterate items
                 if i >= 4:
-                    break  # Limit to 4 params for compactness
-                try:  # Try to format the hyperparameter
-                    vals = (
-                        list(v) if hasattr(v, "__iter__") and not isinstance(v, (str, bytes, dict)) else [v]
-                    )  # Convert iterable values to list
-                    shown = ",".join([_short(x, 12) for x in vals[:4]])  # Show up to 4 values per hyperparameter
+                    break  # Limit display to first 4 params
+                try:
+                    vals = list(v) if hasattr(v, "__iter__") and not isinstance(v, (str, bytes, dict)) else [v]
+                    shown = ",".join([_short(x, 12) for x in vals[:4]])  # Show up to 4 values
                     if len(vals) > 4:
-                        shown += f",+{len(vals)-4}"  # Indicate remaining values
-                    parts.append(
-                        f"{BackgroundColors.GREEN}{_short(k,18)}{BackgroundColors.GREEN}:[{BackgroundColors.CYAN}{shown}{BackgroundColors.GREEN}]"
-                    )  # Append formatted hyperparameter
-                except Exception:  # Fallback on error
-                    parts.append(
-                        f"{BackgroundColors.GREEN}{_short(k,18)}{BackgroundColors.GREEN}:[{BackgroundColors.CYAN}{_short(v,12)}{BackgroundColors.GREEN}]"
-                    )  # Fallback formatting
-            remaining = max(0, len(param_grid) - 4)  # Count remaining parameters
-            param_display = ", ".join(parts)  # Join formatted parameters
+                        shown += f",+{len(vals)-4}"  # Indicate extras
+                    parts.append(f"{BackgroundColors.GREEN}{_short(k,18)}{BackgroundColors.GREEN}:[{BackgroundColors.CYAN}{shown}{BackgroundColors.GREEN}]")
+                except Exception:
+                    parts.append(f"{BackgroundColors.GREEN}{_short(k,18)}{BackgroundColors.GREEN}:[{BackgroundColors.CYAN}{_short(v,12)}{BackgroundColors.GREEN}]")
+            remaining = max(0, len(param_grid) - 4)  # Number of remaining params not displayed
+            param_display = ", ".join(parts)  # Join parts for display
             if remaining > 0:
-                param_display += (
-                    f", {BackgroundColors.CYAN}+{remaining} more{BackgroundColors.GREEN}"  # Show remaining count
-                )
-        else:  # If param_grid is not a dictionary
-            param_display = _short(param_grid, 60)  # Truncate string or other type
+                param_display += f", {BackgroundColors.CYAN}+{remaining} more{BackgroundColors.GREEN}"  # Append remaining count
+        else:
+            param_display = _short(param_grid, 60)  # Otherwise, short representation
 
-        desc = f"{desc} {BackgroundColors.GREEN}({param_display}){Style.RESET_ALL}"  # Append parameter display to description
+        desc = f"{desc} {BackgroundColors.GREEN}({param_display}){Style.RESET_ALL}"  # Append parameter display
 
-        progress_bar.set_description(desc)  # Update progress bar description
-        progress_bar.n = overall if overall is not None else (current or getattr(progress_bar, "n", 0))
-        progress_bar.total = total_combinations  # Ensure total is correct
-        progress_bar.refresh()  # Force refresh of the progress bar
+        progress_bar.set_description(desc)  # Set progress bar description
+        progress_bar.n = overall if overall is not None else (current or getattr(progress_bar, "n", 0))  # Set current count
+        progress_bar.total = total_combinations  # Set total combinations
+        progress_bar.refresh()  # Refresh the display
 
     except Exception:
         pass  # Silently ignore any errors during update
+
+
+def compute_safe_n_jobs(X_train, y_train):
+    """
+    Compute a safe `n_jobs` value based on available memory and dataset size.
+    
+    :param X_train: Training feature matrix
+    :param y_train: Training labels
+    :return: Tuple (safe_n_jobs, available_memory_gb, data_size_gb
+    """
+    
+    available_memory_gb = psutil.virtual_memory().available / (1024 ** 3)  # Available RAM in GB
+    data_size_gb = (X_train.nbytes + y_train.nbytes) / (1024 ** 3)  # Dataset size in GB
+
+    estimated_memory_per_worker = data_size_gb * 0.3  # Heuristic per-worker memory estimate
+    safe_n_jobs = max(
+        1,
+        min(
+            abs(N_JOBS) if N_JOBS < 0 else N_JOBS,
+            int(available_memory_gb / max(0.5, estimated_memory_per_worker)),
+        ),
+    )  # Compute safe worker count
+
+    if N_JOBS == -2:
+        safe_n_jobs = min(safe_n_jobs, max(1, psutil.cpu_count(logical=False) - 1))  # Leave one core free
+    elif N_JOBS == -1:
+        safe_n_jobs = min(safe_n_jobs, psutil.cpu_count(logical=False))  # Use all physical cores
+
+    safe_n_jobs = min(safe_n_jobs, 8)  # Cap workers to 8
+    return safe_n_jobs, available_memory_gb, data_size_gb  # Return computed values
+
+
+def run_parallel_evaluation(
+    model_name,
+    model,
+    keys,
+    combinations_to_test,
+    cached_results,
+    cached_count,
+    X_train,
+    y_train,
+    csv_path,
+    progress_bar,
+    total_combinations,
+    model_index,
+    total_combinations_all_models,
+    total_models,
+    hardware_specs,
+    global_counter,
+    best_score,
+    best_params,
+    best_elapsed,
+    all_results,
+    safe_n_jobs,
+):
+    """
+    Run the ThreadPoolExecutor evaluation and return updated results.
+
+    :param model_name: Name of the model being optimized
+    :param model: Model instance to optimize
+    :param keys: List of hyperparameter names
+    :param combinations_to_test: List of hyperparameter combinations to evaluate
+    :param cached_results: Dictionary of cached results
+    :param cached_count: Number of cached combinations
+    :param X_train: Training features
+    :param y_train: Training labels
+    :param csv_path: Path to CSV for progress description
+    :param progress_bar: tqdm progress bar instance
+    :param total_combinations: Total hyperparameter combinations for the current model
+    :param model_index: Current model index (1-based)
+    :param total_combinations_all_models: Total hyperparameter combinations across all models
+    :param total_models: Total number of models being optimized
+    :param hardware_specs: Dictionary of hardware specifications (optional)
+    :param global_counter: Overall combination index across all models
+    :param best_score: Current best F1 score
+    :param best_params: Current best hyperparameters
+    :param best_elapsed: Execution time of the best combination
+    :param all_results: List of all results collected so far
+    :param safe_n_jobs: Number of parallel workers to use
+    :return: Tuple (best_params, best_score, best_elapsed, all_results, global_counter)
+    """
+    
+    verbose_output(f"{BackgroundColors.GREEN}Starting parallel evaluation with {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} workers...{Style.RESET_ALL}")  # Log start
+
+    if progress_bar is not None and cached_count > 0:  # Advance progress for cached combos
+        for _ in range(cached_count):
+            try:
+                progress_bar.update(1)  # Increment progress bar
+            except Exception:
+                pass  # Ignore progress update errors
+
+    if len(combinations_to_test) == 0:  # Nothing to evaluate
+        verbose_output(f"{BackgroundColors.GREEN}All combinations already cached for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Skipping computation.{Style.RESET_ALL}")
+        return best_params, best_score, best_elapsed, all_results, global_counter  # Return early
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=safe_n_jobs) as executor:  # Run parallel evaluation
+        future_to_params = {
+            executor.submit(evaluate_single_combination, clone(model), keys, combo, X_train, y_train): combo
+            for combo in combinations_to_test
+        }  # Map futures to combos
+
+        local_counter = cached_count  # Start local counter after cached items
+
+        for future in concurrent.futures.as_completed(future_to_params):  # Process completed futures
+            try:  # Try to get result
+                current_params, metrics, elapsed = future.result()  # Get results
+            except Exception as worker_err:  # Catch exceptions from worker
+                combo = future_to_params.get(future)  # Find combo that failed
+                current_params = dict(zip(keys, combo)) if combo is not None else {}  # Reconstruct params
+                metrics = None  # No metrics on failure
+                elapsed = 0.0  # No elapsed time
+                print(f"{BackgroundColors.YELLOW}Warning: Combination {current_params} failed: {worker_err}{Style.RESET_ALL}")  # Warn
+
+            if csv_path:  # Persist result if csv path provided
+                save_combination_result(
+                    csv_path, model_name, current_params, metrics, elapsed, cached_results, hardware_specs
+                )  # Save result
+
+                global_counter += 1  # Increment global progress
+                local_counter += 1  # Increment local model progress
+
+                if progress_bar is not None:
+                    update_optimization_progress_bar(
+                        progress_bar,
+                        csv_path,
+                        model_name,
+                        param_grid=current_params,
+                        combo_current=local_counter,
+                        combo_total=total_combinations,
+                        current=model_index,
+                        total_combinations=total_combinations_all_models,
+                        total_models=total_models,
+                        overall=global_counter,
+                    )  # Update progress description
+                    try:
+                        progress_bar.update(1)  # Advance progress
+                    except Exception:
+                        pass  # Ignore update errors
+
+                result_entry = OrderedDict([("params", json.dumps(current_params)), ("execution_time", elapsed)])  # Build result entry
+                if metrics is not None:
+                    result_entry.update(metrics)  # Include metrics
+                all_results.append(result_entry)  # Append to list
+
+                if metrics is not None and "f1_score" in metrics:  # Update best if improved
+                    f1 = metrics["f1_score"]
+                    current_best_elapsed = (
+                        next((r["execution_time"] for r in all_results if r.get("f1_score") == best_score), float("inf"))
+                        if best_score != -float("inf")
+                        else float("inf")
+                    )  # Find current best elapsed
+                    if (f1 > best_score) or (f1 == best_score and elapsed < current_best_elapsed):
+                        best_score = f1
+                        best_params = current_params
+                        best_elapsed = elapsed
+                        verbose_output(f"{BackgroundColors.GREEN}New best F1 score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}")
+                        # Log new best
+
+    return best_params, best_score, best_elapsed, all_results, global_counter  # Return updated results
 
 
 def manual_grid_search(
@@ -1107,186 +1275,157 @@ def manual_grid_search(
     :return: Tuple (best_params, best_score, all_results, global_counter_end)
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Manually optimizing {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN} using parallel processing...{Style.RESET_ALL}"
-    )  # Output the verbose message
+    verbose_output(f"{BackgroundColors.GREEN}Manually optimizing {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN} using parallel processing...{Style.RESET_ALL}")  # Log manual optimization start
 
     if not param_grid:
         return None, None, None, global_counter_start  # No hyperparameters to optimize
 
     keys = list(param_grid.keys())  # Parameter names
-    values = [v if isinstance(v, (list, tuple)) else [v] for v in param_grid.values()]  # Ensure values are lists
-    param_combinations = list(product(*values))  # Cartesian product
-    total_combinations = len(param_combinations)  # Total number of combinations for this model
+    values = [v if isinstance(v, (list, tuple)) else [v] for v in param_grid.values()]  # Ensure each value is iterable
+    param_combinations = list(product(*values))  # Cartesian product of hyperparameter values
+    total_combinations = len(param_combinations)  # Total combinations count
 
-    cached_results = load_cached_results(csv_path, model_name) if csv_path else {}  # Load cached results
-    cached_count = len(cached_results)  # Number of cached combinations
+    cached_results = load_cached_results(csv_path, model_name) if csv_path else {}  # Load cached cache results
+    cached_count = len(cached_results)  # Count cached entries
 
-    combinations_to_test = []  # Combinations that need testing
-    for combo in param_combinations:  # Iterate all combinations
-        params_dict = dict(zip(keys, combo))  # Build parameter dict
-        params_key = json.dumps(params_dict, sort_keys=True)  # Serialize to JSON string
-        if params_key not in cached_results:  # If not cached
-            combinations_to_test.append(combo)  # Add to test list
+    combinations_to_test = []  # Accumulate combinations that are not cached
+    for combo in param_combinations:  # Iterate all combos
+        params_dict = dict(zip(keys, combo))  # Build params dict
+        params_key = json.dumps(params_dict, sort_keys=True)  # Canonical JSON key
+        if params_key not in cached_results:  # Skip if cached
+            combinations_to_test.append(combo)  # Schedule for testing
 
-    if cached_count > 0:  # If there are cached results
-        print(
-            f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{cached_count}{BackgroundColors.GREEN} cached results for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Testing {BackgroundColors.CYAN}{len(combinations_to_test)}{BackgroundColors.GREEN} remaining combinations.{Style.RESET_ALL}"
-        )
+    if cached_count > 0:  # Report cached count
+        print(f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{cached_count}{BackgroundColors.GREEN} cached results for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Testing {BackgroundColors.CYAN}{len(combinations_to_test)}{BackgroundColors.GREEN} remaining combinations.{Style.RESET_ALL}")
 
-    best_score = -float("inf")  # Initialize best score
-    best_params = None  # Initialize best parameters
-    best_elapsed = 0.0  # Execution time for best parameters (seconds)
-    all_results = []  # Store results for all combinations
-    global_counter = global_counter_start  # Initialize global counter
+    best_score = -float("inf")  # Initialize best score sentinel
+    best_params = None  # Placeholder for best params
+    best_elapsed = 0.0  # Elapsed time for best params
+    all_results = []  # List to collect results
+    global_counter = global_counter_start  # Start global counter
 
     for params_key, cached_data in cached_results.items():  # Process cached results
-        try:  # Try to parse cached data
-            params_dict = json.loads(params_key)  # Deserialize JSON string
-            f1 = cached_data.get("f1_score")  # Get F1 score (new key name)
-            elapsed = cached_data.get("elapsed", 0.0)  # Get elapsed time from cache
+        try:
+            params_dict = json.loads(params_key)  # Parse params key
+            f1 = cached_data.get("f1_score")  # Cached F1 if present
+            elapsed = cached_data.get("elapsed", 0.0)  # Cached elapsed time
 
-            result_entry = OrderedDict([("params", params_key), ("execution_time", elapsed)])  # Basic result entry
-            
-            for key in ["f1_score", "accuracy", "precision", "recall", "false_positive_rate",
-                        "false_negative_rate", "true_positive_rate", "true_negative_rate",
-                        "matthews_corrcoef", "roc_auc_score", "cohen_kappa"]:  # Metrics to include
-                if key in cached_data:  # If metric exists in cache
-                    result_entry[key] = cached_data[key]  # Add metric to result entry
+            result_entry = OrderedDict([("params", params_key), ("execution_time", elapsed)])  # Base result entry
 
-            all_results.append(result_entry)  # Append to all results
+            for key in [
+                "f1_score",
+                "accuracy",
+                "precision",
+                "recall",
+                "false_positive_rate",
+                "false_negative_rate",
+                "true_positive_rate",
+                "true_negative_rate",
+                "matthews_corrcoef",
+                "roc_auc_score",
+                "cohen_kappa",
+            ]:  # Metrics to include
+                if key in cached_data:  # If metric present
+                    result_entry[key] = cached_data[key]  # Include cached metric
 
-            if f1 is not None and f1 > best_score:  # Update best score if applicable
+            all_results.append(result_entry)  # Append cached result
+
+            if f1 is not None and f1 > best_score:  # Update best from cache
                 best_score = f1  # Update best score
-                best_params = params_dict  # Update best parameters
-                best_elapsed = elapsed  # Update elapsed time for best parameters
+                best_params = params_dict  # Update best params
+                best_elapsed = elapsed  # Update best elapsed time
 
-            global_counter += 1  # Increment overall combination counter
-        except Exception:  # Skip malformed cache entries
-            pass  # Skip malformed cache entries
+            global_counter += 1  # Increment global counter
+        except Exception:  # Catch JSON parsing errors
+            pass  # Ignore malformed cache entries
 
-    available_memory_gb = psutil.virtual_memory().available / (1024**3)  # Available RAM in GB
-    data_size_gb = (X_train.nbytes + y_train.nbytes) / (1024**3)  # Dataset size in GB
-
-    estimated_memory_per_worker = data_size_gb * 0.3  # Lower multiplier for shared memory
-    safe_n_jobs = max(
-        1, min(abs(N_JOBS) if N_JOBS < 0 else N_JOBS, int(available_memory_gb / max(0.5, estimated_memory_per_worker)))
-    )  # Calculate safe n_jobs based on memory
-
-    if N_JOBS == -2:  # Leave one core free
-        safe_n_jobs = min(safe_n_jobs, max(1, psutil.cpu_count(logical=False) - 1))  # Use all but one physical core
-    elif N_JOBS == -1:  # Use all cores but still respect memory limits
-        safe_n_jobs = min(safe_n_jobs, psutil.cpu_count(logical=False))  # Use all physical cores
-
-    safe_n_jobs = min(safe_n_jobs, 8)  # Cap at 8 workers to prevent excessive thread contention
+    safe_n_jobs, available_memory_gb, data_size_gb = compute_safe_n_jobs(X_train, y_train)  # Compute workers and sizes
 
     verbose_output(
         f"{BackgroundColors.GREEN}Using {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} parallel workers (Available RAM: {BackgroundColors.CYAN}{available_memory_gb:.1f}GB{BackgroundColors.GREEN}, Dataset: {BackgroundColors.CYAN}{data_size_gb:.2f}GB{BackgroundColors.GREEN}){Style.RESET_ALL}"
-    )
+    )  # Log resources
 
-
-    # Use ThreadPoolExecutor for better memory management and to avoid ProcessPoolExecutor deadlocks
-    verbose_output(
-        f"{BackgroundColors.GREEN}Starting parallel evaluation with {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} workers...{Style.RESET_ALL}"
-    )
-
-    if progress_bar is not None and cached_count > 0:  # Update progress bar for cached results
-        for i in range(cached_count):  # Iterate cached results
-            if progress_bar is not None:  # Update progress bar if available
-                try:  # Safely update progress bar
-                    progress_bar.update(1)  # Increment progress bar
-                except Exception:  # Ignore progress bar update errors
-                    pass  # Ignore errors
-
-    if len(combinations_to_test) == 0:  # All combinations are cached
-        verbose_output(
-            f"{BackgroundColors.GREEN}All combinations already cached for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Skipping computation.{Style.RESET_ALL}"
-        )
-        return best_params, best_score, best_elapsed, all_results, global_counter  # Return cached results
-
-    with concurrent.futures.ThreadPoolExecutor(  # ThreadPoolExecutor for parallel evaluation
-        max_workers=safe_n_jobs  # Set number of parallel workers
-    ) as executor:  # Use ThreadPoolExecutor for parallel evaluation
-        future_to_params = {  # Map futures to parameter combinations
-            executor.submit(  # Submit evaluation task
-                evaluate_single_combination, clone(model), keys, combination, X_train, y_train  # Pass cloned model and data
-            ): combination  # Map future to combination
-            for combination in combinations_to_test  # Only test non-cached combinations
-        }  # Submit all combinations
-        local_counter = cached_count  # Start counter after cached results
-
-        for future in concurrent.futures.as_completed(  # Iterate as each future completes
-            future_to_params  # Futures to monitor
-        ):  # Iterate as each future completes
-            try:  # Try to get result
-                current_params, metrics, elapsed = future.result()  # Get result from future (params, metrics_dict, elapsed)
-            except Exception as worker_err:  # Catch any errors from the worker
-                combo = future_to_params.get(future)  # Get the combination that caused the error
-                current_params = dict(zip(keys, combo)) if combo is not None else {}  # Build current params dict
-                metrics = None  # Mark metrics as None
-                elapsed = 0.0  # Mark elapsed as 0.0
-                print(
-                    f"{BackgroundColors.YELLOW}Warning: Combination {current_params} failed: {worker_err}{Style.RESET_ALL}"
-                )
-
-            if csv_path:  # Save result to CSV if path is provided
-                save_combination_result(csv_path, model_name, current_params, metrics, elapsed, cached_results, hardware_specs)  # Save result
-
-                global_counter += 1  # Increment overall combination counter
-                local_counter += 1  # Increment per-model combination counter
-
-                if progress_bar is not None and csv_path is not None:  # Update progress bar if available
-                    update_optimization_progress_bar(
-                        progress_bar,
-                        csv_path,
-                        model_name,
-                        param_grid=current_params,
-                        combo_current=local_counter,
-                        combo_total=total_combinations,
-                        current=model_index,
-                        total_combinations=total_combinations_all_models,
-                        total_models=total_models,
-                        overall=global_counter,
-                    )  # Update progress bar description
-                    try:  # Safely update progress bar
-                        progress_bar.update(1)  # Increment progress bar
-                    except Exception:  # Ignore progress bar update errors
-                        pass  # Ignore errors
-
-                result_entry = OrderedDict([("params", json.dumps(current_params)), ("execution_time", elapsed)])  # Basic result entry
-                if metrics is not None:  # If metrics are valid
-                    result_entry.update(metrics)  # Add all metrics (f1_score, accuracy, etc.)
-                all_results.append(result_entry)  # Append to all results
-
-                if metrics is not None and "f1_score" in metrics:  # If metrics are valid
-                    f1 = metrics["f1_score"]  # Extract F1 score
-                    current_best_elapsed = (  # Get elapsed time for current best F1 score
-                        next((r["execution_time"] for r in all_results
-                              if r.get("f1_score") == best_score), float("inf"))  # Find elapsed time for best score
-                        if best_score != -float("inf")  # Only if best score is valid
-                        else float("inf")  # Default to infinity
-                    )  # Get elapsed time for current best F1 score
-                    if (f1 > best_score) or (
-                        f1 == best_score and elapsed < current_best_elapsed
-                    ):  # Verify for new best (higher F1 or same F1 but faster)
-                        best_score = f1  # Update best F1 score
-                        best_params = current_params  # Update best parameters
-                        best_elapsed = elapsed  # Save execution time for best params
-                        verbose_output(
-                            f"{BackgroundColors.GREEN}New best F1 score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}"
-                        )  # Log new best
-
-    verbose_output(
-        f"{BackgroundColors.GREEN}Completed optimization for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Best score: {BackgroundColors.CYAN}{best_score:.4f}{Style.RESET_ALL}"
-    )
-
-    return (
-        best_params,
+    best_params, best_score, best_elapsed, all_results, global_counter = run_parallel_evaluation(
+        model_name,
+        model,
+        keys,
+        combinations_to_test,
+        cached_results,
+        cached_count,
+        X_train,
+        y_train,
+        csv_path,
+        progress_bar,
+        total_combinations,
+        model_index,
+        total_combinations_all_models,
+        total_models,
+        hardware_specs,
+        global_counter,
         best_score,
+        best_params,
         best_elapsed,
         all_results,
-        global_counter,
-    )  # Return best results, elapsed for best, all combinations, and final global counter
+        safe_n_jobs,
+    )  # Perform parallel evaluation
+
+    verbose_output(f"{BackgroundColors.GREEN}Completed optimization for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Best score: {BackgroundColors.CYAN}{best_score:.4f}{Style.RESET_ALL}")  # Log completion
+
+    return best_params, best_score, best_elapsed, all_results, global_counter  # Return final results
+
+
+def build_result_entry_from_best(csv_path, model_name, best_params, best_score, best_elapsed, all_results, X_train_ga):
+    """
+    Build the ordered result dict for the best found parameters for a model.
+    
+    :param csv_path: Path of the CSV file currently being processed
+    :param model_name: Name of the model
+    :param best_params: Best hyperparameters found
+    :param best_score: Best F1 score achieved
+    :param best_elapsed: Elapsed time for best parameters
+    :param all_results: List of all results collected during optimization
+    :param X_train_ga: Training feature matrix generated by the Genetic Algorithm
+    :return: OrderedDict with result entry
+    """
+    
+    elapsed_time = float(best_elapsed or 0.0)  # Elapsed time for best params
+
+    best_result = None  # Placeholder for best result entry
+    for result in all_results:  # Find the best result entry
+        if result.get("params") == json.dumps(best_params):  # Match params
+            best_result = result  # Store best result
+            break  # Exit loop
+
+    result_dict = OrderedDict(  # Build result dictionary
+        [
+            ("base_csv", os.path.basename(csv_path)),
+            ("model", model_name),
+            ("best_params", json.dumps(best_params)),
+            ("best_cv_f1_score", best_score),
+            ("n_features", X_train_ga.shape[1]),
+            ("feature_selection_method", "Genetic Algorithm"),
+            ("dataset", os.path.basename(csv_path)),
+            ("elapsed_time_s", round(float(elapsed_time), 2)),
+        ]
+    )
+
+    if best_result:  # If best result found, include additional metrics
+        for metric_key in [  # Metrics to include
+            "accuracy",
+            "precision",
+            "recall",
+            "false_positive_rate",
+            "false_negative_rate",
+            "true_positive_rate",
+            "true_negative_rate",
+            "matthews_corrcoef",
+            "roc_auc_score",
+            "cohen_kappa",
+        ]:
+            if metric_key in best_result:  # If metric present
+                result_dict[metric_key] = best_result[metric_key]  # Add to result dict
+
+    return result_dict  # Return assembled result dict
 
 
 def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list):
@@ -1340,48 +1479,20 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
             except Exception as model_err:  # Catch any errors during model optimization
                 print(
                     f"{BackgroundColors.RED}Error optimizing {model_name}: {model_err}{Style.RESET_ALL}"
-                )
+                )  # Print error message
                 continue  # Skip to next model
 
-            if best_params is not None:  # If optimization succeeded
-                elapsed_time = float(best_elapsed or 0.0)  # Elapsed time for best params
-                
-                best_result = None  # Initialize best result entry
-                for result in all_results:  # Find the best result entry
-                    if result.get("params") == json.dumps(best_params):  # Match best params
-                        best_result = result  # Assign best result
-                        break  # Exit loop once found
-                
-                result_dict = OrderedDict(
-                    [  # Append only the best result
-                        ("base_csv", os.path.basename(csv_path)),  # Base CSV filename
-                        ("model", model_name),  # Model name
-                        ("best_params", json.dumps(best_params)),  # Best parameters as JSON string
-                        ("best_cv_f1_score", best_score),  # Best F1 score
-                        ("n_features", X_train_ga.shape[1]),  # Number of features after GA selection
-                        ("feature_selection_method", "Genetic Algorithm"),  # Feature selection method
-                        ("dataset", os.path.basename(csv_path)),  # Dataset filename
-                        (
-                            "elapsed_time_s",
-                            round(float(elapsed_time), 2),
-                        ),  # Elapsed training time (seconds) for best params
-                    ]
-                )
-                
-                if best_result:  # If best result entry was found
-                    for metric_key in ["accuracy", "precision", "recall", "false_positive_rate",
-                                       "false_negative_rate", "true_positive_rate", "true_negative_rate",
-                                       "matthews_corrcoef", "roc_auc_score", "cohen_kappa"]:  # Metrics to include
-                        if metric_key in best_result:  # If metric exists in best result
-                            result_dict[metric_key] = best_result[metric_key]  # Add metric to result dict
-                
+            if best_params is not None:  # If valid best parameters were found
+                result_dict = build_result_entry_from_best(
+                    csv_path, model_name, best_params, best_score, best_elapsed, all_results, X_train_ga
+                )  # Build result entry
                 dir_results_list.append(result_dict)  # Append to results list
-            else:  # If optimization failed
+            else:  # If no valid parameters were found
                 print(
                     f"{BackgroundColors.YELLOW}Warning: No valid results for {model_name}{Style.RESET_ALL}"
-                )
+                )  # Print warning message
 
-            pbar.refresh()  # Refresh progress bar after each model
+            pbar.refresh()  # Refresh progress bar
 
         print()  # Line spacing after all models complete
 
