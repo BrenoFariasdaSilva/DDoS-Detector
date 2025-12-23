@@ -72,7 +72,7 @@ from pathlib import Path  # For handling file paths
 from sklearn.base import clone  # Import necessary modules for cloning
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier  # For ensemble models
 from sklearn.linear_model import LogisticRegression  # For logistic regression model
-from sklearn.metrics import make_scorer, f1_score  # For custom scoring metrics
+from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, make_scorer, precision_score, recall_score  # For custom scoring metrics
 from sklearn.model_selection import GridSearchCV, train_test_split  # For hyperparameter search and data splitting
 from sklearn.neighbors import KNeighborsClassifier, NearestCentroid  # For k-nearest neighbors model
 from sklearn.neural_network import MLPClassifier  # For neural network model
@@ -858,33 +858,73 @@ def evaluate_single_combination(model, keys, combination, X_train, y_train):
     :param combination: Parameter values for this combination
     :param X_train: Training features
     :param y_train: Training labels
-    :return: Tuple (current_params, score, elapsed)
+    :return: Tuple (current_params, metrics_dict, elapsed)
     """
 
     current_params = dict(zip(keys, combination))  # Build dict of current params
     start_time = time.time()  # Start timing
+    metrics = None  # Initialize metrics as None
 
     try:  # Try to train and evaluate
         model.set_params(**current_params)  # Apply hyperparameters
         model.fit(X_train, y_train)  # Train model
         y_pred = model.predict(X_train)  # Predict on training set
-        score = f1_score(y_train, y_pred, average="weighted")  # Compute weighted F1 score
+
+        f1 = f1_score(y_train, y_pred, average="weighted")  # Weighted F1 score
+        accuracy = accuracy_score(y_train, y_pred)  # Accuracy
+        precision = precision_score(y_train, y_pred, average="weighted", zero_division=0)  # Weighted precision
+        recall = recall_score(y_train, y_pred, average="weighted", zero_division=0)  # Weighted recall
+
+        cm = confusion_matrix(y_train, y_pred)  # Confusion matrix
+        n_classes = cm.shape[0]  # Number of classes
+
+        fpr_list, fnr_list, tpr_list, tnr_list = [], [], [], []  # Initialize lists for rates
+
+        for i in range(n_classes):  # Calculate rates for each class
+            tp = cm[i, i]  # True Positives
+            fn = cm[i, :].sum() - tp  # False Negatives
+            fp = cm[:, i].sum() - tp  # False Positives
+            tn = cm.sum() - tp - fn - fp  # True Negatives
+
+            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # False Positive Rate: FP / (FP + TN)
+            fpr_list.append(fpr)  # Append FPR
+
+            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # False Negative Rate: FN / (FN + TP)
+            fnr_list.append(fnr)  # Append FNR
+
+            tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0  # True Positive Rate (Recall): TP / (TP + FN)
+            tpr_list.append(tpr)  # Append TPR
+
+            tnr = tn / (tn + fp) if (tn + fp) > 0 else 0.0  # True Negative Rate: TN / (TN + FP)
+            tnr_list.append(tnr)  # Append TNR
+
+        metrics = {  # Store all metrics
+            "f1_score": float(f1),
+            "accuracy": float(accuracy),
+            "precision": float(precision),
+            "recall": float(recall),
+            "false_positive_rate": float(np.mean(fpr_list)),
+            "false_negative_rate": float(np.mean(fnr_list)),
+            "true_positive_rate": float(np.mean(tpr_list)),
+            "true_negative_rate": float(np.mean(tnr_list)),
+        }
+
     except MemoryError:  # Catch memory errors specifically
         print(
             f"{BackgroundColors.RED}MemoryError with params {current_params}. Consider reducing dataset size or n_jobs.{Style.RESET_ALL}"
         )
-        score = None  # Mark score as None
+        metrics = None  # Mark metrics as None
     except KeyboardInterrupt:  # Allow graceful interruption
         raise  # Re-raise keyboard interrupt
     except Exception as e:  # Catch any other errors during training/evaluation
         verbose_output(
             f"{BackgroundColors.YELLOW}Error evaluating params {current_params}: {type(e).__name__}: {e}{Style.RESET_ALL}"
         )
-        score = None  # Mark score as None
+        metrics = None  # Mark metrics as None
 
     elapsed = time.time() - start_time  # Measure execution time
 
-    return current_params, score, elapsed  # Return results
+    return current_params, metrics, elapsed  # Return results
 
 
 def evaluate_single_combination_from_files(model, keys, combination, X_path, y_path):
@@ -899,7 +939,7 @@ def evaluate_single_combination_from_files(model, keys, combination, X_path, y_p
         y = np.load(y_path, mmap_mode="r")  # Load labels
     except Exception:  # Catch any loading errors
         current_params = dict(zip(keys, combination))  # Build dict of current params
-        return current_params, None, 0.0  # Return failure result
+        return current_params, None, 0.0  # Return failure result (params, metrics=None, elapsed=0)
 
     return evaluate_single_combination(model, keys, combination, X, y)  # Call evaluation function
 
