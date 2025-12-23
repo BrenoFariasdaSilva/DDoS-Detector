@@ -41,6 +41,7 @@ A machine learning framework for Distributed Denial of Service (DDoS) attack det
   - [Table of Contents](#table-of-contents)
   - [Introduction](#introduction)
     - [Project Architecture](#project-architecture)
+    - [Key Technical Features](#key-technical-features)
   - [Setup](#setup)
     - [Git](#git)
         - [Linux](#linux)
@@ -92,6 +93,15 @@ The system is organized into several interconnected modules, each addressing a c
 - **Logger** (`Logger.py`): Dual-channel logger preserving ANSI color codes for terminal output while maintaining clean log files.
 - **Telegram Bot** (`telegram_bot.py`): Notification system for long-running experiments, supporting message splitting for Telegram's character limits.
 - **Makefile**: Automation for all pipeline stages with cross-platform support (Windows, Linux, macOS) and detached execution modes.
+
+### Key Technical Features
+
+- **Multi-Dataset Support**: Designed for CICDDoS2019, CIC-IDS-2017, and compatible datasets with shared feature definitions
+- **Feature Reusability**: GA-selected features can be reused across compatible datasets without retraining
+- **Comprehensive Metrics**: Tracks standard metrics (accuracy, precision, recall, F1) plus confusion-based rates (FPR, FNR, TPR, TNR), MCC, Cohen's kappa, and ROC-AUC
+- **Progress Persistence**: Checkpoint saving and caching for resumable long-running optimizations
+- **Hardware Awareness**: Automatic detection of CPU model, cores, RAM, GPU availability (ThunderSVM), and memory-safe parallel worker allocation
+- **Cross-Platform**: Unified codebase with OS-specific adaptations for sound notifications, path handling, and system information retrieval
 
 ## Setup
 
