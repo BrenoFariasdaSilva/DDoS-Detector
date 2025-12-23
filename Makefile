@@ -36,7 +36,7 @@ if [ -z "$(DETACH)" ]; then \
 	$(PYTHON) $(1); \
 else \
 	LOG_FILE=$(LOG_DIR)/$$(basename $(1) .py).log; \
-	nohup $(PYTHON) $(1) >/dev/null 2>&1 & \
+	nohup $(PYTHON) $(1) --verbose >/dev/null 2>&1 & \
 	sleep 2; \
 	tail -f $$LOG_FILE; \
 fi
