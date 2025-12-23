@@ -154,3 +154,21 @@ This section presents the comprehensive outputs and achievements of each module 
   - Feature set impact: GA ≈ RFE ≈ PCA (all achieve F1 ≥ 0.9900 on well-separated datasets)
   - Best individual algorithms: Random Forest, XGBoost, LightGBM
   - Ensemble provides marginal improvements when individual models already achieve near-perfect scores
+
+## Data Augmentation Results
+
+**WGAN-GP Synthetic Data Generation** (`wgangp.py`)
+- Generates synthetic network flow samples using Wasserstein GAN with Gradient Penalty
+- Supports conditional generation for multi-class attack scenarios
+- Training outputs:
+  - Generator and Discriminator checkpoints saved per epoch: `outputs/generator_epoch*.pt`, `outputs/discriminator_epoch*.pt`
+  - Checkpoints include model weights, metadata (feature count, label encoder mappings, scaler parameters)
+  - Training logs track Wasserstein distance, gradient penalty, and discriminator/generator losses
+- Generation mode produces `generated.csv` with specified number of synthetic samples
+- Synthetic samples match original feature distributions and class characteristics
+- Typical training: 60-100 epochs, batch size 64-128, learning rate 0.0001-0.0002
+- Generated data can be used for:
+  - Balancing imbalanced datasets (minority attack classes like BENIGN at 0.07% in DrDoS_DNS)
+  - Data augmentation to improve model generalization
+  - Testing classifier robustness on synthetic variations
+- Quality metrics can be computed offline: statistical distance (Kolmogorov-Smirnov), mode coverage, feature correlation preservation
