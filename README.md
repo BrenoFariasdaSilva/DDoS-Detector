@@ -8,7 +8,7 @@
   
 ---
 
-Project-Description - @UPDATE.
+A machine learning framework for Distributed Denial of Service (DDoS) attack detection achieving @UPDATE F1-scores. Features hyperparameter optimization across nine classifiers (Random Forest, SVM, XGBoost, Logistic Regression, KNN, Nearest Centroid, Gradient Boosting, LightGBM, and MLP), WGAN-GP for synthetic data generation, multi-method feature selection (Genetic Algorithms, RFE, PCA), and stacking ensemble evaluation. Validated on CICDDoS2019 <!--@UPDATE--> benchmark datasets with full reproducibility and cross-platform support.
   
 ---
 
