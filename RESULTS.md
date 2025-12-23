@@ -91,3 +91,66 @@ This section presents the comprehensive outputs and achievements of each module 
 - **GA achieves perfect precision (FPR = 0.0000)** with 36 features, eliminating false alarms
 - **RFE achieves most compact representation** (10 features) with minimal FPR (0.0045)
 - **PCA demonstrates strong linear separability** with only 8 components sufficient for perfect F1-score
+
+## Model Optimization Results
+
+**Hyperparameter Optimization** (`hyperparameters_optimization.py`)
+- Produces `Classifiers_Hyperparameters/<dataset>_Hyperparameter_Optimization_Results.csv`
+- Comprehensive results for nine classifiers:
+  - **Random Forest**: Optimizes n_estimators (50-200), max_depth (None, 10-30), min_samples_split (2-10), min_samples_leaf (1-4), max_features
+  - **SVM/ThunderSVM**: Optimizes C (0.1-100), kernel (linear/rbf/poly), gamma (scale/auto/0.001-1). Auto-detects GPU availability
+  - **XGBoost**: Optimizes n_estimators (50-200), max_depth (3-10), learning_rate (0.01-0.3), subsample (0.6-1.0), colsample_bytree (0.6-1.0)
+  - **Logistic Regression**: Optimizes C (0.001-100), penalty (l1/l2/elasticnet/None), solver (lbfgs/liblinear/saga), l1_ratio
+  - **KNN**: Optimizes n_neighbors (3-11), weights (uniform/distance), metric (euclidean/manhattan/minkowski), p (1-2)
+  - **Nearest Centroid**: Optimizes metric (euclidean/manhattan), shrink_threshold (None, 0.1-2.0)
+  - **Gradient Boosting**: Optimizes n_estimators (50-200), learning_rate (0.01-0.3), max_depth (3-7), min_samples_split, min_samples_leaf, subsample
+  - **LightGBM**: Optimizes n_estimators (50-200), max_depth (3-10/-1), learning_rate (0.01-0.3), num_leaves (15-63), min_child_samples (10-30), subsample
+  - **MLP Neural Network**: Optimizes hidden_layer_sizes (50-100 neurons), activation (relu/tanh/logistic), solver (adam/sgd), alpha (0.0001-0.01), learning_rate (constant/adaptive)
+- Comprehensive metrics per model (all formatted to 4 decimal places):
+  - F1-score (weighted average), accuracy, precision, recall
+  - Matthews Correlation Coefficient (MCC), Cohen's Kappa
+  - Confusion-based rates: FPR, FNR, TPR, TNR (averaged across classes)
+  - ROC-AUC score (when predict_proba available)
+  - Execution time per combination (2 decimal places for seconds)
+- Progress caching system saves intermediate results to `Cache/Hyperparameter_Optimization/`
+  - Enables resumable searches after interruption
+  - Skips previously evaluated combinations automatically
+  - Hardware specifications stored per cached result
+  - All cached metrics formatted consistently (4 decimals for scores, 2 for time)
+- Memory-safe parallel evaluation:
+  - Automatic worker count calculation based on available RAM and dataset size
+  - ThreadPoolExecutor for shared-memory efficiency
+  - Configurable N_JOBS (-1 all cores, -2 all but one, or specific number)
+  - Worker count capped at 8 for stability
+- Expected results on CICDDoS2019 (based on similar datasets):
+  - Random Forest: F1 0.9850-0.9950, best with 100-200 trees, max_depth=20-30
+  - XGBoost: F1 0.9800-0.9920, best with 100-150 estimators, learning_rate=0.1, max_depth=5-7
+  - LightGBM: F1 0.9820-0.9940, best with 150-200 estimators, num_leaves=31-63
+  - SVM: F1 0.9750-0.9880 (GPU-accelerated with ThunderSVM when available)
+  - Neural Network (MLP): F1 0.9700-0.9850, best with (100,100) hidden layers, adam solver
+- Total combination counts: 3,000-10,000+ depending on enabled models and grid sizes
+- Parallel execution reduces optimization time from days to hours
+- Results include best hyperparameters (JSON), best F1 score, feature count, elapsed time, hardware specs
+
+**Stacking Ensemble** (`stacking.py`)
+- Generates `Feature_Analysis/Stacking_Classifier_Results.csv` per dataset
+- Evaluates classifiers across three feature sets: Genetic Algorithm, RFE, and PCA
+- Tests individual models and stacking meta-classifier combining predictions
+- Results per feature set and classifier:
+  - All standard metrics: accuracy, precision, recall, F1-score
+  - Confusion-based rates: FPR, FNR (computed from confusion matrices)
+  - Feature list used (JSON format), feature count, feature selection method
+  - Execution time, hardware metadata (CPU model, cores, RAM, OS)
+- Stacking meta-classifier (typically LogisticRegression or RandomForest) combines:
+  - Random Forest, SVM, XGBoost, LightGBM, Gradient Boosting predictions
+  - Uses cross-validated predictions as meta-features
+- Expected results pattern:
+  - Individual models: F1 0.9700-0.9950 depending on feature set and algorithm
+  - Stacking ensemble: F1 0.9800-0.9980, typically 0.5-2% improvement over best individual
+  - GA features often match or exceed RFE/PCA due to multi-objective optimization
+  - RFE provides most compact representation (10 features) with excellent performance
+  - PCA achieves comparable results with varying component counts
+- Comparative analysis pattern:
+  - Feature set impact: GA ≈ RFE ≈ PCA (all achieve F1 ≥ 0.9900 on well-separated datasets)
+  - Best individual algorithms: Random Forest, XGBoost, LightGBM
+  - Ensemble provides marginal improvements when individual models already achieve near-perfect scores
