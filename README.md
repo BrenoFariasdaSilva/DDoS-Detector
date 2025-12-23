@@ -39,7 +39,7 @@ A machine learning framework for Distributed Denial of Service (DDoS) attack det
 ## Table of Contents
 - [DDoS-Detector. ](#ddos-detector-)
   - [Table of Contents](#table-of-contents)
-  - [Introduction - @UPDATE](#introduction---update)
+  - [Introduction](#introduction)
   - [Setup](#setup)
     - [Git](#git)
         - [Linux](#linux)
@@ -63,9 +63,9 @@ A machine learning framework for Distributed Denial of Service (DDoS) attack det
   - [License](#license)
     - [Apache License 2.0](#apache-license-20)
 
-## Introduction - @UPDATE
+## Introduction
 
-Detailed project description.
+This project provides a complete end-to-end machine learning pipeline for DDoS (Distributed Denial of Service) attack detection and classification using network flow data. The framework integrates state-of-the-art techniques for data preprocessing, feature engineering, model optimization, and evaluation to achieve robust and accurate intrusion detection across multiple benchmark datasets.
 
 ## Setup
 
