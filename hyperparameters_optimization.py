@@ -954,11 +954,45 @@ def manual_grid_search(
     param_combinations = list(product(*values))  # Cartesian product
     total_combinations = len(param_combinations)  # Total number of combinations for this model
 
+    cached_results = load_cached_results(csv_path, model_name) if csv_path else {}  # Load cached results
+    cached_count = len(cached_results)  # Number of cached results
+
+    combinations_to_test = []  # Combinations that need to be tested
+    for combo in param_combinations:  # Iterate all combinations
+        params_dict = dict(zip(keys, combo))  # Build parameter dict
+        params_key = json.dumps(params_dict, sort_keys=True)  # Serialize parameters
+        if params_key not in cached_results:  # If not cached
+            combinations_to_test.append(combo)  # Add to test list
+
+    if cached_count > 0:  # If there are cached results
+        print(
+            f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{cached_count}{BackgroundColors.GREEN} cached results for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Testing {BackgroundColors.CYAN}{len(combinations_to_test)}{BackgroundColors.GREEN} remaining combinations.{Style.RESET_ALL}"
+        )
+
     best_score = -float("inf")  # Initialize best score
     best_params = None  # Initialize best parameters
     best_elapsed = 0.0  # Execution time for best parameters (seconds)
     all_results = []  # Store results for all combinations
     global_counter = global_counter_start  # Initialize global counter
+
+    for params_key, cached_data in cached_results.items():  # Process cached results
+        try:  # Try to parse cached result
+            params_dict = json.loads(params_key)  # Deserialize parameters
+            score = cached_data.get("score")  # F1 score
+            elapsed = cached_data.get("elapsed", 0.0)  # Execution time
+
+            all_results.append(  # Store cached result
+                OrderedDict([("params", params_key), ("score", score), ("execution_time", elapsed)])
+            )
+
+            if score is not None and score > best_score:  # Update best if cached score is better
+                best_score = score  # Update best score
+                best_params = params_dict  # Update best parameters
+                best_elapsed = elapsed  # Update best execution time
+
+            global_counter += 1  # Increment overall combination counter
+        except Exception:  # Skip malformed cache entries
+            pass  # Skip malformed cache entries
 
     available_memory_gb = psutil.virtual_memory().available / (1024**3)  # Available RAM in GB
     data_size_gb = (X_train.nbytes + y_train.nbytes) / (1024**3)  # Dataset size in GB
@@ -985,6 +1019,20 @@ def manual_grid_search(
         f"{BackgroundColors.GREEN}Starting parallel evaluation with {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} workers...{Style.RESET_ALL}"
     )
 
+    if progress_bar is not None and cached_count > 0:  # Update progress bar for cached results
+        for i in range(cached_count):  # Iterate over cached results
+            if progress_bar is not None:  # If progress bar is available
+                try:  # Safely update progress bar
+                    progress_bar.update(1)  # Increment progress bar
+                except Exception:  # Ignore progress bar update errors
+                    pass  # Ignore errors
+
+    if len(combinations_to_test) == 0:  # All combinations are cached
+        verbose_output(
+            f"{BackgroundColors.GREEN}All combinations already cached for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Skipping computation.{Style.RESET_ALL}"
+        )
+        return best_params, best_score, best_elapsed, all_results, global_counter  # Return cached results
+
     with concurrent.futures.ThreadPoolExecutor(  # ThreadPoolExecutor for parallel evaluation
         max_workers=safe_n_jobs  # Set number of parallel workers
     ) as executor:  # Use ThreadPoolExecutor for parallel evaluation
@@ -992,9 +1040,9 @@ def manual_grid_search(
             executor.submit(  # Submit evaluation task
                 evaluate_single_combination, clone(model), keys, combination, X_train, y_train  # Pass cloned model and data
             ): combination  # Map future to combination
-            for combination in param_combinations  # Iterate all combinations
+            for combination in combinations_to_test  # Only test non-cached combinations
         }  # Submit all combinations
-        local_counter = 0  # Local combination counter for this model
+        local_counter = cached_count  # Start counter after cached results
 
         for future in concurrent.futures.as_completed(  # Iterate as each future completes
             future_to_params  # Futures to monitor
@@ -1009,6 +1057,9 @@ def manual_grid_search(
                 print(
                     f"{BackgroundColors.YELLOW}Warning: Combination {current_params} failed: {worker_err}{Style.RESET_ALL}"
                 )
+                
+                if csv_path:  # If CSV path is provided
+                    save_combination_result(csv_path, model_name, current_params, score, elapsed, cached_results)  # Save to cache
 
                 global_counter += 1  # Increment overall combination counter
                 local_counter += 1  # Increment per-model combination counter
