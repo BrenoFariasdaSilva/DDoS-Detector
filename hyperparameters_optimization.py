@@ -90,8 +90,8 @@ try:  # Attempt to import ThunderSVM
     THUNDERSVM_AVAILABLE = True  # Flag indicating ThunderSVM is available
 except Exception as _th_err:  # Import failed
     ThunderSVC = None  # ThunderSVM not available
-    THUNDERSVM_AVAILABLE = False
-    print(f"Warning: ThunderSVM import failed ({type(_th_err).__name__}: {_th_err}). Falling back to sklearn.SVC.")
+    THUNDERSVM_AVAILABLE = False  # Set flag to False
+    print(f"Warning: ThunderSVM import failed ({type(_th_err).__name__}: {_th_err}). Falling back to sklearn.SVC.")  # Print warning message
 from tqdm import tqdm  # For progress bars
 from xgboost import XGBClassifier  # For XGBoost classifier
 
@@ -336,7 +336,7 @@ def extract_genetic_algorithm_features(file_path):
     if not verify_filepath_exists(ga_results_path):  # If the GA results file does not exist
         print(
             f"{BackgroundColors.YELLOW}GA results file not found: {BackgroundColors.CYAN}{ga_results_path}{Style.RESET_ALL}"
-        )
+        )  # Print warning message
         return None  # Return None if the file doesn't exist
 
     try:  # Try to load and parse the GA results
@@ -345,21 +345,21 @@ def extract_genetic_algorithm_features(file_path):
         if best_row.empty:  # If no "best" row is found
             print(
                 f"{BackgroundColors.YELLOW}No 'best' run_index found in {BackgroundColors.CYAN}{ga_results_path}{Style.RESET_ALL}"
-            )
+            )  # Print warning message
             return None  # Return None if the "best" row doesn't exist
         best_features_str = best_row.iloc[0]["best_features"]  # Get the best_features column value (JSON string)
         best_features = json.loads(best_features_str)  # Parse the JSON string into a Python list
         verbose_output(
             f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(best_features)}{BackgroundColors.GREEN} GA features{Style.RESET_ALL}"
-        )
+        )  # Output verbose message about loaded features
         return best_features  # Return the list of best features
     except IndexError:  # If there's an issue accessing the row
         print(
             f"{BackgroundColors.RED}Error: Could not access 'best' row in {BackgroundColors.CYAN}{ga_results_path}{Style.RESET_ALL}"
-        )
+        )  # Print error message
         return None  # Return None if there was an error
     except Exception as e:  # Catch any other exceptions
-        print(f"{BackgroundColors.RED}Error loading GA features: {e}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.RED}Error loading GA features: {e}{Style.RESET_ALL}")  # Print error message
         return None  # Return None if there was an error
 
 
@@ -376,7 +376,7 @@ def load_dataset(csv_path):
     )  # Output the loading dataset message
 
     if not verify_filepath_exists(csv_path):  # If the CSV file does not exist
-        print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")  # Print error message
         return None  # Return None
 
     df = pd.read_csv(csv_path, low_memory=True)  # Load the dataset
@@ -384,7 +384,7 @@ def load_dataset(csv_path):
     df.columns = df.columns.str.strip()  # Clean column names by stripping leading/trailing whitespace
 
     if df.shape[1] < 2:  # If there are less than 2 columns
-        print(f"{BackgroundColors.RED}CSV must have at least 1 feature and 1 target.{Style.RESET_ALL}")
+        print(f"{BackgroundColors.RED}CSV must have at least 1 feature and 1 target.{Style.RESET_ALL}")  # Print error message
         return None  # Return None
 
     return df  # Return the loaded DataFrame
@@ -489,12 +489,12 @@ def load_and_prepare_dataset(csv_path):
 
     df = load_dataset(csv_path)  # Load dataset
     if df is None:  # If load failed
-        print(f"{BackgroundColors.YELLOW}Failed to load dataset {csv_path}. Skipping file.{Style.RESET_ALL}")
+        print(f"{BackgroundColors.YELLOW}Failed to load dataset {csv_path}. Skipping file.{Style.RESET_ALL}")  # Print warning message
         return None  # Exit early
 
     df_clean = preprocess_dataframe(df)  # Preprocess DataFrame
     if df_clean is None or df_clean.empty:  # If preprocessing failed
-        print(f"{BackgroundColors.YELLOW}Dataset preprocessing failed for {csv_path}. Skipping file.{Style.RESET_ALL}")
+        print(f"{BackgroundColors.YELLOW}Dataset preprocessing failed for {csv_path}. Skipping file.{Style.RESET_ALL}")  # Print warning message
         return None  # Exit early
 
     X = df_clean.iloc[:, :-1]  # Features
@@ -508,7 +508,7 @@ def load_and_prepare_dataset(csv_path):
 
     feature_names = list(X.select_dtypes(include=np.number).columns)  # Numeric feature names
 
-    return X_train_scaled, X_test_scaled, y_train, y_test, scaler, feature_names
+    return X_train_scaled, X_test_scaled, y_train, y_test, scaler, feature_names  # Return all components X_train_scaled, X_test_scaled, y_train, y_test, scaler, feature_names
 
 
 def get_feature_subset(X_scaled, features, feature_names):
@@ -526,7 +526,7 @@ def get_feature_subset(X_scaled, features, feature_names):
     )  # Output the verbose message
 
     if features:  # Only proceed if the list of selected features is NOT empty/None
-        indices = [feature_names.index(f) for f in features if f in feature_names]
+        indices = [feature_names.index(f) for f in features if f in feature_names]  # Get indices of selected features
         return X_scaled[:, indices]  # Return the subset of features
     else:  # If no features are selected (or features is None)
         return np.empty((X_scaled.shape[0], 0))  # Return an empty array with correct number of rows
@@ -829,18 +829,18 @@ def get_models_and_param_grids():
     if not enabled_models:  # If no models are enabled
         print(
             f"{BackgroundColors.RED}Error: No models enabled in ENABLED_MODELS configuration. Please enable at least one model.{Style.RESET_ALL}"
-        )
+        )  # Print error message
         return {}  # Return empty dict
 
     disabled_models = [name for name in all_models.keys() if name not in ENABLED_MODELS]  # List of disabled models
     if disabled_models:  # If there are disabled models
         print(
             f"{BackgroundColors.YELLOW}Disabled models: {BackgroundColors.CYAN}{', '.join(disabled_models)}{Style.RESET_ALL}"
-        )
+        )  # Print list of disabled models
 
     print(
         f"{BackgroundColors.GREEN}Enabled models ({len(enabled_models)}): {BackgroundColors.CYAN}{', '.join(enabled_models.keys())}{Style.RESET_ALL}"
-    )
+    )  # Print list of enabled models
 
     return enabled_models  # Return enabled models and their parameter grids
 
@@ -868,7 +868,6 @@ def compute_total_param_combinations(models):
         total_combinations_all_models += count  # Add to total
 
     return total_combinations_all_models, model_combinations_counts  # Return total and per-model counts
-
 
 
 def evaluate_single_combination(model, keys, combination, X_train, y_train):
@@ -1386,6 +1385,7 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
 
         print()  # Line spacing after all models complete
 
+
 def process_single_csv_file(csv_path, dir_results_list):
     """
     Processes a single CSV file: loads GA-selected features, prepares the dataset,
@@ -1405,7 +1405,7 @@ def process_single_csv_file(csv_path, dir_results_list):
     )  # Output loading message
     ga_selected_features = extract_genetic_algorithm_features(csv_path)  # Extract GA features
     if ga_selected_features is None or len(ga_selected_features) == 0:  # If no GA features found
-        print(f"{BackgroundColors.YELLOW}No GA features found for {csv_path}. Skipping file.{Style.RESET_ALL}")
+        print(f"{BackgroundColors.YELLOW}No GA features found for {csv_path}. Skipping file.{Style.RESET_ALL}")  # Print warning
         return  # Exit early
 
     dataset_bundle = load_and_prepare_dataset(csv_path)  # Load, preprocess, split, scale
@@ -1426,7 +1426,7 @@ def process_single_csv_file(csv_path, dir_results_list):
     )  # Output shape
 
     if X_train_ga.shape[1] == 0:  # If GA selects no features
-        print(f"{BackgroundColors.YELLOW}No features selected by GA for {csv_path}. Skipping file.{Style.RESET_ALL}")
+        print(f"{BackgroundColors.YELLOW}No features selected by GA for {csv_path}. Skipping file.{Style.RESET_ALL}")  # Print warning
         return  # Exit early
 
     models_and_grids = get_models_and_param_grids()  # Get model grids
@@ -1452,10 +1452,10 @@ def process_single_csv_file(csv_path, dir_results_list):
         best_model = max(added_slice, key=lambda x: x["best_cv_f1_score"])  # Best model
         print(
             f"{BackgroundColors.GREEN}Best model: {BackgroundColors.CYAN}{best_model['model']}{Style.RESET_ALL}"
-        )  # Output model
+        )  # Output model name
         print(
             f"{BackgroundColors.GREEN}Best CV F1 Score: {BackgroundColors.CYAN}{best_model['best_cv_f1_score']:.4f}{Style.RESET_ALL}"
-        )  # Output score
+        )  # Output best score
 
 
 def get_hardware_specifications():
@@ -1521,7 +1521,7 @@ def save_optimization_results(csv_path, results_list):
     )  # Output the verbose message
 
     if not results_list:  # If the results list is empty
-        print(f"{BackgroundColors.YELLOW}No results to save.{Style.RESET_ALL}")
+        print(f"{BackgroundColors.YELLOW}No results to save.{Style.RESET_ALL}")  # Print warning
         return  # Exit the function
 
     output_dir = f"{os.path.dirname(csv_path)}/Classifiers_Hyperparameters/"  # Directory to save outputs
@@ -1542,9 +1542,9 @@ def save_optimization_results(csv_path, results_list):
             + hardware_specs["os"]
         )  # Add hardware specs column
         df_results.to_csv(output_path, index=False, encoding="utf-8")  # Save to CSV
-        print(f"{BackgroundColors.GREEN}Results saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Results saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Print success message
     except Exception as e:  # Catch any errors during saving
-        print(f"{BackgroundColors.RED}Error saving results: {e}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.RED}Error saving results: {e}{Style.RESET_ALL}")  # Print error message
 
 
 def calculate_execution_time(start_time, finish_time):
@@ -1580,11 +1580,11 @@ def play_sound():
         else:  # If the platform.system() is not in the SOUND_COMMANDS dictionary
             print(
                 f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not in the {BackgroundColors.CYAN}SOUND_COMMANDS dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}"
-            )
+            )  # Print error message
     else:  # If the sound file does not exist
         print(
             f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{SOUND_FILE}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}"
-        )
+        )  # Print error message
 
 
 def main():
