@@ -1133,23 +1133,28 @@ def compute_safe_n_jobs(X_train, y_train):
     """
     
     available_memory_gb = psutil.virtual_memory().available / (1024 ** 3)  # Available RAM in GB
-    data_size_gb = (X_train.nbytes + y_train.nbytes) / (1024 ** 3)  # Dataset size in GB
 
-    estimated_memory_per_worker = data_size_gb * 0.3  # Heuristic per-worker memory estimate
-    safe_n_jobs = max(
-        1,
-        min(
-            abs(N_JOBS) if N_JOBS < 0 else N_JOBS,
-            int(available_memory_gb / max(0.5, estimated_memory_per_worker)),
-        ),
-    )  # Compute safe worker count
+    try:  # Try to compute dataset size
+        data_size_gb = (X_train.nbytes + y_train.nbytes) / (1024 ** 3)  # Dataset size in GB
+    except Exception:  # If computation fails
+        data_size_gb = 0.0  # Default to 0 GB
 
-    if N_JOBS == -2:
-        safe_n_jobs = min(safe_n_jobs, max(1, psutil.cpu_count(logical=False) - 1))  # Leave one core free
-    elif N_JOBS == -1:
-        safe_n_jobs = min(safe_n_jobs, psutil.cpu_count(logical=False))  # Use all physical cores
+    estimated_memory_per_worker = max(0.1, data_size_gb * 0.25)  # Estimate memory per worker (25% of dataset size, min 0.1 GB)
 
-    safe_n_jobs = min(safe_n_jobs, 8)  # Cap workers to 8
+    physical_cores = psutil.cpu_count(logical=False) or os.cpu_count() or 1  # Number of physical CPU cores
+    if N_JOBS == -1:  # All cores
+        desired_workers = physical_cores  # Use all physical cores
+    elif N_JOBS == -2:  # All but one core
+        desired_workers = max(1, physical_cores - 1)  # Use all but one core
+    elif N_JOBS > 0:  # Specific number of jobs
+        desired_workers = N_JOBS  # Use specified number of jobs
+    else:  # Invalid N_JOBS
+        desired_workers = max(1, physical_cores - 1)  # Default to all but one core
+
+    mem_based_cap = int(max(1, available_memory_gb / max(0.5, estimated_memory_per_worker)))  # Memory-based worker cap
+    safe_n_jobs = int(min(desired_workers, physical_cores, mem_based_cap))  # Final safe n_jobs
+    safe_n_jobs = max(1, min(safe_n_jobs, 64))  # Ensure at least 1 and at most 64
+
     return safe_n_jobs, available_memory_gb, data_size_gb  # Return computed values
 
 
