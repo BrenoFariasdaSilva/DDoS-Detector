@@ -548,12 +548,23 @@ def _is_valid_combination(model_name_local, params_local):
     penalty = params_local.get("penalty")  # Get penalty parameter
     l1_ratio = params_local.get("l1_ratio", 0.0)  # Get l1_ratio parameter (default to 0.0)
 
+    # lbfgs doesn't support l1 or elasticnet penalties
     if solver == "lbfgs" and penalty in ("l1", "elasticnet"):
         return False
+    
+    # elasticnet penalty requires saga solver
     if penalty == "elasticnet" and solver != "saga":
         return False
-    if penalty == "l1" and solver != "saga":
+    
+    # l1 penalty only works with saga and liblinear solvers
+    if penalty == "l1" and solver not in ("saga", "liblinear"):
         return False
+    
+    # l1_ratio is only used with elasticnet penalty - filter out if used with other penalties
+    if l1_ratio not in (None, 0.0) and penalty != "elasticnet":
+        return False
+    
+    # When penalty is None, l1_ratio should not be specified
     if penalty is None and l1_ratio not in (None, 0.0):
         return False
 
