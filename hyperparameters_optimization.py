@@ -1206,10 +1206,10 @@ def run_parallel_evaluation(
     verbose_output(f"{BackgroundColors.GREEN}Starting parallel evaluation with {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} workers...{Style.RESET_ALL}")  # Log start
 
     if progress_bar is not None and cached_count > 0:  # Advance progress for cached combos
-        for _ in range(cached_count):
-            try:
+        for _ in range(cached_count):  # For each cached combo
+            try:  # Try to update progress bar
                 progress_bar.update(1)  # Increment progress bar
-            except Exception:
+            except Exception:  # Catch any errors
                 pass  # Ignore progress update errors
 
     if len(combinations_to_test) == 0:  # Nothing to evaluate
@@ -1268,7 +1268,7 @@ def run_parallel_evaluation(
                 all_results.append(result_entry)  # Append to list
 
                 if metrics is not None and "f1_score" in metrics:  # Update best if improved
-                    f1 = metrics["f1_score"]
+                    f1 = metrics["f1_score"]  # Extract F1 score
                     current_best_elapsed = (
                         next((r["execution_time"] for r in all_results if r.get("f1_score") == best_score), float("inf"))
                         if best_score != -float("inf")
