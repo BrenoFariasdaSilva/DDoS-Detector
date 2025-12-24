@@ -372,7 +372,7 @@ def load_dataset(csv_path):
     """
 
     verbose_output(
-        f"\n{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}"
+        f"{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}"
     )  # Output the loading dataset message
 
     if not verify_filepath_exists(csv_path):  # If the CSV file does not exist
