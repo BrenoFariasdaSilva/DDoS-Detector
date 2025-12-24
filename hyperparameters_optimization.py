@@ -635,7 +635,7 @@ def save_combination_result(csv_path, model_name, params, score, elapsed, cached
     :param csv_path: Path to the CSV dataset file
     :param model_name: Name of the model being optimized
     :param params: Dictionary of hyperparameters for this combination
-    :param score: F1 score achieved
+    :param score: F1 score achieved (can be a scalar or dict with 'f1_score' key)
     :param elapsed: Execution time in seconds
     :param cached_results: Dictionary of all cached results (will be updated and saved)
     :param hardware_specs: Dictionary of hardware specifications (optional)
@@ -651,8 +651,13 @@ def save_combination_result(csv_path, model_name, params, score, elapsed, cached
 
     params_key = json.dumps(params, sort_keys=True)  # Serialize parameters as JSON string
 
+    if isinstance(score, dict):  # If score is a dictionary
+        f1_score_value = score.get("f1_score", None)  # Extract F1 score
+    else:  # If score is a scalar
+        f1_score_value = score  # Use score directly
+
     cached_results[params_key] = {  # Update cached results
-        "score": round(float(score), 4) if score is not None else None,  # F1 score formatted to 4 decimals
+        "score": round(float(f1_score_value), 4) if f1_score_value is not None else None,  # F1 score formatted to 4 decimals
         "elapsed": round(float(elapsed), 2),  # Execution time formatted to 2 decimals
         "timestamp": datetime.datetime.now().isoformat(),  # Timestamp
     }
@@ -1368,6 +1373,9 @@ def manual_grid_search(
             ]:  # Metrics to include
                 if key in cached_data:  # If metric present
                     result_entry[key] = round(float(cached_data[key]), 4) if cached_data[key] is not None else None  # Include cached metric formatted to 4 decimals
+            
+            if "f1_score" not in result_entry and f1 is not None:  # If missing F1 but have score
+                result_entry["f1_score"] = round(float(f1), 4)  # Add F1 score formatted
 
             all_results.append(result_entry)  # Append cached result
 
