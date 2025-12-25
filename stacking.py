@@ -108,6 +108,7 @@ VERBOSE = False  # Set to True to output verbose messages
 N_JOBS = -1  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
 THREADS_LIMIT = 2  # Number of threads for parallel evaluation of individual classifiers
 FILES_TO_IGNORE = [""]  # List of files to ignore during processing
+HYPERPARAMETERS_FILENAME = "Hyperparameter_Optimization_Results.csv"  # Filename for hyperparameter optimization results
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
@@ -736,13 +737,14 @@ def get_models():
 
 def extract_hyperparameter_optimization_results(csv_path):
     """
-    Extract hyperparameter optimization results for a dataset.
+    Extract hyperparameter optimization results for a specific dataset file.
 
-    Looks for common output locations created by the project's
-    hyperparameter optimization script, located in the f"{dataset_name}_Hyperparameter_Optimization_Results.csv" file
-    within the "Classifiers_Hyperparameters" subdirectory relative to the dataset CSV file
+    Looks for the HYPERPARAMETERS_FILENAME file in the "Classifiers_Hyperparameters"
+    subdirectory relative to the dataset CSV file. Filters results to match the
+    current base_csv filename being processed.
 
-    This modified version extracts **only the best hyperparameters** for each classifier.
+    This function extracts **only the best hyperparameters** for each classifier
+    that corresponds to the current file being processed.
 
     :param csv_path: Path to the dataset CSV file being processed.
     :return: Dictionary mapping model names to their best hyperparameters, or None if not found.
@@ -753,25 +755,36 @@ def extract_hyperparameter_optimization_results(csv_path):
     )  # Inform user which dataset we're searching for
 
     file_dir = os.path.dirname(csv_path)  # Directory containing the dataset file
-    dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Dataset filename without extension
+    base_filename = os.path.basename(csv_path)  # Get the base filename (e.g., "UDPLag.csv")
 
-    csv_filepath = os.path.join(
-        file_dir, "Classifiers_Hyperparameters", f"{dataset_name}_Hyperparameter_Optimization_Results.csv"
-    )  # First possible location
+    hyperparams_path = os.path.join(
+        file_dir, "Classifiers_Hyperparameters", HYPERPARAMETERS_FILENAME
+    )  # Path to hyperparameter optimization results
 
-    if not verify_filepath_exists(csv_filepath):  # If the CSV file does not exist at the expected path
+    if not verify_filepath_exists(hyperparams_path):  # If the hyperparameters file does not exist
+        verbose_output(
+            f"{BackgroundColors.YELLOW}No hyperparameter optimization results found at: {BackgroundColors.CYAN}{hyperparams_path}{Style.RESET_ALL}"
+        )
         return None  # Return None if no optimization results found
 
     try:  # Try to load the CSV file
-        df = pd.read_csv(csv_filepath)  # Load the CSV into a DataFrame
+        df = pd.read_csv(hyperparams_path)  # Load the CSV into a DataFrame
     except Exception as e:  # If there is an error loading the CSV
         print(
-            f"{BackgroundColors.RED}Failed to load hyperparameter optimization file {csv_filepath}: {e}{Style.RESET_ALL}"
+            f"{BackgroundColors.RED}Failed to load hyperparameter optimization file {hyperparams_path}: {e}{Style.RESET_ALL}"
         )
         return {}  # Return empty dict on failure
 
+    matching_rows = df[df["base_csv"] == base_filename]  # Filter by base_csv column
+
+    if matching_rows.empty:  # If no matching rows found
+        verbose_output(
+            f"{BackgroundColors.YELLOW}No hyperparameter results found for file: {BackgroundColors.CYAN}{base_filename}{BackgroundColors.YELLOW} in {BackgroundColors.CYAN}{hyperparams_path}{Style.RESET_ALL}"
+        )
+        return None  # Return None if no results for this file
+
     results = {}  # Initialize dictionary to hold parsed results per model
-    for _, row in df.iterrows():  # Iterate over each row (each model's optimization result)
+    for _, row in matching_rows.iterrows():  # Iterate over each matching row
         try:  # Try to parse each row
             model = row.get("model") or row.get("Model")  # Try common column names for model identifier
             if not model:  # If model identifier is missing
@@ -795,7 +808,7 @@ def extract_hyperparameter_optimization_results(csv_path):
             continue  # Skip problematic rows silently
 
     verbose_output(
-        f"{BackgroundColors.GREEN}Loaded hyperparameter optimization results from: {BackgroundColors.CYAN}{csv_filepath}{Style.RESET_ALL}"
+        f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(results)}{BackgroundColors.GREEN} hyperparameter optimization results for {BackgroundColors.CYAN}{base_filename}{BackgroundColors.GREEN} from: {BackgroundColors.CYAN}{hyperparams_path}{Style.RESET_ALL}"
     )
     return results  # Return the normalized results mapping
 
