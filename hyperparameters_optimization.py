@@ -114,6 +114,7 @@ class BackgroundColors:  # Colors for the terminal
 VERBOSE = False  # Default verbose setting (can be overridden via CLI args)
 N_JOBS = -2  # Number of parallel jobs (-1 uses all cores, -2 leaves one core free, or set specific number like 4)
 RESULTS_FILENAME = "Hyperparameter_Optimization_Results.csv"  # Filename for saving results
+CACHE_PREFIX = "Cache_"  # Prefix for cache filenames
 MATCH_FILENAMES_TO_PROCESS = [""]  # List of specific filenames to search for a match (set to None to process all files)
 IGNORE_FILES = [RESULTS_FILENAME]  # List of filenames to ignore when searching for datasets
 IGNORE_DIRS = [
@@ -567,6 +568,173 @@ def _is_valid_combination(model_name_local, params_local):
         return False
 
     return True  # Valid combination
+
+
+def get_cache_file_path(csv_path):
+    """
+    Generate cache file path for a specific dataset.
+    
+    :param csv_path: Path to the CSV dataset file
+    :return: Absolute path to the cache CSV file
+    """
+    
+    file_dir = os.path.dirname(csv_path)  # Directory containing the dataset file
+    base_filename = os.path.basename(csv_path)  # Get base filename
+    cache_filename = f"{CACHE_PREFIX}{RESULTS_FILENAME}"  # Cache filename with prefix
+    cache_dir = os.path.join(file_dir, "Classifiers_Hyperparameters")  # Cache directory
+    cache_file = os.path.join(cache_dir, cache_filename)  # Full cache path
+    
+    return cache_file  # Return cache file path
+
+
+def get_results_file_path(csv_path):
+    """
+    Generate results file path for a specific dataset.
+    
+    :param csv_path: Path to the CSV dataset file
+    :return: Absolute path to the results CSV file
+    """
+    
+    file_dir = os.path.dirname(csv_path)  # Directory containing the dataset file
+    results_dir = os.path.join(file_dir, "Classifiers_Hyperparameters")  # Results directory
+    results_file = os.path.join(results_dir, RESULTS_FILENAME)  # Full results path
+    
+    return results_file  # Return results file path
+
+
+def load_cache_results(csv_path):
+    """
+    Load cached optimization results from CSV file.
+    
+    :param csv_path: Path to the CSV dataset file being processed
+    :return: Dictionary mapping (model_name, params_json) to result dict
+    """
+    
+    cache_file = get_cache_file_path(csv_path)  # Get cache file path
+    
+    if not os.path.exists(cache_file):  # If cache file doesn't exist
+        verbose_output(
+            f"{BackgroundColors.YELLOW}No cache file found at: {BackgroundColors.CYAN}{cache_file}{Style.RESET_ALL}"
+        )
+        return {}  # Return empty dict
+    
+    try:  # Try to load cache
+        cache_df = pd.read_csv(cache_file)  # Load cache CSV
+        cache_dict = {}  # Dictionary to store cache
+        
+        for _, row in cache_df.iterrows():  # Iterate over cached rows
+            model_name = row.get("model")  # Get model name
+            params_json = row.get("best_params")  # Get params as JSON string
+            
+            if model_name and params_json:  # If both are present
+                key = (model_name, params_json)  # Create composite key
+                cache_dict[key] = row.to_dict()  # Store entire row as dict
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(cache_dict)}{BackgroundColors.GREEN} cached results from: {BackgroundColors.CYAN}{cache_file}{Style.RESET_ALL}"
+        )
+        return cache_dict  # Return cached results
+    
+    except Exception as e:  # If loading fails
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Failed to load cache file: {e}{Style.RESET_ALL}"
+        )
+        return {}  # Return empty dict
+
+
+def check_if_fully_processed(csv_path, models):
+    """
+    Check if the dataset has already been fully processed in the results file.
+    
+    :param csv_path: Path to the CSV dataset file
+    :param models: Dictionary of models being processed
+    :return: True if all models have been processed, False otherwise
+    """
+    
+    results_file = get_results_file_path(csv_path)  # Get results file path
+    base_filename = os.path.basename(csv_path)  # Get base filename
+    
+    if not os.path.exists(results_file):  # If results file doesn't exist
+        return False  # Not fully processed
+    
+    try:  # Try to check results file
+        results_df = pd.read_csv(results_file)  # Load results CSV
+        
+        file_results = results_df[results_df["base_csv"] == base_filename]  # Filter by filename
+        
+        if file_results.empty:  # If no results for this file
+            return False  # Not processed
+        
+        processed_models = set(file_results["model"].unique())  # Get processed models
+        required_models = set(models.keys())  # Get required models
+        
+        if required_models.issubset(processed_models):  # If all models processed
+            print(
+                f"{BackgroundColors.GREEN}File {BackgroundColors.CYAN}{base_filename}{BackgroundColors.GREEN} already fully processed. Skipping.{Style.RESET_ALL}"
+            )
+            return True  # Fully processed
+        
+        return False  # Not fully processed
+    
+    except Exception as e:  # If checking fails
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Warning: Failed to check results file: {e}{Style.RESET_ALL}"
+        )
+        return False  # Assume not processed
+
+
+def save_to_cache(csv_path, result_entry):
+    """
+    Append a single result entry to the cache CSV file.
+    
+    :param csv_path: Path to the CSV dataset file
+    :param result_entry: OrderedDict containing the result to cache
+    :return: None
+    """
+    
+    cache_file = get_cache_file_path(csv_path)  # Get cache file path
+    cache_dir = os.path.dirname(cache_file)  # Get cache directory
+    
+    os.makedirs(cache_dir, exist_ok=True)  # Ensure cache directory exists
+    
+    try:  # Try to save to cache
+        result_df = pd.DataFrame([result_entry])  # Create DataFrame from entry
+        
+        if os.path.exists(cache_file):  # If cache file exists
+            result_df.to_csv(cache_file, mode="a", header=False, index=False)  # Append without header
+        else:  # If cache file doesn't exist
+            result_df.to_csv(cache_file, mode="w", header=True, index=False)  # Write with header
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Saved result to cache: {BackgroundColors.CYAN}{cache_file}{Style.RESET_ALL}"
+        )
+    
+    except Exception as e:  # If saving fails
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Warning: Failed to save to cache: {e}{Style.RESET_ALL}"
+        )
+
+
+def remove_cache_file(csv_path):
+    """
+    Remove the cache file after successful completion.
+    
+    :param csv_path: Path to the CSV dataset file
+    :return: None
+    """
+    
+    cache_file = get_cache_file_path(csv_path)  # Get cache file path
+    
+    if os.path.exists(cache_file):  # If cache file exists
+        try:  # Try to remove cache file
+            os.remove(cache_file)  # Delete cache file
+            print(
+                f"{BackgroundColors.GREEN}Removed cache file: {BackgroundColors.CYAN}{cache_file}{Style.RESET_ALL}"
+            )
+        except Exception as e:  # If removal fails
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Failed to remove cache file: {e}{Style.RESET_ALL}"
+            )
 
 
 def detect_gpu_info():
@@ -1167,6 +1335,76 @@ def run_parallel_evaluation(
     return best_params, best_score, best_elapsed, all_results, global_counter  # Return updated results
 
 
+def process_cached_combinations(
+    model_name,
+    param_combinations,
+    keys,
+    cache_dict,
+    best_score,
+    best_params,
+    best_elapsed,
+    all_results,
+    global_counter,
+):
+    """
+    Process cached results and filter combinations that need to be tested.
+    
+    :param model_name: Name of the model being optimized
+    :param param_combinations: List of all parameter combinations to check
+    :param keys: Parameter names
+    :param cache_dict: Dictionary of cached results
+    :param best_score: Current best F1 score
+    :param best_params: Current best hyperparameters
+    :param best_elapsed: Execution time of the best combination
+    :param all_results: List of all results collected so far
+    :param global_counter: Overall combination index across all models
+    :return: Tuple (combinations_to_test, best_score, best_params, best_elapsed, all_results, global_counter, cached_count)
+    """
+    
+    combinations_to_test = []  # Accumulate combinations to test
+    cached_count = 0  # Count cached combinations
+    
+    # Process cached results and filter combinations
+    for combo in param_combinations:  # Iterate all combos
+        params_dict = dict(zip(keys, combo))  # Build params dict
+        params_json = json.dumps(params_dict, sort_keys=True)  # Serialize params
+        cache_key = (model_name, params_json)  # Create cache key
+        
+        if cache_key in cache_dict:  # If combination is cached
+            cached_count += 1  # Increment cached count
+            cached_row = cache_dict[cache_key]  # Get cached result
+            
+            # Reconstruct result entry from cache
+            result_entry = OrderedDict([
+                ("params", params_json),
+                ("execution_time", cached_row.get("elapsed_time_s", 0.0))
+            ])
+            
+            # Add all metrics from cache
+            for metric in ["f1_score", "accuracy", "precision", "recall",
+                          "false_positive_rate", "false_negative_rate",
+                          "true_positive_rate", "true_negative_rate",
+                          "matthews_corrcoef", "roc_auc_score", "cohen_kappa"]:
+                if metric in cached_row:
+                    result_entry[metric] = cached_row[metric]
+            
+            all_results.append(result_entry)  # Add to results
+            
+            # Update best from cache
+            cached_f1 = cached_row.get("best_cv_f1_score") or result_entry.get("f1_score")
+            if cached_f1 is not None and cached_f1 > best_score:
+                best_score = cached_f1
+                best_params = params_dict
+                best_elapsed = cached_row.get("elapsed_time_s", 0.0)
+            
+            global_counter += 1  # Increment global counter
+        
+        elif _is_valid_combination(model_name, params_dict):  # If not cached and valid
+            combinations_to_test.append(combo)  # Schedule for testing
+    
+    return combinations_to_test, best_score, best_params, best_elapsed, all_results, global_counter, cached_count
+
+
 def manual_grid_search(
     model_name,
     model,
@@ -1214,19 +1452,31 @@ def manual_grid_search(
     param_combinations = list(product(*values))  # Cartesian product of hyperparameter values
     total_combinations = len(param_combinations)  # Total combinations count
 
-    combinations_to_test = []  # Accumulate combinations to test
-    for combo in param_combinations:  # Iterate all combos
-        params_dict = dict(zip(keys, combo))  # Build params dict
-        if _is_valid_combination(model_name, params_dict):  # Skip if invalid
-            combinations_to_test.append(combo)  # Schedule for testing
-
-    print(f"{BackgroundColors.GREEN}Testing {BackgroundColors.CYAN}{len(combinations_to_test)}{BackgroundColors.GREEN} combinations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}")
-
+    cache_dict = load_cache_results(csv_path) if csv_path else {}  # Load cache
+    
     best_score = -float("inf")  # Initialize best score sentinel
     best_params = None  # Placeholder for best params
     best_elapsed = 0.0  # Elapsed time for best params
     all_results = []  # List to collect results
     global_counter = global_counter_start  # Start global counter
+    
+    # Process cached results and filter combinations to test
+    combinations_to_test, best_score, best_params, best_elapsed, all_results, global_counter, cached_count = process_cached_combinations(
+        model_name,
+        param_combinations,
+        keys,
+        cache_dict,
+        best_score,
+        best_params,
+        best_elapsed,
+        all_results,
+        global_counter,
+    )
+
+    if cached_count > 0:  # Report cached count
+        print(f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{cached_count}{BackgroundColors.GREEN} cached results for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Testing {BackgroundColors.CYAN}{len(combinations_to_test)}{BackgroundColors.GREEN} remaining combinations.{Style.RESET_ALL}")
+    else:
+        print(f"{BackgroundColors.GREEN}Testing {BackgroundColors.CYAN}{len(combinations_to_test)}{BackgroundColors.GREEN} combinations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}")
 
     safe_n_jobs, available_memory_gb, data_size_gb = compute_safe_n_jobs(X_train, y_train)  # Compute workers and sizes
 
@@ -1311,6 +1561,8 @@ def build_result_entry_from_best(csv_path, model_name, best_params, best_score, 
         ]:
             if metric_key in best_result:  # If metric present
                 result_dict[metric_key] = round(float(best_result[metric_key]), 4) if best_result[metric_key] is not None else None  # Add to result dict formatted to 4 decimals
+
+    save_to_cache(csv_path, result_dict)  # Save to cache
 
     return result_dict  # Return assembled result dict
 
@@ -1397,6 +1649,11 @@ def process_single_csv_file(csv_path, dir_results_list):
     print(
         f"{BackgroundColors.GREEN}\nProcessing file: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}"
     )  # Output the file being processed
+
+    models = get_models_and_param_grids()  # Get models and their parameter grids
+    
+    if check_if_fully_processed(csv_path, models):  # If already processed
+        return  # Skip this file
 
     print(
         f"{BackgroundColors.GREEN}Loading Genetic Algorithm selected features...{Style.RESET_ALL}"
@@ -1541,6 +1798,10 @@ def save_optimization_results(csv_path, results_list):
         )  # Add hardware specs column
         df_results.to_csv(output_path, index=False, encoding="utf-8")  # Save to CSV
         print(f"{BackgroundColors.GREEN}Results saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Print success message
+        
+        # Remove cache file after successful save
+        remove_cache_file(csv_path)  # Clean up cache
+        
     except Exception as e:  # Catch any errors during saving
         print(f"{BackgroundColors.RED}Error saving results: {e}{Style.RESET_ALL}")  # Print error message
 
