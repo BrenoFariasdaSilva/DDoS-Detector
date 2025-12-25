@@ -114,12 +114,10 @@ class BackgroundColors:  # Colors for the terminal
 VERBOSE = False  # Default verbose setting (can be overridden via CLI args)
 N_JOBS = -2  # Number of parallel jobs (-1 uses all cores, -2 leaves one core free, or set specific number like 4)
 RESULTS_FILENAME = "Hyperparameter_Optimization_Results.csv"  # Filename for saving results
-CACHE_DIR = "Cache/Hyperparameter_Optimization"  # Directory for saving progress cache
-ENABLE_PROGRESS_CACHE = True  # Set to False to disable progress caching and recompute all combinations
 MATCH_FILENAMES_TO_PROCESS = [""]  # List of specific filenames to search for a match (set to None to process all files)
 IGNORE_FILES = [RESULTS_FILENAME]  # List of filenames to ignore when searching for datasets
 IGNORE_DIRS = [
-    "Cache",
+    "Classifiers_Hyperparameters",
     "Dataset_Description",
     "Data_Separability",
     "Feature_Analysis",
@@ -569,110 +567,6 @@ def _is_valid_combination(model_name_local, params_local):
         return False
 
     return True  # Valid combination
-
-
-def get_cache_path(csv_path, model_name):
-    """
-    Generate cache file path for a specific dataset and model.
-
-    :param csv_path: Path to the CSV dataset file
-    :param model_name: Name of the model being optimized
-    :return: Absolute path to the cache file
-    """
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Generating cache path for model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
-    )  # Output the verbose message
-
-    csv_basename = os.path.splitext(os.path.basename(csv_path))[0]  # Get CSV filename without extension
-    parent_dir = os.path.basename(os.path.dirname(csv_path))  # Get parent directory name
-    safe_model_name = model_name.replace(" ", "_").replace("/", "_")  # Make model name filesystem-safe
-
-    cache_subdir = os.path.join(CACHE_DIR, parent_dir, csv_basename)  # Cache subdirectory
-    cache_file = os.path.join(cache_subdir, f"{safe_model_name}.json")  # Cache file path
-
-    return cache_file  # Return the cache file path
-
-
-def load_cached_results(csv_path, model_name):
-    """
-    Load cached hyperparameter optimization results for a specific dataset and model.
-
-    :param csv_path: Path to the CSV dataset file
-    :param model_name: Name of the model being optimized
-    :return: Dictionary mapping parameter combinations (as JSON strings) to results, or empty dict if no cache
-    """
-
-    if not ENABLE_PROGRESS_CACHE:  # If caching is disabled
-        return {}  # Caching disabled
-
-    cache_file = get_cache_path(csv_path, model_name)  # Get cache file path
-
-    if not os.path.exists(cache_file):  # If cache file does not exist
-        verbose_output(
-            f"{BackgroundColors.YELLOW}No cache found for {model_name} on {os.path.basename(csv_path)}{Style.RESET_ALL}"
-        )
-        return {}  # No cache file exists
-
-    try:  # Try to load cached results
-        with open(cache_file, "r") as f:  # Open cache file
-            cached_data = json.load(f)  # Load JSON data
-        verbose_output(
-            f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(cached_data)}{BackgroundColors.GREEN} cached results for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
-        )
-        return cached_data  # Return cached results
-    except Exception as e:  # Catch any errors during loading
-        print(
-            f"{BackgroundColors.YELLOW}Warning: Failed to load cache for {model_name}: {e}{Style.RESET_ALL}"
-        )
-        return {}  # Return empty dict on error
-
-
-def save_combination_result(csv_path, model_name, params, score, elapsed, cached_results, hardware_specs=None):
-    """
-    Save a single combination result to the cache file immediately.
-
-    :param csv_path: Path to the CSV dataset file
-    :param model_name: Name of the model being optimized
-    :param params: Dictionary of hyperparameters for this combination
-    :param score: F1 score achieved (can be a scalar or dict with 'f1_score' key)
-    :param elapsed: Execution time in seconds
-    :param cached_results: Dictionary of all cached results (will be updated and saved)
-    :param hardware_specs: Dictionary of hardware specifications (optional)
-    :return: None
-    """
-
-    if not ENABLE_PROGRESS_CACHE:  # If caching is disabled
-        return  # Caching disabled
-
-    cache_file = get_cache_path(csv_path, model_name)  # Get cache file path
-
-    os.makedirs(os.path.dirname(cache_file), exist_ok=True)  # Ensure cache directory exists
-
-    params_key = json.dumps(params, sort_keys=True)  # Serialize parameters as JSON string
-
-    if isinstance(score, dict):  # If score is a dictionary
-        f1_score_value = score.get("f1_score", None)  # Extract F1 score
-    else:  # If score is a scalar
-        f1_score_value = score  # Use score directly
-
-    cached_results[params_key] = {  # Update cached results
-        "score": round(float(f1_score_value), 4) if f1_score_value is not None else None,  # F1 score formatted to 4 decimals
-        "elapsed": round(float(elapsed), 2),  # Execution time formatted to 2 decimals
-        "timestamp": datetime.datetime.now().isoformat(),  # Timestamp
-    }
-
-    if hardware_specs is not None:  # If hardware specifications are provided
-        cached_results[params_key]["hardware"] = hardware_specs  # Add hardware specifications
-
-    # Save to file
-    try:  # Try to save cached results
-        with open(cache_file, "w") as f:  # Open cache file for writing
-            json.dump(cached_results, f, indent=2)  # Write JSON data
-    except Exception as e:  # Catch any errors during saving
-        verbose_output(
-            f"{BackgroundColors.YELLOW}Warning: Failed to save cache: {e}{Style.RESET_ALL}"
-        )
 
 
 def detect_gpu_info():
@@ -1163,8 +1057,6 @@ def run_parallel_evaluation(
     model,
     keys,
     combinations_to_test,
-    cached_results,
-    cached_count,
     X_train,
     y_train,
     csv_path,
@@ -1188,8 +1080,6 @@ def run_parallel_evaluation(
     :param model: Model instance to optimize
     :param keys: List of hyperparameter names
     :param combinations_to_test: List of hyperparameter combinations to evaluate
-    :param cached_results: Dictionary of cached results
-    :param cached_count: Number of cached combinations
     :param X_train: Training features
     :param y_train: Training labels
     :param csv_path: Path to CSV for progress description
@@ -1210,15 +1100,8 @@ def run_parallel_evaluation(
     
     verbose_output(f"{BackgroundColors.GREEN}Starting parallel evaluation with {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} workers...{Style.RESET_ALL}")  # Log start
 
-    if progress_bar is not None and cached_count > 0:  # Advance progress for cached combos
-        for _ in range(cached_count):  # For each cached combo
-            try:  # Try to update progress bar
-                progress_bar.update(1)  # Increment progress bar
-            except Exception:  # Catch any errors
-                pass  # Ignore progress update errors
-
     if len(combinations_to_test) == 0:  # Nothing to evaluate
-        verbose_output(f"{BackgroundColors.GREEN}All combinations already cached for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Skipping computation.{Style.RESET_ALL}")
+        verbose_output(f"{BackgroundColors.GREEN}No combinations to test for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Skipping computation.{Style.RESET_ALL}")
         return best_params, best_score, best_elapsed, all_results, global_counter  # Return early
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=safe_n_jobs) as executor:  # Run parallel evaluation
@@ -1227,7 +1110,7 @@ def run_parallel_evaluation(
             for combo in combinations_to_test
         }  # Map futures to combos
 
-        local_counter = cached_count  # Start local counter after cached items
+        local_counter = 0  # Start local counter
 
         for future in concurrent.futures.as_completed(future_to_params):  # Process completed futures
             try:  # Try to get result
@@ -1239,52 +1122,47 @@ def run_parallel_evaluation(
                 elapsed = 0.0  # No elapsed time
                 print(f"{BackgroundColors.YELLOW}Warning: Combination {current_params} failed: {worker_err}{Style.RESET_ALL}")  # Warn
 
-            if csv_path:  # Persist result if csv path provided
-                save_combination_result(
-                    csv_path, model_name, current_params, metrics, elapsed, cached_results, hardware_specs
-                )  # Save result
+            global_counter += 1  # Increment global progress
+            local_counter += 1  # Increment local model progress
 
-                global_counter += 1  # Increment global progress
-                local_counter += 1  # Increment local model progress
+            if progress_bar is not None:
+                update_optimization_progress_bar(
+                    progress_bar,
+                    csv_path,
+                    model_name,
+                    param_grid=current_params,
+                    combo_current=local_counter,
+                    combo_total=total_combinations,
+                    current=model_index,
+                    total_combinations=total_combinations_all_models,
+                    total_models=total_models,
+                    overall=global_counter,
+                )  # Update progress description
+                try:
+                    progress_bar.update(1)  # Advance progress
+                except Exception:
+                    pass  # Ignore update errors
 
-                if progress_bar is not None:
-                    update_optimization_progress_bar(
-                        progress_bar,
-                        csv_path,
-                        model_name,
-                        param_grid=current_params,
-                        combo_current=local_counter,
-                        combo_total=total_combinations,
-                        current=model_index,
-                        total_combinations=total_combinations_all_models,
-                        total_models=total_models,
-                        overall=global_counter,
-                    )  # Update progress description
-                    try:
-                        progress_bar.update(1)  # Advance progress
-                    except Exception:
-                        pass  # Ignore update errors
+            result_entry = OrderedDict([("params", json.dumps(current_params)), ("execution_time", round(float(elapsed), 2))])  # Build result entry with formatted time
+            if metrics is not None:
+                # Format all metrics to 4 decimal places
+                formatted_metrics = {k: round(float(v), 4) if v is not None else None for k, v in metrics.items()}
+                result_entry.update(formatted_metrics)  # Include formatted metrics
+            all_results.append(result_entry)  # Append to list
 
-                result_entry = OrderedDict([("params", json.dumps(current_params)), ("execution_time", round(float(elapsed), 2))])  # Build result entry with formatted time
-                if metrics is not None:
-                    # Format all metrics to 4 decimal places
-                    formatted_metrics = {k: round(float(v), 4) if v is not None else None for k, v in metrics.items()}
-                    result_entry.update(formatted_metrics)  # Include formatted metrics
-                all_results.append(result_entry)  # Append to list
-
-                if metrics is not None and "f1_score" in metrics:  # Update best if improved
-                    f1 = metrics["f1_score"]  # Extract F1 score
-                    current_best_elapsed = (
-                        next((r["execution_time"] for r in all_results if r.get("f1_score") == best_score), float("inf"))
-                        if best_score != -float("inf")
-                        else float("inf")
-                    )  # Find current best elapsed
-                    if (f1 > best_score) or (f1 == best_score and elapsed < current_best_elapsed):
-                        best_score = f1
-                        best_params = current_params
-                        best_elapsed = elapsed
-                        verbose_output(f"{BackgroundColors.GREEN}New best F1 score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}")
-                        # Log new best
+            if metrics is not None and "f1_score" in metrics:  # Update best if improved
+                f1 = metrics["f1_score"]  # Extract F1 score
+                current_best_elapsed = (
+                    next((r["execution_time"] for r in all_results if r.get("f1_score") == best_score), float("inf"))
+                    if best_score != -float("inf")
+                    else float("inf")
+                )  # Find current best elapsed
+                if (f1 > best_score) or (f1 == best_score and elapsed < current_best_elapsed):
+                    best_score = f1
+                    best_params = current_params
+                    best_elapsed = elapsed
+                    verbose_output(f"{BackgroundColors.GREEN}New best F1 score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}")
+                    # Log new best
 
     return best_params, best_score, best_elapsed, all_results, global_counter  # Return updated results
 
@@ -1336,62 +1214,19 @@ def manual_grid_search(
     param_combinations = list(product(*values))  # Cartesian product of hyperparameter values
     total_combinations = len(param_combinations)  # Total combinations count
 
-    cached_results = load_cached_results(csv_path, model_name) if csv_path else {}  # Load cached cache results
-    cached_count = len(cached_results)  # Count cached entries
-
-    combinations_to_test = []  # Accumulate combinations that are not cached
+    combinations_to_test = []  # Accumulate combinations to test
     for combo in param_combinations:  # Iterate all combos
         params_dict = dict(zip(keys, combo))  # Build params dict
-        params_key = json.dumps(params_dict, sort_keys=True)  # Canonical JSON key
-        if params_key not in cached_results and _is_valid_combination(model_name, params_dict):  # Skip if cached or invalid
+        if _is_valid_combination(model_name, params_dict):  # Skip if invalid
             combinations_to_test.append(combo)  # Schedule for testing
 
-    if cached_count > 0:  # Report cached count
-        print(f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{cached_count}{BackgroundColors.GREEN} cached results for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Testing {BackgroundColors.CYAN}{len(combinations_to_test)}{BackgroundColors.GREEN} remaining combinations.{Style.RESET_ALL}")
+    print(f"{BackgroundColors.GREEN}Testing {BackgroundColors.CYAN}{len(combinations_to_test)}{BackgroundColors.GREEN} combinations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}")
 
     best_score = -float("inf")  # Initialize best score sentinel
     best_params = None  # Placeholder for best params
     best_elapsed = 0.0  # Elapsed time for best params
     all_results = []  # List to collect results
     global_counter = global_counter_start  # Start global counter
-
-    for params_key, cached_data in cached_results.items():  # Process cached results
-        try:
-            params_dict = json.loads(params_key)  # Parse params key
-            f1 = cached_data.get("f1_score")  # Cached F1 if present
-            elapsed = cached_data.get("elapsed", 0.0)  # Cached elapsed time
-
-            result_entry = OrderedDict([("params", params_key), ("execution_time", round(float(elapsed), 2))])  # Base result entry with formatted time
-
-            for key in [
-                "f1_score",
-                "accuracy",
-                "precision",
-                "recall",
-                "false_positive_rate",
-                "false_negative_rate",
-                "true_positive_rate",
-                "true_negative_rate",
-                "matthews_corrcoef",
-                "roc_auc_score",
-                "cohen_kappa",
-            ]:  # Metrics to include
-                if key in cached_data:  # If metric present
-                    result_entry[key] = round(float(cached_data[key]), 4) if cached_data[key] is not None else None  # Include cached metric formatted to 4 decimals
-            
-            if "f1_score" not in result_entry and f1 is not None:  # If missing F1 but have score
-                result_entry["f1_score"] = round(float(f1), 4)  # Add F1 score formatted
-
-            all_results.append(result_entry)  # Append cached result
-
-            if f1 is not None and f1 > best_score:  # Update best from cache
-                best_score = f1  # Update best score
-                best_params = params_dict  # Update best params
-                best_elapsed = elapsed  # Update best elapsed time
-
-            global_counter += 1  # Increment global counter
-        except Exception:  # Catch JSON parsing errors
-            pass  # Ignore malformed cache entries
 
     safe_n_jobs, available_memory_gb, data_size_gb = compute_safe_n_jobs(X_train, y_train)  # Compute workers and sizes
 
@@ -1404,8 +1239,6 @@ def manual_grid_search(
         model,
         keys,
         combinations_to_test,
-        cached_results,
-        cached_count,
         X_train,
         y_train,
         csv_path,
