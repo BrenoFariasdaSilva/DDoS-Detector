@@ -1692,7 +1692,7 @@ def save_optimization_results(csv_path, results_list):
     output_dir = f"{os.path.dirname(csv_path)}/Classifiers_Hyperparameters/"  # Directory to save outputs
     os.makedirs(output_dir, exist_ok=True)  # Create the output directory if it doesn't exist
     dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Get the base name of the dataset
-    output_path = os.path.join(output_dir, f"{dataset_name}_{RESULTS_FILENAME}")  # Full path to save the results CSV
+    output_path = os.path.join(output_dir, f"{RESULTS_FILENAME}")  # Full path to save the results CSV
 
     try:  # Try to save the results
         df_results = pd.DataFrame(results_list)  # Convert results list to DataFrame
