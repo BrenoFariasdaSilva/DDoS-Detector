@@ -354,15 +354,15 @@ def find_dataset_level_feature_file(file_path, filename):
 
 def find_feature_file(file_path, filename):
     """
-         Locate a feature-analysis CSV file related to `file_path`.
+    Locate a feature-analysis CSV file related to `file_path`.
 
-         Search order:
-         - <file_dir>/Feature_Analysis/<filename>
-         - ascend parent directories checking <parent>/Feature_Analysis/<filename>
-         - dataset-level folder under `.../Datasets/<dataset_name>/Feature_Analysis/<filename>`
-         - fallback: search under workspace ./Datasets/**/Feature_Analysis/<filename`
+    Search order:
+    - <file_dir>/Feature_Analysis/<filename>
+    - ascend parent directories checking <parent>/Feature_Analysis/<filename>
+    - dataset-level folder under `.../Datasets/<dataset_name>/Feature_Analysis/<filename>`
+    - fallback: search under workspace ./Datasets/**/Feature_Analysis/<filename`
 
-         :param file_path: Path to the file
+    :param file_path: Path to the file
     :param filename: Filename to search for
     :return: The matching path or None
     """
