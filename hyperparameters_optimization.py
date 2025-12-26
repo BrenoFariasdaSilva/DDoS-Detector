@@ -644,7 +644,7 @@ def load_cache_results(csv_path):
         
         for _, row in cache_df.iterrows():  # Iterate over cached rows
             model_name = row.get("model")  # Get model name
-            params_json = row.get("best_params")  # Get params as JSON string
+            params_json = row.get("params")  # Get params as JSON string (FIXED: was "best_params")
             
             if model_name and params_json:  # If both are present
                 key = (model_name, params_json)  # Create composite key
@@ -1406,11 +1406,11 @@ def process_cached_combinations(
             all_results.append(result_entry)  # Add to results
             
             # Update best from cache
-            cached_f1 = cached_row.get("best_cv_f1_score") or result_entry.get("f1_score")
+            cached_f1 = cached_row.get("f1_score") or result_entry.get("f1_score")  # FIXED: was "best_cv_f1_score"
             if cached_f1 is not None and cached_f1 > best_score:
                 best_score = cached_f1
                 best_params = params_dict
-                best_elapsed = cached_row.get("elapsed_time_s", 0.0)
+                best_elapsed = cached_row.get("execution_time", 0.0)  # FIXED: was "elapsed_time_s"
             
             global_counter += 1  # Increment global counter
         
