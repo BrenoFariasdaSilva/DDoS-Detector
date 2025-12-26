@@ -209,6 +209,26 @@ def parse_args(default_verbose=False):
     return VERBOSE  # Return the resulting VERBOSE boolean
 
 
+def get_n_jobs_display():
+    """
+    Convert N_JOBS constant to human-readable string for display.
+    
+    :return: String describing actual number of cores used (e.g., "11 cores" for N_JOBS=-2 on 12-core system)
+    """
+    
+    if N_JOBS > 0:  # Positive number means exact core count
+        return f"{N_JOBS} cores"
+    elif N_JOBS == -1:  # -1 means all cores
+        total_cores = os.cpu_count() or 1
+        return f"{total_cores} cores (all)"
+    elif N_JOBS < -1:  # -2 or less means all but (abs(N_JOBS) - 1) cores
+        total_cores = os.cpu_count() or 1
+        cores_to_use = max(1, total_cores + N_JOBS + 1)  # N_JOBS=-2 on 12 cores = 12 + (-2) + 1 = 11
+        return f"{cores_to_use} cores (all but {abs(N_JOBS + 1)})"
+    else:
+        return "1 core"  # Fallback
+
+
 def iterate_dataset_directories():
     """
     Iterates over all dataset directories defined in DATASETS, skipping invalid and ignored directories.
@@ -1267,7 +1287,8 @@ def run_parallel_evaluation(
     :return: Tuple (best_params, best_score, best_elapsed, all_results, global_counter)
     """
     
-    verbose_output(f"{BackgroundColors.GREEN}Starting sequential evaluation (each model uses {BackgroundColors.CYAN}{N_JOBS}{BackgroundColors.GREEN} cores internally)...{Style.RESET_ALL}")  # Log start
+    n_jobs_display = get_n_jobs_display()  # Get readable core count
+    verbose_output(f"{BackgroundColors.GREEN}Starting sequential evaluation (each model uses {BackgroundColors.CYAN}{n_jobs_display}{BackgroundColors.GREEN} internally)...{Style.RESET_ALL}")  # Log start
 
     if len(combinations_to_test) == 0:  # Nothing to evaluate
         verbose_output(f"{BackgroundColors.GREEN}No combinations to test for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Skipping computation.{Style.RESET_ALL}")
@@ -1474,8 +1495,9 @@ def manual_grid_search(
 
     _, available_memory_gb, data_size_gb = compute_safe_n_jobs(X_train, y_train)  # Get memory stats for logging
 
+    n_jobs_display = get_n_jobs_display()  # Get readable core count
     verbose_output(
-        f"{BackgroundColors.GREEN}Processing combinations sequentially with {BackgroundColors.CYAN}{N_JOBS}{BackgroundColors.GREEN} cores per model (Available RAM: {BackgroundColors.CYAN}{available_memory_gb:.1f}GB{BackgroundColors.GREEN}, Dataset: {BackgroundColors.CYAN}{data_size_gb:.2f}GB{BackgroundColors.GREEN}){Style.RESET_ALL}"
+        f"{BackgroundColors.GREEN}Processing combinations sequentially with {BackgroundColors.CYAN}{n_jobs_display}{BackgroundColors.GREEN} per model (Available RAM: {BackgroundColors.CYAN}{available_memory_gb:.1f}GB{BackgroundColors.GREEN}, Dataset: {BackgroundColors.CYAN}{data_size_gb:.2f}GB{BackgroundColors.GREEN}){Style.RESET_ALL}"
     )  # Log resources
 
     best_params, best_score, best_elapsed, all_results, global_counter = run_parallel_evaluation(
