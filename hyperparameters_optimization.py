@@ -1242,10 +1242,9 @@ def run_parallel_evaluation(
     best_params,
     best_elapsed,
     all_results,
-    safe_n_jobs,
 ):
     """
-    Run the ThreadPoolExecutor evaluation and return updated results.
+    Run sequential evaluation of combinations and return updated results.
 
     :param model_name: Name of the model being optimized
     :param model: Model instance to optimize
@@ -1265,75 +1264,67 @@ def run_parallel_evaluation(
     :param best_params: Current best hyperparameters
     :param best_elapsed: Execution time of the best combination
     :param all_results: List of all results collected so far
-    :param safe_n_jobs: Number of parallel workers to use
     :return: Tuple (best_params, best_score, best_elapsed, all_results, global_counter)
     """
     
-    verbose_output(f"{BackgroundColors.GREEN}Starting parallel evaluation with {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} workers...{Style.RESET_ALL}")  # Log start
+    verbose_output(f"{BackgroundColors.GREEN}Starting sequential evaluation (each model uses {BackgroundColors.CYAN}{N_JOBS}{BackgroundColors.GREEN} cores internally)...{Style.RESET_ALL}")  # Log start
 
     if len(combinations_to_test) == 0:  # Nothing to evaluate
         verbose_output(f"{BackgroundColors.GREEN}No combinations to test for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Skipping computation.{Style.RESET_ALL}")
         return best_params, best_score, best_elapsed, all_results, global_counter  # Return early
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=safe_n_jobs) as executor:  # Run parallel evaluation
-        future_to_params = {
-            executor.submit(evaluate_single_combination, clone(model), keys, combo, X_train, y_train): combo
-            for combo in combinations_to_test
-        }  # Map futures to combos
+    local_counter = 0  # Start local counter
 
-        local_counter = 0  # Start local counter
+    for combo in combinations_to_test:  # Process each combination sequentially
+        try:  # Try to evaluate
+            current_params, metrics, elapsed = evaluate_single_combination(clone(model), keys, combo, X_train, y_train)  # Evaluate
+        except Exception as worker_err:  # Catch exceptions
+            current_params = dict(zip(keys, combo))  # Reconstruct params
+            metrics = None  # No metrics on failure
+            elapsed = 0.0  # No elapsed time
+            print(f"{BackgroundColors.YELLOW}Warning: Combination {current_params} failed: {worker_err}{Style.RESET_ALL}")  # Warn
 
-        for future in concurrent.futures.as_completed(future_to_params):  # Process completed futures
-            try:  # Try to get result
-                current_params, metrics, elapsed = future.result()  # Get results
-            except Exception as worker_err:  # Catch exceptions from worker
-                combo = future_to_params.get(future)  # Find combo that failed
-                current_params = dict(zip(keys, combo)) if combo is not None else {}  # Reconstruct params
-                metrics = None  # No metrics on failure
-                elapsed = 0.0  # No elapsed time
-                print(f"{BackgroundColors.YELLOW}Warning: Combination {current_params} failed: {worker_err}{Style.RESET_ALL}")  # Warn
+        global_counter += 1  # Increment global progress
+        local_counter += 1  # Increment local model progress
 
-            global_counter += 1  # Increment global progress
-            local_counter += 1  # Increment local model progress
+        if progress_bar is not None:
+            update_optimization_progress_bar(
+                progress_bar,
+                csv_path,
+                model_name,
+                param_grid=current_params,
+                combo_current=local_counter,
+                combo_total=total_combinations,
+                current=model_index,
+                total_combinations=total_combinations_all_models,
+                total_models=total_models,
+                overall=global_counter,
+            )  # Update progress description
+            try:
+                progress_bar.update(1)  # Advance progress
+            except Exception:
+                pass  # Ignore update errors
 
-            if progress_bar is not None:
-                update_optimization_progress_bar(
-                    progress_bar,
-                    csv_path,
-                    model_name,
-                    param_grid=current_params,
-                    combo_current=local_counter,
-                    combo_total=total_combinations,
-                    current=model_index,
-                    total_combinations=total_combinations_all_models,
-                    total_models=total_models,
-                    overall=global_counter,
-                )  # Update progress description
-                try:
-                    progress_bar.update(1)  # Advance progress
-                except Exception:
-                    pass  # Ignore update errors
+        result_entry = OrderedDict([("params", json.dumps(current_params)), ("execution_time", round(float(elapsed), 2))])  # Build result entry with formatted time
+        if metrics is not None:
+            # Format all metrics to 4 decimal places
+            formatted_metrics = {k: round(float(v), 4) if v is not None else None for k, v in metrics.items()}
+            result_entry.update(formatted_metrics)  # Include formatted metrics
+        all_results.append(result_entry)  # Append to list
 
-            result_entry = OrderedDict([("params", json.dumps(current_params)), ("execution_time", round(float(elapsed), 2))])  # Build result entry with formatted time
-            if metrics is not None:
-                # Format all metrics to 4 decimal places
-                formatted_metrics = {k: round(float(v), 4) if v is not None else None for k, v in metrics.items()}
-                result_entry.update(formatted_metrics)  # Include formatted metrics
-            all_results.append(result_entry)  # Append to list
-
-            if metrics is not None and "f1_score" in metrics:  # Update best if improved
-                f1 = metrics["f1_score"]  # Extract F1 score
-                current_best_elapsed = (
-                    next((r["execution_time"] for r in all_results if r.get("f1_score") == best_score), float("inf"))
-                    if best_score != -float("inf")
-                    else float("inf")
-                )  # Find current best elapsed
-                if (f1 > best_score) or (f1 == best_score and elapsed < current_best_elapsed):
-                    best_score = f1
-                    best_params = current_params
-                    best_elapsed = elapsed
-                    verbose_output(f"{BackgroundColors.GREEN}New best F1 score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}")
-                    # Log new best
+        if metrics is not None and "f1_score" in metrics:  # Update best if improved
+            f1 = metrics["f1_score"]  # Extract F1 score
+            current_best_elapsed = (
+                next((r["execution_time"] for r in all_results if r.get("f1_score") == best_score), float("inf"))
+                if best_score != -float("inf")
+                else float("inf")
+            )  # Find current best elapsed
+            if (f1 > best_score) or (f1 == best_score and elapsed < current_best_elapsed):
+                best_score = f1
+                best_params = current_params
+                best_elapsed = elapsed
+                verbose_output(f"{BackgroundColors.GREEN}New best F1 score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}")
+                # Log new best
 
     return best_params, best_score, best_elapsed, all_results, global_counter  # Return updated results
 
@@ -1481,10 +1472,10 @@ def manual_grid_search(
     else:
         print(f"{BackgroundColors.GREEN}Testing {BackgroundColors.CYAN}{len(combinations_to_test)}{BackgroundColors.GREEN} combinations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}")
 
-    safe_n_jobs, available_memory_gb, data_size_gb = compute_safe_n_jobs(X_train, y_train)  # Compute workers and sizes
+    _, available_memory_gb, data_size_gb = compute_safe_n_jobs(X_train, y_train)  # Get memory stats for logging
 
     verbose_output(
-        f"{BackgroundColors.GREEN}Using {BackgroundColors.CYAN}{safe_n_jobs}{BackgroundColors.GREEN} parallel workers (Available RAM: {BackgroundColors.CYAN}{available_memory_gb:.1f}GB{BackgroundColors.GREEN}, Dataset: {BackgroundColors.CYAN}{data_size_gb:.2f}GB{BackgroundColors.GREEN}){Style.RESET_ALL}"
+        f"{BackgroundColors.GREEN}Processing combinations sequentially with {BackgroundColors.CYAN}{N_JOBS}{BackgroundColors.GREEN} cores per model (Available RAM: {BackgroundColors.CYAN}{available_memory_gb:.1f}GB{BackgroundColors.GREEN}, Dataset: {BackgroundColors.CYAN}{data_size_gb:.2f}GB{BackgroundColors.GREEN}){Style.RESET_ALL}"
     )  # Log resources
 
     best_params, best_score, best_elapsed, all_results, global_counter = run_parallel_evaluation(
@@ -1506,8 +1497,7 @@ def manual_grid_search(
         best_params,
         best_elapsed,
         all_results,
-        safe_n_jobs,
-    )  # Perform parallel evaluation
+    )  # Perform sequential evaluation (each model uses multiple cores internally)
 
     verbose_output(f"{BackgroundColors.GREEN}Completed optimization for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Best score: {BackgroundColors.CYAN}{best_score:.4f}{Style.RESET_ALL}")  # Log completion
 
