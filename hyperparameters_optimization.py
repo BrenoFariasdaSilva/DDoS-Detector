@@ -1092,6 +1092,12 @@ def evaluate_single_combination(model, keys, combination, X_train, y_train):
     """
 
     current_params = dict(zip(keys, combination))  # Build dict of current params
+    
+    if hasattr(model, "__class__") and model.__class__.__name__ == "LogisticRegression":  # Special handling for Logistic Regression
+        penalty = current_params.get("penalty")  # Get penalty parameter
+        if penalty != "elasticnet" and "l1_ratio" in current_params:  # If penalty is not elasticnet, remove l1_ratio
+            current_params = {k: v for k, v in current_params.items() if k != "l1_ratio"}  # Remove l1_ratio if not needed
+    
     start_time = time.time()  # Start timing
     metrics = None  # Initialize metrics as None
     try:  # Try to train and evaluate using extracted helpers for clarity
