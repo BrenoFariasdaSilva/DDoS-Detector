@@ -1201,7 +1201,9 @@ def compute_safe_n_jobs(X_train, y_train):
     except Exception:  # If computation fails
         data_size_gb = 0.0  # Default to 0 GB
 
-    estimated_memory_per_worker = max(0.1, data_size_gb * 0.25)  # Estimate memory per worker (25% of dataset size, min 0.1 GB)
+    cv_folds = 5  # Number of CV folds
+    memory_multiplier = 4.0  # Conservative multiplier for total memory per worker
+    estimated_memory_per_worker = max(1.0, data_size_gb * memory_multiplier)  # Estimate memory per worker (min 1 GB)
 
     physical_cores = psutil.cpu_count(logical=False) or os.cpu_count() or 1  # Number of physical CPU cores
     if N_JOBS == -1:  # All cores
@@ -1213,7 +1215,8 @@ def compute_safe_n_jobs(X_train, y_train):
     else:  # Invalid N_JOBS
         desired_workers = max(1, physical_cores - 1)  # Default to all but one core
 
-    mem_based_cap = int(max(1, available_memory_gb / max(0.5, estimated_memory_per_worker)))  # Memory-based worker cap
+    usable_memory_gb = available_memory_gb * 0.8  # Use 80% of available memory
+    mem_based_cap = int(max(1, usable_memory_gb / estimated_memory_per_worker))  # Memory-based worker cap
     safe_n_jobs = int(min(desired_workers, physical_cores, mem_based_cap))  # Final safe n_jobs
     safe_n_jobs = max(1, min(safe_n_jobs, 64))  # Ensure at least 1 and at most 64
 
