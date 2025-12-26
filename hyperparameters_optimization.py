@@ -1201,13 +1201,13 @@ def compute_safe_n_jobs(X_train, y_train):
     except Exception:  # If computation fails
         data_size_gb = 0.0  # Default to 0 GB
 
-    cv_folds = 5  # Number of CV folds
-    memory_multiplier = 4.0  # Conservative multiplier for total memory per worker
-    estimated_memory_per_worker = max(1.0, data_size_gb * memory_multiplier)  # Estimate memory per worker (min 1 GB)
+    cv_folds = 5  # Number of CV folds  # Assumed default for memory estimation
+    memory_multiplier = 8.0  # Very conservative multiplier for total memory per worker
+    estimated_memory_per_worker = max(2.0, data_size_gb * memory_multiplier)  # Estimate memory per worker (min 2 GB)
 
     physical_cores = psutil.cpu_count(logical=False) or os.cpu_count() or 1  # Number of physical CPU cores
-    if N_JOBS == -1:  # All cores
-        desired_workers = physical_cores  # Use all physical cores
+    if N_JOBS == -1:  # All cores (but still leave one free)
+        desired_workers = max(1, physical_cores - 1)  # Use all but one core
     elif N_JOBS == -2:  # All but one core
         desired_workers = max(1, physical_cores - 1)  # Use all but one core
     elif N_JOBS > 0:  # Specific number of jobs
@@ -1215,10 +1215,10 @@ def compute_safe_n_jobs(X_train, y_train):
     else:  # Invalid N_JOBS
         desired_workers = max(1, physical_cores - 1)  # Default to all but one core
 
-    usable_memory_gb = available_memory_gb * 0.8  # Use 80% of available memory
+    usable_memory_gb = available_memory_gb * 0.7  # Use only 70% of available memory to be safe
     mem_based_cap = int(max(1, usable_memory_gb / estimated_memory_per_worker))  # Memory-based worker cap
-    safe_n_jobs = int(min(desired_workers, physical_cores, mem_based_cap))  # Final safe n_jobs
-    safe_n_jobs = max(1, min(safe_n_jobs, 64))  # Ensure at least 1 and at most 64
+    safe_n_jobs = int(min(desired_workers, physical_cores - 1, mem_based_cap))  # Final safe n_jobs (always leave one core)
+    safe_n_jobs = max(1, min(safe_n_jobs, 8))  # Ensure at least 1 and at most 8 workers to prevent thrashing
 
     return safe_n_jobs, available_memory_gb, data_size_gb  # Return computed values
 
