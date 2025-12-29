@@ -1306,6 +1306,67 @@ def get_cache_file_path(csv_path):
     return cache_path  # Return the cache file path
 
 
+def load_cache_results(csv_path):
+    """
+    Load cached results from the cache file if it exists.
+
+    :param csv_path: Path to the dataset CSV file
+    :return: Dictionary mapping (feature_set, model_name) to result entry
+    """
+
+    cache_path = get_cache_file_path(csv_path)  # Get the cache file path
+
+    if not os.path.exists(cache_path):  # If cache file doesn't exist
+        verbose_output(
+            f"{BackgroundColors.YELLOW}No cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
+        )  # Output the verbose message
+        return {}  # Return empty dictionary
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Loading cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    try:  # Try to load the cache file
+        df_cache = pd.read_csv(cache_path)  # Read the cache file
+        cache_dict = {}  # Initialize cache dictionary
+
+        for _, row in df_cache.iterrows():  # Iterate through each row
+            feature_set = row.get("feature_set", "")  # Get feature set name
+            model_name = row.get("model_name", "")  # Get model name
+            cache_key = (feature_set, model_name)  # Create cache key tuple
+
+            result_entry = {  # Reconstruct the result entry
+                "dataset": row.get("dataset", ""),
+                "feature_set": feature_set,
+                "classifier_type": row.get("classifier_type", ""),
+                "model_name": model_name,
+                "n_features": row.get("n_features", 0),
+                "metrics": (
+                    row.get("accuracy", 0.0),
+                    row.get("precision", 0.0),
+                    row.get("recall", 0.0),
+                    row.get("f1_score", 0.0),
+                    row.get("fpr", 0.0),
+                    row.get("fnr", 0.0),
+                    row.get("elapsed_time_s", 0.0),
+                ),
+                "features_list": json.loads(row.get("features_list", "[]")),  # Parse JSON string
+            }
+
+            cache_dict[cache_key] = result_entry  # Store in cache dictionary
+
+        print(
+            f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(cache_dict)}{BackgroundColors.GREEN} cached results.{Style.RESET_ALL}"
+        )  # Print success message
+        return cache_dict  # Return the cache dictionary
+
+    except Exception as e:  # Catch any errors
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Failed to load cache file {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
+        )  # Print warning message
+        return {}  # Return empty dictionary on error
+
+
 def calculate_execution_time(start_time, finish_time):
     """
     Calculates the execution time between start and finish times and formats it as hh:mm:ss.
