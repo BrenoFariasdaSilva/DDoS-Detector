@@ -164,6 +164,9 @@ def preprocess_dataframe(df, label_col, remove_zero_variance=True):
     if df is None:  # If the DataFrame is None
         return df  # Return None
 
+    # Strip whitespace from all column names
+    df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+
     # Separate label column
     labels = df[label_col].copy()  # Save labels
 
