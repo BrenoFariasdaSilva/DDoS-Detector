@@ -84,6 +84,23 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
+RESULTS_FILENAME = "generated.csv"  # Filename for generated samples
+MATCH_FILENAMES_TO_PROCESS = [""]  # List of specific filenames to search for a match (set to None to process all files)
+IGNORE_FILES = [RESULTS_FILENAME]  # List of filenames to ignore when searching for datasets
+IGNORE_DIRS = [
+    "Classifiers",
+    "Classifiers_Hyperparameters",
+    "Dataset_Description",
+    "Data_Separability",
+    "Feature_Analysis",
+]  # List of directory names to ignore when searching for datasets
+
+DATASETS = {  # Dictionary containing dataset paths and feature files
+    "CICDDoS2019-Dataset": [  # List of paths to the CICDDoS2019 dataset
+        "./Datasets/CICDDoS2019/01-12/",
+        "./Datasets/CICDDoS2019/03-11/",
+    ],
+}
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
