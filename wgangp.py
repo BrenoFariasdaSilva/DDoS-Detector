@@ -810,8 +810,39 @@ def main():
 
     args = parse_args()  # Parse command-line arguments
     if args.mode == "train":  # If training mode is selected
-        assert args.csv_path is not None, "Training requires --csv_path"  # Ensure CSV path is provided
-        train(args)  # Run training function
+        if args.csv_path is not None:  # If CSV path is provided via command line
+            train(args)  # Run training function on single file
+        else:  # No CSV path provided, use batch processing
+            print(
+                f"{BackgroundColors.GREEN}No CSV path provided. Processing datasets in batch mode...{Style.RESET_ALL}"
+            )  # Notify batch mode
+            for dataset_name, paths in DATASETS.items():  # For each dataset in the DATASETS dictionary
+                print(
+                    f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
+                )
+                for input_path in paths:  # For each path in the dataset's paths list
+                    if not verify_filepath_exists(input_path):  # If the input path does not exist
+                        verbose_output(
+                            f"{BackgroundColors.YELLOW}Skipping missing path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
+                        )
+                        continue  # Skip to the next path if the current one doesn't exist
+
+                    files_to_process = get_files_to_process(
+                        input_path, file_extension=".csv"
+                    )  # Get list of CSV files to process
+
+                    for file in files_to_process:  # For each file to process
+                        print(
+                            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Training on file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
+                        )  # Output the file being processed
+                        args.csv_path = file  # Set CSV path to current file
+                        try:
+                            train(args)  # Run training function
+                        except Exception as e:
+                            print(
+                                f"{BackgroundColors.RED}Error training on {BackgroundColors.CYAN}{file}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
+                            )  # Print error message
+                            continue  # Continue to next file
     elif args.mode == "gen":  # If generation mode is selected
         assert args.checkpoint is not None, "Generation requires --checkpoint"  # Ensure checkpoint is provided
         generate(args)  # Run generation function
