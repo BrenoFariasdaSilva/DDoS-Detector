@@ -297,6 +297,7 @@ def load_file(file_path):
         df = pd.read_csv(
             file_path, low_memory=False
         )  # Load CSV or TXT file into DataFrame with low_memory=False to avoid dtype warning
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
     elif ext == "parquet":  # Parquet file
         verbose_output(
             f"{BackgroundColors.GREEN}Loading data from Parquet file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}"

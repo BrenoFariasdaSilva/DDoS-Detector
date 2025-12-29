@@ -237,7 +237,9 @@ def build_headers_map(filepaths, low_memory=True):
     headers = {}  # Dictionary that will map each filepath to its list of columns
     for fp in filepaths:  # Iterate over all given file paths
         try:  # Try header-only read
-            cols = pd.read_csv(fp, nrows=0).columns.tolist()  # Extract columns without loading file content
+            df_headers = pd.read_csv(fp, nrows=0)  # Extract columns without loading file content
+            df_headers.columns = df_headers.columns.str.strip()  # Remove leading/trailing whitespace from column names
+            cols = df_headers.columns.tolist()  # Get column list
         except Exception:  # If header-only read fails
             df_tmp = load_dataset(fp, low_memory=low_memory)  # Load full dataset (slow fallback)
             cols = df_tmp.columns.tolist() if df_tmp is not None else []  # Extract columns if dataset loaded
@@ -287,6 +289,7 @@ def load_dataset(filepath, low_memory=True):
         with warnings.catch_warnings():  # Suppress DtypeWarning warnings
             warnings.simplefilter("ignore", pd.errors.DtypeWarning)  # Ignore DtypeWarning warnings
             df = pd.read_csv(filepath, low_memory=low_memory)  # Load the dataset
+            df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
 
         return df  # Return the DataFrame
     except Exception as e:  # If an error occurs

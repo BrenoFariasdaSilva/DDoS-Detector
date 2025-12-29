@@ -445,6 +445,7 @@ def extract_genetic_algorithm_features(file_path):
 
     try:  # Try to load the GA results
         df = pd.read_csv(ga_results_path, usecols=["best_features", "run_index"])  # Load only the necessary columns
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
         best_row = df[df["run_index"] == "best"].iloc[0]  # Get the row where run_index is 'best'
         best_features_json = best_row["best_features"]  # Get the JSON string of best features
         ga_features = json.loads(best_features_json)  # Parse the JSON string into a Python list
@@ -492,6 +493,7 @@ def extract_principal_component_analysis_features(file_path):
 
     try:  # Try to load the PCA results
         df = pd.read_csv(pca_results_path, usecols=["n_components", "cv_f1_score"])  # Load only the necessary columns
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
 
         if df.empty:  # Verify if the DataFrame is empty
             print(
@@ -544,6 +546,7 @@ def extract_recursive_feature_elimination_features(file_path):
 
     try:  # Try to load the RFE runs results
         df = pd.read_csv(rfe_runs_path, usecols=["top_features"])  # Load only the "top_features" column
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
 
         if not df.empty:  # Verify if the DataFrame is not empty
             top_features_str = df.loc[0, "top_features"]  # Get the Python literal string from the first row
@@ -798,6 +801,7 @@ def extract_hyperparameter_optimization_results(csv_path):
 
     try:  # Try to load the CSV file
         df = pd.read_csv(hyperparams_path)  # Load the CSV into a DataFrame
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
     except Exception as e:  # If there is an error loading the CSV
         print(
             f"{BackgroundColors.RED}Failed to load hyperparameter optimization file {hyperparams_path}: {e}{Style.RESET_ALL}"
@@ -1356,6 +1360,7 @@ def load_cache_results(csv_path):
 
     try:  # Try to load the cache file
         df_cache = pd.read_csv(cache_path)  # Read the cache file
+        df_cache.columns = df_cache.columns.str.strip()  # Remove leading/trailing whitespace from column names
         cache_dict = {}  # Initialize cache dictionary
 
         for _, row in df_cache.iterrows():  # Iterate through each row
@@ -1432,6 +1437,7 @@ def save_to_cache(csv_path, result_entry):
         # Check if cache file exists
         if os.path.exists(cache_path):  # If cache file exists
             df_existing = pd.read_csv(cache_path)  # Read existing cache
+            df_existing.columns = df_existing.columns.str.strip()  # Remove leading/trailing whitespace from column names
             df_new = pd.DataFrame([flat_row])  # Create DataFrame from new row
             df_combined = pd.concat([df_existing, df_new], ignore_index=True)  # Combine DataFrames
             df_combined.to_csv(cache_path, index=False, encoding="utf-8")  # Write combined data

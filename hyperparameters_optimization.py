@@ -360,6 +360,7 @@ def extract_genetic_algorithm_features(file_path):
 
     try:  # Try to load and parse the GA results
         df = pd.read_csv(ga_results_path)  # Load the CSV file into a DataFrame
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
         best_row = df[df["run_index"] == "best"]  # Filter for the row with run_index == "best"
         if best_row.empty:  # If no "best" row is found
             print(
@@ -643,6 +644,7 @@ def load_cache_results(csv_path):
     
     try:  # Try to load cache
         cache_df = pd.read_csv(cache_file)  # Load cache CSV
+        cache_df.columns = cache_df.columns.str.strip()  # Remove leading/trailing whitespace from column names
         cache_dict = {}  # Dictionary to store cache
         
         for _, row in cache_df.iterrows():  # Iterate over cached rows

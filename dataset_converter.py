@@ -659,7 +659,9 @@ def load_csv_file(input_path):
     :return: pandas DataFrame containing the loaded dataset.
     """
 
-    return pd.read_csv(input_path)  # Load the CSV file
+    df = pd.read_csv(input_path)  # Load the CSV file
+    df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+    return df  # Return the DataFrame
 
 
 def load_parquet_file(input_path):
@@ -682,7 +684,9 @@ def load_txt_file(input_path):
     :return: pandas DataFrame containing the loaded dataset.
     """
 
-    return pd.read_csv(input_path, sep="\t")  # Load TXT file using tab separator
+    df = pd.read_csv(input_path, sep="\t")  # Load TXT file using tab separator
+    df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+    return df  # Return the DataFrame
 
 
 def load_dataset(input_path):

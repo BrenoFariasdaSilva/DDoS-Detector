@@ -238,6 +238,9 @@ class CSVFlowDataset(Dataset):
         fit_scaler: bool = True,  # Whether to fit scaler on data
     ):  # Close constructor signature
         df = pd.read_csv(csv_path, low_memory=False)  # Load CSV file into a DataFrame with low_memory=False to avoid DtypeWarning
+        
+        # Strip whitespace from column names immediately after loading
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
 
         # Auto-detect label column if the specified one doesn't exist
         if label_col not in df.columns:  # If the specified label column is not found

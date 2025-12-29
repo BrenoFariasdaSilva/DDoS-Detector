@@ -2043,7 +2043,9 @@ def load_existing_results(csv_out):
 
     if os.path.exists(csv_out):  # If the consolidated CSV exists
         try:  # Try to read the file into a DataFrame
-            return pd.read_csv(csv_out, dtype=object)  # Read CSV preserving types as object
+            df = pd.read_csv(csv_out, dtype=object)  # Read CSV preserving types as object
+            df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+            return df  # Return the DataFrame
         except Exception:  # On any read error
             return pd.DataFrame()  # Return empty DataFrame as a fallback
     return pd.DataFrame()  # File not present — return empty DataFrame
