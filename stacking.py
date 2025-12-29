@@ -107,7 +107,16 @@ class BackgroundColors:  # Colors for the terminal
 VERBOSE = False  # Set to True to output verbose messages
 N_JOBS = -1  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
 THREADS_LIMIT = 2  # Number of threads for parallel evaluation of individual classifiers
-FILES_TO_IGNORE = [""]  # List of files to ignore during processing
+RESULTS_FILENAME = "Stacking_Classifiers_Results.csv"  # Filename for saving stacking results
+MATCH_FILENAMES_TO_PROCESS = [""]  # List of specific filenames to search for a match (set to None to process all files)
+IGNORE_FILES = [RESULTS_FILENAME]  # List of filenames to ignore when searching for datasets
+IGNORE_DIRS = [
+    "Classifiers",
+    "Classifiers_Hyperparameters",
+    "Dataset_Description",
+    "Data_Separability",
+    "Feature_Analysis",
+]  # List of directory names to ignore when searching for datasets
 HYPERPARAMETERS_FILENAME = "Hyperparameter_Optimization_Results.csv"  # Filename for hyperparameter optimization results
 CACHE_PREFIX = "Cache_"  # Prefix for cache filenames
 
@@ -194,45 +203,61 @@ def verify_filepath_exists(filepath):
 
 def get_files_to_process(directory_path, file_extension=".csv"):
     """
-    Get all of the specified files in a directory (non-recursive).
+    Collect all files with a given extension inside a directory (non-recursive).
 
-    :param directory_path: Path to the directory to search
-    :param file_extension: File extension to filter (default: .csv)
-    :return: List of files with the specified extension
+    Performs validation, respects IGNORE_FILES, and optionally filters by
+    MATCH_FILENAMES_TO_PROCESS when defined.
+
+    :param directory_path: Path to the directory to scan
+    :param file_extension: File extension to include (default: ".csv")
+    :return: Sorted list of matching file paths
     """
 
     verbose_output(
-        f"{BackgroundColors.GREEN}Getting all {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files in the directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}"
-    )  # Output the verbose message
+        f"{BackgroundColors.GREEN}Getting all {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files in: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}"
+    )  # Verbose: starting file collection
+    verify_filepath_exists(directory_path)  # Validate directory path exists
 
-    verify_filepath_exists(directory_path)  # Verify if the directory exists
-
-    if not os.path.isdir(directory_path):  # If the path is not a directory
+    if not os.path.isdir(directory_path):  # Check if path is a valid directory
         verbose_output(
-            f"{BackgroundColors.RED}The specified path is not a directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}"
-        )  # Output the verbose message
-        return []  # Return an empty list
+            f"{BackgroundColors.RED}Not a directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}"
+        )  # Verbose: invalid directory
+        return []  # Return empty list for invalid paths
 
-    files = []  # List to store the files
-
-    for item in os.listdir(directory_path):  # List all items in the directory
-        item_path = os.path.join(directory_path, item)  # Get the full path of the item
-        filename = os.path.basename(item_path)  # Get the filename
-
-        if any(
-            ignore and (ignore == filename or ignore == item_path) for ignore in FILES_TO_IGNORE
-        ):  # If the file is in the FILES_TO_IGNORE list
+    try:  # Attempt to read MATCH_FILENAMES_TO_PROCESS if defined
+        match_names = (
+            set(MATCH_FILENAMES_TO_PROCESS) if MATCH_FILENAMES_TO_PROCESS not in ([], [""], [" "]) else None
+        )  # Load match list or None
+        if match_names:
             verbose_output(
-                f"{BackgroundColors.YELLOW}Ignoring file {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} listed in FILES_TO_IGNORE{Style.RESET_ALL}"
-            )
-            continue  # Skip this file
+                f"{BackgroundColors.GREEN}Filtering to filenames: {BackgroundColors.CYAN}{match_names}{Style.RESET_ALL}"
+            )  # Verbose: applying filename filter
+    except NameError:  # MATCH_FILENAMES_TO_PROCESS not defined
+        match_names = None  # No filtering will be applied
 
-        if os.path.isfile(item_path) and item.lower().endswith(
-            file_extension
-        ):  # If the item is a file and has the specified extension
-            files.append(item_path)  # Add the file to the list
+    files = []  # Accumulator for valid files
 
-    return sorted(files)  # Return sorted list for consistency
+    for item in os.listdir(directory_path):  # Iterate directory entries
+        item_path = os.path.join(directory_path, item)  # Absolute path
+        filename = os.path.basename(item_path)  # Extract just the filename
+
+        if any(ignore == filename or ignore == item_path for ignore in IGNORE_FILES):  # Check if file is in ignore list
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Ignoring {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} (listed in IGNORE_FILES){Style.RESET_ALL}"
+            )  # Verbose: ignoring file
+            continue  # Skip ignored file
+
+        if os.path.isfile(item_path) and item.lower().endswith(file_extension):  # File matches extension requirement
+            if (
+                match_names is not None and filename not in match_names
+            ):  # Filename not included in MATCH_FILENAMES_TO_PROCESS
+                verbose_output(
+                    f"{BackgroundColors.YELLOW}Skipping {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} (not in MATCH_FILENAMES_TO_PROCESS){Style.RESET_ALL}"
+                )  # Verbose: skipping non-matching file
+                continue  # Skip this file
+            files.append(item_path)  # Add file to result list
+
+    return sorted(files)  # Return sorted list for deterministic output
 
 
 def get_dataset_name(input_path):
