@@ -1421,6 +1421,32 @@ def save_to_cache(csv_path, result_entry):
         )  # Print warning message
 
 
+def remove_cache_file(csv_path):
+    """
+    Remove the cache file after successful completion.
+
+    :param csv_path: Path to the dataset CSV file
+    :return: None
+    """
+
+    cache_path = get_cache_file_path(csv_path)  # Get the cache file path
+
+    if os.path.exists(cache_path):  # If cache file exists
+        try:  # Try to remove the cache file
+            os.remove(cache_path)  # Delete the cache file
+            print(
+                f"{BackgroundColors.GREEN}Cache file removed: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
+            )  # Print success message
+        except Exception as e:  # Catch any errors
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Failed to remove cache file {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
+            )  # Print warning message
+    else:  # If cache file doesn't exist
+        verbose_output(
+            f"{BackgroundColors.YELLOW}No cache file to remove at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
+        )  # Output verbose message
+
+
 def calculate_execution_time(start_time, finish_time):
     """
     Calculates the execution time between start and finish times and formats it as hh:mm:ss.
