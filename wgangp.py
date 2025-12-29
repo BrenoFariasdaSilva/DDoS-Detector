@@ -846,8 +846,19 @@ def train(args):
             step += 1  # Increment global step counter
 
         if (epoch + 1) % args.save_every == 0 or epoch == args.epochs - 1:  # Save checkpoints periodically
-            g_path = os.path.join(args.out_dir, f"generator_epoch{epoch+1}.pt")  # Path for generator checkpoint
-            d_path = os.path.join(args.out_dir, f"discriminator_epoch{epoch+1}.pt")  # Path for discriminator checkpoint
+            # Determine checkpoint output directory based on input CSV location
+            if args.csv_path:  # If CSV path is provided
+                csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
+                checkpoint_dir = csv_path_obj.parent / "Data_Augmentation" / "Checkpoints"  # Create Checkpoints subdirectory
+                os.makedirs(checkpoint_dir, exist_ok=True)  # Ensure directory exists
+                checkpoint_prefix = csv_path_obj.stem  # Use input filename as prefix
+            else:  # No CSV path, use default out_dir
+                checkpoint_dir = Path(args.out_dir) / "Checkpoints"  # Create Checkpoints subdirectory in out_dir
+                os.makedirs(checkpoint_dir, exist_ok=True)  # Ensure directory exists
+                checkpoint_prefix = "model"  # Default prefix
+            
+            g_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{epoch+1}.pt"  # Path for generator checkpoint
+            d_path = checkpoint_dir / f"{checkpoint_prefix}_discriminator_epoch{epoch+1}.pt"  # Path for discriminator checkpoint
             torch.save(
                 {
                     "epoch": epoch + 1,  # Save current epoch number
@@ -856,7 +867,7 @@ def train(args):
                     "label_encoder": dataset.label_encoder,  # Save label encoder for mapping
                     "args": vars(args),  # Save training arguments
                 },
-                g_path,
+                str(g_path),
             )  # Save generator checkpoint to disk
             torch.save(
                 {
@@ -864,10 +875,11 @@ def train(args):
                     "state_dict": D.state_dict(),  # Save discriminator state dict
                     "args": vars(args),  # Save training arguments
                 },
-                d_path,
+                str(d_path),
             )  # Save discriminator checkpoint to disk
+            latest_path = checkpoint_dir / f"{checkpoint_prefix}_generator_latest.pt"  # Path for latest generator
             torch.save(
-                G.state_dict(), os.path.join(args.out_dir, "generator_latest.pt")
+                G.state_dict(), str(latest_path)
             )  # Save latest generator weights
             print(f"Saved generator to {g_path}")  # Print checkpoint save message
 
