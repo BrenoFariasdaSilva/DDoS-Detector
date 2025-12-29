@@ -530,6 +530,9 @@ def parse_args():
         "--feature_dim", type=int, default=None, help="If known, supply feature dim"
     )  # Add feature dimension argument
     p.add_argument("--gen_only", action="store_true")  # Add generation only flag
+    p.add_argument("--num_workers", type=int, default=8, help="Number of dataloader workers (default: 8)")  # Add num_workers argument
+    p.add_argument("--use_amp", action="store_true", help="Use automatic mixed precision for faster training")  # Add AMP flag
+    p.add_argument("--compile", action="store_true", help="Use torch.compile() for faster execution (PyTorch 2.0+)")  # Add compile flag
     return p.parse_args()  # Parse arguments and return namespace
 
 
@@ -738,11 +741,27 @@ def train(args):
     )  # Select device for training
     set_seed(args.seed)  # Set random seed for reproducibility
 
+    # Print optimization settings
+    print(f"{BackgroundColors.CYAN}Device: {device}{Style.RESET_ALL}")
+    if args.use_amp and device.type == 'cuda':
+        print(f"{BackgroundColors.GREEN}Using Automatic Mixed Precision (AMP) for faster training{Style.RESET_ALL}")
+    if args.compile:
+        print(f"{BackgroundColors.GREEN}Using torch.compile() for optimized execution{Style.RESET_ALL}")
+
     dataset = CSVFlowDataset(
         args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols
     )  # Load dataset from CSV
+    
+    # Optimized DataLoader settings for better performance
     dataloader = DataLoader(
-        dataset, batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=4
+        dataset, 
+        batch_size=args.batch_size, 
+        shuffle=True, 
+        drop_last=True, 
+        num_workers=args.num_workers,  # Configurable number of workers
+        pin_memory=True if device.type == 'cuda' else False,  # Faster CPU->GPU transfer
+        persistent_workers=True if args.num_workers > 0 else False,  # Keep workers alive between epochs
+        prefetch_factor=2 if args.num_workers > 0 else None,  # Prefetch batches for better GPU utilization
     )  # Create dataloader for batching
 
     feature_dim = dataset.feature_dim  # Get feature dimensionality from dataset
@@ -763,6 +782,18 @@ def train(args):
     ).to(
         device
     )  # Initialize discriminator model
+
+    # Apply torch.compile() for faster execution (PyTorch 2.0+)
+    if args.compile:
+        try:
+            G = torch.compile(G, mode="reduce-overhead")  # Compile generator
+            D = torch.compile(D, mode="reduce-overhead")  # Compile discriminator
+            print(f"{BackgroundColors.GREEN}Models compiled successfully{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{BackgroundColors.YELLOW}torch.compile() not available or failed: {e}{Style.RESET_ALL}")
+
+    # Initialize mixed precision scaler for AMP
+    scaler = torch.cuda.amp.GradScaler() if args.use_amp and device.type == 'cuda' else None
 
     opt_D = torch.optim.Adam(
         D.parameters(), lr=args.lr, betas=(args.beta1, args.beta2)
@@ -800,31 +831,44 @@ def train(args):
             d_real_score = torch.tensor(0.0, device=device)  # Initialize real score tracker
             d_fake_score = torch.tensor(0.0, device=device)  # Initialize fake score tracker
             
+            # Train discriminator with optional mixed precision
             for _ in range(args.critic_steps):  # Train discriminator multiple steps
-                z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for discriminator step
-                fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
-                d_real = D(real_x, labels)  # Get discriminator score for real samples
-                d_fake = D(fake_x, labels)  # Get discriminator score for fake samples
-                gp = gradient_penalty(D, real_x, fake_x, labels, device)  # Compute gradient penalty
-
-                loss_D = d_fake.mean() - d_real.mean() + args.lambda_gp * gp  # Calculate WGAN-GP discriminator loss
+                with torch.cuda.amp.autocast(enabled=(scaler is not None)):  # Enable AMP if available
+                    z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for discriminator step
+                    fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
+                    d_real = D(real_x, labels)  # Get discriminator score for real samples
+                    d_fake = D(fake_x, labels)  # Get discriminator score for fake samples
+                    gp = gradient_penalty(D, real_x, fake_x, labels, device)  # Compute gradient penalty
+                    loss_D = d_fake.mean() - d_real.mean() + args.lambda_gp * gp  # Calculate WGAN-GP discriminator loss
 
                 opt_D.zero_grad()  # Zero discriminator gradients
-                loss_D.backward()  # Backpropagate discriminator loss
-                opt_D.step()  # Update discriminator parameters
+                if scaler is not None:  # If using mixed precision
+                    scaler.scale(loss_D).backward()  # Scale loss and backpropagate
+                    scaler.step(opt_D)  # Update discriminator parameters with scaled gradients
+                    scaler.update()  # Update scaler for next iteration
+                else:  # Standard precision
+                    loss_D.backward()  # Backpropagate discriminator loss
+                    opt_D.step()  # Update discriminator parameters
 
                 # Track scores for the last critic step
                 d_real_score = d_real.mean()  # Store average real score
                 d_fake_score = d_fake.mean()  # Store average fake score
 
-            z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for generator step
-            gen_labels = torch.randint(0, n_classes, (args.batch_size,), device=device)  # Sample labels for generator
-            fake_x = G(z, gen_labels)  # Generate fake samples with generator
-            g_loss = -D(fake_x, gen_labels).mean()  # Calculate generator loss
+            # Train generator with optional mixed precision
+            with torch.cuda.amp.autocast(enabled=(scaler is not None)):  # Enable AMP if available
+                z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for generator step
+                gen_labels = torch.randint(0, n_classes, (args.batch_size,), device=device)  # Sample labels for generator
+                fake_x = G(z, gen_labels)  # Generate fake samples with generator
+                g_loss = -D(fake_x, gen_labels).mean()  # Calculate generator loss
 
             opt_G.zero_grad()  # Zero generator gradients
-            g_loss.backward()  # Backpropagate generator loss
-            opt_G.step()  # Update generator parameters
+            if scaler is not None:  # If using mixed precision
+                scaler.scale(g_loss).backward()  # Scale loss and backpropagate
+                scaler.step(opt_G)  # Update generator parameters with scaled gradients
+                scaler.update()  # Update scaler for next iteration
+            else:  # Standard precision
+                g_loss.backward()  # Backpropagate generator loss
+                opt_G.step()  # Update generator parameters
 
             # Track metrics every log_interval steps
             if step % args.log_interval == 0:  # Log training progress periodically
