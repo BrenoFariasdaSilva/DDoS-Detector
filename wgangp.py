@@ -657,12 +657,13 @@ def gradient_penalty(critic, real_samples, fake_samples, labels, device):
     return gp  # Return scalar gradient penalty
 
 
-def plot_training_metrics(metrics_history, out_dir):
+def plot_training_metrics(metrics_history, out_dir, filename="training_metrics.png"):
     """
     Plot training metrics and save to output directory.
 
     :param metrics_history: dictionary containing lists of metrics over training
     :param out_dir: directory to save plots
+    :param filename: name of the plot file (default: "training_metrics.png")
     :return: None
     """
 
@@ -718,7 +719,7 @@ def plot_training_metrics(metrics_history, out_dir):
     axes[1, 2].grid(True, alpha=0.3)  # Add grid
 
     plt.tight_layout()  # Adjust spacing between subplots
-    plot_path = os.path.join(out_dir, "training_metrics.png")  # Define plot save path
+    plot_path = os.path.join(out_dir, filename)  # Define plot save path using custom filename
     plt.savefig(plot_path, dpi=300, bbox_inches="tight")  # Save figure to file
     print(f"{BackgroundColors.GREEN}Training metrics plot saved to: {BackgroundColors.CYAN}{plot_path}{Style.RESET_ALL}")  # Print save message
     plt.close()  # Close figure to free memory
@@ -875,7 +876,22 @@ def train(args):
     # Plot training metrics
     if len(metrics_history["steps"]) > 0:  # If metrics were collected
         print(f"{BackgroundColors.GREEN}Generating training metrics plots...{Style.RESET_ALL}")  # Print plotting message
-        plot_training_metrics(metrics_history, args.out_dir)  # Create and save plots
+        # Determine plot output directory based on input CSV location
+        if args.csv_path:  # If CSV path is provided
+            csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
+            plot_dir = csv_path_obj.parent / "Data_Augmentation"  # Create Data_Augmentation subdirectory
+            os.makedirs(plot_dir, exist_ok=True)  # Ensure directory exists
+            # Save plot with same base name as input file
+            plot_filename = csv_path_obj.stem + "_training_metrics.png"  # Use input filename for plot
+            # Temporarily modify out_dir for plotting
+            original_out_dir = args.out_dir  # Save original out_dir
+            args.out_dir = str(plot_dir)  # Set out_dir to Data_Augmentation
+            # Update metrics history to use custom filename
+            temp_metrics = metrics_history.copy()  # Copy metrics
+            plot_training_metrics(temp_metrics, str(plot_dir), plot_filename)  # Create and save plots
+            args.out_dir = original_out_dir  # Restore original out_dir
+        else:  # No CSV path, use default out_dir
+            plot_training_metrics(metrics_history, args.out_dir, "training_metrics.png")  # Create and save plots
 
 
 def generate(args):
@@ -1035,8 +1051,10 @@ def main():
         # Set output file path if using default
         if args.out_file == "generated.csv" and args.mode in ["gen", "both"]:  # If using default output file
             csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
-            output_filename = csv_path_obj.stem + "_wgan-gp_data-augmented.csv"  # Create output filename
-            args.out_file = str(csv_path_obj.parent / output_filename)  # Set output file path to same directory as input
+            data_aug_dir = csv_path_obj.parent / "Data_Augmentation"  # Create Data_Augmentation subdirectory path
+            os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists
+            output_filename = csv_path_obj.name  # Use same filename as input
+            args.out_file = str(data_aug_dir / output_filename)  # Set output file path to Data_Augmentation subdirectory
         
         if args.mode == "train":
             train(args)  # Train the model
@@ -1095,10 +1113,12 @@ def main():
                         f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}\n"
                     )
                     
-                    # Set output file path: same directory as input, with suffix
+                    # Set output file path: Data_Augmentation subdirectory with same filename
                     csv_path_obj = Path(file)
-                    output_filename = csv_path_obj.stem + "_wgan-gp_data-augmented.csv"
-                    args.out_file = str(csv_path_obj.parent / output_filename)
+                    data_aug_dir = csv_path_obj.parent / "Data_Augmentation"  # Create Data_Augmentation subdirectory path
+                    os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists
+                    output_filename = csv_path_obj.name  # Use same filename as input
+                    args.out_file = str(data_aug_dir / output_filename)  # Set output file path to Data_Augmentation subdirectory
                     args.csv_path = file  # Set CSV path to current file
                     
                     try:
