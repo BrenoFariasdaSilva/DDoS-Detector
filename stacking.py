@@ -1616,6 +1616,7 @@ def main():
                 )  # Total steps: models + stacking per feature set
                 progress_bar = tqdm(total=total_steps)  # Progress bar for all evaluations
 
+                cache_dict = load_cache_results(file)  # Load cached results from previous runs
                 all_results = []  # List to store results for saving (individual + stacking)
 
                 print(
@@ -1662,6 +1663,16 @@ def main():
                     ) as executor:  # Create a thread pool executor for parallel evaluation
                         future_to_model = {}  # Dictionary to map futures to model names
                         for model_name, model in individual_models.items():  # Iterate over each individual model
+                            cache_key = (name, model_name)  # Create cache key tuple
+                            if cache_key in cache_dict:  # If result is cached
+                                cached_result = cache_dict[cache_key]  # Get cached result
+                                all_results.append(cached_result)  # Add cached result to list
+                                print(
+                                    f"    {BackgroundColors.GREEN}{model_name} (cached) Accuracy: {BackgroundColors.CYAN}{cached_result['metrics'][0]:.4f}{Style.RESET_ALL}"
+                                )  # Output cached accuracy
+                                progress_bar.update(1)  # Update progress
+                                continue  # Skip evaluation, use cached result
+
                             future = executor.submit(
                                 evaluate_individual_classifier,
                                 model,
@@ -1685,6 +1696,7 @@ def main():
                                 "features_list": features_list,
                             }  # Prepare result entry
                             all_results.append(result_entry)  # Add result to list
+                            save_to_cache(file, result_entry)  # Save result to cache
                             print(
                                 f"    {BackgroundColors.GREEN}{model_name} Accuracy for classifier {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{metrics[0]:.4f}{Style.RESET_ALL}"
                             )  # Output accuracy
@@ -1696,26 +1708,38 @@ def main():
                     progress_bar.set_description(
                         f"{BackgroundColors.GREEN}Evaluating {BackgroundColors.CYAN}{idx}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{len(feature_sets)}{BackgroundColors.GREEN} - {BackgroundColors.CYAN}{name}{BackgroundColors.GREEN}: Stacking{Style.RESET_ALL}"
                     )  # Update progress bar description for stacking
-                    stacking_metrics = evaluate_stacking_classifier(
-                        stacking_model, X_train_df, y_train, X_test_df, y_test
-                    )  # Evaluate stacking model with DataFrames
 
-                    stacking_result_entry = {
-                        "dataset": os.path.basename(file),
-                        "feature_set": name,
-                        "classifier_type": "Stacking",
-                        "model_name": "StackingClassifier",
-                        "n_features": X_train_subset.shape[1],
-                        "metrics": stacking_metrics,
-                        "features_list": features_list,
-                    }  # Prepare stacking result entry
-                    all_results.append(stacking_result_entry)  # Add stacking result
-                    print(
-                        f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{stacking_metrics[0]:.4f}{Style.RESET_ALL}"
-                    )  # Output accuracy
-                    progress_bar.update(1)  # Update progress after stacking
+                    stacking_cache_key = (name, "StackingClassifier")  # Create cache key for stacking
+                    if stacking_cache_key in cache_dict:  # If stacking result is cached
+                        stacking_cached_result = cache_dict[stacking_cache_key]  # Get cached stacking result
+                        all_results.append(stacking_cached_result)  # Add cached result to list
+                        print(
+                            f"    {BackgroundColors.GREEN}Stacking (cached) Accuracy: {BackgroundColors.CYAN}{stacking_cached_result['metrics'][0]:.4f}{Style.RESET_ALL}"
+                        )  # Output cached accuracy
+                        progress_bar.update(1)  # Update progress
+                    else:  # If not cached, evaluate
+                        stacking_metrics = evaluate_stacking_classifier(
+                            stacking_model, X_train_df, y_train, X_test_df, y_test
+                        )  # Evaluate stacking model with DataFrames
+
+                        stacking_result_entry = {
+                            "dataset": os.path.basename(file),
+                            "feature_set": name,
+                            "classifier_type": "Stacking",
+                            "model_name": "StackingClassifier",
+                            "n_features": X_train_subset.shape[1],
+                            "metrics": stacking_metrics,
+                            "features_list": features_list,
+                        }  # Prepare stacking result entry
+                        all_results.append(stacking_result_entry)  # Add stacking result
+                        save_to_cache(file, stacking_result_entry)  # Save stacking result to cache
+                        print(
+                            f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{stacking_metrics[0]:.4f}{Style.RESET_ALL}"
+                        )  # Output accuracy
+                        progress_bar.update(1)  # Update progress after stacking
 
                 save_stacking_results(file, all_results)  # Save consolidated results to CSV
+                remove_cache_file(file)  # Remove cache file after successful save
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
