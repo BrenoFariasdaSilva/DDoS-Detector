@@ -120,6 +120,28 @@ RUN_FUNCTIONS = {
     "Play Sound": True,  # Set to True to play a sound when the program finishes
 }
 
+# Functions Definitions:
+
+def detect_label_column(columns):
+    """
+    Try to guess the label column based on common naming conventions.
+
+    :param columns: List of column names
+    :return: The name of the label column if found, else None
+    """
+
+    candidates = ["label", "class", "target"]  # Common label column names
+
+    for col in columns:  # First search for exact matches
+        if col.lower() in candidates:  # Verify if the column name matches any candidate exactly
+            return col  # Return the column name if found
+
+    for col in columns:  # Second search for partial matches
+        if "target" in col.lower() or "label" in col.lower():  # Verify if the column name contains any candidate
+            return col  # Return the column name if found
+
+    return None  # Return None if no label column is found
+
 # Classes Definitions:
 
 
@@ -146,7 +168,16 @@ class CSVFlowDataset(Dataset):
         label_encoder: Optional[LabelEncoder] = None,  # Optional label encoder
         fit_scaler: bool = True,  # Whether to fit scaler on data
     ):  # Close constructor signature
-        df = pd.read_csv(csv_path)  # Load CSV file into a DataFrame
+        df = pd.read_csv(csv_path, low_memory=False)  # Load CSV file into a DataFrame with low_memory=False to avoid DtypeWarning
+
+        # Auto-detect label column if the specified one doesn't exist
+        if label_col not in df.columns:  # If the specified label column is not found
+            detected_col = detect_label_column(df.columns)  # Try to detect the label column
+            if detected_col is not None:  # If a label column was detected
+                print(f"{BackgroundColors.YELLOW}Warning: Label column '{label_col}' not found. Using detected column: '{detected_col}'{Style.RESET_ALL}")  # Warn user
+                label_col = detected_col  # Use the detected column
+            else:  # If no label column was detected
+                raise ValueError(f"Label column '{label_col}' not found in CSV. Available columns: {list(df.columns)}")  # Raise error
 
         if feature_cols is None:  # When user does not specify features
             feature_cols = [c for c in df.columns if c != label_col]  # Select every column except label
