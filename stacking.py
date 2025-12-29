@@ -1367,6 +1367,60 @@ def load_cache_results(csv_path):
         return {}  # Return empty dictionary on error
 
 
+def save_to_cache(csv_path, result_entry):
+    """
+    Save a single result entry to the cache file.
+
+    :param csv_path: Path to the dataset CSV file
+    :param result_entry: Dictionary containing result data
+    :return: None
+    """
+
+    cache_path = get_cache_file_path(csv_path)  # Get the cache file path
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Saving result to cache: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    try:  # Try to save to cache
+        # Flatten the result entry for CSV storage
+        metrics = result_entry.get("metrics", (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))  # Get metrics tuple
+        flat_row = {  # Create flattened row dictionary
+            "dataset": result_entry.get("dataset", ""),
+            "feature_set": result_entry.get("feature_set", ""),
+            "classifier_type": result_entry.get("classifier_type", ""),
+            "model_name": result_entry.get("model_name", ""),
+            "n_features": result_entry.get("n_features", 0),
+            "accuracy": round(metrics[0], 4),
+            "precision": round(metrics[1], 4),
+            "recall": round(metrics[2], 4),
+            "f1_score": round(metrics[3], 4),
+            "fpr": round(metrics[4], 4),
+            "fnr": round(metrics[5], 4),
+            "elapsed_time_s": round(metrics[6], 2),
+            "features_list": json.dumps(result_entry.get("features_list", [])),  # Serialize to JSON
+        }
+
+        # Check if cache file exists
+        if os.path.exists(cache_path):  # If cache file exists
+            df_existing = pd.read_csv(cache_path)  # Read existing cache
+            df_new = pd.DataFrame([flat_row])  # Create DataFrame from new row
+            df_combined = pd.concat([df_existing, df_new], ignore_index=True)  # Combine DataFrames
+            df_combined.to_csv(cache_path, index=False, encoding="utf-8")  # Write combined data
+        else:  # If cache file doesn't exist
+            df_new = pd.DataFrame([flat_row])  # Create DataFrame from new row
+            df_new.to_csv(cache_path, index=False, encoding="utf-8")  # Write new cache file
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Successfully saved to cache: {BackgroundColors.CYAN}{result_entry.get('model_name', 'Unknown')}{Style.RESET_ALL}"
+        )  # Output success message
+
+    except Exception as e:  # Catch any errors
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Failed to save to cache {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
+        )  # Print warning message
+
+
 def calculate_execution_time(start_time, finish_time):
     """
     Calculates the execution time between start and finish times and formats it as hh:mm:ss.
