@@ -54,6 +54,7 @@ Assumptions & Notes:
 import argparse  # For CLI argument parsing
 import atexit  # For playing a sound when the program finishes
 import datetime  # For tracking execution time
+import matplotlib.pyplot as plt  # For plotting training metrics
 import numpy as np  # Numerical operations
 import os  # For running a command in the terminal
 import pandas as pd  # For CSV handling
@@ -656,6 +657,73 @@ def gradient_penalty(critic, real_samples, fake_samples, labels, device):
     return gp  # Return scalar gradient penalty
 
 
+def plot_training_metrics(metrics_history, out_dir):
+    """
+    Plot training metrics and save to output directory.
+
+    :param metrics_history: dictionary containing lists of metrics over training
+    :param out_dir: directory to save plots
+    :return: None
+    """
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))  # Create 2x3 subplot grid
+    fig.suptitle("WGAN-GP Training Metrics", fontsize=16, fontweight="bold")  # Add main title
+
+    steps = metrics_history["steps"]  # Get step numbers
+
+    # Plot 1: Discriminator Loss
+    axes[0, 0].plot(steps, metrics_history["loss_D"], color="blue", linewidth=1.5, alpha=0.7)  # Plot loss_D
+    axes[0, 0].set_title("Discriminator Loss (WGAN)", fontweight="bold")  # Set subplot title
+    axes[0, 0].set_xlabel("Training Step")  # Set x-axis label
+    axes[0, 0].set_ylabel("Loss D")  # Set y-axis label
+    axes[0, 0].grid(True, alpha=0.3)  # Add grid
+
+    # Plot 2: Generator Loss
+    axes[0, 1].plot(steps, metrics_history["loss_G"], color="red", linewidth=1.5, alpha=0.7)  # Plot loss_G
+    axes[0, 1].set_title("Generator Loss (WGAN)", fontweight="bold")  # Set subplot title
+    axes[0, 1].set_xlabel("Training Step")  # Set x-axis label
+    axes[0, 1].set_ylabel("Loss G")  # Set y-axis label
+    axes[0, 1].grid(True, alpha=0.3)  # Add grid
+
+    # Plot 3: Gradient Penalty
+    axes[0, 2].plot(steps, metrics_history["gp"], color="green", linewidth=1.5, alpha=0.7)  # Plot gradient penalty
+    axes[0, 2].set_title("Gradient Penalty", fontweight="bold")  # Set subplot title
+    axes[0, 2].set_xlabel("Training Step")  # Set x-axis label
+    axes[0, 2].set_ylabel("GP")  # Set y-axis label
+    axes[0, 2].grid(True, alpha=0.3)  # Add grid
+
+    # Plot 4: Critic Scores (Real vs Fake)
+    axes[1, 0].plot(steps, metrics_history["D_real"], label="E[D(real)]", color="darkblue", linewidth=1.5, alpha=0.7)  # Plot real scores
+    axes[1, 0].plot(steps, metrics_history["D_fake"], label="E[D(fake)]", color="darkred", linewidth=1.5, alpha=0.7)  # Plot fake scores
+    axes[1, 0].set_title("Critic Scores (Real vs Fake)", fontweight="bold")  # Set subplot title
+    axes[1, 0].set_xlabel("Training Step")  # Set x-axis label
+    axes[1, 0].set_ylabel("Critic Score")  # Set y-axis label
+    axes[1, 0].legend(loc="best")  # Add legend
+    axes[1, 0].grid(True, alpha=0.3)  # Add grid
+
+    # Plot 5: Wasserstein Distance Estimate
+    axes[1, 1].plot(steps, metrics_history["wasserstein"], color="purple", linewidth=1.5, alpha=0.7)  # Plot Wasserstein distance
+    axes[1, 1].set_title("Wasserstein Distance Estimate", fontweight="bold")  # Set subplot title
+    axes[1, 1].set_xlabel("Training Step")  # Set x-axis label
+    axes[1, 1].set_ylabel("W-Distance")  # Set y-axis label
+    axes[1, 1].grid(True, alpha=0.3)  # Add grid
+
+    # Plot 6: Combined Loss View
+    axes[1, 2].plot(steps, metrics_history["loss_D"], label="Loss D", color="blue", linewidth=1.5, alpha=0.6)  # Plot loss_D
+    axes[1, 2].plot(steps, metrics_history["loss_G"], label="Loss G", color="red", linewidth=1.5, alpha=0.6)  # Plot loss_G
+    axes[1, 2].set_title("Combined Loss View", fontweight="bold")  # Set subplot title
+    axes[1, 2].set_xlabel("Training Step")  # Set x-axis label
+    axes[1, 2].set_ylabel("Loss")  # Set y-axis label
+    axes[1, 2].legend(loc="best")  # Add legend
+    axes[1, 2].grid(True, alpha=0.3)  # Add grid
+
+    plt.tight_layout()  # Adjust spacing between subplots
+    plot_path = os.path.join(out_dir, "training_metrics.png")  # Define plot save path
+    plt.savefig(plot_path, dpi=300, bbox_inches="tight")  # Save figure to file
+    print(f"{BackgroundColors.GREEN}Training metrics plot saved to: {BackgroundColors.CYAN}{plot_path}{Style.RESET_ALL}")  # Print save message
+    plt.close()  # Close figure to free memory
+
+
 def train(args):
     """
     Train the WGAN-GP model using the provided arguments.
@@ -710,6 +778,17 @@ def train(args):
     os.makedirs(args.out_dir, exist_ok=True)  # Ensure output directory exists
     step = 0  # Initialize global step counter
 
+    # Initialize metrics tracking
+    metrics_history = {
+        "steps": [],  # Training step numbers
+        "loss_D": [],  # Discriminator loss values
+        "loss_G": [],  # Generator loss values
+        "gp": [],  # Gradient penalty values
+        "D_real": [],  # Average critic score for real samples
+        "D_fake": [],  # Average critic score for fake samples
+        "wasserstein": [],  # Estimated Wasserstein distance (D_real - D_fake)
+    }  # Dictionary to store training metrics
+
     for epoch in range(args.epochs):  # Loop over epochs
         for real_x_np, labels_np in dataloader:  # Loop over batches in dataloader
             real_x = real_x_np.to(device)  # Move real features to device
@@ -717,6 +796,9 @@ def train(args):
 
             loss_D = torch.tensor(0.0, device=device)  # Initialize discriminator loss
             gp = torch.tensor(0.0, device=device)  # Initialize gradient penalty
+            d_real_score = torch.tensor(0.0, device=device)  # Initialize real score tracker
+            d_fake_score = torch.tensor(0.0, device=device)  # Initialize fake score tracker
+            
             for _ in range(args.critic_steps):  # Train discriminator multiple steps
                 z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for discriminator step
                 fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
@@ -730,6 +812,10 @@ def train(args):
                 loss_D.backward()  # Backpropagate discriminator loss
                 opt_D.step()  # Update discriminator parameters
 
+                # Track scores for the last critic step
+                d_real_score = d_real.mean()  # Store average real score
+                d_fake_score = d_fake.mean()  # Store average fake score
+
             z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for generator step
             gen_labels = torch.randint(0, n_classes, (args.batch_size,), device=device)  # Sample labels for generator
             fake_x = G(z, gen_labels)  # Generate fake samples with generator
@@ -739,9 +825,22 @@ def train(args):
             g_loss.backward()  # Backpropagate generator loss
             opt_G.step()  # Update generator parameters
 
+            # Track metrics every log_interval steps
             if step % args.log_interval == 0:  # Log training progress periodically
+                # Calculate Wasserstein distance estimate
+                wasserstein_dist = (d_real_score - d_fake_score).item()  # Compute W-distance
+                
+                # Store metrics
+                metrics_history["steps"].append(step)  # Record step number
+                metrics_history["loss_D"].append(loss_D.item())  # Record discriminator loss
+                metrics_history["loss_G"].append(g_loss.item())  # Record generator loss
+                metrics_history["gp"].append(gp.item())  # Record gradient penalty
+                metrics_history["D_real"].append(d_real_score.item())  # Record real score
+                metrics_history["D_fake"].append(d_fake_score.item())  # Record fake score
+                metrics_history["wasserstein"].append(wasserstein_dist)  # Record Wasserstein distance
+                
                 print(
-                    f"[Epoch {epoch}/{args.epochs}] step {step} | loss_D: {loss_D.item():.4f} | loss_G: {g_loss.item():.4f} | gp: {gp.item():.4f}"
+                    f"[Epoch {epoch+1}/{args.epochs}] step {step} | loss_D: {loss_D.item():.4f} | loss_G: {g_loss.item():.4f} | gp: {gp.item():.4f} | D(real): {d_real_score.item():.4f} | D(fake): {d_fake_score.item():.4f}"
                 )  # Print training status
             step += 1  # Increment global step counter
 
@@ -772,6 +871,11 @@ def train(args):
             print(f"Saved generator to {g_path}")  # Print checkpoint save message
 
     print("Training finished.")  # Print final training completion message
+    
+    # Plot training metrics
+    if len(metrics_history["steps"]) > 0:  # If metrics were collected
+        print(f"{BackgroundColors.GREEN}Generating training metrics plots...{Style.RESET_ALL}")  # Print plotting message
+        plot_training_metrics(metrics_history, args.out_dir)  # Create and save plots
 
 
 def generate(args):
