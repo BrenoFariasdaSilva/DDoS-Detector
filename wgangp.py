@@ -62,6 +62,7 @@ import random  # For reproducibility
 import sys  # For system-specific parameters and functions
 import torch  # PyTorch core
 import torch.nn as nn  # Neural network modules
+import traceback  # For printing tracebacks on exceptions
 from colorama import Style  # For coloring the terminal
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
@@ -395,7 +396,7 @@ def parse_args():
     """
 
     p = argparse.ArgumentParser(description="DRCGAN-like WGAN-GP for CICDDoS2019 features")  # Create argument parser
-    p.add_argument("--mode", choices=["train", "gen"], required=True)  # Add mode argument
+    p.add_argument("--mode", choices=["train", "gen", "both"], default="both", help="Mode: train, gen, or both (default: both)")  # Add mode argument
     p.add_argument(
         "--csv_path", type=str, default=None, help="Path to CSV (training data) - required for training."
     )  # Add CSV path argument
@@ -840,43 +841,110 @@ def main():
     start_time = datetime.datetime.now()  # Get the start time of the program
 
     args = parse_args()  # Parse command-line arguments
-    if args.mode == "train":  # If training mode is selected
-        if args.csv_path is not None:  # If CSV path is provided via command line
-            train(args)  # Run training function on single file
-        else:  # No CSV path provided, use batch processing
+    
+    if args.csv_path is not None:  # Single file mode (csv_path provided):
+        # Set output file path if using default
+        if args.out_file == "generated.csv" and args.mode in ["gen", "both"]:  # If using default output file
+            csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
+            output_filename = csv_path_obj.stem + "_wgan-gp_data-augmented.csv"  # Create output filename
+            args.out_file = str(csv_path_obj.parent / output_filename)  # Set output file path to same directory as input
+        
+        if args.mode == "train":
+            train(args)  # Train the model
+        elif args.mode == "gen":
+            assert args.checkpoint is not None, "Generation requires --checkpoint"  # Ensure checkpoint is provided
+            generate(args)  # Generate synthetic samples
+        elif args.mode == "both":
+            print(f"{BackgroundColors.CYAN}[1/2] Training model...{Style.RESET_ALL}")
+            train(args)  # Train the model
+            
+            # Set checkpoint path to the last saved model
+            checkpoint_path = Path(args.out_dir) / f"generator_epoch{args.epochs}.pt"
+            if not checkpoint_path.exists():
+                # Try to find the latest checkpoint
+                checkpoints = sorted(Path(args.out_dir).glob("generator_epoch*.pt"))
+                if checkpoints:  # If checkpoints found
+                    checkpoint_path = checkpoints[-1]  # Use the latest checkpoint
+                else:  # No checkpoints found
+                    raise FileNotFoundError(f"No generator checkpoint found in {args.out_dir}")
+            
+            args.checkpoint = str(checkpoint_path)
+            print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")
+            print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}\n")
+            generate(args)  # Generate synthetic samples
+    
+    # Batch processing mode (no csv_path provided):
+    else:
+        print(
+            f"{BackgroundColors.GREEN}No CSV path provided. Processing datasets in batch mode...{Style.RESET_ALL}"
+        )  # Notify batch mode
+        
+        for dataset_name, paths in DATASETS.items():  # For each dataset in the DATASETS dictionary
             print(
-                f"{BackgroundColors.GREEN}No CSV path provided. Processing datasets in batch mode...{Style.RESET_ALL}"
-            )  # Notify batch mode
-            for dataset_name, paths in DATASETS.items():  # For each dataset in the DATASETS dictionary
-                print(
-                    f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
-                )
-                for input_path in paths:  # For each path in the dataset's paths list
-                    if not verify_filepath_exists(input_path):  # If the input path does not exist
-                        verbose_output(
-                            f"{BackgroundColors.YELLOW}Skipping missing path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
-                        )
-                        continue  # Skip to the next path if the current one doesn't exist
+                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
+            )
+            for input_path in paths:  # For each path in the dataset's paths list
+                if not verify_filepath_exists(input_path):  # If the input path does not exist
+                    verbose_output(
+                        f"{BackgroundColors.YELLOW}Skipping missing path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
+                    )
+                    continue  # Skip to the next path if the current one doesn't exist
 
-                    files_to_process = get_files_to_process(
-                        input_path, file_extension=".csv"
-                    )  # Get list of CSV files to process
-
-                    for file in files_to_process:  # For each file to process
+                files_to_process = get_files_to_process(
+                    input_path, file_extension=".csv"
+                )  # Get list of CSV files to process
+                files_to_process = ["./Datasets/CICDDoS2019/01-12/Syn.csv"]  # TEMPORARY OVERRIDE FOR TESTING PURPOSES ONLY
+                
+                for file in files_to_process:  # For each file to process
+                    print(
+                        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}"
+                    )
+                    print(
+                        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
+                    )
+                    print(
+                        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}\n"
+                    )
+                    
+                    # Set output file path: same directory as input, with suffix
+                    csv_path_obj = Path(file)
+                    output_filename = csv_path_obj.stem + "_wgan-gp_data-augmented.csv"
+                    args.out_file = str(csv_path_obj.parent / output_filename)
+                    args.csv_path = file  # Set CSV path to current file
+                    
+                    try:
+                        if args.mode == "train":
+                            train(args)  # Train the model only
+                        elif args.mode == "gen":
+                            assert args.checkpoint is not None, "Generation requires --checkpoint"
+                            generate(args)  # Generate synthetic samples only
+                        elif args.mode == "both":
+                            print(f"{BackgroundColors.CYAN}[1/2] Training model on {csv_path_obj.name}...{Style.RESET_ALL}")
+                            train(args)  # Train the model
+                            
+                            # Set checkpoint path to the last saved model
+                            checkpoint_path = Path(args.out_dir) / f"generator_epoch{args.epochs}.pt"
+                            if not checkpoint_path.exists():
+                                # Try to find the latest checkpoint
+                                checkpoints = sorted(Path(args.out_dir).glob("generator_epoch*.pt"))
+                                if checkpoints:
+                                    checkpoint_path = checkpoints[-1]
+                                else:
+                                    raise FileNotFoundError(f"No generator checkpoint found in {args.out_dir}")
+                            
+                            args.checkpoint = str(checkpoint_path)
+                            print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")
+                            print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}\n")
+                            generate(args)  # Generate synthetic samples
+                            
+                    except Exception as e:
                         print(
-                            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Training on file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
-                        )  # Output the file being processed
-                        args.csv_path = file  # Set CSV path to current file
-                        try:
-                            train(args)  # Run training function
-                        except Exception as e:
-                            print(
-                                f"{BackgroundColors.RED}Error training on {BackgroundColors.CYAN}{file}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
-                            )  # Print error message
-                            continue  # Continue to next file
-    elif args.mode == "gen":  # If generation mode is selected
-        assert args.checkpoint is not None, "Generation requires --checkpoint"  # Ensure checkpoint is provided
-        generate(args)  # Run generation function
+                            f"{BackgroundColors.RED}Error processing {BackgroundColors.CYAN}{file}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
+                        )  # Print error message
+                        traceback.print_exc()  # Print full traceback
+                        continue  # Continue to next file
+        
+        print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Batch processing completed!{Style.RESET_ALL}")
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
