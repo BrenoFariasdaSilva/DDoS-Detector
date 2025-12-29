@@ -143,6 +143,71 @@ def detect_label_column(columns):
 
     return None  # Return None if no label column is found
 
+
+def preprocess_dataframe(df, label_col, remove_zero_variance=True):
+    """
+    Preprocess a DataFrame by:
+    1. Selecting only numeric feature columns (excluding label)
+    2. Removing rows with NaN or infinite values
+    3. Optionally dropping zero-variance numeric features
+
+    :param df: pandas DataFrame to preprocess
+    :param label_col: name of the label column to preserve
+    :param remove_zero_variance: whether to drop numeric columns with zero variance
+    :return: cleaned DataFrame with only numeric features and the label column
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Preprocessing DataFrame: selecting numeric features, removing NaN/inf, handling zero-variance.{Style.RESET_ALL}"
+    )  # Output verbose message
+
+    if df is None:  # If the DataFrame is None
+        return df  # Return None
+
+    # Separate label column
+    labels = df[label_col].copy()  # Save labels
+
+    # Select only numeric columns (excluding label)
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()  # Get numeric column names
+    if label_col in numeric_cols:  # If label is numeric, remove it from features
+        numeric_cols.remove(label_col)  # Remove label from feature list
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Found {len(numeric_cols)} numeric feature columns out of {len(df.columns)-1} total features.{Style.RESET_ALL}"
+    )  # Output count
+
+    # Create DataFrame with only numeric features
+    df_numeric = df[numeric_cols].copy()  # Select numeric features
+
+    # Replace infinite values with NaN, then drop rows with NaN
+    df_numeric = df_numeric.replace([np.inf, -np.inf], np.nan)  # Replace inf with NaN
+    valid_mask = ~df_numeric.isna().any(axis=1)  # Mask for rows without NaN
+
+    df_clean = df_numeric[valid_mask].copy()  # Keep only valid rows
+    labels_clean = labels[valid_mask].copy()  # Keep corresponding labels
+
+    rows_dropped = len(df) - len(df_clean)  # Calculate dropped rows
+    if rows_dropped > 0:  # If rows were dropped
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Dropped {rows_dropped} rows with NaN/inf values ({rows_dropped/len(df)*100:.2f}%).{Style.RESET_ALL}"
+        )  # Output warning
+
+    # Remove zero-variance features if requested
+    if remove_zero_variance and len(df_clean) > 0:  # If removal enabled and data remains
+        variances = df_clean.var(axis=0, ddof=0)  # Calculate column variances
+        zero_var_cols = variances[variances == 0].index.tolist()  # Get zero-variance columns
+        if zero_var_cols:  # If zero-variance columns exist
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Dropping {len(zero_var_cols)} zero-variance columns.{Style.RESET_ALL}"
+            )  # Output warning
+            df_clean = df_clean.drop(columns=zero_var_cols)  # Drop zero-variance columns
+
+    # Add label column back
+    df_clean[label_col] = labels_clean.values  # Restore labels
+
+    return df_clean  # Return cleaned DataFrame
+
+
 # Classes Definitions:
 
 
@@ -180,8 +245,22 @@ class CSVFlowDataset(Dataset):
             else:  # If no label column was detected
                 raise ValueError(f"Label column '{label_col}' not found in CSV. Available columns: {list(df.columns)}")  # Raise error
 
+        # Preprocess DataFrame: select numeric features, remove NaN/inf, handle zero-variance
+        df = preprocess_dataframe(df, label_col, remove_zero_variance=True)  # Clean and filter DataFrame
+
+        if len(df) == 0:  # If all rows were dropped
+            raise ValueError(f"No valid data remaining after preprocessing {csv_path}")  # Raise error
+
+        # Get available numeric feature columns (excluding label)
+        available_features = [c for c in df.columns if c != label_col]  # List numeric features
+
         if feature_cols is None:  # When user does not specify features
-            feature_cols = [c for c in df.columns if c != label_col]  # Select every column except label
+            feature_cols = available_features  # Use all available numeric features
+        else:  # User specified features
+            # Filter to only include features that exist and are numeric
+            feature_cols = [c for c in feature_cols if c in available_features]  # Keep valid features
+            if not feature_cols:  # If no valid features remain
+                raise ValueError(f"None of the specified feature columns are numeric or available in {csv_path}")  # Raise error
 
         self.label_col = label_col  # Save label column name
         self.feature_cols = feature_cols  # Save list of feature columns
