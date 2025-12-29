@@ -109,6 +109,7 @@ N_JOBS = -1  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
 THREADS_LIMIT = 2  # Number of threads for parallel evaluation of individual classifiers
 FILES_TO_IGNORE = [""]  # List of files to ignore during processing
 HYPERPARAMETERS_FILENAME = "Hyperparameter_Optimization_Results.csv"  # Filename for hyperparameter optimization results
+CACHE_PREFIX = "Cache_"  # Prefix for cache filenames
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
@@ -1282,6 +1283,27 @@ def save_stacking_results(csv_path, results_list):
         print(
             f"{BackgroundColors.RED}Failed to write Stacking Classifier CSV to {BackgroundColors.CYAN}{csv_output_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
         )  # Print error message
+
+
+def get_cache_file_path(csv_path):
+    """
+    Generate the cache file path for a given dataset CSV path.
+
+    :param csv_path: Path to the dataset CSV file
+    :return: Path to the cache file
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Generating cache file path for: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Get base dataset name
+    output_dir = f"{os.path.dirname(csv_path)}/Classifiers"  # Directory relative to the dataset
+    os.makedirs(output_dir, exist_ok=True)  # Ensure the directory exists
+    cache_filename = f"{CACHE_PREFIX}{dataset_name}-Stacking_Classifiers_Results.csv"  # Cache filename
+    cache_path = os.path.join(output_dir, cache_filename)  # Full cache file path
+
+    return cache_path  # Return the cache file path
 
 
 def calculate_execution_time(start_time, finish_time):
