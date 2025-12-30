@@ -1142,13 +1142,22 @@ def generate(args):
             raise RuntimeError(
                 "Percentage-based generation requires class_distribution in checkpoint or --csv_path to calculate it."
             )  # Raise error
-        print(f"{BackgroundColors.CYAN}Generating {args.n_samples*100:.1f}% of training data per class{Style.RESET_ALL}")
+        print(f"{BackgroundColors.CYAN}Generating {args.n_samples*100:.1f}% of training data per class (min 10 samples for small classes){Style.RESET_ALL}")
         if args.label is not None:  # If specific label requested
             if args.label not in class_distribution:  # Verify label exists
                 raise ValueError(f"Label {args.label} not found in training data class distribution")  # Raise error
-            n_per_class = {args.label: max(1, int(class_distribution[args.label] * args.n_samples))}  # Calculate for specific label
+            original_count = class_distribution[args.label]  # Get original class count
+            calculated = int(original_count * args.n_samples)  # Calculate percentage-based count
+            # For small classes (<100 instances), ensure at least 10 samples are generated
+            final_count = max(10 if original_count < 100 else 1, calculated)  # Apply minimum threshold
+            n_per_class = {args.label: final_count}  # Store final count
         else:  # Generate for all classes
-            n_per_class = {label: max(1, int(count * args.n_samples)) for label, count in class_distribution.items()}  # Calculate per class
+            n_per_class = {}  # Initialize dictionary
+            for label, original_count in class_distribution.items():  # For each class
+                calculated = int(original_count * args.n_samples)  # Calculate percentage-based count
+                # For small classes (<100 instances), ensure at least 10 samples are generated
+                final_count = max(10 if original_count < 100 else 1, calculated)  # Apply minimum threshold
+                n_per_class[label] = final_count  # Store final count
         labels = []  # List to build label array
         for label, count in n_per_class.items():  # For each class
             labels.extend([label] * count)  # Repeat label by count
