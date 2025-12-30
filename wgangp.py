@@ -1008,6 +1008,8 @@ def train(args):
             )  # Save latest generator weights
         print(f"{BackgroundColors.GREEN}Saved generator to {BackgroundColors.CYAN}{g_path}{Style.RESET_ALL}")  # Print checkpoint save message
     
+    print(f"{BackgroundColors.GREEN}Training finished!{Style.RESET_ALL}")  # Print training completion message
+    
     # Plot training metrics
     if len(metrics_history["steps"]) > 0:  # If metrics were collected
         print(f"{BackgroundColors.GREEN}Generating training metrics plots...{Style.RESET_ALL}")  # Print plotting message
@@ -1175,8 +1177,7 @@ def main():
     """
 
     print(
-        f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}WGAN-GP Data Augmentation{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
-        end="\n\n",
+        f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}WGAN-GP Data Augmentation{BackgroundColors.GREEN} program!{Style.RESET_ALL}"
     )  # Output the welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
 
@@ -1212,7 +1213,7 @@ def main():
             
             args.checkpoint = str(checkpoint_path)
             print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")
-            print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}\n")
+            print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")
             generate(args)  # Generate synthetic samples
     
     # Batch processing mode (no csv_path provided):
@@ -1223,7 +1224,7 @@ def main():
         
         for dataset_name, paths in DATASETS.items():  # For each dataset in the DATASETS dictionary
             print(
-                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
             )
             for input_path in paths:  # For each path in the dataset's paths list
                 if not verify_filepath_exists(input_path):  # If the input path does not exist
@@ -1277,7 +1278,7 @@ def main():
                             
                             args.checkpoint = str(checkpoint_path)
                             print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")
-                            print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}\n")
+                            print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")
                             generate(args)  # Generate synthetic samples
                             
                     except Exception as e:
