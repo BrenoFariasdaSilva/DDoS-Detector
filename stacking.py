@@ -1648,6 +1648,204 @@ def play_sound():
         )
 
 
+def evaluate_on_dataset(
+    file,
+    df,
+    feature_names,
+    ga_selected_features,
+    pca_n_components,
+    rfe_selected_features,
+    base_models,
+    data_source_label="Original"
+):
+    """
+    Evaluate classifiers on a single dataset (original or augmented).
+
+    :param file: Path to the dataset file
+    :param df: DataFrame with the dataset
+    :param feature_names: List of feature column names
+    :param ga_selected_features: GA selected features
+    :param pca_n_components: Number of PCA components
+    :param rfe_selected_features: RFE selected features
+    :param base_models: Dictionary of base models to evaluate
+    :param data_source_label: Label for data source ("Original", "Augmented", or "Original+Augmented")
+    :return: Dictionary mapping (feature_set, model_name) to results
+    """
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}"
+    )
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating on: {BackgroundColors.CYAN}{data_source_label} Data{Style.RESET_ALL}"
+    )
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}\n"
+    )
+
+    X_full = df.select_dtypes(include=np.number).iloc[:, :-1]  # Features (numeric only)
+    y = df.iloc[:, -1]  # Target
+
+    if len(np.unique(y)) < 2:  # Verify if there is more than one class
+        print(
+            f"{BackgroundColors.RED}Target column has only one class. Cannot perform classification. Skipping.{Style.RESET_ALL}"
+        )  # Output the error message
+        return {}  # Return empty dictionary
+
+    X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
+        X_full, y
+    )  # Scale and split the data
+
+    estimators = [
+        (name, model) for name, model in base_models.items() if name != "SVM"
+    ]  # Define estimators (excluding SVM)
+
+    stacking_model = StackingClassifier(
+        estimators=estimators,
+        final_estimator=RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=N_JOBS),
+        cv=5,
+        n_jobs=N_JOBS,
+    )  # Define the Stacking Classifier model
+
+    X_train_pca, X_test_pca = apply_pca_transformation(
+        X_train_scaled, X_test_scaled, pca_n_components, file
+    )  # Apply PCA transformation if applicable
+
+    feature_sets = {  # Dictionary of feature sets to evaluate
+        "Full Features": (X_train_scaled, X_test_scaled),  # All features
+        "GA Features": (
+            get_feature_subset(X_train_scaled, ga_selected_features, feature_names),
+            get_feature_subset(X_test_scaled, ga_selected_features, feature_names),
+        ),  # GA subset
+        "PCA Components": (
+            (X_train_pca, X_test_pca) if X_train_pca is not None else None
+        ),  # PCA components (only if PCA was applied)
+        "RFE Features": (
+            get_feature_subset(X_train_scaled, rfe_selected_features, feature_names),
+            get_feature_subset(X_test_scaled, rfe_selected_features, feature_names),
+        ),  # RFE subset
+    }
+
+    feature_sets = {
+        k: v for k, v in feature_sets.items() if v is not None
+    }  # Remove any None entries (e.g., PCA if not applied)
+    feature_sets = dict(sorted(feature_sets.items()))  # Sort the feature sets by name
+
+    individual_models = {
+        k: v for k, v in base_models.items()
+    }  # Use the base models (with hyperparameters applied) for individual evaluation
+    total_steps = len(feature_sets) * (
+        len(individual_models) + 1
+    )  # Total steps: models + stacking per feature set
+    progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout)  # Progress bar for all evaluations
+
+    all_results = {}  # Dictionary to store results: (feature_set, model_name) -> result_entry
+
+    for idx, (name, (X_train_subset, X_test_subset)) in enumerate(feature_sets.items(), start=1):
+        if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}"
+            )  # Output warning
+            progress_bar.update(len(individual_models) + 1)  # Skip all steps for this feature set
+            continue  # Skip to the next set
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating models on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}"
+        )  # Output evaluation status
+
+        features_list = get_features_list_for_feature_set(
+            name, feature_names, ga_selected_features, rfe_selected_features
+        )  # Determine the features list for this feature set
+
+        if name == "PCA Components":  # If the feature set is PCA Components
+            subset_feature_names = [
+                f"PC{i+1}" for i in range(X_train_subset.shape[1])
+            ]  # Generate PCA component names
+        else:  # For other feature sets
+            subset_feature_names = (
+                features_list if features_list else [f"feature_{i}" for i in range(X_train_subset.shape[1])]
+            )  # Use actual feature names or generate generic ones
+
+        X_train_df = pd.DataFrame(
+            X_train_subset, columns=subset_feature_names
+        )  # Convert training features to DataFrame
+        X_test_df = pd.DataFrame(
+            X_test_subset, columns=subset_feature_names
+        )  # Convert test features to DataFrame
+
+        progress_bar.set_description(
+            f"{data_source_label} - {name} (Individual)"
+        )  # Update progress bar description
+        
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=THREADS_LIMIT
+        ) as executor:  # Create a thread pool executor for parallel evaluation
+            future_to_model = {}  # Dictionary to map futures to model names
+            for model_name, model in individual_models.items():  # Iterate over each individual model
+                future = executor.submit(
+                    evaluate_individual_classifier,
+                    model,
+                    model_name,
+                    X_train_df.values,
+                    y_train,
+                    X_test_df.values,
+                    y_test,
+                )  # Submit evaluation task to thread pool (using .values for numpy arrays)
+                future_to_model[future] = model_name  # Store mapping of future to model name
+            
+            for future in concurrent.futures.as_completed(future_to_model):  # As each evaluation completes
+                model_name = future_to_model[future]  # Get the model name from the mapping
+                metrics = future.result()  # Get the metrics from the completed future
+                result_entry = {
+                    "dataset": os.path.basename(file),
+                    "feature_set": name,
+                    "classifier_type": "Individual",
+                    "model_name": model_name,
+                    "data_source": data_source_label,
+                    "n_features": X_train_subset.shape[1],
+                    "n_samples_train": len(y_train),
+                    "n_samples_test": len(y_test),
+                    "metrics": metrics,
+                    "features_list": features_list,
+                }  # Prepare result entry
+                all_results[(name, model_name)] = result_entry  # Store result with key
+                print(
+                    f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{metrics[0]:.4f}{Style.RESET_ALL}"
+                )  # Output accuracy
+                progress_bar.update(1)  # Update progress after each model
+
+        print(
+            f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}"
+        )
+        progress_bar.set_description(
+            f"{data_source_label} - {name} (Stacking)"
+        )  # Update progress bar description for stacking
+
+        stacking_metrics = evaluate_stacking_classifier(
+            stacking_model, X_train_df, y_train, X_test_df, y_test
+        )  # Evaluate stacking model with DataFrames
+
+        stacking_result_entry = {
+            "dataset": os.path.basename(file),
+            "feature_set": name,
+            "classifier_type": "Stacking",
+            "model_name": "StackingClassifier",
+            "data_source": data_source_label,
+            "n_features": X_train_subset.shape[1],
+            "n_samples_train": len(y_train),
+            "n_samples_test": len(y_test),
+            "metrics": stacking_metrics,
+            "features_list": features_list,
+        }  # Prepare stacking result entry
+        all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store result with key
+        print(
+            f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{stacking_metrics[0]:.4f}{Style.RESET_ALL}"
+        )  # Output accuracy
+        progress_bar.update(1)  # Update progress after stacking
+
+    progress_bar.close()  # Close progress bar
+    return all_results  # Return dictionary of results
+
+
 def main():
     """
     Main function.
@@ -1659,6 +1857,15 @@ def main():
     print(
         f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Classifiers Stacking{BackgroundColors.GREEN} program!{Style.RESET_ALL}\n"
     )  # Output the welcome message
+    
+    if TEST_DATA_AUGMENTATION:
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.YELLOW}Data Augmentation Testing: {BackgroundColors.CYAN}ENABLED{Style.RESET_ALL}"
+        )
+        print(
+            f"{BackgroundColors.GREEN}Will compare performance on: Original vs Augmented vs Original+Augmented{Style.RESET_ALL}\n"
+        )
+    
     start_time = datetime.datetime.now()  # Get the start time of the program
 
     set_threads_limit_based_on_ram()  # Adjust THREADS_LIMIT based on system RAM
@@ -1684,43 +1891,40 @@ def main():
 
             for file in files_to_process:  # For each file to process
                 print(
+                    f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+                )
+                print(
                     f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
-                )  # Output the file being processed
+                )
+                print(
+                    f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+                )
 
+                # Load feature selection results (same for all runs)
                 ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
                     file
                 )  # Load feature selection results
 
-                df = load_dataset(file)  # Load the dataset
+                # Load original dataset
+                df_original = load_dataset(file)  # Load the original dataset
 
-                if df is None:  # If the dataset failed to load
+                if df_original is None:  # If the dataset failed to load
                     verbose_output(
                         f"{BackgroundColors.RED}Failed to load dataset from: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
                     )  # Output the failure message
                     continue  # Skip to the next file if loading failed
 
-                cleaned_df = preprocess_dataframe(df)  # Preprocess the DataFrame
+                df_original_cleaned = preprocess_dataframe(df_original)  # Preprocess the DataFrame
 
-                if cleaned_df is None or cleaned_df.empty:  # If the DataFrame is None or empty after preprocessing
+                if df_original_cleaned is None or df_original_cleaned.empty:  # If the DataFrame is None or empty after preprocessing
                     print(
                         f"{BackgroundColors.RED}Dataset {BackgroundColors.CYAN}{file}{BackgroundColors.RED} empty after preprocessing. Skipping.{Style.RESET_ALL}"
                     )
                     continue  # Skip to the next file if preprocessing failed
 
-                X_full = cleaned_df.select_dtypes(include=np.number).iloc[:, :-1]  # Features (numeric only)
-                y = cleaned_df.iloc[:, -1]  # Target
-                feature_names = X_full.columns.tolist()  # Get the list of feature names
+                feature_names = df_original_cleaned.select_dtypes(include=np.number).iloc[:, :-1].columns.tolist()  # Get feature names
 
-                if len(np.unique(y)) < 2:  # Verify if there is more than one class
-                    print(
-                        f"{BackgroundColors.RED}Target column has only one class. Cannot perform classification. Skipping.{Style.RESET_ALL}"
-                    )  # Output the error message
-                    continue  # Skip to the next file
-
-                X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
-                    X_full, y
-                )  # Scale and split the data
-
+                # Get base models (same for all runs)
                 base_models = get_models()  # Get the base models
 
                 hp_results_raw = extract_hyperparameter_optimization_results(
@@ -1734,177 +1938,221 @@ def main():
                         hp_params_map, base_models
                     )  # Apply hyperparameters to base models
 
-                estimators = [
-                    (name, model) for name, model in base_models.items() if name != "SVM"
-                ]  # Define estimators (excluding SVM)
-
-                stacking_model = StackingClassifier(
-                    estimators=estimators,
-                    final_estimator=RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=N_JOBS),
-                    cv=5,
-                    n_jobs=N_JOBS,
-                )  # Define the Stacking Classifier model
-
-                X_train_pca, X_test_pca = apply_pca_transformation(
-                    X_train_scaled, X_test_scaled, pca_n_components, file
-                )  # Apply PCA transformation if applicable
-
-                feature_sets = {  # Dictionary of feature sets to evaluate
-                    "Full Features": (X_train_scaled, X_test_scaled),  # All features
-                    "GA Features": (
-                        get_feature_subset(X_train_scaled, ga_selected_features, feature_names),
-                        get_feature_subset(X_test_scaled, ga_selected_features, feature_names),
-                    ),  # GA subset
-                    "PCA Components": (
-                        (X_train_pca, X_test_pca) if X_train_pca is not None else None
-                    ),  # PCA components (only if PCA was applied)
-                    "RFE Features": (
-                        get_feature_subset(X_train_scaled, rfe_selected_features, feature_names),
-                        get_feature_subset(X_test_scaled, rfe_selected_features, feature_names),
-                    ),  # RFE subset
-                }
-
-                feature_sets = {
-                    k: v for k, v in feature_sets.items() if v is not None
-                }  # Remove any None entries (e.g., PCA if not applied)
-                feature_sets = dict(sorted(feature_sets.items()))  # Sort the feature sets by name
-
-                individual_models = {
-                    k: v for k, v in base_models.items()
-                }  # Use the base models (with hyperparameters applied) for individual evaluation
-                total_steps = len(feature_sets) * (
-                    len(individual_models) + 1
-                )  # Total steps: models + stacking per feature set
-                progress_bar = tqdm(total=total_steps)  # Progress bar for all evaluations
-
-                cache_dict = load_cache_results(file)  # Load cached results from previous runs
-                all_results = []  # List to store results for saving (individual + stacking)
-
+                # ALWAYS evaluate on original data first
                 print(
-                    f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}--- Running Classifier Evaluation (Individual + Stacking) ---{Style.RESET_ALL}"
-                )  # Output separator
+                    f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[1/3] Evaluating on ORIGINAL data{Style.RESET_ALL}"
+                )
+                results_original = evaluate_on_dataset(
+                    file,
+                    df_original_cleaned,
+                    feature_names,
+                    ga_selected_features,
+                    pca_n_components,
+                    rfe_selected_features,
+                    base_models,
+                    data_source_label="Original"
+                )
 
-                for idx, (name, (X_train_subset, X_test_subset)) in enumerate(feature_sets.items(), start=1):
-                    if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
+                # Save original results
+                original_results_list = list(results_original.values())
+                save_stacking_results(file, original_results_list)
+
+                # If TEST_DATA_AUGMENTATION is enabled, also evaluate on augmented data
+                if TEST_DATA_AUGMENTATION:
+                    augmented_file = find_data_augmentation_file(file)
+                    
+                    if augmented_file is not None:
                         print(
-                            f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}"
-                        )  # Output warning
-                        progress_bar.update(len(individual_models) + 1)  # Skip all steps for this feature set
-                        continue  # Skip to the next set
-
-                    print(
-                        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating models on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}"
-                    )  # Output evaluation status
-
-                    features_list = get_features_list_for_feature_set(
-                        name, feature_names, ga_selected_features, rfe_selected_features
-                    )  # Determine the features list for this feature set
-
-                    if name == "PCA Components":  # If the feature set is PCA Components
-                        subset_feature_names = [
-                            f"PC{i+1}" for i in range(X_train_subset.shape[1])
-                        ]  # Generate PCA component names
-                    else:  # For other feature sets
-                        subset_feature_names = (
-                            features_list if features_list else [f"feature_{i}" for i in range(X_train_subset.shape[1])]
-                        )  # Use actual feature names or generate generic ones
-
-                    X_train_df = pd.DataFrame(
-                        X_train_subset, columns=subset_feature_names
-                    )  # Convert training features to DataFrame
-                    X_test_df = pd.DataFrame(
-                        X_test_subset, columns=subset_feature_names
-                    )  # Convert test features to DataFrame
-
-                    progress_bar.set_description(
-                        f"{BackgroundColors.GREEN}Evaluating individual classifiers in parallel on {BackgroundColors.CYAN}{name}{Style.RESET_ALL}"
-                    )  # Update progress bar description
-                    with concurrent.futures.ThreadPoolExecutor(
-                        max_workers=THREADS_LIMIT
-                    ) as executor:  # Create a thread pool executor for parallel evaluation
-                        future_to_model = {}  # Dictionary to map futures to model names
-                        for model_name, model in individual_models.items():  # Iterate over each individual model
-                            cache_key = (name, model_name)  # Create cache key tuple
-                            if cache_key in cache_dict:  # If result is cached
-                                cached_result = cache_dict[cache_key]  # Get cached result
-                                all_results.append(cached_result)  # Add cached result to list
+                            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[2/3] Evaluating on AUGMENTED data{Style.RESET_ALL}"
+                        )
+                        
+                        df_augmented = load_dataset(augmented_file)
+                        
+                        if df_augmented is not None:
+                            df_augmented_cleaned = preprocess_dataframe(df_augmented)
+                            
+                            if df_augmented_cleaned is not None and not df_augmented_cleaned.empty:
+                                # Evaluate on augmented data only
+                                results_augmented = evaluate_on_dataset(
+                                    file,
+                                    df_augmented_cleaned,
+                                    feature_names,
+                                    ga_selected_features,
+                                    pca_n_components,
+                                    rfe_selected_features,
+                                    base_models,
+                                    data_source_label="Augmented"
+                                )
+                                
+                                # Merge original + augmented data
                                 print(
-                                    f"    {BackgroundColors.GREEN}{model_name} (cached) Accuracy: {BackgroundColors.CYAN}{cached_result['metrics'][0]:.4f}{Style.RESET_ALL}"
-                                )  # Output cached accuracy
-                                progress_bar.update(1)  # Update progress
-                                continue  # Skip evaluation, use cached result
-
-                            future = executor.submit(
-                                evaluate_individual_classifier,
-                                model,
-                                model_name,
-                                X_train_df.values,
-                                y_train,
-                                X_test_df.values,
-                                y_test,
-                            )  # Submit evaluation task to thread pool (using .values for numpy arrays)
-                            future_to_model[future] = model_name  # Store mapping of future to model name
-                        for future in concurrent.futures.as_completed(future_to_model):  # As each evaluation completes
-                            model_name = future_to_model[future]  # Get the model name from the mapping
-                            metrics = future.result()  # Get the metrics from the completed future
-                            result_entry = {
-                                "dataset": os.path.basename(file),
-                                "feature_set": name,
-                                "classifier_type": "Individual",
-                                "model_name": model_name,
-                                "n_features": X_train_subset.shape[1],
-                                "metrics": metrics,
-                                "features_list": features_list,
-                            }  # Prepare result entry
-                            all_results.append(result_entry)  # Add result to list
-                            save_to_cache(file, result_entry)  # Save result to cache
+                                    f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[3/3] Evaluating on ORIGINAL + AUGMENTED data{Style.RESET_ALL}"
+                                )
+                                df_merged = merge_original_and_augmented(df_original_cleaned, df_augmented_cleaned)
+                                
+                                results_merged = evaluate_on_dataset(
+                                    file,
+                                    df_merged,
+                                    feature_names,
+                                    ga_selected_features,
+                                    pca_n_components,
+                                    rfe_selected_features,
+                                    base_models,
+                                    data_source_label="Original+Augmented"
+                                )
+                                
+                                # Generate comparison report
+                                print(
+                                    f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
+                                )
+                                print(
+                                    f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}DATA AUGMENTATION COMPARISON REPORT{Style.RESET_ALL}"
+                                )
+                                print(
+                                    f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
+                                )
+                                
+                                comparison_results = []
+                                
+                                # Compare metrics for each feature_set and model
+                                for key in results_original.keys():
+                                    orig_result = results_original[key]
+                                    aug_result = results_augmented.get(key)
+                                    merged_result = results_merged.get(key)
+                                    
+                                    feature_set = orig_result["feature_set"]
+                                    model_name = orig_result["model_name"]
+                                    classifier_type = orig_result["classifier_type"]
+                                    
+                                    # Extract metrics (accuracy, precision, recall, f1, fpr, fnr, time)
+                                    orig_metrics = orig_result["metrics"]
+                                    aug_metrics = aug_result["metrics"] if aug_result else [0]*7
+                                    merged_metrics = merged_result["metrics"] if merged_result else [0]*7
+                                    
+                                    # Calculate improvements (Original+Augmented vs Original)
+                                    acc_improvement = calculate_metric_improvement(orig_metrics[0], merged_metrics[0])
+                                    prec_improvement = calculate_metric_improvement(orig_metrics[1], merged_metrics[1])
+                                    rec_improvement = calculate_metric_improvement(orig_metrics[2], merged_metrics[2])
+                                    f1_improvement = calculate_metric_improvement(orig_metrics[3], merged_metrics[3])
+                                    # For FPR and FNR, lower is better, so improvement is negative
+                                    fpr_improvement = calculate_metric_improvement(orig_metrics[4], merged_metrics[4])
+                                    fnr_improvement = calculate_metric_improvement(orig_metrics[5], merged_metrics[5])
+                                    
+                                    # Print detailed comparison
+                                    print(
+                                        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Feature Set: {BackgroundColors.CYAN}{feature_set}{BackgroundColors.GREEN} | Model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
+                                    )
+                                    print(f"  {BackgroundColors.YELLOW}Accuracy:{Style.RESET_ALL}")
+                                    print(f"    Original: {orig_metrics[0]:.4f} | Augmented: {aug_metrics[0]:.4f} | Original+Augmented: {merged_metrics[0]:.4f} | {BackgroundColors.CYAN}Improvement: {acc_improvement:+.2f}%{Style.RESET_ALL}")
+                                    print(f"  {BackgroundColors.YELLOW}Precision:{Style.RESET_ALL}")
+                                    print(f"    Original: {orig_metrics[1]:.4f} | Augmented: {aug_metrics[1]:.4f} | Original+Augmented: {merged_metrics[1]:.4f} | {BackgroundColors.CYAN}Improvement: {prec_improvement:+.2f}%{Style.RESET_ALL}")
+                                    print(f"  {BackgroundColors.YELLOW}Recall:{Style.RESET_ALL}")
+                                    print(f"    Original: {orig_metrics[2]:.4f} | Augmented: {aug_metrics[2]:.4f} | Original+Augmented: {merged_metrics[2]:.4f} | {BackgroundColors.CYAN}Improvement: {rec_improvement:+.2f}%{Style.RESET_ALL}")
+                                    print(f"  {BackgroundColors.YELLOW}F1-Score:{Style.RESET_ALL}")
+                                    print(f"    Original: {orig_metrics[3]:.4f} | Augmented: {aug_metrics[3]:.4f} | Original+Augmented: {merged_metrics[3]:.4f} | {BackgroundColors.CYAN}Improvement: {f1_improvement:+.2f}%{Style.RESET_ALL}")
+                                    print(f"  {BackgroundColors.YELLOW}FPR (lower is better):{Style.RESET_ALL}")
+                                    print(f"    Original: {orig_metrics[4]:.4f} | Augmented: {aug_metrics[4]:.4f} | Original+Augmented: {merged_metrics[4]:.4f} | {BackgroundColors.CYAN}Change: {fpr_improvement:+.2f}%{Style.RESET_ALL}")
+                                    print(f"  {BackgroundColors.YELLOW}FNR (lower is better):{Style.RESET_ALL}")
+                                    print(f"    Original: {orig_metrics[5]:.4f} | Augmented: {aug_metrics[5]:.4f} | Original+Augmented: {merged_metrics[5]:.4f} | {BackgroundColors.CYAN}Change: {fnr_improvement:+.2f}%{Style.RESET_ALL}\n")
+                                    
+                                    # Store comparison results for CSV export
+                                    comparison_results.append({
+                                        "dataset": orig_result["dataset"],
+                                        "feature_set": feature_set,
+                                        "classifier_type": classifier_type,
+                                        "model_name": model_name,
+                                        "data_source": "Original",
+                                        "n_features": orig_result["n_features"],
+                                        "n_samples_train": orig_result["n_samples_train"],
+                                        "n_samples_test": orig_result["n_samples_test"],
+                                        "accuracy": orig_metrics[0],
+                                        "precision": orig_metrics[1],
+                                        "recall": orig_metrics[2],
+                                        "f1_score": orig_metrics[3],
+                                        "fpr": orig_metrics[4],
+                                        "fnr": orig_metrics[5],
+                                        "training_time": orig_metrics[6],
+                                        "accuracy_improvement": 0.0,
+                                        "precision_improvement": 0.0,
+                                        "recall_improvement": 0.0,
+                                        "f1_score_improvement": 0.0,
+                                        "fpr_improvement": 0.0,
+                                        "fnr_improvement": 0.0,
+                                        "features_list": orig_result["features_list"],
+                                    })
+                                    
+                                    comparison_results.append({
+                                        "dataset": orig_result["dataset"],
+                                        "feature_set": feature_set,
+                                        "classifier_type": classifier_type,
+                                        "model_name": model_name,
+                                        "data_source": "Augmented",
+                                        "n_features": aug_result["n_features"] if aug_result else 0,
+                                        "n_samples_train": aug_result["n_samples_train"] if aug_result else 0,
+                                        "n_samples_test": aug_result["n_samples_test"] if aug_result else 0,
+                                        "accuracy": aug_metrics[0],
+                                        "precision": aug_metrics[1],
+                                        "recall": aug_metrics[2],
+                                        "f1_score": aug_metrics[3],
+                                        "fpr": aug_metrics[4],
+                                        "fnr": aug_metrics[5],
+                                        "training_time": aug_metrics[6],
+                                        "accuracy_improvement": 0.0,
+                                        "precision_improvement": 0.0,
+                                        "recall_improvement": 0.0,
+                                        "f1_score_improvement": 0.0,
+                                        "fpr_improvement": 0.0,
+                                        "fnr_improvement": 0.0,
+                                        "features_list": orig_result["features_list"],
+                                    })
+                                    
+                                    comparison_results.append({
+                                        "dataset": orig_result["dataset"],
+                                        "feature_set": feature_set,
+                                        "classifier_type": classifier_type,
+                                        "model_name": model_name,
+                                        "data_source": "Original+Augmented",
+                                        "n_features": merged_result["n_features"] if merged_result else 0,
+                                        "n_samples_train": merged_result["n_samples_train"] if merged_result else 0,
+                                        "n_samples_test": merged_result["n_samples_test"] if merged_result else 0,
+                                        "accuracy": merged_metrics[0],
+                                        "precision": merged_metrics[1],
+                                        "recall": merged_metrics[2],
+                                        "f1_score": merged_metrics[3],
+                                        "fpr": merged_metrics[4],
+                                        "fnr": merged_metrics[5],
+                                        "training_time": merged_metrics[6],
+                                        "accuracy_improvement": acc_improvement,
+                                        "precision_improvement": prec_improvement,
+                                        "recall_improvement": rec_improvement,
+                                        "f1_score_improvement": f1_improvement,
+                                        "fpr_improvement": fpr_improvement,
+                                        "fnr_improvement": fnr_improvement,
+                                        "features_list": orig_result["features_list"],
+                                    })
+                                
+                                # Save comparison results
+                                save_augmentation_comparison_results(file, comparison_results)
+                                
+                                print(
+                                    f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Data augmentation comparison complete!{Style.RESET_ALL}"
+                                )
+                            else:
+                                print(
+                                    f"{BackgroundColors.YELLOW}Warning: Augmented dataset empty after preprocessing. Skipping augmentation comparison.{Style.RESET_ALL}"
+                                )
+                        else:
                             print(
-                                f"    {BackgroundColors.GREEN}{model_name} Accuracy for classifier {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{metrics[0]:.4f}{Style.RESET_ALL}"
-                            )  # Output accuracy
-                            progress_bar.update(1)  # Update progress after each model
-
-                    print(
-                        f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}"
-                    )
-                    progress_bar.set_description(
-                        f"{BackgroundColors.GREEN}Evaluating {BackgroundColors.CYAN}{idx}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{len(feature_sets)}{BackgroundColors.GREEN} - {BackgroundColors.CYAN}{name}{BackgroundColors.GREEN}: Stacking{Style.RESET_ALL}"
-                    )  # Update progress bar description for stacking
-
-                    stacking_cache_key = (name, "StackingClassifier")  # Create cache key for stacking
-                    if stacking_cache_key in cache_dict:  # If stacking result is cached
-                        stacking_cached_result = cache_dict[stacking_cache_key]  # Get cached stacking result
-                        all_results.append(stacking_cached_result)  # Add cached result to list
+                                f"{BackgroundColors.YELLOW}Warning: Failed to load augmented dataset. Skipping augmentation comparison.{Style.RESET_ALL}"
+                            )
+                    else:
                         print(
-                            f"    {BackgroundColors.GREEN}Stacking (cached) Accuracy: {BackgroundColors.CYAN}{stacking_cached_result['metrics'][0]:.4f}{Style.RESET_ALL}"
-                        )  # Output cached accuracy
-                        progress_bar.update(1)  # Update progress
-                    else:  # If not cached, evaluate
-                        stacking_metrics = evaluate_stacking_classifier(
-                            stacking_model, X_train_df, y_train, X_test_df, y_test
-                        )  # Evaluate stacking model with DataFrames
-
-                        stacking_result_entry = {
-                            "dataset": os.path.basename(file),
-                            "feature_set": name,
-                            "classifier_type": "Stacking",
-                            "model_name": "StackingClassifier",
-                            "n_features": X_train_subset.shape[1],
-                            "metrics": stacking_metrics,
-                            "features_list": features_list,
-                        }  # Prepare stacking result entry
-                        all_results.append(stacking_result_entry)  # Add stacking result
-                        save_to_cache(file, stacking_result_entry)  # Save stacking result to cache
-                        print(
-                            f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{stacking_metrics[0]:.4f}{Style.RESET_ALL}"
-                        )  # Output accuracy
-                        progress_bar.update(1)  # Update progress after stacking
-
-                save_stacking_results(file, all_results)  # Save consolidated results to CSV
-                remove_cache_file(file)  # Remove cache file after successful save
+                            f"\n{BackgroundColors.YELLOW}No augmented data found for this file. Skipping augmentation comparison.{Style.RESET_ALL}"
+                        )
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
-        f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
+        f"\n{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
     )  # Output the start and finish times
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
