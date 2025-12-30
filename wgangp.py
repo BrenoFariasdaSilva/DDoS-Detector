@@ -1016,6 +1016,7 @@ def train(args):
                 "opt_G_state": opt_G.state_dict(),  # Save generator optimizer state
                 "scaler": dataset.scaler,  # Save scaler for inverse transform
                 "label_encoder": dataset.label_encoder,  # Save label encoder for mapping
+                "feature_cols": dataset.feature_cols,  # Save feature column names for generation
                 "metrics_history": metrics_history,  # Save metrics history for resume
                 "args": vars(args),  # Save training arguments
             }
@@ -1083,17 +1084,19 @@ def generate(args):
     args_ck = ckpt.get("args", {})  # Retrieve saved arguments from checkpoint
     scaler = ckpt.get("scaler", None)  # Try to get scaler from checkpoint
     label_encoder = ckpt.get("label_encoder", None)  # Try to get label encoder from checkpoint
+    feature_cols = ckpt.get("feature_cols", None)  # Try to get feature column names from checkpoint
 
-    if scaler is None or label_encoder is None:  # If scaler or label encoder missing
+    if scaler is None or label_encoder is None or feature_cols is None:  # If scaler, label encoder, or feature_cols missing
         if args.csv_path is None:  # Verify if CSV path is provided
             raise RuntimeError(
-                "Checkpoint missing scaler/label_encoder. Provide --csv_path to reconstruct them."
+                "Checkpoint missing scaler/label_encoder/feature_cols. Provide --csv_path to reconstruct them."
             )  # Raise error if not
         tmp_ds = CSVFlowDataset(
             args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols
-        )  # Rebuild dataset to get scaler and encoder
+        )  # Rebuild dataset to get scaler, encoder, and feature names
         scaler = tmp_ds.scaler  # Use scaler from rebuilt dataset
         label_encoder = tmp_ds.label_encoder  # Use label encoder from rebuilt dataset
+        feature_cols = tmp_ds.feature_cols  # Use feature column names from rebuilt dataset
 
     if args.feature_dim is not None:  # If feature dimension is provided
         feature_dim = args.feature_dim  # Use provided feature dimension
@@ -1142,9 +1145,8 @@ def generate(args):
 
     X_orig = scaler.inverse_transform(X_fake)  # Inverse transform features to original scale
 
-    df = pd.DataFrame(
-        X_orig, columns=args.feature_cols if args.feature_cols is not None else [f"f{i}" for i in range(feature_dim)]
-    )  # Create DataFrame for generated data
+    # Use feature column names from checkpoint (preserves original feature names)
+    df = pd.DataFrame(X_orig, columns=feature_cols)  # Create DataFrame with original feature names
     df[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
     df.to_csv(args.out_file, index=False)  # Save generated data to CSV file
     print(f"{BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} generated samples to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message
