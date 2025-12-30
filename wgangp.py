@@ -846,7 +846,7 @@ def train(args):
                 if g_checkpoint_path.exists():  # If generator checkpoint exists
                     try:  # Try to load checkpoint
                         print(f"{BackgroundColors.GREEN}Loading generator checkpoint: {g_checkpoint_path.name}{Style.RESET_ALL}")
-                        g_checkpoint = torch.load(g_checkpoint_path, map_location=device)  # Load generator checkpoint
+                        g_checkpoint = torch.load(g_checkpoint_path, map_location=device, weights_only=False)  # Load generator checkpoint with sklearn objects
                         G.load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights
                         start_epoch = g_checkpoint["epoch"]  # Set starting epoch
                         
@@ -869,7 +869,7 @@ def train(args):
                         # Load discriminator checkpoint
                         if d_checkpoint_path.exists():  # If discriminator checkpoint exists
                             print(f"{BackgroundColors.GREEN}Loading discriminator checkpoint: {d_checkpoint_path.name}{Style.RESET_ALL}")
-                            d_checkpoint = torch.load(d_checkpoint_path, map_location=device)  # Load discriminator checkpoint
+                            d_checkpoint = torch.load(d_checkpoint_path, map_location=device, weights_only=False)  # Load discriminator checkpoint
                             D.load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights
                             
                             # Load optimizer state if available
@@ -907,7 +907,7 @@ def train(args):
             
             # Train discriminator with optional mixed precision
             for _ in range(args.critic_steps):  # Train discriminator multiple steps
-                with torch.cuda.amp.autocast(enabled=(scaler is not None)):  # Enable AMP if available
+                with torch.amp.autocast(device_type=device.type, enabled=(scaler is not None)):  # Enable AMP if available
                     z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for discriminator step
                     fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
                     d_real = D(real_x, labels)  # Get discriminator score for real samples
@@ -929,7 +929,7 @@ def train(args):
                 d_fake_score = d_fake.mean()  # Store average fake score
 
             # Train generator with optional mixed precision
-            with torch.cuda.amp.autocast(enabled=(scaler is not None)):  # Enable AMP if available
+            with torch.amp.autocast(device_type=device.type, enabled=(scaler is not None)):  # Enable AMP if available
                 z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for generator step
                 gen_labels = torch.randint(0, n_classes, (args.batch_size,), device=device)  # Sample labels for generator
                 fake_x = G(z, gen_labels)  # Generate fake samples with generator
@@ -1042,7 +1042,7 @@ def generate(args):
     device = torch.device(
         "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
     )  # Select device for generation
-    ckpt = torch.load(args.checkpoint, map_location=device)  # Load checkpoint from disk
+    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)  # Load checkpoint from disk with sklearn objects
     args_ck = ckpt.get("args", {})  # Retrieve saved arguments from checkpoint
     scaler = ckpt.get("scaler", None)  # Try to get scaler from checkpoint
     label_encoder = ckpt.get("label_encoder", None)  # Try to get label encoder from checkpoint
