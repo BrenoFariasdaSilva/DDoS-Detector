@@ -100,17 +100,23 @@ telegram: dependencies
 wgangp: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	@echo "Usage: make wgangp CSV_PATH=path/to/file.csv [MODE=train|gen|both] [EPOCHS=60] [USE_AMP=1] [COMPILE=1] [FROM_SCRATCH=1]"
-	@echo "Example: make wgangp CSV_PATH=./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv MODE=train USE_AMP=1"
 	@if [ -z "$(CSV_PATH)" ]; then \
-		echo "Error: CSV_PATH is required. Example: make wgangp CSV_PATH=./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"; \
-		exit 1; \
+		echo "Running in batch mode (processing all datasets from DATASETS dictionary)"; \
+		echo "To run on a specific file, use: make wgangp CSV_PATH=path/to/file.csv [OPTIONS]"; \
+		echo "Available options: MODE=train|gen|both EPOCHS=60 USE_AMP=1 COMPILE=1 FROM_SCRATCH=1"; \
+		$(PYTHON) ./wgangp.py --mode $(or $(MODE),train) \
+			$(if $(EPOCHS),--epochs $(EPOCHS),) \
+			$(if $(USE_AMP),--use_amp,) \
+			$(if $(COMPILE),--compile,) \
+			$(if $(FROM_SCRATCH),--from_scratch,); \
+	else \
+		echo "Running on single file: $(CSV_PATH)"; \
+		$(PYTHON) ./wgangp.py --mode $(or $(MODE),train) --csv_path $(CSV_PATH) \
+			$(if $(EPOCHS),--epochs $(EPOCHS),) \
+			$(if $(USE_AMP),--use_amp,) \
+			$(if $(COMPILE),--compile,) \
+			$(if $(FROM_SCRATCH),--from_scratch,); \
 	fi
-	$(PYTHON) ./wgangp.py --mode $(or $(MODE),train) --csv_path $(CSV_PATH) \
-		$(if $(EPOCHS),--epochs $(EPOCHS),) \
-		$(if $(USE_AMP),--use_amp,) \
-		$(if $(COMPILE),--compile,) \
-		$(if $(FROM_SCRATCH),--from_scratch,)
 
 # Create virtual environment if missing
 $(VENV):
