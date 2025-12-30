@@ -107,7 +107,9 @@ class BackgroundColors:  # Colors for the terminal
 VERBOSE = False  # Set to True to output verbose messages
 N_JOBS = -1  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
 THREADS_LIMIT = 2  # Number of threads for parallel evaluation of individual classifiers
+TEST_DATA_AUGMENTATION = True  # Set to True to compare original vs augmented data performance
 RESULTS_FILENAME = "Stacking_Classifiers_Results.csv"  # Filename for saving stacking results
+AUGMENTATION_COMPARISON_FILENAME = "Data_Augmentation_Comparison_Results.csv"  # Filename for augmentation comparison results
 MATCH_FILENAMES_TO_PROCESS = [""]  # List of specific filenames to search for a match (set to None to process all files)
 IGNORE_FILES = [RESULTS_FILENAME]  # List of filenames to ignore when searching for datasets
 IGNORE_DIRS = [
