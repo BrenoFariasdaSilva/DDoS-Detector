@@ -751,7 +751,7 @@ def train(args):
     set_seed(args.seed)  # Set random seed for reproducibility
 
     # Print optimization settings
-    print(f"{BackgroundColors.CYAN}Device: {device}{Style.RESET_ALL}")
+    print(f"{BackgroundColors.GREEN}Device: {BackgroundColors.CYAN}{device.type.upper()}{Style.RESET_ALL}")
     if args.use_amp and device.type == 'cuda':
         print(f"{BackgroundColors.GREEN}Using Automatic Mixed Precision (AMP) for faster training{Style.RESET_ALL}")
     if args.compile:
