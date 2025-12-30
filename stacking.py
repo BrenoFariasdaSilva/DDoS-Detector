@@ -341,6 +341,64 @@ def merge_original_and_augmented(original_df, augmented_df):
     return merged_df  # Return merged dataframe
 
 
+def save_augmentation_comparison_results(file_path, comparison_results):
+    """
+    Save data augmentation comparison results to CSV file.
+
+    :param file_path: Path to the original CSV file being processed
+    :param comparison_results: List of dictionaries containing comparison metrics
+    :return: None
+    """
+
+    if not comparison_results:  # If no results to save
+        return  # Exit early
+
+    file_path_obj = Path(file_path)  # Create Path object
+    feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"  # Feature_Analysis directory
+    os.makedirs(feature_analysis_dir, exist_ok=True)  # Ensure directory exists
+    output_path = feature_analysis_dir / AUGMENTATION_COMPARISON_FILENAME  # Output file path
+
+    df = pd.DataFrame(comparison_results)  # Convert results to DataFrame
+
+    # Define column order for better readability
+    column_order = [
+        "dataset",
+        "feature_set",
+        "classifier_type",
+        "model_name",
+        "data_source",
+        "n_features",
+        "n_samples_train",
+        "n_samples_test",
+        "accuracy",
+        "precision",
+        "recall",
+        "f1_score",
+        "fpr",
+        "fnr",
+        "training_time",
+        "accuracy_improvement",
+        "precision_improvement",
+        "recall_improvement",
+        "f1_score_improvement",
+        "fpr_improvement",
+        "fnr_improvement",
+        "features_list",
+        "Hardware",
+    ]  # Define desired column order
+
+    # Reorder columns (only include columns that exist)
+    existing_columns = [col for col in column_order if col in df.columns]  # Filter to existing columns
+    df = df[existing_columns]  # Reorder DataFrame columns
+
+    df = add_hardware_column(df, existing_columns)  # Add hardware specifications column
+
+    df.to_csv(output_path, index=False)  # Save to CSV file
+    print(
+        f"{BackgroundColors.GREEN}Saved augmentation comparison results to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+    )  # Output success message
+
+
 def find_local_feature_file(file_dir, filename):
     """
     Attempt to locate <file_dir>/Feature_Analysis/<filename>.
