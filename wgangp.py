@@ -1006,9 +1006,7 @@ def train(args):
             torch.save(
                 G.state_dict(), str(latest_path)
             )  # Save latest generator weights
-            print(f"Saved generator to {g_path}")  # Print checkpoint save message
-
-    print("Training finished.")  # Print final training completion message
+        print(f"{BackgroundColors.GREEN}Saved generator to {BackgroundColors.CYAN}{g_path}{Style.RESET_ALL}")  # Print checkpoint save message
     
     # Plot training metrics
     if len(metrics_history["steps"]) > 0:  # If metrics were collected
@@ -1110,7 +1108,7 @@ def generate(args):
     )  # Create DataFrame for generated data
     df[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
     df.to_csv(args.out_file, index=False)  # Save generated data to CSV file
-    print(f"Saved {n} generated samples to {args.out_file}")  # Print completion message
+    print(f"{BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} generated samples to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message
 
 
 def verify_filepath_exists(filepath):
