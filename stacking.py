@@ -319,6 +319,28 @@ def find_data_augmentation_file(original_file_path):
         return None  # Return None
 
 
+def merge_original_and_augmented(original_df, augmented_df):
+    """
+    Merge original and augmented dataframes by concatenating them.
+
+    :param original_df: Original DataFrame
+    :param augmented_df: Augmented DataFrame
+    :return: Merged DataFrame
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Merging original ({len(original_df)} rows) and augmented ({len(augmented_df)} rows) data{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    merged_df = pd.concat([original_df, augmented_df], ignore_index=True)  # Concatenate dataframes
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Merged dataset has {BackgroundColors.CYAN}{len(merged_df)}{BackgroundColors.GREEN} rows{Style.RESET_ALL}"
+    )  # Output the result
+
+    return merged_df  # Return merged dataframe
+
+
 def find_local_feature_file(file_dir, filename):
     """
     Attempt to locate <file_dir>/Feature_Analysis/<filename>.
