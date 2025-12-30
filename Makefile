@@ -100,7 +100,17 @@ telegram: dependencies
 wgangp: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(call RUN_AND_LOG, ./wgangp.py)
+	@echo "Usage: make wgangp CSV_PATH=path/to/file.csv [MODE=train|gen|both] [EPOCHS=60] [USE_AMP=1] [COMPILE=1] [FROM_SCRATCH=1]"
+	@echo "Example: make wgangp CSV_PATH=./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv MODE=train USE_AMP=1"
+	@if [ -z "$(CSV_PATH)" ]; then \
+		echo "Error: CSV_PATH is required. Example: make wgangp CSV_PATH=./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"; \
+		exit 1; \
+	fi
+	$(PYTHON) ./wgangp.py --mode $(or $(MODE),train) --csv_path $(CSV_PATH) \
+		$(if $(EPOCHS),--epochs $(EPOCHS),) \
+		$(if $(USE_AMP),--use_amp,) \
+		$(if $(COMPILE),--compile,) \
+		$(if $(FROM_SCRATCH),--from_scratch,)
 
 # Create virtual environment if missing
 $(VENV):
