@@ -100,16 +100,17 @@ telegram: dependencies
 wgangp: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	@if [ -z "$(CSV_PATH)" ] && [ -z "$(MODE)" ] && [ -z "$(EPOCHS)" ] && [ -z "$(USE_AMP)" ] && [ -z "$(COMPILE)" ] && [ -z "$(FROM_SCRATCH)" ]; then \
+	@if [ -z "$(CSV_PATH)" ] && [ -z "$(MODE)" ] && [ -z "$(EPOCHS)" ] && [ -z "$(N_SAMPLES)" ] && [ -z "$(USE_AMP)" ] && [ -z "$(COMPILE)" ] && [ -z "$(FROM_SCRATCH)" ]; then \
 		echo "Running wgangp with no args (using script defaults)"; \
 		$(PYTHON) ./wgangp.py; \
 	else \
 		if [ -z "$(CSV_PATH)" ]; then \
 			echo "Running in batch mode (processing all datasets from DATASETS dictionary)"; \
 			echo "To run on a specific file, use: make wgangp CSV_PATH=path/to/file.csv [OPTIONS]"; \
-			echo "Available options: MODE=train|gen|both EPOCHS=60 USE_AMP=1 COMPILE=1 FROM_SCRATCH=1"; \
+			echo "Available options: MODE=train|gen|both EPOCHS=60 N_SAMPLES=0.1|1000 USE_AMP=1 COMPILE=1 FROM_SCRATCH=1"; \
 			$(PYTHON) ./wgangp.py $(if $(MODE),--mode $(MODE),) \
 				$(if $(EPOCHS),--epochs $(EPOCHS),) \
+				$(if $(N_SAMPLES),--n_samples $(N_SAMPLES),) \
 				$(if $(USE_AMP),--use_amp,) \
 				$(if $(COMPILE),--compile,) \
 				$(if $(FROM_SCRATCH),--from_scratch,); \
@@ -118,6 +119,7 @@ wgangp: dependencies
 			$(PYTHON) ./wgangp.py --csv_path $(CSV_PATH) \
 				$(if $(MODE),--mode $(MODE),) \
 				$(if $(EPOCHS),--epochs $(EPOCHS),) \
+				$(if $(N_SAMPLES),--n_samples $(N_SAMPLES),) \
 				$(if $(USE_AMP),--use_amp,) \
 				$(if $(COMPILE),--compile,) \
 				$(if $(FROM_SCRATCH),--from_scratch,); \
