@@ -533,7 +533,7 @@ def parse_args():
     p.add_argument("--num_workers", type=int, default=8, help="Number of dataloader workers (default: 8)")  # Add num_workers argument
     p.add_argument("--use_amp", action="store_true", help="Use automatic mixed precision for faster training")  # Add AMP flag
     p.add_argument("--compile", action="store_true", help="Use torch.compile() for faster execution (PyTorch 2.0+)")  # Add compile flag
-    p.add_argument("--resume", type=str, default=None, help="Path to checkpoint directory or specific checkpoint file to resume training from")  # Add resume argument
+    p.add_argument("--from_scratch", action="store_true", help="Force training from scratch, ignoring existing checkpoints")  # Add from-scratch flag
     return p.parse_args()  # Parse arguments and return namespace
 
 
@@ -823,71 +823,77 @@ def train(args):
         "wasserstein": [],  # Estimated Wasserstein distance (D_real - D_fake)
     }  # Dictionary to store training metrics
 
-    # Resume from checkpoint if specified
-    if args.resume:  # If resume path is provided
-        print(f"{BackgroundColors.CYAN}Attempting to resume from checkpoint: {args.resume}{Style.RESET_ALL}")
-        resume_path = Path(args.resume)  # Create Path object
+    # Automatically check for existing checkpoints for this specific CSV file
+    if not args.from_scratch and args.csv_path:  # If not forcing from scratch and CSV path provided
+        csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
+        checkpoint_dir = csv_path_obj.parent / "Data_Augmentation" / "Checkpoints"  # Expected checkpoint directory
+        checkpoint_prefix = csv_path_obj.stem  # Expected filename prefix
         
-        # Determine if it's a directory or file
-        if resume_path.is_dir():  # If directory, find latest checkpoint
-            checkpoint_files = sorted(resume_path.glob("*_generator_epoch*.pt"))  # Find all generator checkpoints
-            if checkpoint_files:  # If checkpoints found
+        if checkpoint_dir.exists():  # If checkpoint directory exists
+            # Find all generator checkpoints for this specific file
+            checkpoint_files = sorted(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))  # Find matching checkpoints
+            
+            if checkpoint_files:  # If checkpoints found for this file
                 g_checkpoint_path = checkpoint_files[-1]  # Get latest checkpoint
-                # Find corresponding discriminator checkpoint
+                # Extract epoch number from filename
                 epoch_num = g_checkpoint_path.stem.split("epoch")[-1]  # Extract epoch number
-                prefix = g_checkpoint_path.stem.replace(f"_generator_epoch{epoch_num}", "")  # Extract prefix
-                d_checkpoint_path = resume_path / f"{prefix}_discriminator_epoch{epoch_num}.pt"  # Build discriminator path
-            else:  # No checkpoints found
-                print(f"{BackgroundColors.RED}No checkpoint files found in {resume_path}{Style.RESET_ALL}")
-                g_checkpoint_path = None
-        else:  # Specific file provided
-            g_checkpoint_path = resume_path  # Use provided path
-            # Find corresponding discriminator checkpoint
-            if "generator" in g_checkpoint_path.name:  # If generator checkpoint
-                d_checkpoint_path = Path(str(g_checkpoint_path).replace("generator", "discriminator"))  # Get discriminator path
-            else:  # Invalid checkpoint
-                print(f"{BackgroundColors.RED}Invalid checkpoint file: {g_checkpoint_path}{Style.RESET_ALL}")
-                g_checkpoint_path = None
-        
-        # Load checkpoints if found
-        if g_checkpoint_path and g_checkpoint_path.exists():  # If generator checkpoint exists
-            print(f"{BackgroundColors.GREEN}Loading generator checkpoint: {g_checkpoint_path}{Style.RESET_ALL}")
-            g_checkpoint = torch.load(g_checkpoint_path, map_location=device)  # Load generator checkpoint
-            G.load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights
-            start_epoch = g_checkpoint["epoch"]  # Set starting epoch
-            
-            # Load optimizer state if available
-            if "opt_G_state" in g_checkpoint:  # If optimizer state saved
-                opt_G.load_state_dict(g_checkpoint["opt_G_state"])  # Restore generator optimizer
-                print(f"{BackgroundColors.GREEN}Restored generator optimizer state{Style.RESET_ALL}")
-            
-            # Load metrics history if available
-            if "metrics_history" in g_checkpoint:  # If metrics history saved
-                metrics_history = g_checkpoint["metrics_history"]  # Restore metrics
-                step = metrics_history["steps"][-1] if metrics_history["steps"] else 0  # Restore step counter
-                print(f"{BackgroundColors.GREEN}Restored metrics history (step {step}){Style.RESET_ALL}")
-            
-            # Load AMP scaler state if available
-            if scaler is not None and "scaler_state" in g_checkpoint:  # If using AMP and scaler state saved
-                scaler.load_state_dict(g_checkpoint["scaler_state"])  # Restore scaler state
-                print(f"{BackgroundColors.GREEN}Restored AMP scaler state{Style.RESET_ALL}")
-            
-            # Load discriminator checkpoint
-            if d_checkpoint_path.exists():  # If discriminator checkpoint exists
-                print(f"{BackgroundColors.GREEN}Loading discriminator checkpoint: {d_checkpoint_path}{Style.RESET_ALL}")
-                d_checkpoint = torch.load(d_checkpoint_path, map_location=device)  # Load discriminator checkpoint
-                D.load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights
+                d_checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_discriminator_epoch{epoch_num}.pt"  # Build discriminator path
                 
-                # Load optimizer state if available
-                if "opt_D_state" in d_checkpoint:  # If optimizer state saved
-                    opt_D.load_state_dict(d_checkpoint["opt_D_state"])  # Restore discriminator optimizer
-                    print(f"{BackgroundColors.GREEN}Restored discriminator optimizer state{Style.RESET_ALL}")
-            else:  # Discriminator checkpoint not found
-                print(f"{BackgroundColors.YELLOW}Warning: Discriminator checkpoint not found at {d_checkpoint_path}{Style.RESET_ALL}")
-            
-            print(f"{BackgroundColors.GREEN}Resuming training from epoch {start_epoch}{Style.RESET_ALL}")
-        else:  # Checkpoint not found
-            print(f"{BackgroundColors.YELLOW}Checkpoint not found, starting from scratch{Style.RESET_ALL}")
+                print(f"{BackgroundColors.CYAN}Found existing checkpoints for {csv_path_obj.name}{Style.RESET_ALL}")
+                print(f"{BackgroundColors.CYAN}Attempting to resume from epoch {epoch_num}...{Style.RESET_ALL}")
+                
+                # Load generator checkpoint
+                if g_checkpoint_path.exists():  # If generator checkpoint exists
+                    try:  # Try to load checkpoint
+                        print(f"{BackgroundColors.GREEN}Loading generator checkpoint: {g_checkpoint_path.name}{Style.RESET_ALL}")
+                        g_checkpoint = torch.load(g_checkpoint_path, map_location=device)  # Load generator checkpoint
+                        G.load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights
+                        start_epoch = g_checkpoint["epoch"]  # Set starting epoch
+                        
+                        # Load optimizer state if available
+                        if "opt_G_state" in g_checkpoint:  # If optimizer state saved
+                            opt_G.load_state_dict(g_checkpoint["opt_G_state"])  # Restore generator optimizer
+                            print(f"{BackgroundColors.GREEN}✓ Restored generator optimizer state{Style.RESET_ALL}")
+                        
+                        # Load metrics history if available
+                        if "metrics_history" in g_checkpoint:  # If metrics history saved
+                            metrics_history = g_checkpoint["metrics_history"]  # Restore metrics
+                            step = metrics_history["steps"][-1] if metrics_history["steps"] else 0  # Restore step counter
+                            print(f"{BackgroundColors.GREEN}✓ Restored metrics history ({len(metrics_history['steps'])} steps){Style.RESET_ALL}")
+                        
+                        # Load AMP scaler state if available
+                        if scaler is not None and "scaler_state" in g_checkpoint:  # If using AMP and scaler state saved
+                            scaler.load_state_dict(g_checkpoint["scaler_state"])  # Restore scaler state
+                            print(f"{BackgroundColors.GREEN}✓ Restored AMP scaler state{Style.RESET_ALL}")
+                        
+                        # Load discriminator checkpoint
+                        if d_checkpoint_path.exists():  # If discriminator checkpoint exists
+                            print(f"{BackgroundColors.GREEN}Loading discriminator checkpoint: {d_checkpoint_path.name}{Style.RESET_ALL}")
+                            d_checkpoint = torch.load(d_checkpoint_path, map_location=device)  # Load discriminator checkpoint
+                            D.load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights
+                            
+                            # Load optimizer state if available
+                            if "opt_D_state" in d_checkpoint:  # If optimizer state saved
+                                opt_D.load_state_dict(d_checkpoint["opt_D_state"])  # Restore discriminator optimizer
+                                print(f"{BackgroundColors.GREEN}✓ Restored discriminator optimizer state{Style.RESET_ALL}")
+                        else:  # Discriminator checkpoint not found
+                            print(f"{BackgroundColors.YELLOW}⚠ Warning: Discriminator checkpoint not found{Style.RESET_ALL}")
+                        
+                        print(f"{BackgroundColors.GREEN}✓ Resuming training from epoch {start_epoch} (step {step}){Style.RESET_ALL}")
+                    except Exception as e:  # If loading fails
+                        print(f"{BackgroundColors.YELLOW}⚠ Failed to load checkpoint: {e}{Style.RESET_ALL}")
+                        print(f"{BackgroundColors.YELLOW}⚠ Starting training from scratch{Style.RESET_ALL}")
+                        start_epoch = 0  # Reset to start from beginning
+                        step = 0  # Reset step counter
+            else:  # No checkpoints found for this file
+                print(f"{BackgroundColors.CYAN}No existing checkpoints found for {csv_path_obj.name}{Style.RESET_ALL}")
+                print(f"{BackgroundColors.CYAN}Starting training from scratch{Style.RESET_ALL}")
+        else:  # Checkpoint directory doesn't exist
+            print(f"{BackgroundColors.CYAN}No checkpoint directory found{Style.RESET_ALL}")
+            print(f"{BackgroundColors.CYAN}Starting training from scratch{Style.RESET_ALL}")
+    elif args.from_scratch:  # If user explicitly requested from scratch
+        print(f"{BackgroundColors.CYAN}--from_scratch flag set, ignoring existing checkpoints{Style.RESET_ALL}")
+        print(f"{BackgroundColors.CYAN}Starting training from scratch{Style.RESET_ALL}")
 
     for epoch in range(start_epoch, args.epochs):  # Loop over epochs starting from resume point
         for real_x_np, labels_np in dataloader:  # Loop over batches in dataloader
