@@ -1237,7 +1237,6 @@ def main():
                 files_to_process = get_files_to_process(
                     input_path, file_extension=".csv"
                 )  # Get list of CSV files to process
-                files_to_process = ["./Datasets/CICDDoS2019/01-12/Syn.csv"]  # TEMPORARY OVERRIDE FOR TESTING PURPOSES ONLY
                 
                 for file in files_to_process:  # For each file to process
                     print(
