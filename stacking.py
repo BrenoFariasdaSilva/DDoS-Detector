@@ -290,6 +290,35 @@ def get_dataset_name(input_path):
     return dataset_name  # Return the dataset name
 
 
+def find_data_augmentation_file(original_file_path):
+    """
+    Find the corresponding data augmentation file for an original CSV file.
+    The augmented file is expected to be in ../Data_Augmentation/<same_filename>
+
+    :param original_file_path: Path to the original CSV file
+    :return: Path to the augmented file if it exists, None otherwise
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Looking for data augmentation file for: {BackgroundColors.CYAN}{original_file_path}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    original_path = Path(original_file_path)  # Create Path object
+    augmented_dir = original_path.parent / "Data_Augmentation"  # Data_Augmentation subdirectory
+    augmented_file = augmented_dir / original_path.name  # Same filename in augmented directory
+
+    if augmented_file.exists():  # If augmented file exists
+        verbose_output(
+            f"{BackgroundColors.GREEN}Found augmented file: {BackgroundColors.CYAN}{augmented_file}{Style.RESET_ALL}"
+        )  # Output success message
+        return str(augmented_file)  # Return path as string
+    else:  # If augmented file doesn't exist
+        verbose_output(
+            f"{BackgroundColors.YELLOW}No augmented file found for: {BackgroundColors.CYAN}{original_file_path}{Style.RESET_ALL}"
+        )  # Output warning
+        return None  # Return None
+
+
 def find_local_feature_file(file_dir, filename):
     """
     Attempt to locate <file_dir>/Feature_Analysis/<filename>.
