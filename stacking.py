@@ -341,6 +341,22 @@ def merge_original_and_augmented(original_df, augmented_df):
     return merged_df  # Return merged dataframe
 
 
+def calculate_metric_improvement(original_value, augmented_value):
+    """
+    Calculate percentage improvement of a metric.
+
+    :param original_value: Original metric value
+    :param augmented_value: Augmented metric value
+    :return: Percentage improvement (positive = better, negative = worse)
+    """
+
+    if original_value == 0:  # Avoid division by zero
+        return 0.0 if augmented_value == 0 else float('inf')  # Return 0 if both are 0, inf if only original is 0
+    
+    improvement = ((augmented_value - original_value) / original_value) * 100  # Calculate percentage improvement
+    return improvement  # Return improvement
+
+
 def save_augmentation_comparison_results(file_path, comparison_results):
     """
     Save data augmentation comparison results to CSV file.
