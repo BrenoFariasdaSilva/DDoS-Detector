@@ -521,7 +521,12 @@ def parse_args():
     p.add_argument(
         "--checkpoint", type=str, default=None, help="Path to generator checkpoint for generation"
     )  # Add checkpoint argument
-    p.add_argument("--n_samples", type=int, default=1000)  # Add number of samples argument
+    p.add_argument(
+        "--n_samples",
+        type=float,
+        default=0.1,
+        help="Number of samples to generate. If >= 1, absolute count. If < 1, percentage of training data per class (default: 0.1 = 10%%)"
+    )  # Add number of samples argument (supports both int and percentage)
     p.add_argument(
         "--label", type=int, default=None, help="If set, generate samples for this class id only"
     )  # Add label argument for generation
@@ -1009,6 +1014,10 @@ def train(args):
             g_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{epoch+1}.pt"  # Path for generator checkpoint
             d_path = checkpoint_dir / f"{checkpoint_prefix}_discriminator_epoch{epoch+1}.pt"  # Path for discriminator checkpoint
             
+            # Calculate class distribution for percentage-based generation
+            unique_labels, label_counts = np.unique(dataset.labels, return_counts=True)  # Get class distribution
+            class_distribution = dict(zip(unique_labels.tolist(), label_counts.tolist()))  # Create label:count mapping
+            
             # Prepare generator checkpoint with full training state
             g_checkpoint = {
                 "epoch": epoch + 1,  # Save current epoch number
@@ -1017,6 +1026,7 @@ def train(args):
                 "scaler": dataset.scaler,  # Save scaler for inverse transform
                 "label_encoder": dataset.label_encoder,  # Save label encoder for mapping
                 "feature_cols": dataset.feature_cols,  # Save feature column names for generation
+                "class_distribution": class_distribution,  # Save class distribution for percentage-based generation
                 "metrics_history": metrics_history,  # Save metrics history for resume
                 "args": vars(args),  # Save training arguments
             }
@@ -1085,18 +1095,22 @@ def generate(args):
     scaler = ckpt.get("scaler", None)  # Try to get scaler from checkpoint
     label_encoder = ckpt.get("label_encoder", None)  # Try to get label encoder from checkpoint
     feature_cols = ckpt.get("feature_cols", None)  # Try to get feature column names from checkpoint
+    class_distribution = ckpt.get("class_distribution", None)  # Try to get class distribution from checkpoint
 
-    if scaler is None or label_encoder is None or feature_cols is None:  # If scaler, label encoder, or feature_cols missing
+    if scaler is None or label_encoder is None or feature_cols is None or (args.n_samples < 1.0 and class_distribution is None):  # If critical data missing
         if args.csv_path is None:  # Verify if CSV path is provided
             raise RuntimeError(
-                "Checkpoint missing scaler/label_encoder/feature_cols. Provide --csv_path to reconstruct them."
+                "Checkpoint missing scaler/label_encoder/feature_cols/class_distribution. Provide --csv_path to reconstruct them."
             )  # Raise error if not
         tmp_ds = CSVFlowDataset(
             args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols
-        )  # Rebuild dataset to get scaler, encoder, and feature names
+        )  # Rebuild dataset to get scaler, encoder, feature names, and class distribution
         scaler = tmp_ds.scaler  # Use scaler from rebuilt dataset
         label_encoder = tmp_ds.label_encoder  # Use label encoder from rebuilt dataset
         feature_cols = tmp_ds.feature_cols  # Use feature column names from rebuilt dataset
+        if args.n_samples < 1.0:  # If percentage mode, calculate class distribution
+            unique_labels, label_counts = np.unique(tmp_ds.labels, return_counts=True)  # Get class distribution
+            class_distribution = dict(zip(unique_labels.tolist(), label_counts.tolist()))  # Create label:count mapping
 
     if args.feature_dim is not None:  # If feature dimension is provided
         feature_dim = args.feature_dim  # Use provided feature dimension
@@ -1122,11 +1136,35 @@ def generate(args):
     G.load_state_dict(ckpt["state_dict"] if "state_dict" in ckpt else ckpt)  # Load generator weights from checkpoint
     G.eval()  # Set generator to evaluation mode
 
-    n = args.n_samples  # Number of samples to generate
-    if args.label is not None:  # If a specific label is requested
-        labels = np.array([args.label] * n, dtype=np.int64)  # Create array of repeated label
-    else:
-        labels = np.random.randint(0, n_classes, size=(n,), dtype=np.int64)  # Sample labels uniformly
+    # Determine number of samples to generate (supports both absolute count and percentage)
+    if args.n_samples < 1.0:  # Percentage mode: generate percentage of training data per class
+        if class_distribution is None:  # If class distribution not available
+            raise RuntimeError(
+                "Percentage-based generation requires class_distribution in checkpoint or --csv_path to calculate it."
+            )  # Raise error
+        print(f"{BackgroundColors.CYAN}Generating {args.n_samples*100:.1f}% of training data per class{Style.RESET_ALL}")
+        if args.label is not None:  # If specific label requested
+            if args.label not in class_distribution:  # Verify label exists
+                raise ValueError(f"Label {args.label} not found in training data class distribution")  # Raise error
+            n_per_class = {args.label: max(1, int(class_distribution[args.label] * args.n_samples))}  # Calculate for specific label
+        else:  # Generate for all classes
+            n_per_class = {label: max(1, int(count * args.n_samples)) for label, count in class_distribution.items()}  # Calculate per class
+        labels = []  # List to build label array
+        for label, count in n_per_class.items():  # For each class
+            labels.extend([label] * count)  # Repeat label by count
+        labels = np.array(labels, dtype=np.int64)  # Convert to array
+        n = len(labels)  # Total number of samples
+        print(f"{BackgroundColors.GREEN}Total samples to generate: {BackgroundColors.CYAN}{n}{Style.RESET_ALL}")
+        for label, count in n_per_class.items():  # Print per-class breakdown
+            class_name = label_encoder.inverse_transform([label])[0]  # Get class name
+            print(f"{BackgroundColors.GREEN}  - Class '{class_name}': {BackgroundColors.CYAN}{count}{BackgroundColors.GREEN} samples{Style.RESET_ALL}")
+    else:  # Absolute count mode: generate exact number of samples
+        n = int(args.n_samples)  # Convert to integer
+        print(f"{BackgroundColors.CYAN}Generating {n} samples (absolute count){Style.RESET_ALL}")
+        if args.label is not None:  # If a specific label is requested
+            labels = np.array([args.label] * n, dtype=np.int64)  # Create array of repeated label
+        else:
+            labels = np.random.randint(0, n_classes, size=(n,), dtype=np.int64)  # Sample labels uniformly
 
     batch_size = args.gen_batch_size  # Set generation batch size
     all_fake = []  # List to store generated feature batches
