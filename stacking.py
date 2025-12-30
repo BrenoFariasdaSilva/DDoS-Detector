@@ -399,6 +399,7 @@ def save_augmentation_comparison_results(file_path, comparison_results):
         "f1_score_improvement",
         "fpr_improvement",
         "fnr_improvement",
+        "training_time_improvement",
         "features_list",
         "Hardware",
     ]  # Define desired column order
@@ -2034,9 +2035,11 @@ def main():
                                     prec_improvement = calculate_metric_improvement(orig_metrics[1], merged_metrics[1])
                                     rec_improvement = calculate_metric_improvement(orig_metrics[2], merged_metrics[2])
                                     f1_improvement = calculate_metric_improvement(orig_metrics[3], merged_metrics[3])
-                                    # For FPR and FNR, lower is better, so improvement is negative
+                                    # For FPR and FNR, lower is better, so negative change means improvement
                                     fpr_improvement = calculate_metric_improvement(orig_metrics[4], merged_metrics[4])
                                     fnr_improvement = calculate_metric_improvement(orig_metrics[5], merged_metrics[5])
+                                    # For training time, lower is better, so negative change means improvement
+                                    time_improvement = calculate_metric_improvement(orig_metrics[6], merged_metrics[6])
                                     
                                     # Print detailed comparison
                                     print(
@@ -2053,7 +2056,9 @@ def main():
                                     print(f"  {BackgroundColors.YELLOW}FPR (lower is better):{Style.RESET_ALL}")
                                     print(f"    Original: {orig_metrics[4]:.4f} | Augmented: {aug_metrics[4]:.4f} | Original+Augmented: {merged_metrics[4]:.4f} | {BackgroundColors.CYAN}Change: {fpr_improvement:+.2f}%{Style.RESET_ALL}")
                                     print(f"  {BackgroundColors.YELLOW}FNR (lower is better):{Style.RESET_ALL}")
-                                    print(f"    Original: {orig_metrics[5]:.4f} | Augmented: {aug_metrics[5]:.4f} | Original+Augmented: {merged_metrics[5]:.4f} | {BackgroundColors.CYAN}Change: {fnr_improvement:+.2f}%{Style.RESET_ALL}\n")
+                                    print(f"    Original: {orig_metrics[5]:.4f} | Augmented: {aug_metrics[5]:.4f} | Original+Augmented: {merged_metrics[5]:.4f} | {BackgroundColors.CYAN}Change: {fnr_improvement:+.2f}%{Style.RESET_ALL}")
+                                    print(f"  {BackgroundColors.YELLOW}Training Time (seconds, lower is better):{Style.RESET_ALL}")
+                                    print(f"    Original: {orig_metrics[6]:.2f}s | Augmented: {aug_metrics[6]:.2f}s | Original+Augmented: {merged_metrics[6]:.2f}s | {BackgroundColors.CYAN}Change: {time_improvement:+.2f}%{Style.RESET_ALL}\n")
                                     
                                     # Store comparison results for CSV export
                                     comparison_results.append({
@@ -2078,6 +2083,7 @@ def main():
                                         "f1_score_improvement": 0.0,
                                         "fpr_improvement": 0.0,
                                         "fnr_improvement": 0.0,
+                                        "training_time_improvement": 0.0,
                                         "features_list": orig_result["features_list"],
                                     })
                                     
@@ -2103,6 +2109,7 @@ def main():
                                         "f1_score_improvement": 0.0,
                                         "fpr_improvement": 0.0,
                                         "fnr_improvement": 0.0,
+                                        "training_time_improvement": 0.0,
                                         "features_list": orig_result["features_list"],
                                     })
                                     
@@ -2128,6 +2135,7 @@ def main():
                                         "f1_score_improvement": f1_improvement,
                                         "fpr_improvement": fpr_improvement,
                                         "fnr_improvement": fnr_improvement,
+                                        "training_time_improvement": time_improvement,
                                         "features_list": orig_result["features_list"],
                                     })
                                 
