@@ -54,6 +54,7 @@ Assumptions & Notes:
 import argparse  # For CLI argument parsing
 import atexit  # For playing a sound when the program finishes
 import datetime  # For tracking execution time
+import json  # For saving/loading metrics history
 import matplotlib.pyplot as plt  # For plotting training metrics
 import numpy as np  # Numerical operations
 import os  # For running a command in the terminal
@@ -855,11 +856,24 @@ def train(args):
                             opt_G.load_state_dict(g_checkpoint["opt_G_state"])  # Restore generator optimizer
                             print(f"{BackgroundColors.GREEN}✓ Restored generator optimizer state{Style.RESET_ALL}")
                         
-                        # Load metrics history if available
-                        if "metrics_history" in g_checkpoint:  # If metrics history saved
-                            metrics_history = g_checkpoint["metrics_history"]  # Restore metrics
+                        # Load metrics history from checkpoint or separate JSON file
+                        metrics_loaded = False  # Flag to track if metrics were loaded
+                        if "metrics_history" in g_checkpoint:  # If metrics history saved in checkpoint
+                            metrics_history = g_checkpoint["metrics_history"]  # Restore metrics from checkpoint
                             step = metrics_history["steps"][-1] if metrics_history["steps"] else 0  # Restore step counter
-                            print(f"{BackgroundColors.GREEN}✓ Restored metrics history ({len(metrics_history['steps'])} steps){Style.RESET_ALL}")
+                            metrics_loaded = True  # Mark as loaded
+                            print(f"{BackgroundColors.GREEN}✓ Restored metrics history from checkpoint ({len(metrics_history['steps'])} steps){Style.RESET_ALL}")
+                        else:  # Try loading from separate JSON file
+                            metrics_json_path = checkpoint_dir / f"{checkpoint_prefix}_metrics_history.json"  # Path to metrics JSON
+                            if metrics_json_path.exists():  # If JSON file exists
+                                try:  # Try to load metrics
+                                    with open(metrics_json_path, 'r') as f:  # Open file for reading
+                                        metrics_history = json.load(f)  # Load metrics from JSON
+                                    step = metrics_history["steps"][-1] if metrics_history["steps"] else 0  # Restore step counter
+                                    metrics_loaded = True  # Mark as loaded
+                                    print(f"{BackgroundColors.GREEN}✓ Restored metrics history from JSON file ({len(metrics_history['steps'])} steps){Style.RESET_ALL}")
+                                except Exception as e:  # If loading fails
+                                    print(f"{BackgroundColors.YELLOW}⚠ Warning: Failed to load metrics from JSON: {e}{Style.RESET_ALL}")
                         
                         # Load AMP scaler state if available
                         if scaler is not None and "scaler_state" in g_checkpoint:  # If using AMP and scaler state saved
@@ -878,6 +892,23 @@ def train(args):
                                 print(f"{BackgroundColors.GREEN}✓ Restored discriminator optimizer state{Style.RESET_ALL}")
                         else:  # Discriminator checkpoint not found
                             print(f"{BackgroundColors.YELLOW}⚠ Warning: Discriminator checkpoint not found{Style.RESET_ALL}")
+                        
+                        # Check if training metrics plot exists after loading checkpoint
+                        plot_dir = csv_path_obj.parent / "Data_Augmentation"  # Plot directory
+                        plot_filename = csv_path_obj.stem + "_training_metrics.png"  # Plot filename
+                        plot_path = plot_dir / plot_filename  # Full plot path
+                        
+                        if not plot_path.exists():  # If plot doesn't exist
+                            # Check if we have metrics to generate the plot
+                            if metrics_loaded and len(metrics_history.get("steps", [])) > 0:  # If metrics available
+                                print(f"{BackgroundColors.YELLOW}Training metrics plot not found, generating from metrics history...{Style.RESET_ALL}")
+                                os.makedirs(plot_dir, exist_ok=True)  # Ensure directory exists
+                                plot_training_metrics(metrics_history, str(plot_dir), plot_filename)  # Generate plot
+                                print(f"{BackgroundColors.GREEN}✓ Generated training metrics plot: {plot_filename}{Style.RESET_ALL}")
+                            else:  # No metrics available
+                                print(f"{BackgroundColors.YELLOW}⚠ Warning: Training metrics plot not found and no metrics history available to generate it{Style.RESET_ALL}")
+                        else:
+                            print(f"{BackgroundColors.GREEN}✓ Training metrics plot already exists{Style.RESET_ALL}")
                         
                         print(f"{BackgroundColors.GREEN}✓ Resuming training from epoch {start_epoch} (step {step}){Style.RESET_ALL}")
                     except Exception as e:  # If loading fails
@@ -1006,6 +1037,12 @@ def train(args):
             torch.save(
                 G.state_dict(), str(latest_path)
             )  # Save latest generator weights
+            
+            # Save metrics history to separate JSON file for easy loading
+            metrics_path = checkpoint_dir / f"{checkpoint_prefix}_metrics_history.json"  # Path for metrics JSON
+            with open(metrics_path, 'w') as f:  # Open file for writing
+                json.dump(metrics_history, f, indent=2)  # Save metrics as JSON
+            print(f"{BackgroundColors.GREEN}Saved metrics history to {BackgroundColors.CYAN}{metrics_path}{Style.RESET_ALL}")  # Print metrics save message
         print(f"{BackgroundColors.GREEN}Saved generator to {BackgroundColors.CYAN}{g_path}{Style.RESET_ALL}")  # Print checkpoint save message
     
     print(f"{BackgroundColors.GREEN}Training finished!{Style.RESET_ALL}")  # Print training completion message
