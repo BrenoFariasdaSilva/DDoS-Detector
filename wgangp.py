@@ -1201,15 +1201,18 @@ def main():
             print(f"{BackgroundColors.CYAN}[1/2] Training model...{Style.RESET_ALL}")
             train(args)  # Train the model
             
-            # Set checkpoint path to the last saved model
-            checkpoint_path = Path(args.out_dir) / f"generator_epoch{args.epochs}.pt"
+            # Set checkpoint path to the last saved model (dataset-specific)
+            csv_path_obj = Path(args.csv_path)
+            checkpoint_prefix = csv_path_obj.stem  # Use CSV filename as prefix
+            checkpoint_dir = csv_path_obj.parent / "Data_Augmentation" / "Checkpoints"
+            checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{args.epochs}.pt"
             if not checkpoint_path.exists():
-                # Try to find the latest checkpoint
-                checkpoints = sorted(Path(args.out_dir).glob("generator_epoch*.pt"))
+                # Try to find the latest checkpoint for this specific file
+                checkpoints = sorted(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))
                 if checkpoints:  # If checkpoints found
                     checkpoint_path = checkpoints[-1]  # Use the latest checkpoint
                 else:  # No checkpoints found
-                    raise FileNotFoundError(f"No generator checkpoint found in {args.out_dir}")
+                    raise FileNotFoundError(f"No generator checkpoint found for {csv_path_obj.name} in {checkpoint_dir}")
             
             args.checkpoint = str(checkpoint_path)
             print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")
@@ -1266,15 +1269,17 @@ def main():
                             print(f"{BackgroundColors.CYAN}[1/2] Training model on {csv_path_obj.name}...{Style.RESET_ALL}")
                             train(args)  # Train the model
                             
-                            # Set checkpoint path to the last saved model
-                            checkpoint_path = Path(args.out_dir) / f"generator_epoch{args.epochs}.pt"
+                            # Set checkpoint path to the last saved model (dataset-specific)
+                            checkpoint_prefix = csv_path_obj.stem  # Use CSV filename as prefix
+                            checkpoint_dir = data_aug_dir / "Checkpoints"  # Checkpoints in Data_Augmentation/Checkpoints
+                            checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{args.epochs}.pt"
                             if not checkpoint_path.exists():
-                                # Try to find the latest checkpoint
-                                checkpoints = sorted(Path(args.out_dir).glob("generator_epoch*.pt"))
+                                # Try to find the latest checkpoint for this specific file
+                                checkpoints = sorted(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))
                                 if checkpoints:
                                     checkpoint_path = checkpoints[-1]
                                 else:
-                                    raise FileNotFoundError(f"No generator checkpoint found in {args.out_dir}")
+                                    raise FileNotFoundError(f"No generator checkpoint found for {csv_path_obj.name} in {checkpoint_dir}")
                             
                             args.checkpoint = str(checkpoint_path)
                             print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")
