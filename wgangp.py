@@ -68,6 +68,7 @@ import traceback  # For printing tracebacks on exceptions
 from colorama import Style  # For coloring the terminal
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
+from tqdm import tqdm  # For progress bar visualization
 from sklearn.preprocessing import StandardScaler, LabelEncoder  # For data preprocessing
 from torch import autograd  # For gradient penalty
 from torch.utils.data import Dataset, DataLoader  # Dataset and DataLoader
@@ -106,6 +107,7 @@ DATASETS = {  # Dictionary containing dataset paths and feature files
 }
 
 # Logger Setup:
+original_stdout = sys.stdout  # Store original stdout for tqdm before redirection
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
 sys.stdout = logger  # Redirect stdout to the logger
 sys.stderr = logger  # Redirect stderr to the logger
@@ -932,7 +934,17 @@ def train(args):
         print(f"{BackgroundColors.CYAN}Starting training from scratch{Style.RESET_ALL}")
 
     for epoch in range(start_epoch, args.epochs):  # Loop over epochs starting from resume point
-        for real_x_np, labels_np in dataloader:  # Loop over batches in dataloader
+        # Create progress bar for current epoch using original stdout to prevent multiple lines
+        pbar = tqdm(
+            dataloader, 
+            desc=f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL}", 
+            unit="batch",
+            file=original_stdout,  # Use original stdout before Logger redirection
+            ncols=None,  # Auto-detect terminal width
+            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'  # Custom format
+        )
+        
+        for real_x_np, labels_np in pbar:  # Loop over batches in dataloader with progress bar
             real_x = real_x_np.to(device)  # Move real features to device
             labels = labels_np.to(device, dtype=torch.long)  # Move labels to device and set type
 
@@ -980,6 +992,17 @@ def train(args):
                 g_loss.backward()  # Backpropagate generator loss
                 opt_G.step()  # Update generator parameters
 
+            # Update progress bar description with current metrics (colored)
+            pbar.set_description(
+                f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL} | "
+                f"{BackgroundColors.YELLOW}step {step}{Style.RESET_ALL} | "
+                f"{BackgroundColors.RED}loss_D: {loss_D.item():.4f}{Style.RESET_ALL} | "
+                f"{BackgroundColors.GREEN}loss_G: {g_loss.item():.4f}{Style.RESET_ALL} | "
+                f"gp: {gp.item():.4f} | "
+                f"D(real): {d_real_score.item():.4f} | "
+                f"D(fake): {d_fake_score.item():.4f}"
+            )
+            
             # Track metrics every log_interval steps
             if step % args.log_interval == 0:  # Log training progress periodically
                 # Calculate Wasserstein distance estimate
@@ -993,10 +1016,6 @@ def train(args):
                 metrics_history["D_real"].append(d_real_score.item())  # Record real score
                 metrics_history["D_fake"].append(d_fake_score.item())  # Record fake score
                 metrics_history["wasserstein"].append(wasserstein_dist)  # Record Wasserstein distance
-                
-                print(
-                    f"[Epoch {epoch+1}/{args.epochs}] step {step} | loss_D: {loss_D.item():.4f} | loss_G: {g_loss.item():.4f} | gp: {gp.item():.4f} | D(real): {d_real_score.item():.4f} | D(fake): {d_fake_score.item():.4f}"
-                )  # Print training status
             step += 1  # Increment global step counter
 
         if (epoch + 1) % args.save_every == 0 or epoch == args.epochs - 1:  # Save checkpoints periodically
@@ -1284,7 +1303,7 @@ def main():
             assert args.checkpoint is not None, "Generation requires --checkpoint"  # Ensure checkpoint is provided
             generate(args)  # Generate synthetic samples
         elif args.mode == "both":
-            print(f"{BackgroundColors.CYAN}[1/2] Training model...{Style.RESET_ALL}")
+            print(f"{BackgroundColors.GREEN}[1/2] Training model...{Style.RESET_ALL}")
             train(args)  # Train the model
             
             # Set checkpoint path to the last saved model (dataset-specific)
@@ -1352,7 +1371,7 @@ def main():
                             assert args.checkpoint is not None, "Generation requires --checkpoint"
                             generate(args)  # Generate synthetic samples only
                         elif args.mode == "both":
-                            print(f"{BackgroundColors.CYAN}[1/2] Training model on {csv_path_obj.name}...{Style.RESET_ALL}")
+                            print(f"{BackgroundColors.GREEN}[1/2] Training model on {BackgroundColors.CYAN}{csv_path_obj.name}{BackgroundColors.GREEN}...{Style.RESET_ALL}")
                             train(args)  # Train the model
                             
                             # Set checkpoint path to the last saved model (dataset-specific)
