@@ -776,10 +776,32 @@ def load_dataset(csv_path):
     return df  # Return the loaded DataFrame
 
 
+def sanitize_feature_names(columns):
+    """
+    Sanitize column names by removing special JSON characters that LightGBM doesn't support.
+    Replaces: { } [ ] : , " \ with underscores.
+
+    :param columns: pandas Index or list of column names
+    :return: list of sanitized column names
+    """
+    import re
+    sanitized = []
+    for col in columns:
+        # Replace special JSON characters with underscores
+        clean_col = re.sub(r'[{}\[\]:,"\\]', '_', str(col))
+        # Remove multiple consecutive underscores
+        clean_col = re.sub(r'_+', '_', clean_col)
+        # Remove leading/trailing underscores
+        clean_col = clean_col.strip('_')
+        sanitized.append(clean_col)
+    return sanitized
+
+
 def preprocess_dataframe(df, remove_zero_variance=True):
     """
     Preprocess a DataFrame by removing rows with NaN or infinite values and
-    dropping zero-variance numeric features.
+    dropping zero-variance numeric features. Also sanitizes feature names to
+    remove special JSON characters that cause issues with LightGBM.
 
     :param df: pandas DataFrame to preprocess
     :param remove_zero_variance: whether to drop numeric columns with zero variance
@@ -795,6 +817,9 @@ def preprocess_dataframe(df, remove_zero_variance=True):
 
     # Strip whitespace from all column names
     df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+
+    # Sanitize feature names to remove special JSON characters (LightGBM requirement)
+    df.columns = sanitize_feature_names(df.columns)  # Sanitize column names
 
     df_clean = df.replace([np.inf, -np.inf], np.nan).dropna()  # Remove rows with NaN or infinite values
 
