@@ -1840,7 +1840,7 @@ def evaluate_on_dataset(
                     "n_samples_train": len(y_train),
                     "n_samples_test": len(y_test),
                     "metrics": metrics,
-                    "features_list": features_list,
+                    "features_list": subset_feature_names,
                 }  # Prepare result entry
                 all_results[(name, model_name)] = result_entry  # Store result with key
                 print(
@@ -1869,7 +1869,7 @@ def evaluate_on_dataset(
             "n_samples_train": len(y_train),
             "n_samples_test": len(y_test),
             "metrics": stacking_metrics,
-            "features_list": features_list,
+            "features_list": subset_feature_names,
         }  # Prepare stacking result entry
         all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store result with key
         print(
