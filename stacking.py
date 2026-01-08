@@ -1698,6 +1698,12 @@ def evaluate_on_dataset(
     :return: Dictionary mapping (feature_set, model_name) to results
     """
 
+    # Sanitize GA and RFE feature names to match the sanitized feature_names in the DataFrame
+    if ga_selected_features:
+        ga_selected_features = sanitize_feature_names(ga_selected_features)
+    if rfe_selected_features:
+        rfe_selected_features = sanitize_feature_names(rfe_selected_features)
+
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}"
     )
