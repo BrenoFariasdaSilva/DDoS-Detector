@@ -1180,18 +1180,24 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
 def get_feature_subset(X_scaled, features, feature_names):
     """
     Returns a subset of features from the scaled feature set based on the provided feature names.
+    Also returns the actual feature names that were successfully selected.
 
     :param X_scaled: Scaled features (numpy array).
     :param features: List of feature names to select.
     :param feature_names: List of all feature names corresponding to columns in X_scaled.
-    :return: Numpy array containing only the selected features, or an empty array if features is None/empty.
+    :return: Tuple of (subset array, list of actual selected feature names)
     """
 
     if features:  # Only proceed if the list of selected features is NOT empty/None
-        indices = [feature_names.index(f) for f in features if f in feature_names]
-        return X_scaled[:, indices]  # Return the subset of features
+        indices = []  # List to store indices of selected features
+        selected_names = []  # List to store names of selected features
+        for f in features:  # Iterate over each feature in the provided list
+            if f in feature_names:  # Check if the feature exists in the full feature list
+                indices.append(feature_names.index(f))  # Append the index of the feature
+                selected_names.append(f)  # Append the name of the feature
+        return X_scaled[:, indices], selected_names  # Return the subset and actual names
     else:  # If no features are selected (or features is None)
-        return np.empty((X_scaled.shape[0], 0))  # Return an empty array with correct number of rows
+        return np.empty((X_scaled.shape[0], 0)), []  # Return empty array and empty list
 
 
 def get_features_list_for_feature_set(feature_set_name, feature_names, ga_selected_features, rfe_selected_features):
@@ -1742,19 +1748,20 @@ def evaluate_on_dataset(
         X_train_scaled, X_test_scaled, pca_n_components, file
     )  # Apply PCA transformation if applicable
 
+    # Get feature subsets with actual selected feature names
+    X_train_ga, ga_actual_features = get_feature_subset(X_train_scaled, ga_selected_features, feature_names)
+    X_test_ga, _ = get_feature_subset(X_test_scaled, ga_selected_features, feature_names)
+    
+    X_train_rfe, rfe_actual_features = get_feature_subset(X_train_scaled, rfe_selected_features, feature_names)
+    X_test_rfe, _ = get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)
+
     feature_sets = {  # Dictionary of feature sets to evaluate
-        "Full Features": (X_train_scaled, X_test_scaled),  # All features
-        "GA Features": (
-            get_feature_subset(X_train_scaled, ga_selected_features, feature_names),
-            get_feature_subset(X_test_scaled, ga_selected_features, feature_names),
-        ),  # GA subset
+        "Full Features": (X_train_scaled, X_test_scaled, feature_names),  # All features with names
+        "GA Features": (X_train_ga, X_test_ga, ga_actual_features),  # GA subset with actual names
         "PCA Components": (
-            (X_train_pca, X_test_pca) if X_train_pca is not None else None
+            (X_train_pca, X_test_pca, None) if X_train_pca is not None else None
         ),  # PCA components (only if PCA was applied)
-        "RFE Features": (
-            get_feature_subset(X_train_scaled, rfe_selected_features, feature_names),
-            get_feature_subset(X_test_scaled, rfe_selected_features, feature_names),
-        ),  # RFE subset
+        "RFE Features": (X_train_rfe, X_test_rfe, rfe_actual_features),  # RFE subset with actual names
     }
 
     feature_sets = {
@@ -1772,7 +1779,7 @@ def evaluate_on_dataset(
 
     all_results = {}  # Dictionary to store results: (feature_set, model_name) -> result_entry
 
-    for idx, (name, (X_train_subset, X_test_subset)) in enumerate(feature_sets.items(), start=1):
+    for idx, (name, (X_train_subset, X_test_subset, subset_feature_names_list)) in enumerate(feature_sets.items(), start=1):
         if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
             print(
                 f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}"
@@ -1784,17 +1791,13 @@ def evaluate_on_dataset(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating models on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}"
         )  # Output evaluation status
 
-        features_list = get_features_list_for_feature_set(
-            name, feature_names, ga_selected_features, rfe_selected_features
-        )  # Determine the features list for this feature set
-
         if name == "PCA Components":  # If the feature set is PCA Components
             subset_feature_names = [
                 f"PC{i+1}" for i in range(X_train_subset.shape[1])
             ]  # Generate PCA component names
         else:  # For other feature sets
             subset_feature_names = (
-                features_list if features_list else [f"feature_{i}" for i in range(X_train_subset.shape[1])]
+                subset_feature_names_list if subset_feature_names_list else [f"feature_{i}" for i in range(X_train_subset.shape[1])]
             )  # Use actual feature names or generate generic ones
 
         X_train_df = pd.DataFrame(
