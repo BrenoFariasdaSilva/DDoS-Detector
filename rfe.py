@@ -58,7 +58,8 @@ import subprocess  # For executing system commands
 import sys  # For system-specific parameters and functions
 import time  # For measuring elapsed time
 from colorama import Style  # For coloring the terminal
-from joblib import dump  # For exporting trained models and scalers
+from joblib import dump, load  # For exporting and loading trained models and scalers
+import glob  # For finding exported model files
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.ensemble import RandomForestClassifier  # For the Random Forest model
@@ -88,6 +89,7 @@ class BackgroundColors:  # Colors for the terminal
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
 N_JOBS = -1  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
+SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, try loading exported models instead of retraining
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
@@ -510,7 +512,7 @@ def export_final_model(X_numeric, feature_columns, top_features, y_array, csv_pa
     print(f"{BackgroundColors.GREEN}Saved final model to {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}")  # notify saved model
     print(f"{BackgroundColors.GREEN}Saved scaler to {BackgroundColors.CYAN}{scaler_path}{Style.RESET_ALL}")  # notify saved scaler
 
-    return model_path, scaler_path, features_path  # return saved artifact paths
+    return final_model, scaler_full, top_features, model_path, scaler_path, features_path  # return objects and paths
 
 
 def save_rfe_results(csv_path, run_results):
@@ -538,6 +540,93 @@ def save_rfe_results(csv_path, run_results):
         )  # Notify CSV saved
     except Exception as e:  # If saving CSV fails
         print(f"{BackgroundColors.RED}Failed to save run results to CSV: {e}{Style.RESET_ALL}")  # Print error
+
+
+def load_exported_artifacts(csv_path):
+    """Attempt to locate and load latest exported model, scaler and features for csv_path.
+
+    :param csv_path: original dataset path used to name exported artifacts
+    :return: (model, scaler, features) or None if not found
+    """
+
+    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/Models/"  # location where artifacts are stored
+    if not os.path.isdir(models_dir):
+        return None  # no models directory
+
+    base_name = safe_filename(Path(csv_path).stem)  # safe base name
+    pattern = os.path.join(models_dir, f"{base_name}_*_model.joblib")  # glob pattern for model files
+    candidates = glob.glob(pattern)  # find matching model files
+    if not candidates:
+        return None  # no exported models found
+
+    # pick latest by modification time
+    latest_model = max(candidates, key=os.path.getmtime)  # select most recent model file
+    scaler_path = latest_model.replace("_model.joblib", "_scaler.joblib")  # infer scaler path
+    features_path = latest_model.replace("_model.joblib", "_features.json")  # infer features path
+    if not os.path.exists(scaler_path) or not os.path.exists(features_path):
+        return None  # incomplete artifact set
+
+    try:
+        model = load(latest_model)  # load model with joblib
+        scaler = load(scaler_path)  # load scaler with joblib
+        with open(features_path, "r", encoding="utf-8") as fh:
+            features = json.load(fh)  # load features list
+        return model, scaler, features
+    except Exception:
+        return None  # any loading error -> treat as not found
+
+
+def evaluate_exported_model(model, scaler, X_numeric, feature_columns, top_features, y_array):
+    """Evaluate a loaded/trained model on the full numeric dataset and
+    compute the same metrics used by the RFE pipeline.
+
+    :return: tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
+    """
+
+    start_time = time.time()  # measure prediction/eval time
+    X_scaled = scaler.transform(X_numeric.values)  # scale full numeric data with provided scaler
+    sel_indices = [i for i, f in enumerate(feature_columns) if f in top_features]  # indices for chosen features
+    X_eval = X_scaled[:, sel_indices] if sel_indices else X_scaled  # selected eval array
+    y_pred = model.predict(X_eval)  # model predictions on full dataset
+
+    acc = accuracy_score(y_array, y_pred)  # compute accuracy
+    prec = precision_score(y_array, y_pred, average="weighted", zero_division=0)  # precision
+    rec = recall_score(y_array, y_pred, average="weighted", zero_division=0)  # recall
+    f1 = f1_score(y_array, y_pred, average="weighted", zero_division=0)  # f1 score
+
+    # compute FPR/FNR similarly to compute_rfe_metrics
+    if len(np.unique(y_array)) == 2:
+        cm = confusion_matrix(y_array, y_pred)
+        if cm.shape == (2, 2):
+            tn, fp, fn, tp = cm.ravel()
+            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0
+        else:
+            total = cm.sum() if cm.size > 0 else 1
+            fpr = float(cm.sum() - np.trace(cm)) / float(total) if total > 0 else 0
+            fnr = fpr
+    else:
+        cm = confusion_matrix(y_array, y_pred)
+        supports = cm.sum(axis=1)
+        fprs = []
+        fnrs = []
+        for i in range(cm.shape[0]):
+            tp = cm[i, i]
+            fn = cm[i, :].sum() - tp
+            fp = cm[:, i].sum() - tp
+            tn = cm.sum() - (tp + fp + fn)
+            denom_fnr = (tp + fn) if (tp + fn) > 0 else 1
+            denom_fpr = (fp + tn) if (fp + tn) > 0 else 1
+            fnr_i = fn / denom_fnr
+            fpr_i = fp / denom_fpr
+            fprs.append((fpr_i, supports[i]))
+            fnrs.append((fnr_i, supports[i]))
+        total_support = float(supports.sum()) if supports.sum() > 0 else 1.0
+        fpr = float(sum(v * s for v, s in fprs) / total_support)
+        fnr = float(sum(v * s for v, s in fnrs) / total_support)
+
+    elapsed = time.time() - start_time
+    return float(acc), float(prec), float(rec), float(f1), float(fpr), float(fnr), float(elapsed)
 
 
 def run_rfe(csv_path):
@@ -596,27 +685,44 @@ def run_rfe(csv_path):
         metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42)  # compute metrics on split
         top_features, rfe_ranking = extract_top_features(selector, feature_columns)  # extract selected features and rankings
         sorted_rfe_ranking = sorted(rfe_ranking.items(), key=lambda x: x[1])  # sort features by ranking (ascending)
-        run_results = [  # prepare run results dict for saving
-            {
-                "model": model.__class__.__name__,  # model class name
-                "accuracy": round(metrics_tuple[0], 4),  # accuracy metric rounded
-                "precision": round(metrics_tuple[1], 4),  # precision metric rounded
-                "recall": round(metrics_tuple[2], 4),  # recall metric rounded
-                "f1_score": round(metrics_tuple[3], 4),  # f1 score rounded
-                "fpr": round(metrics_tuple[4], 4),  # false positive rate rounded
-                "fnr": round(metrics_tuple[5], 4),  # false negative rate rounded
-                "elapsed_time_s": round(metrics_tuple[6], 2),  # elapsed time rounded to 2 decimals
-                "top_features": json.dumps(top_features),  # JSON-encoded top features list
-                "rfe_ranking": json.dumps(sorted_rfe_ranking),  # JSON-encoded sorted ranking list
-            }
-        ]
+
         print_metrics(metrics_tuple) if VERBOSE else None  # optionally print metrics
         print_top_features(top_features, rfe_ranking) if VERBOSE else None  # optionally print top features
 
-        # Export final model+artifacts using helper to avoid duplication
-        _model_path, _scaler_path, _features_path = export_final_model(
-            X_numeric, feature_columns, top_features, y_array, csv_path
-        )  # train and export final model, scaler and features
+        # If enabled, try loading existing exported artifacts instead of retraining (fallback)
+        if SKIP_TRAIN_IF_MODEL_EXISTS:
+            loaded = load_exported_artifacts(csv_path)  # try to load latest exported artifacts
+            if loaded is not None:
+                final_model, scaler_full, loaded_features = loaded  # unpack loaded objects
+                top_features = loaded_features  # use loaded feature list
+                print(f"{BackgroundColors.GREEN}Loaded exported model and scaler for {BackgroundColors.CYAN}{Path(csv_path).stem}{Style.RESET_ALL}")  # notify load
+            else:
+                final_model, scaler_full, top_features, _model_path, _scaler_path, _features_path = export_final_model(
+                    X_numeric, feature_columns, top_features, y_array, csv_path
+                )  # train and export final model, scaler and features
+        else:
+            final_model, scaler_full, top_features, _model_path, _scaler_path, _features_path = export_final_model(
+                X_numeric, feature_columns, top_features, y_array, csv_path
+            )  # train and export final model, scaler and features
+
+        # Evaluate final_model (loaded or newly trained) on the full dataset
+        eval_metrics = evaluate_exported_model(final_model, scaler_full, X_numeric, feature_columns, top_features, y_array)
+
+        run_results = [  # prepare run results dict for saving based on final exported model
+            {
+                "model": final_model.__class__.__name__,  # model class name
+                "accuracy": round(eval_metrics[0], 4),
+                "precision": round(eval_metrics[1], 4),
+                "recall": round(eval_metrics[2], 4),
+                "f1_score": round(eval_metrics[3], 4),
+                "fpr": round(eval_metrics[4], 4),
+                "fnr": round(eval_metrics[5], 4),
+                "elapsed_time_s": round(eval_metrics[6], 2),
+                "top_features": json.dumps(top_features),
+                "rfe_ranking": json.dumps(sorted_rfe_ranking),
+            }
+        ]
+
         save_rfe_results(csv_path, run_results)  # save fallback run results
         return  # exit after fallback run
 
@@ -667,21 +773,34 @@ def run_rfe(csv_path):
 
     sorted_rfe_ranking = sorted(avg_rfe_ranking.items(), key=lambda x: x[1])  # sort averaged rankings ascending
 
-    # Export final model+artifacts using helper to avoid duplication (CV path)
-    _model_path, _scaler_path, _features_path = export_final_model(
-        X_numeric, feature_columns, top_features, y_array, csv_path
-    )  # train and export final model, scaler and features
+    # If enabled, try loading existing exported artifacts instead of retraining
+    if SKIP_TRAIN_IF_MODEL_EXISTS:
+        loaded = load_exported_artifacts(csv_path)  # try to load latest exported artifacts
+        if loaded is not None:
+            final_model, scaler_full, loaded_features = loaded  # unpack loaded objects
+            top_features = loaded_features  # use loaded feature list
+            print(f"{BackgroundColors.GREEN}Loaded exported model and scaler for {BackgroundColors.CYAN}{Path(csv_path).stem}{Style.RESET_ALL}")  # notify load
+        else:
+            final_model, scaler_full, top_features, _model_path, _scaler_path, _features_path = export_final_model(
+                X_numeric, feature_columns, top_features, y_array, csv_path
+            )  # train and export final model, scaler and features
+    else:
+        final_model, scaler_full, top_features, _model_path, _scaler_path, _features_path = export_final_model(
+            X_numeric, feature_columns, top_features, y_array, csv_path
+        )  # train and export final model, scaler and features
 
+    # Evaluate final_model (loaded or newly trained) on the full dataset and build run results
+    eval_metrics = evaluate_exported_model(final_model, scaler_full, X_numeric, feature_columns, top_features, y_array)
     run_results = [  # prepare aggregated run results for saving
         {
-            "model": RandomForestClassifier().__class__.__name__,  # model class name
-            "accuracy": round(float(mean_metrics[0]), 4),  # mean accuracy across folds rounded
-            "precision": round(float(mean_metrics[1]), 4),  # mean precision across folds rounded
-            "recall": round(float(mean_metrics[2]), 4),  # mean recall across folds rounded
-            "f1_score": round(float(mean_metrics[3]), 4),  # mean f1-score across folds rounded
-            "fpr": round(float(mean_metrics[4]), 4),  # mean false positive rate across folds rounded
-            "fnr": round(float(mean_metrics[5]), 4),  # mean false negative rate across folds rounded
-            "elapsed_time_s": round(float(total_elapsed), 2),  # total elapsed time across folds rounded
+            "model": final_model.__class__.__name__,  # model class name
+            "accuracy": round(eval_metrics[0], 4),
+            "precision": round(eval_metrics[1], 4),
+            "recall": round(eval_metrics[2], 4),
+            "f1_score": round(eval_metrics[3], 4),
+            "fpr": round(eval_metrics[4], 4),
+            "fnr": round(eval_metrics[5], 4),
+            "elapsed_time_s": round(eval_metrics[6], 2),
             "top_features": json.dumps(top_features),  # JSON-encoded list of majority-selected features
             "rfe_ranking": json.dumps(sorted_rfe_ranking),  # JSON-encoded averaged and sorted rankings
         }
