@@ -43,6 +43,8 @@ Dependencies:
    - pandas, numpy, scikit-learn, seaborn, matplotlib, colorama
 """
 
+
+import argparse  # For command-line argument parsing
 import atexit  # For playing a sound when the program finishes
 import datetime  # For timestamping
 import json  # For saving lists and dicts as JSON strings
@@ -895,10 +897,26 @@ def main():
 
 
 if __name__ == "__main__":
-    """
-    This is the standard boilerplate that calls the main() function.
+    parser = argparse.ArgumentParser(
+        description="Run RFE pipeline and optionally load existing exported models."
+    )  # CLI description
+    parser.add_argument(
+        "--skip-train-if-model-exists",
+        dest="skip_train",
+        action="store_true",
+        help="If set, do not retrain; load existing exported artifacts and evaluate.",
+    )  # Flag to skip training when exported artifacts exist
+    parser.add_argument(
+        "--csv",
+        dest="csv",
+        type=str,
+        default=None,
+        help="Optional: path to dataset CSV to analyze. If omitted, uses the default in main().",
+    )  # Optional CSV override
+    args = parser.parse_args()  # Parse CLI args
 
-    :return: None
-    """
+    # Override module-level constant based on CLI flag
+    SKIP_TRAIN_IF_MODEL_EXISTS = bool(args.skip_train)  # Respect the user's CLI choice
+    CSV_FILE = args.csv if args.csv else CSV_FILE  # Use provided CSV or default
 
     main()  # Call the main function
