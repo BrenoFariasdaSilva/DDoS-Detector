@@ -58,6 +58,7 @@ import subprocess  # For executing system commands
 import sys  # For system-specific parameters and functions
 import time  # For measuring elapsed time
 from colorama import Style  # For coloring the terminal
+from joblib import dump  # For exporting trained models and scalers
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.ensemble import RandomForestClassifier  # For the Random Forest model
@@ -471,6 +472,47 @@ def populate_hardware_column_and_order(df, column_name="Hardware"):
     return df_results.reindex(columns=columns_order)  # Reorder columns
 
 
+def export_final_model(X_numeric, feature_columns, top_features, y_array, csv_path):
+    """
+    Train a final RandomForest on the full numeric dataset restricted to
+    `top_features`, save model, scaler, and feature list to disk and
+    return their paths.
+
+    All newly added lines include inline comments explaining their purpose.
+    
+    :param X_numeric: DataFrame of numeric features
+    :param feature_columns: Original feature column names
+    :param top_features: List of top selected features
+    :param y_array: Numpy array of target labels
+    :param csv_path: Original CSV file path
+    :return: model_path, scaler_path, features_path
+    """
+
+    scaler_full = StandardScaler()  # create a scaler for full-data training
+    X_full_scaled = scaler_full.fit_transform(X_numeric.values)  # scale all numeric features
+    sel_indices = [i for i, f in enumerate(feature_columns) if f in top_features]  # get indices for top features
+    X_final = X_full_scaled[:, sel_indices] if sel_indices else X_full_scaled  # select columns or keep all if none
+    final_model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)  # instantiate final RF
+    final_model.fit(X_final, y_array)  # fit final model on entire dataset using selected features
+
+    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/Models/"  # models output directory
+    os.makedirs(models_dir, exist_ok=True)  # ensure directory exists
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")  # timestamp for filenames
+    base_name = safe_filename(Path(csv_path).stem)  # safe base name from dataset path
+    model_path = f"{models_dir}{base_name}_{timestamp}_model.joblib"  # model file path
+    scaler_path = f"{models_dir}{base_name}_{timestamp}_scaler.joblib"  # scaler file path
+    features_path = f"{models_dir}{base_name}_{timestamp}_features.json"  # selected features file path
+    dump(final_model, model_path)  # save trained model to disk
+    dump(scaler_full, scaler_path)  # save fitted scaler to disk
+    with open(features_path, "w", encoding="utf-8") as fh:  # write selected features to json
+        fh.write(json.dumps(top_features))  # save feature list as JSON
+
+    print(f"{BackgroundColors.GREEN}Saved final model to {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}")  # notify saved model
+    print(f"{BackgroundColors.GREEN}Saved scaler to {BackgroundColors.CYAN}{scaler_path}{Style.RESET_ALL}")  # notify saved scaler
+
+    return model_path, scaler_path, features_path  # return saved artifact paths
+
+
 def save_rfe_results(csv_path, run_results):
     """
     Saves results from RFE run to a structured CSV file.
@@ -570,6 +612,11 @@ def run_rfe(csv_path):
         ]
         print_metrics(metrics_tuple) if VERBOSE else None  # optionally print metrics
         print_top_features(top_features, rfe_ranking) if VERBOSE else None  # optionally print top features
+
+        # Export final model+artifacts using helper to avoid duplication
+        _model_path, _scaler_path, _features_path = export_final_model(
+            X_numeric, feature_columns, top_features, y_array, csv_path
+        )  # train and export final model, scaler and features
         save_rfe_results(csv_path, run_results)  # save fallback run results
         return  # exit after fallback run
 
@@ -619,6 +666,11 @@ def run_rfe(csv_path):
     top_features = [f for f, c in zip(feature_columns, support_counts) if c >= majority_threshold]  # select majority-chosen features
 
     sorted_rfe_ranking = sorted(avg_rfe_ranking.items(), key=lambda x: x[1])  # sort averaged rankings ascending
+
+    # Export final model+artifacts using helper to avoid duplication (CV path)
+    _model_path, _scaler_path, _features_path = export_final_model(
+        X_numeric, feature_columns, top_features, y_array, csv_path
+    )  # train and export final model, scaler and features
 
     run_results = [  # prepare aggregated run results for saving
         {
