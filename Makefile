@@ -49,17 +49,17 @@ all: main
 main: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(call RUN_AND_LOG, ./main.py)
+	$(call RUN_AND_LOG, ./main.py $(ARGS))
 
 dataset_converter: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(call RUN_AND_LOG, ./dataset_converter.py)
+	$(call RUN_AND_LOG, ./dataset_converter.py $(ARGS))
 
 dataset_descriptor: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(call RUN_AND_LOG, ./dataset_descriptor.py)
+	$(call RUN_AND_LOG, ./dataset_descriptor.py $(ARGS))
 
 download_datasets: dependencies
 	$(ENSURE_LOG_DIR)
@@ -70,17 +70,17 @@ download_datasets: dependencies
 hyperparameters_optimization: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(call RUN_AND_LOG, ./hyperparameters_optimization.py)
+	$(call RUN_AND_LOG, ./hyperparameters_optimization.py $(ARGS))
 
 genetic_algorithm: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(call RUN_AND_LOG, ./genetic_algorithm.py)
+	$(call RUN_AND_LOG, ./genetic_algorithm.py $(ARGS))
 
 pca: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(call RUN_AND_LOG, ./pca.py)
+	$(call RUN_AND_LOG, ./pca.py $(ARGS))
 
 rfe: dependencies
 	$(ENSURE_LOG_DIR)
@@ -90,12 +90,12 @@ rfe: dependencies
 stacking: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(call RUN_AND_LOG, ./stacking.py)
+	$(call RUN_AND_LOG, ./stacking.py $(ARGS))
 
 telegram: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(call RUN_AND_LOG, ./telegram_bot.py)
+	$(call RUN_AND_LOG, ./telegram_bot.py $(ARGS))
 
 wgangp: dependencies
 	$(ENSURE_LOG_DIR)
