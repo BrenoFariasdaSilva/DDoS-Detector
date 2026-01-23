@@ -69,7 +69,7 @@ from sklearn.metrics import (
     f1_score,
     confusion_matrix,
 )  # For performance metrics
-from sklearn.model_selection import train_test_split  # For splitting the data
+from sklearn.model_selection import StratifiedKFold, train_test_split  # For train/test split and stratified K-Fold CV
 from sklearn.preprocessing import StandardScaler  # For scaling the data (standardization)
 
 
@@ -525,41 +525,120 @@ def run_rfe(csv_path):
     if X is None or y is None:  # If loading failed
         return  # Exit the function
 
-    X_train, X_test, y_train, y_test, feature_columns = scale_and_split(X, y)  # Scale and split the data
+    # Coerce numeric features (keep only columns with numeric content)
+    X_numeric = X.select_dtypes(include=["number"]).copy()  # select numeric columns from X
+    if X_numeric.shape[1] == 0:  # check if no numeric columns were found
+        coerced_cols = {}  # prepare dict to hold columns coerced to numeric
+        for col in X.columns:  # iterate over all original columns
+            coerced = pd.to_numeric(X[col], errors="coerce")  # attempt to coerce column to numeric (invalid -> NaN)
+            if coerced.notna().sum() > 0:  # if coercion produced any valid numeric values
+                coerced_cols[col] = coerced  # keep this coerced column
+        if coerced_cols:  # if at least one column was successfully coerced to numeric
+            X_numeric = pd.DataFrame(coerced_cols, index=X.index)  # build DataFrame from coerced numeric columns
+        else:
+            print(f"{BackgroundColors.RED}No numeric features found after preprocessing. Cannot run RFE.{Style.RESET_ALL}")  # warn user
+            return  # exit because RFE requires numeric features
 
-    random_state = 42  # Fixed random state for reproducibility
+    feature_columns = X_numeric.columns  # save the numeric feature column names for later mapping
 
-    selector, model = run_rfe_selector(X_train, y_train, random_state=random_state)  # Run RFE to select top features
-    metrics_tuple = compute_rfe_metrics(
-        selector, X_train, X_test, y_train, y_test, random_state=random_state
-    )  # Compute performance metrics (returns a tuple)
-    top_features, rfe_ranking = extract_top_features(
-        selector, feature_columns
-    )  # Extract top features and their rankings
+    # Determine stratified CV splits safely
+    y_array = np.array(y)  # convert target to numpy array for splitting and counting
+    unique, counts = np.unique(y_array, return_counts=True)  # compute class labels and their counts
+    min_class_count = counts.min() if counts.size > 0 else 0  # get smallest class sample count
+    if min_class_count < 2:  # if any class has fewer than 2 samples
+        print(f"{BackgroundColors.YELLOW}Not enough samples per class for stratified CV; falling back to single train/test split.{Style.RESET_ALL}")  # notify fallback
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_numeric.values, y_array, test_size=0.2, random_state=42, stratify=None
+        )  # perform a single non-stratified train/test split
+        selector, model = run_rfe_selector(X_train, y_train, random_state=42)  # run RFE on the single split
+        metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42)  # compute metrics on split
+        top_features, rfe_ranking = extract_top_features(selector, feature_columns)  # extract selected features and rankings
+        sorted_rfe_ranking = sorted(rfe_ranking.items(), key=lambda x: x[1])  # sort features by ranking (ascending)
+        run_results = [  # prepare run results dict for saving
+            {
+                "model": model.__class__.__name__,  # model class name
+                "accuracy": round(metrics_tuple[0], 4),  # accuracy metric rounded
+                "precision": round(metrics_tuple[1], 4),  # precision metric rounded
+                "recall": round(metrics_tuple[2], 4),  # recall metric rounded
+                "f1_score": round(metrics_tuple[3], 4),  # f1 score rounded
+                "fpr": round(metrics_tuple[4], 4),  # false positive rate rounded
+                "fnr": round(metrics_tuple[5], 4),  # false negative rate rounded
+                "elapsed_time_s": round(metrics_tuple[6], 2),  # elapsed time rounded to 2 decimals
+                "top_features": json.dumps(top_features),  # JSON-encoded top features list
+                "rfe_ranking": json.dumps(sorted_rfe_ranking),  # JSON-encoded sorted ranking list
+            }
+        ]
+        print_metrics(metrics_tuple) if VERBOSE else None  # optionally print metrics
+        print_top_features(top_features, rfe_ranking) if VERBOSE else None  # optionally print top features
+        save_rfe_results(csv_path, run_results)  # save fallback run results
+        return  # exit after fallback run
 
-    sorted_rfe_ranking = sorted(
-        rfe_ranking.items(), key=lambda x: x[1]
-    )  # Sort features by ranking (ascending, lower is better), as list of [feature, ranking]
+    n_splits = min(10, len(y_array), min_class_count)  # choose up to 10 splits but not more than samples or smallest class
+    n_splits = max(2, int(n_splits))  # ensure at least 2 splits
 
-    run_results = [
-        {  # Store results for this run
-            "model": model.__class__.__name__,  # Model name
-            "accuracy": round(metrics_tuple[0], 4),  # Accuracy
-            "precision": round(metrics_tuple[1], 4),  # Precision
-            "recall": round(metrics_tuple[2], 4),  # Recall
-            "f1_score": round(metrics_tuple[3], 4),  # F1-Score
-            "fpr": round(metrics_tuple[4], 4),  # False Positive Rate
-            "fnr": round(metrics_tuple[5], 4),  # False Negative Rate
-            "elapsed_time_s": round(metrics_tuple[6], 2),  # Elapsed time in seconds (2 decimals for time)
-            "top_features": json.dumps(top_features),  # List of top features as JSON
-            "rfe_ranking": json.dumps(sorted_rfe_ranking),  # Sorted RFE rankings list as JSON
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)  # create stratified K-Fold iterator
+
+    fold_metrics = []  # list to collect per-fold metric tuples
+    fold_rankings = []  # list to collect per-fold ranking arrays
+    fold_supports = []  # list to collect per-fold support masks
+    total_elapsed = 0.0  # accumulator for elapsed times across folds
+
+    for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X_numeric.values, y_array), start=1):
+        verbose_output(f"{BackgroundColors.CYAN}Running fold {fold_idx}/{n_splits}{Style.RESET_ALL}")  # optional fold progress
+
+        X_train_raw = X_numeric.iloc[train_idx].values  # raw numeric train features for this fold
+        X_test_raw = X_numeric.iloc[test_idx].values  # raw numeric test features for this fold
+        y_train = y_array[train_idx]  # train labels for this fold
+        y_test = y_array[test_idx]  # test labels for this fold
+
+        scaler = StandardScaler()  # instantiate a scaler for fold-local scaling
+        X_train = scaler.fit_transform(X_train_raw)  # fit scaler on train and transform train
+        X_test = scaler.transform(X_test_raw)  # transform test with the same scaler
+
+        selector, model = run_rfe_selector(X_train, y_train, random_state=42)  # fit RFE on this fold's training data
+
+        metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42)  # compute metrics for this fold
+        fold_metrics.append(metrics_tuple)  # append per-fold metrics tuple
+        fold_rankings.append(selector.ranking_)  # append per-fold ranking array
+        fold_supports.append(selector.support_.astype(int))  # append per-fold support mask as integers
+        total_elapsed += metrics_tuple[6]  # accumulate elapsed time from this fold
+
+    # Aggregate metrics (mean across folds)
+    metrics_arr = np.array(fold_metrics)  # convert list of tuples to numpy array
+    mean_metrics = metrics_arr.mean(axis=0)  # compute mean metric values across folds
+
+    # Aggregate rankings: mean rank per feature across folds
+    rankings_arr = np.vstack(fold_rankings)  # shape: (n_folds, n_features) stack rankings
+    mean_rankings = rankings_arr.mean(axis=0)  # mean ranking per feature
+    avg_rfe_ranking = {f: float(r) for f, r in zip(feature_columns, mean_rankings)}  # map feature->avg rank
+
+    # Aggregate supports to decide top features (selected in majority of folds)
+    supports_arr = np.vstack(fold_supports)  # shape: (n_folds, n_features) stack support masks
+    support_counts = supports_arr.sum(axis=0)  # count how many folds selected each feature
+    majority_threshold = (n_splits // 2) + 1  # require strict majority to consider a feature selected
+    top_features = [f for f, c in zip(feature_columns, support_counts) if c >= majority_threshold]  # select majority-chosen features
+
+    sorted_rfe_ranking = sorted(avg_rfe_ranking.items(), key=lambda x: x[1])  # sort averaged rankings ascending
+
+    run_results = [  # prepare aggregated run results for saving
+        {
+            "model": RandomForestClassifier().__class__.__name__,  # model class name
+            "accuracy": round(float(mean_metrics[0]), 4),  # mean accuracy across folds rounded
+            "precision": round(float(mean_metrics[1]), 4),  # mean precision across folds rounded
+            "recall": round(float(mean_metrics[2]), 4),  # mean recall across folds rounded
+            "f1_score": round(float(mean_metrics[3]), 4),  # mean f1-score across folds rounded
+            "fpr": round(float(mean_metrics[4]), 4),  # mean false positive rate across folds rounded
+            "fnr": round(float(mean_metrics[5]), 4),  # mean false negative rate across folds rounded
+            "elapsed_time_s": round(float(total_elapsed), 2),  # total elapsed time across folds rounded
+            "top_features": json.dumps(top_features),  # JSON-encoded list of majority-selected features
+            "rfe_ranking": json.dumps(sorted_rfe_ranking),  # JSON-encoded averaged and sorted rankings
         }
     ]
 
-    print_metrics(metrics_tuple) if VERBOSE else None  # Print metrics to terminal
-    print_top_features(top_features, rfe_ranking) if VERBOSE else None  # Print top features to terminal
+    print_metrics(tuple(mean_metrics)) if VERBOSE else None  # optionally print aggregated metrics
+    print_top_features(top_features, avg_rfe_ranking) if VERBOSE else None  # optionally print aggregated top features and avg ranks
 
-    save_rfe_results(csv_path, run_results)  # Save structured results
+    save_rfe_results(csv_path, run_results)  # save aggregated run results to CSV
 
 
 def verbose_output(true_string="", false_string=""):
