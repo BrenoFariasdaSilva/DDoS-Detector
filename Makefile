@@ -85,7 +85,7 @@ pca: dependencies
 rfe: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(call RUN_AND_LOG, ./rfe.py)
+	$(call RUN_AND_LOG, ./rfe.py $(ARGS))
 
 stacking: dependencies
 	$(ENSURE_LOG_DIR)
