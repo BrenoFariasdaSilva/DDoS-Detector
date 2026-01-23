@@ -90,6 +90,7 @@ class BackgroundColors:  # Colors for the terminal
 VERBOSE = False  # Set to True to output verbose messages
 N_JOBS = -1  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
 SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, try loading exported models instead of retraining
+CSV_FILE = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Path to the CSV dataset file (set in main)
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
@@ -880,8 +881,7 @@ def main():
     )  # Output the welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
 
-    csv_file = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Path to the CSV file
-    run_rfe(csv_file)  # Run RFE on the specified CSV file
+    run_rfe(CSV_FILE)  # Run RFE on the specified CSV file
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
