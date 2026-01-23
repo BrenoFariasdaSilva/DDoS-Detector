@@ -907,6 +907,12 @@ if __name__ == "__main__":
         help="If set, do not retrain; load existing exported artifacts and evaluate.",
     )  # Flag to skip training when exported artifacts exist
     parser.add_argument(
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="Enable verbose output during the run.",
+    )  # Flag to enable verbose logging
+    parser.add_argument(
         "--csv",
         dest="csv",
         type=str,
@@ -917,6 +923,7 @@ if __name__ == "__main__":
 
     # Override module-level constant based on CLI flag
     SKIP_TRAIN_IF_MODEL_EXISTS = bool(args.skip_train)  # Respect the user's CLI choice
+    VERBOSE = bool(args.verbose)  # Respect the user's request to print verbose output
     CSV_FILE = args.csv if args.csv else CSV_FILE  # Use provided CSV or default
 
     main()  # Call the main function
