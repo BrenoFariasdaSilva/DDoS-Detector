@@ -546,6 +546,28 @@ def save_rfe_results(csv_path, run_results):
         print(f"{BackgroundColors.RED}Failed to save run results to CSV: {e}{Style.RESET_ALL}")  # Print error
 
 
+def print_run_summary(run_results):
+    """
+    Print a concise run summary to the terminal.
+
+    :param run_results: list containing a single run-results dict
+    :return: None
+    """
+    
+    if not run_results:
+        return
+    
+    res = run_results[0]
+    print(f"\n{BackgroundColors.BOLD}Run summary:{Style.RESET_ALL}")
+    print(f"  Model: {res.get('model')}")
+    print(f"  CV Method: {res.get('cv_method')}")
+    print(
+        f"  Accuracy: {res.get('accuracy'):.4f}  Precision: {res.get('precision'):.4f}  Recall: {res.get('recall'):.4f}  F1: {res.get('f1_score'):.4f}"
+    )
+    print(f"  FPR: {res.get('fpr'):.4f}  FNR: {res.get('fnr'):.4f}  Elapsed: {res.get('elapsed_time_s'):.2f}s")
+    print(f"  Top features: {res.get('top_features')}")
+
+
 def load_exported_artifacts(csv_path):
     """Attempt to locate and load latest exported model, scaler and features for csv_path.
 
@@ -729,6 +751,8 @@ def run_rfe(csv_path):
         ]
 
         save_rfe_results(csv_path, run_results)  # save fallback run results
+        print_run_summary(run_results)  # concise terminal summary
+
         return  # exit after fallback run
 
     n_splits = min(10, len(y_array), min_class_count)  # choose up to 10 splits but not more than samples or smallest class
@@ -816,6 +840,7 @@ def run_rfe(csv_path):
     print_top_features(top_features, avg_rfe_ranking) if VERBOSE else None  # optionally print aggregated top features and avg ranks
 
     save_rfe_results(csv_path, run_results)  # save aggregated run results to CSV
+    print_run_summary(run_results)  # concise terminal summary
 
 
 def verbose_output(true_string="", false_string=""):
