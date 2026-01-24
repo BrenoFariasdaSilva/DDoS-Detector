@@ -111,6 +111,29 @@ RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = False  # Whether monitor already app
 RESUME_PROGRESS = True  # When True, attempt to resume progress from saved state files
 PROGRESS_STATE_DIR_NAME = "ga_progress"  # Subfolder under Feature_Analysis to store progress files
 PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL  # Pickle protocol to use when saving state
+GA_RESULTS_CSV_COLUMNS = [  # Columns for the results CSV
+    "dataset",
+    "dataset_path",
+    "run_index",
+    "population_size",
+    "n_generations",
+    "cxpb",
+    "mutpb",
+    "n_train",
+    "n_test",
+    "train_test_ratio",
+    "hardware",
+    "classifier",
+    "accuracy",
+    "precision",
+    "recall",
+    "f1_score",
+    "fpr",
+    "fnr",
+    "elapsed_time_s",
+    "best_features",
+    "rfe_ranking",
+]
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
@@ -2272,29 +2295,7 @@ def write_consolidated_csv(rows, output_dir):
                 df_existing, df_new
             )  # Merge new rows, replacing by dataset_path where needed
 
-        columns = [  # Define canonical column order for the consolidated CSV
-            "dataset",
-            "dataset_path",
-            "run_index",
-            "population_size",
-            "n_generations",
-            "cxpb",
-            "mutpb",
-            "n_train",
-            "n_test",
-            "train_test_ratio",
-            "hardware",
-            "classifier",
-            "accuracy",
-            "precision",
-            "recall",
-            "f1_score",
-            "fpr",
-            "fnr",
-            "elapsed_time_s",
-            "best_features",
-            "rfe_ranking",
-        ]
+        columns = GA_RESULTS_CSV_COLUMNS  # Canonical column order for consolidated CSV
 
         populate_hardware_column(df_combined, column_name="hardware")  # Populate hardware column using system specs
 
