@@ -93,6 +93,22 @@ VERBOSE = False  # Set to True to output verbose messages
 N_JOBS = -1  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
 SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, try loading exported models instead of retraining
 CSV_FILE = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Path to the CSV dataset file (set in main)
+RFE_RESULTS_CSV_COLUMNS = [  # Columns for the RFE results CSV
+    "model",
+    "dataset",
+    "accuracy",
+    "precision",
+    "recall",
+    "f1_score",
+    "fpr",
+    "fnr",
+    "elapsed_time_s",
+    "Hardware",
+    "cv_method",
+    "hyperparameters",
+    "top_features",
+    "rfe_ranking",
+]
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
@@ -461,22 +477,13 @@ def populate_hardware_column_and_order(df, column_name="Hardware"):
         + " GB | OS: "
         + hardware_specs["os"]
     )  # Add hardware specs column
+    # Build the columns order from the canonical constant, substituting the
+    # runtime `column_name` for the placeholder "Hardware" so callers can
+    # choose a different name if needed.
     columns_order = [
-        "model",
-        "dataset",  # added: relative dataset path used for this run
-        "accuracy",
-        "precision",
-        "recall",
-        "f1_score",
-        "fpr",
-        "fnr",
-        "elapsed_time_s",
-        column_name,
-        "cv_method",
-        "hyperparameters",
-        "top_features",
-        "rfe_ranking",
-    ]  # Define column order
+        (column_name if c == "Hardware" else c) for c in RFE_RESULTS_CSV_COLUMNS
+    ]
+
     return df_results.reindex(columns=columns_order)  # Reorder columns
 
 
