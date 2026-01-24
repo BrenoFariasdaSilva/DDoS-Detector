@@ -502,18 +502,20 @@ def export_final_model(X_numeric, feature_columns, top_features, y_array, csv_pa
     final_model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)  # instantiate final RF
     final_model.fit(X_final, y_array)  # fit final model on entire dataset using selected features
 
-    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/Models/"  # models output directory
+    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/Models/RFE/"  # models output directory under RFE subdir
     os.makedirs(models_dir, exist_ok=True)  # ensure directory exists
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")  # timestamp for filenames
+    timestamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")  # timestamp for filenames (YYYY_MM_DD-HH_MM_SS)
     base_name = safe_filename(Path(csv_path).stem)  # safe base name from dataset path
-    model_path = f"{models_dir}{base_name}_{timestamp}_model.joblib"  # model file path
-    scaler_path = f"{models_dir}{base_name}_{timestamp}_scaler.joblib"  # scaler file path
-    features_path = f"{models_dir}{base_name}_{timestamp}_features.json"  # selected features file path
-    params_path = f"{models_dir}{base_name}_{timestamp}_params.json"  # hyperparameters file path
+    model_path = f"{models_dir}RFE-{base_name}-{timestamp}-model.joblib"  # model file path
+    scaler_path = f"{models_dir}RFE-{base_name}-{timestamp}-scaler.joblib"  # scaler file path
+    features_path = f"{models_dir}RFE-{base_name}-{timestamp}-features.json"  # selected features file path
+    params_path = f"{models_dir}RFE-{base_name}-{timestamp}-params.json"  # hyperparameters file path
     dump(final_model, model_path)  # save trained model to disk
     dump(scaler_full, scaler_path)  # save fitted scaler to disk
+    
     with open(features_path, "w", encoding="utf-8") as fh:  # write selected features to json
         fh.write(json.dumps(top_features))  # save feature list as JSON
+        
     # Save model hyperparameters (so we can reproduce training configuration)
     model_params = final_model.get_params()  # get hyperparameters from trained estimator
     with open(params_path, "w", encoding="utf-8") as ph:  # write params to json
@@ -521,6 +523,7 @@ def export_final_model(X_numeric, feature_columns, top_features, y_array, csv_pa
 
     print(f"{BackgroundColors.GREEN}Saved final model to {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}")  # notify saved model
     print(f"{BackgroundColors.GREEN}Saved scaler to {BackgroundColors.CYAN}{scaler_path}{Style.RESET_ALL}")  # notify saved scaler
+    print(f"{BackgroundColors.GREEN}Saved params to {BackgroundColors.CYAN}{params_path}{Style.RESET_ALL}")  # notify saved params
 
     return final_model, scaler_full, top_features, model_path, scaler_path, features_path, model_params, params_path  # return objects, paths and params
 
@@ -587,20 +590,20 @@ def load_exported_artifacts(csv_path):
     :return: (model, scaler, features) or None if not found
     """
 
-    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/Models/"  # location where artifacts are stored
+    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/Models/RFE/"  # location where RFE artifacts are stored
     if not os.path.isdir(models_dir):
         return None  # no models directory
 
     base_name = safe_filename(Path(csv_path).stem)  # safe base name
-    pattern = os.path.join(models_dir, f"{base_name}_*_model.joblib")  # glob pattern for model files
+    pattern = os.path.join(models_dir, f"RFE-{base_name}-*-model.joblib")  # glob pattern for RFE model files
     candidates = glob.glob(pattern)  # find matching model files
     if not candidates:
         return None  # no exported models found
 
     # pick latest by modification time
     latest_model = max(candidates, key=os.path.getmtime)  # select most recent model file
-    scaler_path = latest_model.replace("_model.joblib", "_scaler.joblib")  # infer scaler path
-    features_path = latest_model.replace("_model.joblib", "_features.json")  # infer features path
+    scaler_path = latest_model.replace("-model.joblib", "-scaler.joblib")  # infer scaler path
+    features_path = latest_model.replace("-model.joblib", "-features.json")  # infer features path
     if not os.path.exists(scaler_path) or not os.path.exists(features_path):
         return None  # incomplete artifact set
 
@@ -610,7 +613,7 @@ def load_exported_artifacts(csv_path):
         with open(features_path, "r", encoding="utf-8") as fh:
             features = json.load(fh)  # load features list
         params = None
-        params_path = latest_model.replace("_model.joblib", "_params.json")  # infer params path
+        params_path = latest_model.replace("-model.joblib", "-params.json")  # infer params path
         if os.path.exists(params_path):
             try:
                 with open(params_path, "r", encoding="utf-8") as ph:
