@@ -471,6 +471,7 @@ def populate_hardware_column_and_order(df, column_name="Hardware"):
         "fnr",
         "elapsed_time_s",
         column_name,
+        "cv_method",
         "top_features",
         "rfe_ranking",
     ]  # Define column order
@@ -721,6 +722,7 @@ def run_rfe(csv_path):
                 "fpr": round(eval_metrics[4], 4),
                 "fnr": round(eval_metrics[5], 4),
                 "elapsed_time_s": round(eval_metrics[6], 2),
+                "cv_method": "single_train_test_split",
                 "top_features": json.dumps(top_features),
                 "rfe_ranking": json.dumps(sorted_rfe_ranking),
             }
@@ -804,6 +806,7 @@ def run_rfe(csv_path):
             "fpr": round(eval_metrics[4], 4),
             "fnr": round(eval_metrics[5], 4),
             "elapsed_time_s": round(eval_metrics[6], 2),
+            "cv_method": f"StratifiedKFold(n_splits={n_splits})",
             "top_features": json.dumps(top_features),  # JSON-encoded list of majority-selected features
             "rfe_ranking": json.dumps(sorted_rfe_ranking),  # JSON-encoded averaged and sorted rankings
         }
