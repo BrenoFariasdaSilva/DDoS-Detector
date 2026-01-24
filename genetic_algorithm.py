@@ -2401,12 +2401,6 @@ def save_results(
         cxpb=cxpb,
         mutpb=mutpb,
     )  # Base row for CSV
-    rows = build_rows_list(
-        rf_metrics, best_features, runs_list, feature_names, base_row
-    )  # Build rows from metrics and runs
-    write_consolidated_csv(rows, output_dir)  # Persist consolidated CSV
-
-    # Prepare output directory for models
     models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/Genetic_Algorithm/Models/"
     os.makedirs(models_dir, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
@@ -2416,7 +2410,6 @@ def save_results(
     features_path = os.path.join(models_dir, f"GA-{base_name}-{timestamp}-features.json")
     params_path = os.path.join(models_dir, f"GA-{base_name}-{timestamp}-params.json")
 
-    # Prepare data for training final model
     df_features = prepare_feature_dataframe(X, feature_names)
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(df_features.values)
@@ -2424,8 +2417,7 @@ def save_results(
     X_final = X_scaled[:, sel_indices] if sel_indices else X_scaled
     final_model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)
     final_model.fit(X_final, y)
-
-    # Save model, scaler, features, and params
+    from joblib import dump
     dump(final_model, model_path)
     dump(scaler, scaler_path)
     with open(features_path, "w", encoding="utf-8") as fh:
@@ -2438,7 +2430,75 @@ def save_results(
     print(f"{BackgroundColors.GREEN}Saved scaler to {BackgroundColors.CYAN}{scaler_path}{Style.RESET_ALL}")
     print(f"{BackgroundColors.GREEN}Saved params to {BackgroundColors.CYAN}{params_path}{Style.RESET_ALL}")
 
-    return {  # Return saved metadata
+    eval_metrics = None
+    try:
+        # Evaluate on full data using selected features
+        y_pred = final_model.predict(X_final)
+        acc = accuracy_score(y, y_pred)
+        prec = precision_score(y, y_pred, average="weighted", zero_division=0)
+        rec = recall_score(y, y_pred, average="weighted", zero_division=0)
+        f1 = f1_score(y, y_pred, average="weighted", zero_division=0)
+        # FPR/FNR (binary or multiclass)
+        if len(np.unique(y)) == 2:
+            cm = confusion_matrix(y, y_pred)
+            if cm.shape == (2, 2):
+                tn, fp, fn, tp = cm.ravel()
+                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+                fnr = fn / (fn + tp) if (fn + tp) > 0 else 0
+            else:
+                total = cm.sum() if cm.size > 0 else 1
+                fpr = float(cm.sum() - np.trace(cm)) / float(total) if total > 0 else 0
+                fnr = fpr
+        else:
+            cm = confusion_matrix(y, y_pred)
+            supports = cm.sum(axis=1)
+            fprs = []
+            fnrs = []
+            for i in range(cm.shape[0]):
+                tp = cm[i, i]
+                fn = cm[i, :].sum() - tp
+                fp = cm[:, i].sum() - tp
+                tn = cm.sum() - (tp + fp + fn)
+                denom_fnr = (tp + fn) if (tp + fn) > 0 else 1
+                denom_fpr = (fp + tn) if (fp + tn) > 0 else 1
+                fnr_i = fn / denom_fnr
+                fpr_i = fp / denom_fpr
+                fprs.append((fpr_i, supports[i]))
+                fnrs.append((fnr_i, supports[i]))
+            total_support = float(supports.sum()) if supports.sum() > 0 else 1.0
+            fpr = float(sum(v * s for v, s in fprs) / total_support)
+            fnr = float(sum(v * s for v, s in fnrs) / total_support)
+        elapsed = None  # Not timing here, but could add
+        eval_metrics = (acc, prec, rec, f1, fpr, fnr, 0.0)
+    except Exception:
+        eval_metrics = (None, None, None, None, None, None, None)
+
+    # Determine CV method string for results
+    cv_method = None
+    # If n_generations or best_pop_size is set, assume GA used StratifiedKFold with 10 splits (default in run_population_sweep)
+    if n_generations is not None or best_pop_size is not None:
+        cv_method = "StratifiedKFold(n_splits=10)"
+    else:
+        cv_method = "train_test_split"
+
+    run_results = [{
+        "model": final_model.__class__.__name__,
+        "dataset": os.path.relpath(csv_path),
+        "accuracy": round(eval_metrics[0], 4) if eval_metrics[0] is not None else None,
+        "precision": round(eval_metrics[1], 4) if eval_metrics[1] is not None else None,
+        "recall": round(eval_metrics[2], 4) if eval_metrics[2] is not None else None,
+        "f1_score": round(eval_metrics[3], 4) if eval_metrics[3] is not None else None,
+        "fpr": round(eval_metrics[4], 4) if eval_metrics[4] is not None else None,
+        "fnr": round(eval_metrics[5], 4) if eval_metrics[5] is not None else None,
+        "elapsed_time_s": round(eval_metrics[6], 2) if eval_metrics[6] is not None else None,
+        "cv_method": cv_method,
+        "top_features": json.dumps(best_features),
+        "rfe_ranking": json.dumps(rfe_ranking),
+        "hyperparameters": json.dumps(model_params, default=str) if model_params is not None else None,
+    }]
+    write_consolidated_csv(run_results, output_dir)
+
+    return {
         "best_features": best_features,
         "rf_metrics": rf_metrics,
         "output_dir": output_dir,
