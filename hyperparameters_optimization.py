@@ -127,6 +127,28 @@ IGNORE_DIRS = [
     "Data_Separability",
     "Feature_Analysis",
 ]  # List of directory names to ignore when searching for datasets
+# Canonical header for the hyperparameter optimization results CSV
+RESULTS_CSV_COLUMNS = [
+    "base_csv",
+    "model",
+    "best_params",
+    "best_cv_f1_score",
+    "n_features",
+    "feature_selection_method",
+    "dataset",
+    "elapsed_time_s",
+    "accuracy",
+    "precision",
+    "recall",
+    "fpr",
+    "fnr",
+    "tpr",
+    "tnr",
+    "matthews_corrcoef",
+    "roc_auc_score",
+    "cohen_kappa",
+    "Hardware",
+]
 
 # Enabled Models Configuration:
 ENABLED_MODELS = [
@@ -1876,18 +1898,22 @@ def save_optimization_results(csv_path, results_list):
         df_results["Hardware"] = (
             hardware_specs["cpu_model"]
             + " | Cores: "
-            + str(hardware_specs["cores"])
+            + str(hardware_specs["cores"]) 
             + " | RAM: "
-            + str(hardware_specs["ram_gb"])
+            + str(hardware_specs["ram_gb"]) 
             + " GB | OS: "
             + hardware_specs["os"]
         )  # Add hardware specs column
+
+        desired = [c for c in RESULTS_CSV_COLUMNS if c in df_results.columns]
+        df_results = df_results[desired + [c for c in df_results.columns if c not in desired]]
+
         df_results.to_csv(output_path, index=False, encoding="utf-8")  # Save to CSV
         print(f"{BackgroundColors.GREEN}Results saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Print success message
-        
+
         # Remove cache file after successful save
         remove_cache_file(csv_path)  # Clean up cache
-        
+
     except Exception as e:  # Catch any errors during saving
         print(f"{BackgroundColors.RED}Error saving results: {e}{Style.RESET_ALL}")  # Print error message
 
