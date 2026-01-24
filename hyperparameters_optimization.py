@@ -127,8 +127,7 @@ IGNORE_DIRS = [
     "Data_Separability",
     "Feature_Analysis",
 ]  # List of directory names to ignore when searching for datasets
-# Canonical header for the hyperparameter optimization results CSV
-RESULTS_CSV_COLUMNS = [
+HYPERPARAMETERS_RESULTS_CSV_COLUMNS = [  # Columns for the results CSV
     "base_csv",
     "model",
     "best_params",
@@ -1905,7 +1904,7 @@ def save_optimization_results(csv_path, results_list):
             + hardware_specs["os"]
         )  # Add hardware specs column
 
-        desired = [c for c in RESULTS_CSV_COLUMNS if c in df_results.columns]
+        desired = [c for c in HYPERPARAMETERS_RESULTS_CSV_COLUMNS if c in df_results.columns]
         df_results = df_results[desired + [c for c in df_results.columns if c not in desired]]
 
         df_results.to_csv(output_path, index=False, encoding="utf-8")  # Save to CSV
