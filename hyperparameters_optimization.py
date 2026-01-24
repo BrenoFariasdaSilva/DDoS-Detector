@@ -116,6 +116,7 @@ class BackgroundColors:  # Colors for the terminal
 VERBOSE = False  # Default verbose setting (can be overridden via CLI args)
 MODEL_EXPORT_BASE = "Feature_Analysis/Hyperparameter_Optimization/Models/"
 N_JOBS = -2  # Number of parallel jobs (-1 uses all cores, -2 leaves one core free, or set specific number like 4)
+SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, skip training when exported models exist for dataset
 RESULTS_FILENAME = "Hyperparameter_Optimization_Results.csv"  # Filename for saving results
 CACHE_PREFIX = "Cache_"  # Prefix for cache filenames
 MATCH_FILENAMES_TO_PROCESS = [""]  # List of specific filenames to search for a match (set to None to process all files)
@@ -1721,6 +1722,18 @@ def process_single_csv_file(csv_path, dir_results_list):
         f"{BackgroundColors.GREEN}\nProcessing file: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}"
     )  # Output the file being processed
 
+    # Early skip: if user requested to skip training when exported models exist
+    dataset_name = os.path.basename(os.path.dirname(csv_path))
+    export_dir = os.path.join(MODEL_EXPORT_BASE, dataset_name)
+    if SKIP_TRAIN_IF_MODEL_EXISTS and os.path.isdir(export_dir):
+        try:
+            existing_models = [f for f in os.listdir(export_dir) if f.endswith("_model.joblib")]
+        except Exception:
+            existing_models = []
+        if existing_models:
+            print(f"{BackgroundColors.YELLOW}Found exported models for {dataset_name} in {export_dir}. Skipping training as requested.{Style.RESET_ALL}")
+            return
+
     models = get_models_and_param_grids()  # Get models and their parameter grids
     
     if check_if_fully_processed(csv_path, models):  # If already processed
@@ -1981,5 +1994,36 @@ if __name__ == "__main__":
 
     :return: None
     """
+
+    parser = argparse.ArgumentParser(
+        description="Run Hyperparameter optimization and optionally load existing exported models."
+    )
+    parser.add_argument(
+        "--skip-train-if-model-exists",
+        dest="skip_train",
+        action="store_true",
+        help="If set, do not retrain; skip processing when exported models exist for the dataset.",
+    )
+    parser.add_argument(
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="Enable verbose output during the run.",
+    )
+    parser.add_argument(
+        "--csv",
+        dest="csv",
+        type=str,
+        default=None,
+        help="Optional: path to a single dataset CSV to analyze. If omitted, iterates DATASETS.",
+    )
+    args = parser.parse_args()
+
+    # Apply CLI overrides
+    SKIP_TRAIN_IF_MODEL_EXISTS = bool(args.skip_train)
+    VERBOSE = bool(args.verbose)
+    if args.csv:
+        # Restrict processing to the directory containing the provided CSV
+        DATASETS = {"SingleCSV": [os.path.dirname(args.csv)]}
 
     main()  # Call the main function
