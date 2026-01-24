@@ -15,7 +15,7 @@ Description :
       - Automatic loading of Genetic Algorithm selected features
       - Data preprocessing with NaN/infinite value removal and zero-variance filtering
       - Comprehensive hyperparameter search grids for each classifier
-      - Cross-validation with stratified K-fold (cv=5) for robust evaluation
+    - Cross-validation with stratified K-fold (cv=10) for robust evaluation
       - F1-score optimization (weighted average for multi-class problems)
       - Results saved to CSV with best parameters and cross-validation scores
       - Progress tracking with tqdm progress bars
@@ -80,7 +80,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )  # For custom scoring metrics
-from sklearn.model_selection import train_test_split  # For hyperparameter search and data splitting
+from sklearn.model_selection import train_test_split, StratifiedKFold  # For hyperparameter search, data splitting, and stratified K-Fold CV
 from sklearn.neighbors import KNeighborsClassifier, NearestCentroid  # For k-nearest neighbors model
 from sklearn.neural_network import MLPClassifier  # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For label encoding and feature scaling
@@ -1108,29 +1108,57 @@ def evaluate_single_combination(model, keys, combination, X_train, y_train):
     
     start_time = time.time()  # Start timing
     metrics = None  # Initialize metrics as None
-    try:  # Try to train and evaluate using extracted helpers for clarity
-        model.set_params(**current_params)  # Apply hyperparameters to model
-        model.fit(X_train, y_train)  # Fit model on training data
-        y_pred = model.predict(X_train)  # Predict labels on training data
+    try:
+        # Apply hyperparameters
+        # Use stratified K-fold cross-validation with 10 splits
+        cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
+        fold_metrics_list = []
+        fold_elapsed = []
+        for train_idx, val_idx in cv.split(X_train, y_train):
+            X_tr, X_val = X_train[train_idx], X_train[val_idx]
+            y_tr, y_val = y_train[train_idx], y_train[val_idx]
+            clf = clone(model)
+            clf.set_params(**current_params)
+            t0 = time.time()
+            clf.fit(X_tr, y_tr)
+            elapsed_fold = time.time() - t0
+            y_pred = clf.predict(X_val)
+            m = compute_metrics_from_predictions(clf, y_val, y_pred, X_val)
+            if m is not None:
+                fold_metrics_list.append(m)
+                fold_elapsed.append(elapsed_fold)
 
-        metrics = compute_metrics_from_predictions(model, y_train, y_pred, X_train)  # Compute metrics from predictions
+        if len(fold_metrics_list) == 0:
+            metrics = None
+        else:
+            # Aggregate metrics by averaging across folds for numeric values
+            aggregated = {}
+            keys_all = set().union(*(d.keys() for d in fold_metrics_list))
+            for k in keys_all:
+                vals = [d.get(k) for d in fold_metrics_list if d.get(k) is not None]
+                if len(vals) == 0:
+                    aggregated[k] = None
+                else:
+                    try:
+                        aggregated[k] = float(np.mean(vals))
+                    except Exception:
+                        aggregated[k] = vals[0]
+            metrics = aggregated
+            # Add averaged f1_score alias if present
+            if "f1_score" in metrics:
+                metrics["f1_score"] = metrics.get("f1_score")
 
-    except MemoryError:  # Catch memory errors specifically
-        print(
-            f"{BackgroundColors.RED}MemoryError with params {current_params}. Consider reducing dataset size or n_jobs.{Style.RESET_ALL}"
-        )  # Print error message
-        metrics = None  # Set metrics to None on memory error
-    except KeyboardInterrupt:  # User interrupted execution
-        raise  # Re-raise KeyboardInterrupt
-    except Exception as e:  # Catch any other exceptions
-        verbose_output(
-            f"{BackgroundColors.YELLOW}Error evaluating params {current_params}: {type(e).__name__}: {e}{Style.RESET_ALL}"
-        )  # Output verbose error message
-        metrics = None  # Set metrics to None on error
+    except MemoryError:
+        print(f"{BackgroundColors.RED}MemoryError with params {current_params}. Consider reducing dataset size or n_jobs.{Style.RESET_ALL}")
+        metrics = None
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        verbose_output(f"{BackgroundColors.YELLOW}Error evaluating params {current_params}: {type(e).__name__}: {e}{Style.RESET_ALL}")
+        metrics = None
 
-    elapsed = time.time() - start_time  # Compute elapsed time
-
-    return current_params, metrics, elapsed  # Return params, metrics and elapsed
+    elapsed = time.time() - start_time
+    return current_params, metrics, elapsed
 
 
 def update_optimization_progress_bar(
