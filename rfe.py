@@ -502,7 +502,7 @@ def export_final_model(X_numeric, feature_columns, top_features, y_array, csv_pa
     final_model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)  # instantiate final RF
     final_model.fit(X_final, y_array)  # fit final model on entire dataset using selected features
 
-    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/Models/RFE/"  # models output directory under RFE subdir
+    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE/Models/"  # models output directory under RFE/Models subdir
     os.makedirs(models_dir, exist_ok=True)  # ensure directory exists
     timestamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")  # timestamp for filenames (YYYY_MM_DD-HH_MM_SS)
     base_name = safe_filename(Path(csv_path).stem)  # safe base name from dataset path
@@ -540,7 +540,7 @@ def save_rfe_results(csv_path, run_results):
         f"{BackgroundColors.GREEN}Saving RFE Run Results to CSV...{Style.RESET_ALL}"
     )  # Output the verbose message
 
-    output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/"  # Define output directory
+    output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE/"  # Define output directory under RFE subdir
     os.makedirs(output_dir, exist_ok=True)  # Create directory if it doesn't exist
 
     try:  # Try saving CSV
@@ -590,7 +590,8 @@ def load_exported_artifacts(csv_path):
     :return: (model, scaler, features) or None if not found
     """
 
-    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/Models/RFE/"  # location where RFE artifacts are stored
+    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE/Models/"  # location where RFE artifacts are stored
+    
     if not os.path.isdir(models_dir):
         return None  # no models directory
 
