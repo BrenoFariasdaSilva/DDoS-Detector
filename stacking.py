@@ -1492,57 +1492,61 @@ def add_hardware_column(df, columns_order, column_name="Hardware"):
 
 
 def save_stacking_results(csv_path, results_list):
-    """
-    Saves the results of the stacking classifier evaluations to a structured CSV file.
+    """Save the stacking results to CSV file located in same dataset Feature_Analysis directory.
 
-    :param csv_path: Original CSV file path (used for determining output directory).
-    :param results_list: List of dictionaries, each containing results for a feature set.
-                         Expected keys: 'dataset', 'feature_set', 'n_features', 'metrics' (tuple), 'features_list' (list).
-    :return: None
+    Writes richer metadata fields matching RFE outputs: model, dataset, accuracy, precision,
+    recall, f1_score, fpr, fnr, elapsed_time_s, cv_method, top_features, rfe_ranking,
+    hyperparameters, features_list and Hardware.
     """
 
     verbose_output(
         f"{BackgroundColors.GREEN}Preparing to save {BackgroundColors.CYAN}{len(results_list)}{BackgroundColors.GREEN} stacking results to CSV...{Style.RESET_ALL}"
-    )  # Output the verbose message
+    )
 
-    if not results_list:  # Verify if the list of results is empty
+    if not results_list:
         print(f"{BackgroundColors.YELLOW}Warning: No results provided to save.{Style.RESET_ALL}")
-        return  # Exit if nothing to save
+        return
 
-    dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Get base dataset name
-    output_dir = f"{os.path.dirname(csv_path)}/Classifiers"  # Directory relative to the dataset
-    os.makedirs(output_dir, exist_ok=True)  # Ensure the directory exists
-    csv_output_path = f"{output_dir}/{dataset_name}-Stacking_Classifiers_Results.csv"  # Define the final CSV path
+    file_path_obj = Path(csv_path)
+    feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"
+    os.makedirs(feature_analysis_dir, exist_ok=True)
+    stacking_dir = feature_analysis_dir / "Stacking"
+    os.makedirs(stacking_dir, exist_ok=True)
+    output_path = stacking_dir / RESULTS_FILENAME
 
-    flat_rows = []  # List to hold flattened dictionaries
-    for res in results_list:  # For each result entry
-        metrics = res.get("metrics")  # Extract the metrics tuple without removing it
-        if metrics is None:  # Handle missing metrics defensively
-            metrics = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)  # Default metrics tuple
+    flat_rows = []
+    for res in results_list:
+        row = dict(res)
 
-        row = res.copy()  # Start with the base keys ("dataset", "feature_set", etc.)
-        row.pop("metrics", None)  # Remove metrics from the row copy (not from original)
-        row.update(
-            {
-                "accuracy": round(metrics[0], 4),
-                "precision": round(metrics[1], 4),
-                "recall": round(metrics[2], 4),
-                "f1_score": round(metrics[3], 4),
-                "fpr": round(metrics[4], 4),
-                "fnr": round(metrics[5], 4),
-                "elapsed_time_s": round(metrics[6], 2),
-            }
-        )
-        row["features_list"] = json.dumps(res.get("features_list", []))  # Serialize features list as JSON string
-        flat_rows.append(row)  # Add the flattened row
+        # Serialize list-like fields into JSON strings for CSV stability
+        if "features_list" in row and not isinstance(row["features_list"], str):
+            row["features_list"] = json.dumps(row["features_list"])
+        if "top_features" in row and not isinstance(row["top_features"], str):
+            row["top_features"] = json.dumps(row["top_features"])
+        if "rfe_ranking" in row and row["rfe_ranking"] is not None and not isinstance(
+            row["rfe_ranking"], str
+        ):
+            row["rfe_ranking"] = json.dumps(row["rfe_ranking"])
+        if "hyperparameters" in row and row["hyperparameters"] is not None and not isinstance(
+            row["hyperparameters"], str
+        ):
+            row["hyperparameters"] = json.dumps(row["hyperparameters"])
 
-    df_out = pd.DataFrame(flat_rows)  # Create DataFrame from flattened rows
-    columns_order = [
+        flat_rows.append(row)
+
+    df = pd.DataFrame(flat_rows)
+
+    # Define desired column order to match RFE-style outputs
+    column_order = [
+        "model",
         "dataset",
         "feature_set",
         "classifier_type",
         "model_name",
+        "data_source",
         "n_features",
+        "n_samples_train",
+        "n_samples_test",
         "accuracy",
         "precision",
         "recall",
@@ -1550,25 +1554,28 @@ def save_stacking_results(csv_path, results_list):
         "fpr",
         "fnr",
         "elapsed_time_s",
+        "cv_method",
+        "top_features",
+        "rfe_ranking",
+        "hyperparameters",
         "features_list",
-    ]  # Define desired column order
-    add_hardware_column(
-        df_out, columns_order, column_name="Hardware"
-    )  # Ensure Hardware column exists and is placed after elapsed_time_s
-    for col in columns_order:  # Ensure all columns exist
-        if col not in df_out.columns:  # If column is missing
-            df_out[col] = None  # Add missing columns with None
-    df_out = df_out.reindex(columns=columns_order)  # Reindex/reorder the columns
+        "Hardware",
+    ]
 
-    try:  # Attempt to save the DataFrame to CSV
-        df_out.to_csv(csv_output_path, index=False, encoding="utf-8")  # Write to CSV without index
+    existing_columns = [col for col in column_order if col in df.columns]
+    df = df[existing_columns + [c for c in df.columns if c not in existing_columns]]
+
+    df = add_hardware_column(df, existing_columns)
+
+    try:
+        df.to_csv(output_path, index=False, encoding="utf-8")
         print(
-            f"\n{BackgroundColors.GREEN}Stacking classifier results successfully saved to {BackgroundColors.CYAN}{csv_output_path}{Style.RESET_ALL}"
-        )  # Notify successful save
-    except Exception as e:  # Catch any file writing errors
+            f"\n{BackgroundColors.GREEN}Stacking classifier results successfully saved to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+        )
+    except Exception as e:
         print(
-            f"{BackgroundColors.RED}Failed to write Stacking Classifier CSV to {BackgroundColors.CYAN}{csv_output_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
-        )  # Print error message
+            f"{BackgroundColors.RED}Failed to write Stacking Classifier CSV to {BackgroundColors.CYAN}{output_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
+        )
 
 
 def get_cache_file_path(csv_path):
@@ -1622,86 +1629,45 @@ def load_cache_results(csv_path):
             model_name = row.get("model_name", "")  # Get model name
             cache_key = (feature_set, model_name)  # Create cache key tuple
 
-            result_entry = {  # Reconstruct the result entry
+            def _safe_load_json(val):
+                if pd.isna(val):
+                    return None
+                if isinstance(val, str):
+                    try:
+                        return json.loads(val)
+                    except Exception:
+                        return val
+                return val
+
+            result_entry = {
+                "model": row.get("model", ""),
                 "dataset": row.get("dataset", ""),
                 "feature_set": feature_set,
                 "classifier_type": row.get("classifier_type", ""),
                 "model_name": model_name,
-                "n_features": row.get("n_features", 0),
-                "metrics": (
-                    row.get("accuracy", 0.0),
-                    row.get("precision", 0.0),
-                    row.get("recall", 0.0),
-                    row.get("f1_score", 0.0),
-                    row.get("fpr", 0.0),
-                    row.get("fnr", 0.0),
-                    row.get("elapsed_time_s", 0.0),
-                ),
-                "features_list": json.loads(row.get("features_list", "[]")),  # Parse JSON string
+                "data_source": row.get("data_source", ""),
+                "n_features": int(row["n_features"]) if "n_features" in row and not pd.isna(row["n_features"]) else None,
+                "n_samples_train": int(row["n_samples_train"]) if "n_samples_train" in row and not pd.isna(row["n_samples_train"]) else None,
+                "n_samples_test": int(row["n_samples_test"]) if "n_samples_test" in row and not pd.isna(row["n_samples_test"]) else None,
+                "accuracy": float(row["accuracy"]) if "accuracy" in row and not pd.isna(row["accuracy"]) else None,
+                "precision": float(row["precision"]) if "precision" in row and not pd.isna(row["precision"]) else None,
+                "recall": float(row["recall"]) if "recall" in row and not pd.isna(row["recall"]) else None,
+                "f1_score": float(row["f1_score"]) if "f1_score" in row and not pd.isna(row["f1_score"]) else None,
+                "fpr": float(row["fpr"]) if "fpr" in row and not pd.isna(row["fpr"]) else None,
+                "fnr": float(row["fnr"]) if "fnr" in row and not pd.isna(row["fnr"]) else None,
+                "elapsed_time_s": float(row["elapsed_time_s"]) if "elapsed_time_s" in row and not pd.isna(row["elapsed_time_s"]) else None,
+                "cv_method": row.get("cv_method", None),
+                "top_features": _safe_load_json(row.get("top_features", None)),
+                "rfe_ranking": _safe_load_json(row.get("rfe_ranking", None)),
+                "hyperparameters": _safe_load_json(row.get("hyperparameters", None)),
+                "features_list": _safe_load_json(row.get("features_list", None)),
+                "Hardware": row.get("Hardware", None),
             }
 
-            cache_dict[cache_key] = result_entry  # Store in cache dictionary
+            cache_dict[cache_key] = result_entry
 
-        print(
-            f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(cache_dict)}{BackgroundColors.GREEN} cached results.{Style.RESET_ALL}"
-        )  # Print success message
-        return cache_dict  # Return the cache dictionary
-
-    except Exception as e:  # Catch any errors
-        print(
-            f"{BackgroundColors.YELLOW}Warning: Failed to load cache file {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
-        )  # Print warning message
-        return {}  # Return empty dictionary on error
-
-
-def save_to_cache(csv_path, result_entry):
-    """
-    Save a single result entry to the cache file.
-
-    :param csv_path: Path to the dataset CSV file
-    :param result_entry: Dictionary containing result data
-    :return: None
-    """
-
-    cache_path = get_cache_file_path(csv_path)  # Get the cache file path
-
-    verbose_output(
-        f"{BackgroundColors.GREEN}Saving result to cache: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
-    )  # Output the verbose message
-
-    try:  # Try to save to cache
-        # Flatten the result entry for CSV storage
-        metrics = result_entry.get("metrics", (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))  # Get metrics tuple
-        flat_row = {  # Create flattened row dictionary
-            "dataset": result_entry.get("dataset", ""),
-            "feature_set": result_entry.get("feature_set", ""),
-            "classifier_type": result_entry.get("classifier_type", ""),
-            "model_name": result_entry.get("model_name", ""),
-            "n_features": result_entry.get("n_features", 0),
-            "accuracy": round(metrics[0], 4),
-            "precision": round(metrics[1], 4),
-            "recall": round(metrics[2], 4),
-            "f1_score": round(metrics[3], 4),
-            "fpr": round(metrics[4], 4),
-            "fnr": round(metrics[5], 4),
-            "elapsed_time_s": round(metrics[6], 2),
-            "features_list": json.dumps(result_entry.get("features_list", [])),  # Serialize to JSON
-        }
-
-        # Check if cache file exists
-        if os.path.exists(cache_path):  # If cache file exists
-            df_existing = pd.read_csv(cache_path)  # Read existing cache
-            df_existing.columns = df_existing.columns.str.strip()  # Remove leading/trailing whitespace from column names
-            df_new = pd.DataFrame([flat_row])  # Create DataFrame from new row
-            df_combined = pd.concat([df_existing, df_new], ignore_index=True)  # Combine DataFrames
-            df_combined.to_csv(cache_path, index=False, encoding="utf-8")  # Write combined data
-        else:  # If cache file doesn't exist
-            df_new = pd.DataFrame([flat_row])  # Create DataFrame from new row
-            df_new.to_csv(cache_path, index=False, encoding="utf-8")  # Write new cache file
-
-        verbose_output(
-            f"{BackgroundColors.GREEN}Successfully saved to cache: {BackgroundColors.CYAN}{result_entry.get('model_name', 'Unknown')}{Style.RESET_ALL}"
-        )  # Output success message
+        print(f"{BackgroundColors.GREEN}Loaded cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")
+        return cache_dict
 
     except Exception as e:  # Catch any errors
         print(
@@ -1783,7 +1749,8 @@ def evaluate_on_dataset(
     pca_n_components,
     rfe_selected_features,
     base_models,
-    data_source_label="Original"
+    data_source_label="Original",
+    hyperparams_map=None,
 ):
     """
     Evaluate classifiers on a single dataset (original or augmented).
@@ -1924,13 +1891,17 @@ def evaluate_on_dataset(
                     subset_feature_names,
                     name,
                 )  # Submit evaluation task to thread pool (using .values for numpy arrays)
-                future_to_model[future] = model_name  # Store mapping of future to model name
+                # Store both the model name and its class name for richer metadata
+                future_to_model[future] = (model_name, model.__class__.__name__)
             
             for future in concurrent.futures.as_completed(future_to_model):  # As each evaluation completes
-                model_name = future_to_model[future]  # Get the model name from the mapping
+                model_name, model_class = future_to_model[future]  # Get metadata from mapping
                 metrics = future.result()  # Get the metrics from the completed future
+                # Flatten metrics into named fields and include extra metadata similar to rfe.py
+                acc, prec, rec, f1, fpr, fnr, elapsed = metrics
                 result_entry = {
-                    "dataset": os.path.basename(file),
+                    "model": model_class,
+                    "dataset": os.path.relpath(file),
                     "feature_set": name,
                     "classifier_type": "Individual",
                     "model_name": model_name,
@@ -1938,7 +1909,17 @@ def evaluate_on_dataset(
                     "n_features": X_train_subset.shape[1],
                     "n_samples_train": len(y_train),
                     "n_samples_test": len(y_test),
-                    "metrics": metrics,
+                    "accuracy": round(acc, 4),
+                    "precision": round(prec, 4),
+                    "recall": round(rec, 4),
+                    "f1_score": round(f1, 4),
+                    "fpr": round(fpr, 4),
+                    "fnr": round(fnr, 4),
+                    "elapsed_time_s": round(elapsed, 2),
+                    "cv_method": f"StratifiedKFold(n_splits=10)",
+                    "top_features": json.dumps(subset_feature_names),
+                    "rfe_ranking": None,
+                    "hyperparameters": json.dumps(hyperparams_map.get(model_name)) if hyperparams_map and hyperparams_map.get(model_name) is not None else None,
                     "features_list": subset_feature_names,
                 }  # Prepare result entry
                 all_results[(name, model_name)] = result_entry  # Store result with key
@@ -1965,8 +1946,11 @@ def evaluate_on_dataset(
         except Exception:
             pass
 
+        # Flatten stacking metrics and include richer metadata
+        s_acc, s_prec, s_rec, s_f1, s_fpr, s_fnr, s_elapsed = stacking_metrics
         stacking_result_entry = {
-            "dataset": os.path.basename(file),
+            "model": stacking_model.__class__.__name__,
+            "dataset": os.path.relpath(file),
             "feature_set": name,
             "classifier_type": "Stacking",
             "model_name": "StackingClassifier",
@@ -1974,7 +1958,17 @@ def evaluate_on_dataset(
             "n_features": X_train_subset.shape[1],
             "n_samples_train": len(y_train),
             "n_samples_test": len(y_test),
-            "metrics": stacking_metrics,
+            "accuracy": round(s_acc, 4),
+            "precision": round(s_prec, 4),
+            "recall": round(s_rec, 4),
+            "f1_score": round(s_f1, 4),
+            "fpr": round(s_fpr, 4),
+            "fnr": round(s_fnr, 4),
+            "elapsed_time_s": round(s_elapsed, 2),
+            "cv_method": f"StratifiedKFold(n_splits=10)",
+            "top_features": json.dumps(subset_feature_names),
+            "rfe_ranking": None,
+            "hyperparameters": None,
             "features_list": subset_feature_names,
         }  # Prepare stacking result entry
         all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store result with key
@@ -2081,6 +2075,8 @@ def main():
                 # Get base models (same for all runs)
                 base_models = get_models()  # Get the base models
 
+                # Prepare hyperparameters mapping (may remain empty)
+                hp_params_map = {}
                 hp_results_raw = extract_hyperparameter_optimization_results(
                     file
                 )  # Extract hyperparameter optimization results
@@ -2104,7 +2100,8 @@ def main():
                     pca_n_components,
                     rfe_selected_features,
                     base_models,
-                    data_source_label="Original"
+                    data_source_label="Original",
+                    hyperparams_map=hp_params_map,
                 )
 
                 # Save original results
@@ -2135,7 +2132,8 @@ def main():
                                     pca_n_components,
                                     rfe_selected_features,
                                     base_models,
-                                    data_source_label="Augmented"
+                                    data_source_label="Augmented",
+                                    hyperparams_map=hp_params_map,
                                 )
                                 
                                 # Merge original + augmented data
@@ -2152,7 +2150,8 @@ def main():
                                     pca_n_components,
                                     rfe_selected_features,
                                     base_models,
-                                    data_source_label="Original+Augmented"
+                                    data_source_label="Original+Augmented",
+                                    hyperparams_map=hp_params_map,
                                 )
                                 
                                 # Generate comparison report
@@ -2179,9 +2178,33 @@ def main():
                                     classifier_type = orig_result["classifier_type"]
                                     
                                     # Extract metrics (accuracy, precision, recall, f1, fpr, fnr, time)
-                                    orig_metrics = orig_result["metrics"]
-                                    aug_metrics = aug_result["metrics"] if aug_result else [0]*7
-                                    merged_metrics = merged_result["metrics"] if merged_result else [0]*7
+                                    orig_metrics = [
+                                        orig_result.get("accuracy", 0),
+                                        orig_result.get("precision", 0),
+                                        orig_result.get("recall", 0),
+                                        orig_result.get("f1_score", 0),
+                                        orig_result.get("fpr", 0),
+                                        orig_result.get("fnr", 0),
+                                        orig_result.get("elapsed_time_s", 0),
+                                    ]
+                                    aug_metrics = [
+                                        aug_result.get("accuracy", 0) if aug_result else 0,
+                                        aug_result.get("precision", 0) if aug_result else 0,
+                                        aug_result.get("recall", 0) if aug_result else 0,
+                                        aug_result.get("f1_score", 0) if aug_result else 0,
+                                        aug_result.get("fpr", 0) if aug_result else 0,
+                                        aug_result.get("fnr", 0) if aug_result else 0,
+                                        aug_result.get("elapsed_time_s", 0) if aug_result else 0,
+                                    ]
+                                    merged_metrics = [
+                                        merged_result.get("accuracy", 0) if merged_result else 0,
+                                        merged_result.get("precision", 0) if merged_result else 0,
+                                        merged_result.get("recall", 0) if merged_result else 0,
+                                        merged_result.get("f1_score", 0) if merged_result else 0,
+                                        merged_result.get("fpr", 0) if merged_result else 0,
+                                        merged_result.get("fnr", 0) if merged_result else 0,
+                                        merged_result.get("elapsed_time_s", 0) if merged_result else 0,
+                                    ]
                                     
                                     # Calculate improvements (Original+Augmented vs Original)
                                     acc_improvement = calculate_metric_improvement(orig_metrics[0], merged_metrics[0])
