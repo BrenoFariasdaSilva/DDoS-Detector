@@ -479,7 +479,7 @@ def save_pca_results(csv_path, all_results):
     :return: None
     """
 
-    output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/"  # Output directory
+    output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/PCA/"  # Output directory under PCA subdir
     os.makedirs(output_dir, exist_ok=True)  # Create output directory if it doesn't exist
 
     eval_method = "10-Fold Stratified CV"  # Evaluation method
