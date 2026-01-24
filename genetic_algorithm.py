@@ -38,9 +38,11 @@ Dependencies:
    seaborn, colorama. Optional: psutil, python-telegram-bot.
 """
 
+import argparse  # For command-line argument parsing
 import atexit  # For playing a sound when the program finishes
 import csv  # For writing metrics/features CSVs
 import datetime  # For timestamping
+import glob  # For file pattern matching
 import hashlib  # For generating state identifiers
 import json  # For structured JSON output and parsing
 import matplotlib.pyplot as plt  # For plotting graphs
@@ -62,6 +64,7 @@ import warnings  # For suppressing warnings
 from colorama import Style  # For coloring the terminal
 from deap import base, creator, tools, algorithms  # For the genetic algorithm
 from functools import partial  # For creating partial functions
+from joblib import load  # For loading exported models
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.ensemble import RandomForestClassifier  # For the machine learning model
@@ -95,6 +98,7 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
+SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, try loading exported models instead of retraining
 RUNS = 5  # Number of runs for Genetic Algorithm analysis
 EARLY_STOP_ACC_THRESHOLD = 0.75  # Minimum acceptable accuracy for an individual
 EARLY_STOP_FOLDS = 3  # Number of folds to check before early stopping
@@ -160,6 +164,44 @@ def verify_filepath_exists(filepath):
     )  # Output the verbose message
 
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
+
+
+def load_exported_artifacts(csv_path):
+    """Attempt to locate and load latest exported model, scaler and features for csv_path.
+
+    :param csv_path: original dataset path used to name exported artifacts
+    :return: (model, scaler, features, params) or None if not found
+    """
+    
+    models_dir = os.path.join(os.path.dirname(csv_path), "Feature_Analysis", "GA", "Models")
+    if not os.path.isdir(models_dir):
+        return None
+    base_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', os.path.splitext(os.path.basename(csv_path))[0])
+    pattern = os.path.join(models_dir, f"GA-{base_name}-*-model.joblib")
+    candidates = glob.glob(pattern)
+    if not candidates:
+        return None
+    latest_model = max(candidates, key=os.path.getmtime)
+    scaler_path = latest_model.replace("-model.joblib", "-scaler.joblib")
+    features_path = latest_model.replace("-model.joblib", "-features.json")
+    params_path = latest_model.replace("-model.joblib", "-params.json")
+    if not (os.path.exists(scaler_path) and os.path.exists(features_path)):
+        return None
+    try:
+        model = load(latest_model)
+        scaler = load(scaler_path)
+        with open(features_path, "r", encoding="utf-8") as fh:
+            features = json.load(fh)
+        params = None
+        if os.path.exists(params_path):
+            try:
+                with open(params_path, "r", encoding="utf-8") as ph:
+                    params = json.load(ph)
+            except Exception:
+                params = None
+        return model, scaler, features, params
+    except Exception:
+        return None
 
 
 def get_files_to_process(directory_path, file_extension=".csv"):
@@ -2384,7 +2426,6 @@ def save_results(
     final_model.fit(X_final, y)
 
     # Save model, scaler, features, and params
-    from joblib import dump
     dump(final_model, model_path)
     dump(scaler, scaler_path)
     with open(features_path, "w", encoding="utf-8") as fh:
@@ -2693,69 +2734,99 @@ def main():
     :return: None
     """
 
-    warnings.filterwarnings(
-        "ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited.*"
-    )  # Suppress RuntimeWarning for unawaited coroutines from Telegram bot
+    parser = argparse.ArgumentParser(
+        description="Run Genetic Algorithm feature selection and optionally load existing exported models."
+    )
+    parser.add_argument(
+        "--skip-train-if-model-exists",
+        dest="skip_train",
+        action="store_true",
+        help="If set, do not retrain; load existing exported artifacts and evaluate.",
+    )
+    parser.add_argument(
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="Enable verbose output during the run.",
+    )
+    parser.add_argument(
+        "--csv",
+        dest="csv",
+        type=str,
+        default=None,
+        help="Optional: path to dataset CSV to analyze. If omitted, uses the default in main().",
+    )
+    args = parser.parse_args()
+
+    global SKIP_TRAIN_IF_MODEL_EXISTS, VERBOSE
+    SKIP_TRAIN_IF_MODEL_EXISTS = bool(args.skip_train)
+    VERBOSE = bool(args.verbose)
+    csv_path = args.csv if args.csv else "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"
 
     print(
         f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Genetic Algorithm Feature Selection{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
         end="\n\n",
-    )  # Output the welcome message
-    start_time = datetime.datetime.now()  # Get the start time of the program
+    )
+    start_time = datetime.datetime.now()
 
-    input_path = "./Datasets/CICDDoS2019/01-12/"  # Path to the input dataset directory
-    files_to_process = (
-        get_files_to_process(input_path, file_extension=".csv") if os.path.isdir(input_path) else [input_path]
-    )  # Get list of files to process
+    # Example GA params (could be extended to CLI)
+    n_generations = 200
+    min_pop = 20
+    max_pop = 20
+    cxpb = 0.5
+    mutpb = 0.01
+    runs = RUNS
+    bot = TelegramBot()
+    dataset_name = os.path.splitext(os.path.basename(csv_path))[0]
 
-    dataset_name = get_dataset_name(input_path)  # Get the dataset name from the input path
-
-    bot = TelegramBot()  # Initialize Telegram bot for notifications
-
-    start_resource_monitor_safe()  # Start background resource monitor to adapt CPU_PROCESSES safely
-
-    progress_bar = tqdm(
-        files_to_process, desc=f"{BackgroundColors.GREEN}Datasets{Style.RESET_ALL}", unit="file"
-    )  # Progress bar for files to process
-    for file in progress_bar:  # For each file to process
-        signal_new_file(file)  # Notify resource monitor a new file has started (one update allowed per file)
-        update_progress_bar(
-            progress_bar, dataset_name, file
-        )  # Update the description to show the dataset and filename consistently
-
-        sweep_results = run_population_sweep(
-            bot,
-            dataset_name,
-            file,
-            n_generations=200,
-            min_pop=20,
-            max_pop=20,
-            cxpb=0.5,
-            mutpb=0.01,
-            runs=RUNS,
-            progress_bar=progress_bar,
-        )  # Run population sweep
-
-        if VERBOSE and sweep_results:  # If VERBOSE is True and there are results
+    # --- SKIP_TRAIN_IF_MODEL_EXISTS logic ---
+    loaded = None
+    if SKIP_TRAIN_IF_MODEL_EXISTS:
+        loaded = load_exported_artifacts(csv_path)
+        if loaded is not None:
+            model, scaler, features, params = loaded
+            print(f"{BackgroundColors.GREEN}Loaded exported model and scaler for {BackgroundColors.CYAN}{Path(csv_path).stem}{Style.RESET_ALL}")
+            finish_time = datetime.datetime.now()
             print(
-                f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}"
-            )  # Print detailed results
-            for pop_size, features in sweep_results.items():  # For each population size and its best features
-                print(
-                    f"  Pop {pop_size}: {len(features)} features -> {features}"
-                )  # Print the population size and the best features
+                f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
+            )
+            print(
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
+            )
+            atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
+            return
 
-    finish_time = datetime.datetime.now()  # Get the finish time of the program
+    # Run the GA pipeline as usual
+    sweep_results = run_population_sweep(
+        bot,
+        dataset_name,
+        csv_path,
+        n_generations=n_generations,
+        min_pop=min_pop,
+        max_pop=max_pop,
+        cxpb=cxpb,
+        mutpb=mutpb,
+        runs=runs,
+        progress_bar=None,
+    )
+
+    if VERBOSE and sweep_results:
+        print(
+            f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}"
+        )
+        for pop_size, features in sweep_results.items():
+            print(
+                f"  Pop {pop_size}: {len(features)} features -> {features}"
+            )
+
+    finish_time = datetime.datetime.now()
     print(
         f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
-    )  # Output the start and finish times
+    )
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
-    )  # Output the end of the program message
-
-    (
-        atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
-    )  # Register the play_sound function to be called when the program finishes
+    )
+    atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
 
 
 if __name__ == "__main__":
