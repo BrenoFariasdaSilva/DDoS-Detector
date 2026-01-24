@@ -61,6 +61,7 @@ import subprocess  # For fetching CPU model on some OSes
 import sys  # For system-specific parameters and functions
 import time  # For measuring elapsed time
 from colorama import Style  # For coloring the terminal
+from joblib import dump  # For saving scalers and models
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.decomposition import PCA  # For Principal Component Analysis
@@ -304,7 +305,9 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
         fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # Calculate False Positive Rate
         fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # Calculate False Negative Rate
 
-    return {  # Return all results in a dictionary
+    # Attach scaler and trained classifier for export
+    scaler_export = StandardScaler().fit(np.vstack([X_train, X_test]))
+    return {
         "n_components": n_components,
         "explained_variance": explained_variance,
         "cv_accuracy": cv_acc_mean,
@@ -319,6 +322,8 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
         "test_fnr": fnr,
         "elapsed_time_s": elapsed_time,
         "pca_object": pca,
+        "scaler": scaler_export,
+        "trained_classifier": model,
     }
 
 
@@ -548,25 +553,37 @@ def save_pca_results(csv_path, all_results):
     except Exception as e:  # Handle exceptions during file saving
         print(f"{BackgroundColors.RED}Failed to save PCA CSV: {e}{Style.RESET_ALL}")
 
-    for results in all_results:  # Save PCA objects for each configuration
-        n_comp = results["n_components"]  # Number of components
-        pca_obj = results.get("pca_object")  # Get the PCA object
-        if pca_obj:  # If the PCA object exists
-            cache_output_dir = f"{os.path.dirname(csv_path)}/Cache/"  # Output directory
-            os.makedirs(cache_output_dir, exist_ok=True)  # Create cache output directory if it doesn't exist
-            pca_file = f"{cache_output_dir}/PCA_{n_comp}_components.pkl"  # PCA object file path
-            try:  # Attempt to save the PCA object
-                with open(pca_file, "wb") as f:  # Open the file in write-binary mode
-                    pickle.dump(pca_obj, f)  # Save the PCA object
-                verbose_output(
-                    f"{BackgroundColors.GREEN}PCA object saved to {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}"
-                )
-                size_str = get_file_size_string(pca_file)  # Get the file size string
-                verbose_output(
-                    f"{BackgroundColors.GREEN}PCA object size: {BackgroundColors.CYAN}{size_str}{Style.RESET_ALL}"
-                )
-            except Exception as e:  # Handle exceptions during PCA object saving
+    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/PCA/Models/"
+    os.makedirs(models_dir, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
+    base_name = Path(csv_path).stem
+    for results in all_results:
+        n_comp = results["n_components"]
+        pca_obj = results.get("pca_object")
+        if pca_obj:
+            pca_file = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}.pkl"
+            try:
+                with open(pca_file, "wb") as f:
+                    pickle.dump(pca_obj, f)
+                verbose_output(f"{BackgroundColors.GREEN}PCA object saved to {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")
+            except Exception as e:
                 print(f"{BackgroundColors.RED}Failed to save PCA object: {e}{Style.RESET_ALL}")
+        scaler = results.get("scaler")
+        clf = results.get("trained_classifier")
+        if scaler is not None:
+            scaler_path = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}-scaler.joblib"
+            try:
+                dump(scaler, scaler_path)
+                verbose_output(f"{BackgroundColors.GREEN}Scaler saved to {BackgroundColors.CYAN}{scaler_path}{Style.RESET_ALL}")
+            except Exception as e:
+                print(f"{BackgroundColors.RED}Failed to save scaler: {e}{Style.RESET_ALL}")
+        if clf is not None:
+            model_path = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}-model.joblib"
+            try:
+                dump(clf, model_path)
+                verbose_output(f"{BackgroundColors.GREEN}Trained classifier saved to {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}")
+            except Exception as e:
+                print(f"{BackgroundColors.RED}Failed to save classifier: {e}{Style.RESET_ALL}")
 
     verbose_output(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}PCA Configuration Comparison:{Style.RESET_ALL}")
     verbose_output(comparison_df.to_string(index=False))  # Output the comparison DataFrame
