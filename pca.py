@@ -94,6 +94,30 @@ class BackgroundColors:  # Colors for the terminal
 VERBOSE = False  # Set to True to output verbose messages
 SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, try loading exported models instead of retraining
 CSV_FILE = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Path to the CSV dataset file (set in main)
+PCA_RESULTS_CSV_COLUMNS = [  # Columns for the PCA results CSV
+    "tool",
+    "model",
+    "dataset",
+    "hyperparameters",
+    "method",
+    "cv_method",
+    "train_test_split",
+    "scaling",
+    "n_components",
+    "explained_variance",
+    "cv_accuracy",
+    "cv_precision",
+    "cv_recall",
+    "cv_f1_score",
+    "test_accuracy",
+    "test_precision",
+    "test_recall",
+    "test_f1_score",
+    "test_fpr",
+    "test_fnr",
+    "elapsed_time_s",
+    "Hardware",
+]
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
@@ -549,6 +573,11 @@ def save_pca_results(csv_path, all_results):
     csv_output = f"{output_dir}/PCA_Results.csv"  # Output CSV path
 
     comparison_df = populate_hardware_column(comparison_df, column_name="Hardware")  # Add hardware specs column
+
+    try:
+        comparison_df = comparison_df.reindex(columns=PCA_RESULTS_CSV_COLUMNS)
+    except Exception:
+        pass
 
     try:  # Attempt to save the CSV
         comparison_df.to_csv(csv_output, index=False)  # Save the DataFrame to CSV
