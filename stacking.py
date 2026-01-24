@@ -50,6 +50,7 @@ Dependencies:
    - Optional: telegram_bot for notifications
 """
 
+import argparse  # For parsing command-line arguments
 import ast  # For safely evaluating Python literals
 import atexit  # For playing a sound when the program finishes
 import concurrent.futures  # For parallel execution
@@ -68,7 +69,7 @@ import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
 import time  # For measuring execution time
 from colorama import Style  # For terminal text styling
-from joblib import dump  # For exporting trained models and scalers
+from joblib import dump, load  # For exporting and loading trained models and scalers
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.decomposition import PCA  # For Principal Component Analysis
@@ -124,6 +125,8 @@ IGNORE_DIRS = [
 HYPERPARAMETERS_FILENAME = "Hyperparameter_Optimization_Results.csv"  # Filename for hyperparameter optimization results
 CACHE_PREFIX = "Cache_"  # Prefix for cache filenames
 MODEL_EXPORT_BASE = "Feature_Analysis/Stacking/Models/"
+SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, load exported models instead of retraining when available
+CSV_FILE = None  # Optional CSV override from CLI
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
@@ -1285,6 +1288,47 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
 
     start_time = time.time()  # Record the start time
 
+    # If requested, attempt to load an existing exported model instead of retraining
+    if dataset_file is not None and SKIP_TRAIN_IF_MODEL_EXISTS:
+        try:
+            models_dir = Path(dataset_file).parent / "Classifiers" / "Models"
+            if models_dir.exists():
+                safe_model = re.sub(r'[\\/*?:"<>|]', "_", str(model_name))
+                pattern = f"*{safe_model}*"
+                if feature_set:
+                    safe_fs = re.sub(r'[\\/*?:"<>|]', "_", str(feature_set))
+                    pattern = f"*{safe_model}*{safe_fs}*"
+                matches = list(models_dir.glob(f"{pattern}_model.joblib"))
+                if matches:
+                    try:
+                        loaded = load(str(matches[0]))
+                        model = loaded
+                        # try load scaler with same base name
+                        scaler_path = str(matches[0]).replace("_model.joblib", "_scaler.joblib")
+                        if os.path.exists(scaler_path):
+                            scaler = load(scaler_path)
+                        verbose_output(f"Loaded existing model from {matches[0]}")
+                        # compute predictions and metrics without retraining
+                        y_pred = model.predict(X_test)
+                        elapsed_time = 0.0
+                        acc = accuracy_score(y_test, y_pred)
+                        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)
+                        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)
+                        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
+                        if len(np.unique(y_test)) == 2:
+                            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+                            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+                            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0
+                        else:
+                            fpr = 0.0
+                            fnr = 0.0
+                        return (acc, prec, rec, f1, fpr, fnr, elapsed_time)
+                    except Exception:
+                        # fallback to training if loading fails
+                        verbose_output(f"Failed to load existing model for {model_name}; retraining.")
+        except Exception:
+            pass
+
     model.fit(X_train, y_train)  # Fit the model on the training data
 
     y_pred = model.predict(X_test)  # Predict the labels for the test set
@@ -1866,21 +1910,21 @@ def evaluate_on_dataset(
             max_workers=THREADS_LIMIT
         ) as executor:  # Create a thread pool executor for parallel evaluation
             future_to_model = {}  # Dictionary to map futures to model names
-                for model_name, model in individual_models.items():  # Iterate over each individual model
-                    future = executor.submit(
-                        evaluate_individual_classifier,
-                        model,
-                        model_name,
-                        X_train_df.values,
-                        y_train,
-                        X_test_df.values,
-                        y_test,
-                        file,
-                        scaler,
-                        subset_feature_names,
-                        name,
-                    )  # Submit evaluation task to thread pool (using .values for numpy arrays)
-                    future_to_model[future] = model_name  # Store mapping of future to model name
+            for model_name, model in individual_models.items():  # Iterate over each individual model
+                future = executor.submit(
+                    evaluate_individual_classifier,
+                    model,
+                    model_name,
+                    X_train_df.values,
+                    y_train,
+                    X_test_df.values,
+                    y_test,
+                    file,
+                    scaler,
+                    subset_feature_names,
+                    name,
+                )  # Submit evaluation task to thread pool (using .values for numpy arrays)
+                future_to_model[future] = model_name  # Store mapping of future to model name
             
             for future in concurrent.futures.as_completed(future_to_model):  # As each evaluation completes
                 model_name = future_to_model[future]  # Get the model name from the mapping
@@ -1978,9 +2022,22 @@ def main():
                 )
                 continue  # Skip to the next path if the current one doesn't exist
 
-            files_to_process = get_files_to_process(
-                input_path, file_extension=".csv"
-            )  # Get list of CSV files to process
+            # Determine files to process; allow CLI CSV override
+            if CSV_FILE:  # If a specific CSV file is provided via CLI
+                try:
+                    abs_csv = os.path.abspath(CSV_FILE)
+                    abs_input = os.path.abspath(input_path)
+                    if abs_csv.startswith(abs_input):
+                        files_to_process = [CSV_FILE]
+                    else:
+                        # CSV override does not belong to this path; skip
+                        files_to_process = []
+                except Exception:
+                    files_to_process = []
+            else:
+                files_to_process = get_files_to_process(
+                    input_path, file_extension=".csv"
+                )  # Get list of CSV files to process
 
             local_dataset_name = dataset_name or get_dataset_name(
                 input_path
@@ -2268,10 +2325,33 @@ def main():
 
 
 if __name__ == "__main__":
-    """
-    This is the standard boilerplate that calls the main() function.
+    parser = argparse.ArgumentParser(
+        description="Run stacking pipeline and optionally load existing exported models."
+    )
+    parser.add_argument(
+        "--skip-train-if-model-exists",
+        dest="skip_train",
+        action="store_true",
+        help="If set, do not retrain; load existing exported artifacts and evaluate.",
+    )
+    parser.add_argument(
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="Enable verbose output during the run.",
+    )
+    parser.add_argument(
+        "--csv",
+        dest="csv",
+        type=str,
+        default=None,
+        help="Optional: path to dataset CSV to analyze. If omitted, uses the default in DATASETS.",
+    )
+    args = parser.parse_args()
 
-    :return: None
-    """
+    # Override module-level constants based on CLI flags
+    SKIP_TRAIN_IF_MODEL_EXISTS = bool(args.skip_train)
+    VERBOSE = bool(args.verbose)
+    CSV_FILE = args.csv if args.csv else CSV_FILE
 
     main()  # Call the main function
