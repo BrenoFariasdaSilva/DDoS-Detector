@@ -463,6 +463,7 @@ def populate_hardware_column_and_order(df, column_name="Hardware"):
     )  # Add hardware specs column
     columns_order = [
         "model",
+        "dataset",  # added: relative dataset path used for this run
         "accuracy",
         "precision",
         "recall",
@@ -779,17 +780,18 @@ def run_rfe(csv_path):
         run_results = [  # prepare run results dict for saving based on final exported model
             {
                 "model": final_model.__class__.__name__,  # model class name
+                "dataset": os.path.relpath(csv_path),  # added: relative dataset path used for this run
+                "hyperparameters": json.dumps(loaded_hyperparams) if loaded_hyperparams is not None else None,
                 "accuracy": round(eval_metrics[0], 4),
+                "f1_score": round(eval_metrics[3], 4),
                 "precision": round(eval_metrics[1], 4),
                 "recall": round(eval_metrics[2], 4),
-                "f1_score": round(eval_metrics[3], 4),
                 "fpr": round(eval_metrics[4], 4),
                 "fnr": round(eval_metrics[5], 4),
                 "elapsed_time_s": round(eval_metrics[6], 2),
                 "cv_method": "single_train_test_split",
                 "top_features": json.dumps(top_features),
                 "rfe_ranking": json.dumps(sorted_rfe_ranking),
-                "hyperparameters": json.dumps(loaded_hyperparams) if loaded_hyperparams is not None else None,
             }
         ]
 
@@ -884,6 +886,7 @@ def run_rfe(csv_path):
     run_results = [  # prepare aggregated run results for saving
         {
             "model": final_model.__class__.__name__,  # model class name
+            "dataset": os.path.relpath(csv_path),  # added: relative dataset path used for this run
             "accuracy": round(eval_metrics[0], 4),
             "precision": round(eval_metrics[1], 4),
             "recall": round(eval_metrics[2], 4),
