@@ -47,6 +47,7 @@ Dependencies:
         - pandas, numpy, scikit-learn, colorama
 """
 
+import argparse  # For command-line argument parsing
 import atexit  # For playing a sound when the program finishes
 import concurrent.futures  # For parallel execution
 import datetime  # For timestamping
@@ -91,6 +92,8 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
+SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, try loading exported models instead of retraining
+CSV_FILE = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Path to the CSV dataset file (set in main)
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
@@ -598,6 +601,24 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
     :return: None
     """
 
+    # --- SKIP_TRAIN_IF_MODEL_EXISTS logic ---
+    global SKIP_TRAIN_IF_MODEL_EXISTS
+    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/PCA/Models/"
+    base_name = Path(csv_path).stem
+    timestamp = None
+    if SKIP_TRAIN_IF_MODEL_EXISTS:
+        import glob
+        found = False
+        for n_comp in n_components_list:
+            pattern = f"{models_dir}/PCA-{base_name}-{n_comp}c-*-model.joblib"
+            matches = glob.glob(pattern)
+            if matches:
+                print(f"{BackgroundColors.GREEN}Found exported model for n_components={n_comp}, skipping training.{Style.RESET_ALL}")
+                found = True
+        if found:
+            print(f"{BackgroundColors.GREEN}SKIP_TRAIN_IF_MODEL_EXISTS: At least one model exists, skipping retraining for all configs.{Style.RESET_ALL}")
+            return
+
     df = load_dataset(csv_path)  # Load the dataset
     if df is None:  # If dataset loading failed
         return {}  # Return empty dictionary
@@ -767,16 +788,26 @@ def main():
     :param: None
     :return: None
     """
+    
+    global VERBOSE, SKIP_TRAIN_IF_MODEL_EXISTS, CSV_FILE
+    parser = argparse.ArgumentParser(description="PCA Feature Extraction & Evaluation Tool")
+    parser.add_argument("--csv_file", type=str, default=CSV_FILE, help="Path to the CSV dataset file")
+    parser.add_argument("--skip_train_if_model_exists", action="store_true", help="Skip training if exported model exists")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("--n_components_list", type=str, default="8,16,32,64", help="Comma-separated list of PCA component counts to test")
+    parser.add_argument("--max_workers", type=int, default=-1, help="Number of parallel workers (default: -1)")
+    args = parser.parse_args()
 
-    print(
-        f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}PCA Feature Extraction{BackgroundColors.GREEN} program!{Style.RESET_ALL}"
-    )
+    VERBOSE = args.verbose
+    SKIP_TRAIN_IF_MODEL_EXISTS = args.skip_train_if_model_exists
+    CSV_FILE = args.csv_file
+    n_components_list = [int(x) for x in args.n_components_list.split(",") if x.strip().isdigit()]
+    max_workers = args.max_workers
+
+    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}PCA Feature Extraction{BackgroundColors.GREEN} program!{Style.RESET_ALL}")
     start_time = datetime.datetime.now()  # Get the start time of the program
 
-    csv_file = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Path to the CSV dataset file
-    n_components_list = [8, 16, 32, 64]  # List of PCA component counts to test
-
-    run_pca_analysis(csv_file, n_components_list, max_workers=2)  # Run the PCA analysis
+    run_pca_analysis(CSV_FILE, n_components_list, max_workers=max_workers)  # Run the PCA analysis
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
