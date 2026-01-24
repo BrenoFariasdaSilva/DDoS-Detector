@@ -113,6 +113,30 @@ THREADS_LIMIT = 2  # Number of threads for parallel evaluation of individual cla
 TEST_DATA_AUGMENTATION = True  # Set to True to compare original vs augmented data performance
 RESULTS_FILENAME = "Stacking_Classifiers_Results.csv"  # Filename for saving stacking results
 AUGMENTATION_COMPARISON_FILENAME = "Data_Augmentation_Comparison_Results.csv"  # Filename for augmentation comparison results
+RESULTS_CSV_COLUMNS = [  # Columns for the results CSV
+    "model",
+    "dataset",
+    "feature_set",
+    "classifier_type",
+    "model_name",
+    "data_source",
+    "n_features",
+    "n_samples_train",
+    "n_samples_test",
+    "accuracy",
+    "precision",
+    "recall",
+    "f1_score",
+    "fpr",
+    "fnr",
+    "elapsed_time_s",
+    "cv_method",
+    "top_features",
+    "rfe_ranking",
+    "hyperparameters",
+    "features_list",
+    "Hardware",
+]
 MATCH_FILENAMES_TO_PROCESS = [""]  # List of specific filenames to search for a match (set to None to process all files)
 IGNORE_FILES = [RESULTS_FILENAME]  # List of filenames to ignore when searching for datasets
 IGNORE_DIRS = [
@@ -1536,31 +1560,8 @@ def save_stacking_results(csv_path, results_list):
 
     df = pd.DataFrame(flat_rows)
 
-    # Define desired column order to match RFE-style outputs
-    column_order = [
-        "model",
-        "dataset",
-        "feature_set",
-        "classifier_type",
-        "model_name",
-        "data_source",
-        "n_features",
-        "n_samples_train",
-        "n_samples_test",
-        "accuracy",
-        "precision",
-        "recall",
-        "f1_score",
-        "fpr",
-        "fnr",
-        "elapsed_time_s",
-        "cv_method",
-        "top_features",
-        "rfe_ranking",
-        "hyperparameters",
-        "features_list",
-        "Hardware",
-    ]
+    # Use the canonical header constant for results CSV column ordering
+    column_order = list(RESULTS_CSV_COLUMNS)
 
     existing_columns = [col for col in column_order if col in df.columns]
     df = df[existing_columns + [c for c in df.columns if c not in existing_columns]]
