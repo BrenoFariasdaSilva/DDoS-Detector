@@ -2364,6 +2364,39 @@ def save_results(
     )  # Build rows from metrics and runs
     write_consolidated_csv(rows, output_dir)  # Persist consolidated CSV
 
+    # Prepare output directory for models
+    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/Genetic_Algorithm/Models/"
+    os.makedirs(models_dir, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
+    base_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', os.path.splitext(os.path.basename(csv_path))[0])
+    model_path = os.path.join(models_dir, f"GA-{base_name}-{timestamp}-model.joblib")
+    scaler_path = os.path.join(models_dir, f"GA-{base_name}-{timestamp}-scaler.joblib")
+    features_path = os.path.join(models_dir, f"GA-{base_name}-{timestamp}-features.json")
+    params_path = os.path.join(models_dir, f"GA-{base_name}-{timestamp}-params.json")
+
+    # Prepare data for training final model
+    df_features = prepare_feature_dataframe(X, feature_names)
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(df_features.values)
+    sel_indices = [i for i, f in enumerate(feature_names) if f in best_features]
+    X_final = X_scaled[:, sel_indices] if sel_indices else X_scaled
+    final_model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)
+    final_model.fit(X_final, y)
+
+    # Save model, scaler, features, and params
+    from joblib import dump
+    dump(final_model, model_path)
+    dump(scaler, scaler_path)
+    with open(features_path, "w", encoding="utf-8") as fh:
+        json.dump(best_features, fh)
+    model_params = final_model.get_params()
+    with open(params_path, "w", encoding="utf-8") as ph:
+        json.dump(model_params, ph, default=str)
+
+    print(f"{BackgroundColors.GREEN}Saved final model to {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}")
+    print(f"{BackgroundColors.GREEN}Saved scaler to {BackgroundColors.CYAN}{scaler_path}{Style.RESET_ALL}")
+    print(f"{BackgroundColors.GREEN}Saved params to {BackgroundColors.CYAN}{params_path}{Style.RESET_ALL}")
+
     return {  # Return saved metadata
         "best_features": best_features,
         "rf_metrics": rf_metrics,
@@ -2376,6 +2409,10 @@ def save_results(
         "best_pop_size": best_pop_size,
         "runs_list": runs_list,
         "elapsed_time_s": int(round(elapsed_for_base)) if elapsed_for_base is not None else None,
+        "model_path": model_path,
+        "scaler_path": scaler_path,
+        "features_path": features_path,
+        "params_path": params_path,
     }
 
 
