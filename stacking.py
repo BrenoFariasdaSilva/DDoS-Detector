@@ -63,10 +63,12 @@ import pandas as pd  # Import pandas for data manipulation
 import pickle  # For loading PCA objects
 import platform  # For getting the operating system name
 import psutil  # For checking system RAM
+import re  # For regular expressions
 import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
 import time  # For measuring execution time
 from colorama import Style  # For terminal text styling
+from joblib import dump  # For exporting trained models and scalers
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.decomposition import PCA  # For Principal Component Analysis
@@ -121,6 +123,7 @@ IGNORE_DIRS = [
 ]  # List of directory names to ignore when searching for datasets
 HYPERPARAMETERS_FILENAME = "Hyperparameter_Optimization_Results.csv"  # Filename for hyperparameter optimization results
 CACHE_PREFIX = "Cache_"  # Prefix for cache filenames
+MODEL_EXPORT_BASE = "Feature_Analysis/Stacking/Models/"
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
@@ -784,7 +787,7 @@ def sanitize_feature_names(columns):
     :param columns: pandas Index or list of column names
     :return: list of sanitized column names
     """
-    import re
+    
     sanitized = []
     for col in columns:
         # Replace special JSON characters with underscores
@@ -1223,7 +1226,47 @@ def get_features_list_for_feature_set(feature_set_name, feature_names, ga_select
         return []  # Default empty list
 
 
-def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test):
+def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_names, best_params=None, feature_set=None, dataset_csv_path=None):
+    """
+    Export model, scaler and metadata for stacking evaluations.
+    """
+    
+    def safe_filename(name):
+        return re.sub(r'[\\/*?:"<>|]', "_", str(name))
+
+    # Prefer dataset-local export directory when a CSV path is provided
+    if dataset_csv_path:
+        file_path_obj = Path(dataset_csv_path)
+        export_dir = file_path_obj.parent / "Classifiers" / "Models"
+    else:
+        export_dir = Path(MODEL_EXPORT_BASE) / safe_filename(dataset_name)
+    os.makedirs(export_dir, exist_ok=True)
+    param_str = "_".join(f"{k}-{v}" for k, v in sorted(best_params.items())) if best_params else ""
+    param_str = safe_filename(param_str)[:64]
+    features_str = safe_filename("_".join(feature_names))[:64] if feature_names else "all_features"
+    fs = safe_filename(feature_set) if feature_set else "all"
+    base_name = f"{safe_filename(model_name)}__{fs}__{features_str}__{param_str}"
+    model_path = os.path.join(str(export_dir), f"{base_name}_model.joblib")
+    scaler_path = os.path.join(str(export_dir), f"{base_name}_scaler.joblib")
+    try:
+        dump(model, model_path)
+        if scaler is not None:
+            dump(scaler, scaler_path)
+        meta = {
+            "model_name": model_name,
+            "feature_set": feature_set,
+            "features": feature_names,
+            "params": best_params,
+        }
+        meta_path = os.path.join(str(export_dir), f"{base_name}_meta.json")
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+        verbose_output(f"Exported model to {model_path} and scaler to {scaler_path}")
+    except Exception as e:
+        print(f"{BackgroundColors.YELLOW}Warning: Failed to export model {model_name}: {e}{Style.RESET_ALL}")
+
+
+def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None):
     """
     Trains an individual classifier and evaluates its performance on the test set.
 
@@ -1264,6 +1307,14 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
     verbose_output(
         f"{BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{acc:.4f}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{elapsed_time:.2f}s{Style.RESET_ALL}"
     )  # Output result
+
+    # Export trained model and scaler if dataset info is available
+    try:
+        if dataset_file is not None:
+            dataset_name = os.path.basename(os.path.dirname(dataset_file))
+            export_model_and_scaler(model, scaler, dataset_name, model_name, feature_names or [], best_params=None, feature_set=feature_set, dataset_csv_path=dataset_file)
+    except Exception:
+        pass
 
     return (acc, prec, rec, f1, fpr, fnr, elapsed_time)  # Return the metrics tuple
 
@@ -1815,17 +1866,21 @@ def evaluate_on_dataset(
             max_workers=THREADS_LIMIT
         ) as executor:  # Create a thread pool executor for parallel evaluation
             future_to_model = {}  # Dictionary to map futures to model names
-            for model_name, model in individual_models.items():  # Iterate over each individual model
-                future = executor.submit(
-                    evaluate_individual_classifier,
-                    model,
-                    model_name,
-                    X_train_df.values,
-                    y_train,
-                    X_test_df.values,
-                    y_test,
-                )  # Submit evaluation task to thread pool (using .values for numpy arrays)
-                future_to_model[future] = model_name  # Store mapping of future to model name
+                for model_name, model in individual_models.items():  # Iterate over each individual model
+                    future = executor.submit(
+                        evaluate_individual_classifier,
+                        model,
+                        model_name,
+                        X_train_df.values,
+                        y_train,
+                        X_test_df.values,
+                        y_test,
+                        file,
+                        scaler,
+                        subset_feature_names,
+                        name,
+                    )  # Submit evaluation task to thread pool (using .values for numpy arrays)
+                    future_to_model[future] = model_name  # Store mapping of future to model name
             
             for future in concurrent.futures.as_completed(future_to_model):  # As each evaluation completes
                 model_name = future_to_model[future]  # Get the model name from the mapping
@@ -1858,6 +1913,13 @@ def evaluate_on_dataset(
         stacking_metrics = evaluate_stacking_classifier(
             stacking_model, X_train_df, y_train, X_test_df, y_test
         )  # Evaluate stacking model with DataFrames
+
+        # Export stacking model and scaler
+        try:
+            dataset_name = os.path.basename(os.path.dirname(file))
+            export_model_and_scaler(stacking_model, scaler, dataset_name, "StackingClassifier", subset_feature_names, best_params=None, feature_set=name, dataset_csv_path=file)
+        except Exception:
+            pass
 
         stacking_result_entry = {
             "dataset": os.path.basename(file),
