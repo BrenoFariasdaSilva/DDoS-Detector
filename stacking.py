@@ -86,7 +86,7 @@ from sklearn.metrics import (
     f1_score,
     confusion_matrix,
 )  # For performance metrics
-from sklearn.model_selection import train_test_split  # For splitting the dataset
+from sklearn.model_selection import train_test_split, StratifiedKFold  # For splitting the dataset and CV
 from sklearn.neighbors import KNeighborsClassifier, NearestCentroid  # For k-nearest neighbors model
 from sklearn.neural_network import MLPClassifier  # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For label encoding and feature scaling
@@ -1835,7 +1835,7 @@ def evaluate_on_dataset(
     stacking_model = StackingClassifier(
         estimators=estimators,
         final_estimator=RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=N_JOBS),
-        cv=5,
+        cv=StratifiedKFold(n_splits=10, shuffle=True, random_state=42),
         n_jobs=N_JOBS,
     )  # Define the Stacking Classifier model
 
