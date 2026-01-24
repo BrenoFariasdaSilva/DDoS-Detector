@@ -50,6 +50,7 @@ Dependencies:
 import atexit  # For playing a sound when the program finishes
 import concurrent.futures  # For parallel execution
 import datetime  # For timestamping
+import json  # For serializing hyperparameters and other metadata
 import numpy as np  # For numerical operations
 import os  # For file and directory operations
 import pandas as pd  # For data manipulation
@@ -489,6 +490,29 @@ def save_pca_results(csv_path, all_results):
 
     rows = []  # List to store all rows for the CSV
     for results in all_results:  # Flatten each configuration into a CSV row
+        cv_method = "StratifiedKFold(n_splits=10)"  # descriptive CV method used by this module
+        evaluator_hyperparams = {"model": "RandomForestClassifier", "n_estimators": 100, "random_state": 42, "n_jobs": -1}
+
+        row = {
+            "model": evaluator_hyperparams["model"],  # model class name used for evaluation
+            "dataset": os.path.relpath(csv_path),  # relative dataset path used for this run
+            "hyperparameters": json.dumps(evaluator_hyperparams),  # JSON-encoded evaluator hyperparameters
+            "n_components": results.get("n_components"),
+            "explained_variance": results.get("explained_variance"),
+            "cv_accuracy": results.get("cv_accuracy"),
+            "cv_precision": results.get("cv_precision"),
+            "cv_recall": results.get("cv_recall"),
+            "cv_f1_score": results.get("cv_f1_score"),
+            "test_accuracy": results.get("test_accuracy"),
+            "test_precision": results.get("test_precision"),
+            "test_recall": results.get("test_recall"),
+            "test_f1_score": results.get("test_f1_score"),
+            "test_fpr": results.get("test_fpr"),
+            "test_fnr": results.get("test_fnr"),
+            "elapsed_time_s": results.get("elapsed_time_s"),
+            "cv_method": cv_method,  # descriptive CV method
+        }
+        rows.append(row)
         rows.append(
             {  # Create a row dictionary
                 "tool": "PCA",  # Tool name
