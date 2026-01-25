@@ -40,7 +40,7 @@ TODOs:
 
 Dependencies:
    - Python >= 3.9
-   - pandas, numpy, scikit-learn, seaborn, matplotlib, colorama
+   - pandas, numpy, scikit-learn, matplotlib, colorama
 """
 
 
@@ -55,7 +55,6 @@ import pandas as pd  # For data manipulation
 import platform  # For getting the operating system name
 import psutil  # For hardware information
 import re  # For regular expressions
-import seaborn as sns  # For advanced plots
 import subprocess  # For executing system commands
 import sys  # For system-specific parameters and functions
 import time  # For measuring elapsed time
