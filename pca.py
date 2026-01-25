@@ -505,6 +505,19 @@ def get_file_size_string(file_path):
     return size_str  # Return the size string
 
 
+def format_value(value):
+    """
+    Format a numeric value to 4 decimal places, or return None if not possible.
+    
+    :param value: Numeric value
+    :return: Formatted string or None
+    """
+    
+    try:  # Try to format the value
+        return f"{float(value):.4f}" if value is not None else None  # Format to 4 decimal places
+    except Exception:  # On failure
+        return None  # Return None
+            
 def save_pca_results(csv_path, all_results):
     """
     Saves PCA results to a single CSV file containing evaluation metadata
@@ -525,54 +538,36 @@ def save_pca_results(csv_path, all_results):
     train_test_split = "80/20 split"  # Train/test split
     scaling = "StandardScaler"  # Scaling method
 
-    rows = []  # List to store all rows for the CSV
-    for results in all_results:  # Flatten each configuration into a CSV row
-        cv_method = "StratifiedKFold(n_splits=10)"  # descriptive CV method used by this module
-        evaluator_hyperparams = {"model": "RandomForestClassifier", "n_estimators": 100, "random_state": 42, "n_jobs": -1}
+    rows = []  # List to store one normalized row per result
+    evaluator_hyperparams = {"model": "RandomForestClassifier", "n_estimators": 100, "random_state": 42, "n_jobs": -1}
+    cv_method = "StratifiedKFold(n_splits=10)"
+    for results in all_results:
 
+        # Build a single normalized row with canonical fields
         row = {
-            "model": evaluator_hyperparams["model"],  # model class name used for evaluation
-            "dataset": os.path.relpath(csv_path),  # relative dataset path used for this run
-            "hyperparameters": json.dumps(evaluator_hyperparams),  # JSON-encoded evaluator hyperparameters
-            "n_components": results.get("n_components"),
-            "explained_variance": results.get("explained_variance"),
-            "cv_accuracy": results.get("cv_accuracy"),
-            "cv_precision": results.get("cv_precision"),
-            "cv_recall": results.get("cv_recall"),
-            "cv_f1_score": results.get("cv_f1_score"),
-            "test_accuracy": results.get("test_accuracy"),
-            "test_precision": results.get("test_precision"),
-            "test_recall": results.get("test_recall"),
-            "test_f1_score": results.get("test_f1_score"),
-            "test_fpr": results.get("test_fpr"),
-            "test_fnr": results.get("test_fnr"),
-            "elapsed_time_s": results.get("elapsed_time_s"),
-            "cv_method": cv_method,  # descriptive CV method
+            "tool": "PCA",
+            "model": eval_model,
+            "dataset": os.path.relpath(csv_path),
+            "hyperparameters": json.dumps(evaluator_hyperparams),
+            "method": eval_method,
+            "cv_method": cv_method,
+            "train_test_split": train_test_split,
+            "scaling": scaling,
+            "n_components": int(results.get("n_components")) if results.get("n_components") is not None else None,
+            "explained_variance": format_value(results.get("explained_variance")),
+            "cv_accuracy": format_value(results.get("cv_accuracy")),
+            "cv_precision": format_value(results.get("cv_precision")),
+            "cv_recall": format_value(results.get("cv_recall")),
+            "cv_f1_score": format_value(results.get("cv_f1_score")),
+            "test_accuracy": format_value(results.get("test_accuracy")),
+            "test_precision": format_value(results.get("test_precision")),
+            "test_recall": format_value(results.get("test_recall")),
+            "test_f1_score": format_value(results.get("test_f1_score")),
+            "test_fpr": format_value(results.get("test_fpr")),
+            "test_fnr": format_value(results.get("test_fnr")),
+            "elapsed_time_s": format_value(results.get("elapsed_time_s")),
         }
         rows.append(row)
-        rows.append(
-            {  # Create a row dictionary
-                "tool": "PCA",  # Tool name
-                "dataset": os.path.basename(csv_path),  # Source dataset name
-                "method": eval_method,  # CV method
-                "model": eval_model,  # Model used for evaluation
-                "train_test_split": train_test_split,  # Train/test split
-                "scaling": scaling,  # Scaling method
-                "n_components": results["n_components"],  # Number of PCA components
-                "explained_variance": round(results["explained_variance"], 4),  # Explained variance ratio
-                "cv_accuracy": round(results["cv_accuracy"], 4),  # CV accuracy
-                "cv_precision": round(results["cv_precision"], 4),  # CV precision
-                "cv_recall": round(results["cv_recall"], 4),  # CV recall
-                "cv_f1_score": round(results["cv_f1_score"], 4),  # CV F1-score
-                "test_accuracy": round(results["test_accuracy"], 4),  # Test accuracy
-                "test_precision": round(results["test_precision"], 4),  # Test precision
-                "test_recall": round(results["test_recall"], 4),  # Test recall
-                "test_f1_score": round(results["test_f1_score"], 4),  # Test F1-score
-                "test_fpr": round(results["test_fpr"], 4),  # Test false positive rate
-                "test_fnr": round(results["test_fnr"], 4),  # Test false negative rate
-                "elapsed_time_s": round(results["elapsed_time_s"], 2),  # Training time in seconds
-            }
-        )
 
     comparison_df = pd.DataFrame(rows)  # Create DataFrame from rows
     csv_output = f"{output_dir}/PCA_Results.csv"  # Output CSV path
