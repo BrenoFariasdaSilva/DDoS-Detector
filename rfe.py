@@ -807,7 +807,21 @@ def run_rfe(csv_path):
 
         return  # exit after fallback run
 
-    n_splits = min(10, len(y_array), min_class_count)  # choose up to 10 splits but not more than samples or smallest class
+    # Create an 80/20 stratified hold-out
+    stratify_param = y_array if len(np.unique(y_array)) > 1 else None
+    X_train_df, X_test_df, y_train_array, y_test_array = train_test_split(
+        X_numeric, y_array, test_size=0.2, random_state=42, stratify=stratify_param
+    )
+
+    # Fit a scaler on the training portion and transform both train/test.
+    scaler_for_run = StandardScaler()
+    X_train_scaled = scaler_for_run.fit_transform(X_train_df.values)
+    X_test_scaled = scaler_for_run.transform(X_test_df.values)
+
+    # Determine CV splits based on the training portion
+    unique_tr, counts_tr = np.unique(y_train_array, return_counts=True)
+    min_class_count_tr = counts_tr.min() if counts_tr.size > 0 else 0
+    n_splits = min(10, len(y_train_array), min_class_count_tr)  # up to 10 splits but not more than samples or smallest class in train
     n_splits = max(2, int(n_splits))  # ensure at least 2 splits
 
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)  # create stratified K-Fold iterator
@@ -817,21 +831,17 @@ def run_rfe(csv_path):
     fold_supports = []  # list to collect per-fold support masks
     total_elapsed = 0.0  # accumulator for elapsed times across folds
 
-    for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X_numeric.values, y_array), start=1):
+    for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X_train_scaled, y_train_array), start=1):
         verbose_output(f"{BackgroundColors.CYAN}Running fold {fold_idx}/{n_splits}{Style.RESET_ALL}")  # optional fold progress
 
-        X_train_raw = X_numeric.iloc[train_idx].values  # raw numeric train features for this fold
-        X_test_raw = X_numeric.iloc[test_idx].values  # raw numeric test features for this fold
-        y_train = y_array[train_idx]  # train labels for this fold
-        y_test = y_array[test_idx]  # test labels for this fold
+        X_train_fold = X_train_scaled[train_idx]
+        X_test_fold = X_train_scaled[test_idx]
+        y_train_fold = y_train_array[train_idx]
+        y_test_fold = y_train_array[test_idx]
 
-        scaler = StandardScaler()  # instantiate a scaler for fold-local scaling
-        X_train = scaler.fit_transform(X_train_raw)  # fit scaler on train and transform train
-        X_test = scaler.transform(X_test_raw)  # transform test with the same scaler
+        selector, model = run_rfe_selector(X_train_fold, y_train_fold, random_state=42)  # fit RFE on this fold's training data
 
-        selector, model = run_rfe_selector(X_train, y_train, random_state=42)  # fit RFE on this fold's training data
-
-        metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42)  # compute metrics for this fold
+        metrics_tuple = compute_rfe_metrics(selector, X_train_fold, X_test_fold, y_train_fold, y_test_fold, random_state=42)  # compute metrics for this fold
         fold_metrics.append(metrics_tuple)  # append per-fold metrics tuple
         fold_rankings.append(selector.ranking_)  # append per-fold ranking array
         fold_supports.append(selector.support_.astype(int))  # append per-fold support mask as integers
@@ -873,7 +883,7 @@ def run_rfe(csv_path):
                 _features_path,
                 model_params,
                 _params_path,
-            ) = export_final_model(X_numeric, feature_columns, top_features, y_array, csv_path)  # train and export final model, scaler and features
+            ) = export_final_model(X_train_df, feature_columns, top_features, y_train_array, csv_path)  # train and export final model, scaler and features on training set
             loaded_hyperparams = model_params
     else:
         (
@@ -885,11 +895,10 @@ def run_rfe(csv_path):
             _features_path,
             model_params,
             _params_path,
-        ) = export_final_model(X_numeric, feature_columns, top_features, y_array, csv_path)  # train and export final model, scaler and features
+        ) = export_final_model(X_train_df, feature_columns, top_features, y_train_array, csv_path)  # train and export final model, scaler and features on training set
         loaded_hyperparams = model_params
-
-    # Evaluate final_model (loaded or newly trained) on the full dataset and build run results
-    eval_metrics = evaluate_exported_model(final_model, scaler_full, X_numeric, feature_columns, top_features, y_array)
+    # Evaluate final_model (loaded or newly trained) on the held-out test set
+    eval_metrics = evaluate_exported_model(final_model, scaler_full, X_test_df, feature_columns, top_features, y_test_array)
     run_results = [  # prepare aggregated run results for saving
         {
             "model": final_model.__class__.__name__,  # model class name
