@@ -535,14 +535,27 @@ def export_final_model(X_numeric, feature_columns, top_features, y_array, csv_pa
     return final_model, scaler_full, top_features, model_path, scaler_path, features_path, model_params, params_path  # return objects, paths and params
 
 
+def format_value(value):
+    """
+    Format a numeric value to 4 decimal places, or return None if not possible.
+
+    :param value: Numeric value
+    :return: Formatted string or None
+    """
+
+    try:
+        return f"{float(value):.4f}" if value is not None else None
+    except Exception:
+        return None
+
+
 def save_rfe_results(csv_path, run_results):
     """
     Saves results from RFE run to a structured CSV file.
 
     :param csv_path: Original CSV file path
-    : param run_results: List of dicts containing results from the current run
+    :param run_results: List of dicts containing results from the current run
     """
-
     verbose_output(
         f"{BackgroundColors.GREEN}Saving RFE Run Results to CSV...{Style.RESET_ALL}"
     )  # Output the verbose message
@@ -550,8 +563,44 @@ def save_rfe_results(csv_path, run_results):
     output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE/"  # Define output directory under RFE subdir
     os.makedirs(output_dir, exist_ok=True)  # Create directory if it doesn't exist
 
+    # Normalize and format run results so CSV contains consistent types/strings
+    metric_keys = [
+        "accuracy",
+        "precision",
+        "recall",
+        "f1_score",
+        "fpr",
+        "fnr",
+    ]
+
+    rows = []
+    for r in run_results:
+        # Make a shallow copy to avoid mutating caller data
+        rr = r.copy() if isinstance(r, dict) else {}
+
+        # Normalize dataset path to relative
+        rr["dataset"] = os.path.relpath(csv_path)
+
+        # Ensure hyperparameters is JSON string when possible
+        if "hyperparameters" in rr and rr.get("hyperparameters") is not None:
+            if not isinstance(rr.get("hyperparameters"), str):
+                try:
+                    rr["hyperparameters"] = json.dumps(rr.get("hyperparameters"))
+                except Exception:
+                    rr["hyperparameters"] = str(rr.get("hyperparameters"))
+
+        # Format numeric metrics to 4 decimal places (as strings)
+        for k in metric_keys:
+            if k in rr:
+                rr[k] = format_value(rr.get(k))
+
+        # convert elapsed_time_s to integer seconds
+        rr["elapsed_time_s"] = int(round(rr.get("elapsed_time_s", 0)))
+
+        rows.append(rr)
+
     try:  # Try saving CSV
-        df_run = pd.DataFrame(run_results)  # Create DataFrame
+        df_run = pd.DataFrame(rows)  # Create DataFrame
         df_run = populate_hardware_column_and_order(df_run, column_name="Hardware")
         run_csv_path = f"{output_dir}RFE_Run_Results.csv"  # CSV path
         df_run.to_csv(run_csv_path, index=False, encoding="utf-8")  # Write run results CSV
@@ -580,7 +629,7 @@ def print_run_summary(run_results):
     print(
         f"  Accuracy: {res.get('accuracy'):.4f}  Precision: {res.get('precision'):.4f}  Recall: {res.get('recall'):.4f}  F1: {res.get('f1_score'):.4f}"
     )
-    print(f"  FPR: {res.get('fpr'):.4f}  FNR: {res.get('fnr'):.4f}  Elapsed: {res.get('elapsed_time_s'):.2f}s")
+    print(f"  FPR: {res.get('fpr'):.4f}  FNR: {res.get('fnr'):.4f}  Elapsed: {res.get('elapsed_time_s')}s")
     print(f"  Top features: {res.get('top_features')}")
     if res.get("hyperparameters"):
         try:
