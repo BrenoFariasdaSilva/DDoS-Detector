@@ -463,16 +463,44 @@ def split_data(train_df, test_df, split_required, label_col=None, selected_featu
     """
 
     if split_required:  # If a split is required
-        verbose_output(f"{BackgroundColors.GREEN}Splitting data into train/test sets...{Style.RESET_ALL}")
-        X_scaled, y, feature_names, _, scaler, label_encoder = preprocess_features(
-            train_df, label_col, selected_features=selected_features
-        )  # Preprocess features
-        verbose_output(f"{BackgroundColors.GREEN}Splitting data into train/test (75/25)...{Style.RESET_ALL}")
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_scaled, y, test_size=0.25, random_state=42, stratify=y
-        )  # Split data into training and testing sets
+        verbose_output(f"{BackgroundColors.GREEN}Splitting data into train/test sets (75/25)...{Style.RESET_ALL}")
+        # Ensure we know which column is the label for stratification
+        if label_col is None:
+            label_col = detect_label_column(train_df.columns)
+            if label_col is None:
+                raise ValueError(f"{BackgroundColors.RED}No label column detected for stratified split.{Style.RESET_ALL}")
+
+        # Clean rows with missing label prior to splitting to avoid misalignment
+        df_clean = train_df.dropna(subset=[label_col])
+
+        # Perform stratified split on the raw DataFrame to keep scaler fitting inside the training partition
+        train_df_part, test_df_part = train_test_split(
+            df_clean, test_size=0.25, random_state=42, stratify=df_clean[label_col]
+        )
+
+        # Preprocess the training partition (fit scaler and label encoder here)
+        X_train_scaled, y_train, feature_names, _, scaler, label_encoder = preprocess_features(
+            train_df_part, label_col, selected_features=selected_features
+        )
+
+        # Preprocess the testing partition using the fitted scaler and label encoder
+        X_test_scaled, y_test, feature_names_test, _, _, _ = preprocess_features(
+            test_df_part,
+            label_col,
+            ref_columns=feature_names,
+            scaler=scaler,
+            label_encoder=label_encoder,
+            selected_features=selected_features,
+        )
+
+        if list(feature_names) != list(feature_names_test):
+            raise ValueError(
+                f"{BackgroundColors.RED}Mismatch in feature columns between training and testing partitions after preprocessing.{Style.RESET_ALL}"
+            )
+
+        X_train, X_test = X_train_scaled, X_test_scaled
         verbose_output(
-            f"{BackgroundColors.GREEN}Split complete. Train: {X_train.shape}, Test: {X_test.shape}{Style.RESET_ALL}"
+            f"{BackgroundColors.GREEN}Split and preprocessing complete. Train: {X_train.shape}, Test: {X_test.shape}{Style.RESET_ALL}"
         )
     else:  # If no split is required
         X_train_scaled, y_train, feature_names_train, _, scaler, label_encoder = preprocess_features(
