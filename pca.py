@@ -565,7 +565,7 @@ def save_pca_results(csv_path, all_results):
             "test_f1_score": format_value(results.get("test_f1_score")),
             "test_fpr": format_value(results.get("test_fpr")),
             "test_fnr": format_value(results.get("test_fnr")),
-            "elapsed_time_s": format_value(results.get("elapsed_time_s")),
+            "elapsed_time_s": int(results.get("elapsed_time_s")),
         }
         rows.append(row)
 
