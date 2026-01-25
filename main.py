@@ -1243,7 +1243,7 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
         testing_file_path = dataset_info.get("test")  # Get test file
         feature_files = dataset_info.get("features", [])  # Get features list
 
-        dataset_dir = os.path.dirname(training_file_path)  # Get the directory of the dataset file
+        dataset_dir = os.path.dirname(str(training_file_path))  # Get the directory of the dataset file
         dataset_name = os.path.splitext(os.path.basename(str(training_file_path)))[
             0
         ]  # Extract dataset name (casts to str)
