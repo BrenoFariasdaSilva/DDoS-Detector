@@ -240,11 +240,16 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
     :return: X_train, X_test, y_train, y_test, scaler
     """
 
-    scaler = StandardScaler()  # Initialize the scaler
-    X_scaled = scaler.fit_transform(X)  # Scale the features
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_scaled, y, test_size=test_size, random_state=random_state, stratify=y
-    )  # Split into train/test sets
+    # Perform the train/test split first to avoid data leakage
+    stratify_param = y if len(np.unique(y)) > 1 else None
+    X_train_df, X_test_df, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state, stratify=stratify_param
+    )
+
+    # Fit the scaler on the training data only, then transform both partitions
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train_df)
+    X_test = scaler.transform(X_test_df)
 
     return X_train, X_test, y_train, y_test, scaler  # Return the split data and scaler
 
