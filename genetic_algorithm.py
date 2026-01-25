@@ -751,7 +751,9 @@ def split_dataset(df, csv_path, test_size=0.2):
         print(f"{BackgroundColors.RED}No valid numeric features remain after cleaning.{Style.RESET_ALL}")
         return None, None, None, None, None  # Return None values
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)  # Split the dataset
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=42, stratify=y
+    )  # Split the dataset (stratified to preserve class proportions)
 
     scaler = StandardScaler()  # Initialize the scaler
     X_train_scaled = scaler.fit_transform(X_train)  # Fit scaler on training set and transform
