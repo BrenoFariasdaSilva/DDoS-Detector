@@ -93,6 +93,7 @@ N_JOBS = -1  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
 SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, try loading exported models instead of retraining
 CSV_FILE = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Path to the CSV dataset file (set in main)
 RFE_RESULTS_CSV_COLUMNS = [  # Columns for the RFE results CSV
+    "timestamp",
     "tool",
     "model",
     "dataset",
@@ -569,6 +570,9 @@ def save_rfe_results(csv_path, run_results):
     rows = []
     for r in runs:
         data = {c: None for c in RFE_RESULTS_CSV_COLUMNS}
+        # Timestamp for this row (YYYY-MM-DD_HH_MM_SS)
+        ts = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
+        data["timestamp"] = ts
         data["tool"] = "RFE"
         model_obj = r.get("model") or r.get("estimator") or ""
         try:
@@ -651,6 +655,38 @@ def save_rfe_results(csv_path, run_results):
     output_dir = os.path.join(os.path.dirname(csv_path), "Feature_Analysis", "RFE")
     os.makedirs(output_dir, exist_ok=True)
     run_csv_path = os.path.join(output_dir, "RFE_Run_Results.csv")
+
+    # If existing file present, read and backfill timestamp if missing, then concat
+    if os.path.exists(run_csv_path):
+        try:
+            df_existing = pd.read_csv(run_csv_path, dtype=str)
+            # Backfill timestamp for legacy files without timestamp column
+            if "timestamp" not in df_existing.columns:
+                mtime = os.path.getmtime(run_csv_path)
+                back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")
+                df_existing["timestamp"] = back_ts
+
+            # Ensure all expected columns exist in existing dataframe
+            for c in RFE_RESULTS_CSV_COLUMNS:
+                if c not in df_existing.columns:
+                    df_existing[c] = None
+
+            df_combined = pd.concat([df_existing[RFE_RESULTS_CSV_COLUMNS], df_new], ignore_index=True, sort=False)
+
+            # Sort newest -> oldest by timestamp and reindex to canonical order
+            try:
+                df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")
+                df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)
+                df_combined = df_combined.drop(columns=["timestamp_dt"])
+            except Exception:
+                # fallback: string-sort (format chosen is lexicographically sortable)
+                df_combined = df_combined.sort_values(by="timestamp", ascending=False)
+
+            df_out = df_combined.reset_index(drop=True)
+        except Exception:
+            df_out = df_new
+    else:
+        df_out = df_new
 
     # Populate hardware metadata and enforce ordering
     df_out = populate_hardware_column_and_order(df_out, column_name="hardware")
