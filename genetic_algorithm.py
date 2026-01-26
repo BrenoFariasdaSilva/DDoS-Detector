@@ -113,6 +113,7 @@ RESUME_PROGRESS = True  # When True, attempt to resume progress from saved state
 PROGRESS_STATE_DIR_NAME = "ga_progress"  # Subfolder under Feature_Analysis to store progress files
 PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL  # Pickle protocol to use when saving state
 GA_RESULTS_CSV_COLUMNS = [  # Columns for the results CSV
+    "timestamp",
     "dataset",
     "dataset_path",
     "run_index",
@@ -2304,29 +2305,32 @@ def write_consolidated_csv(rows, output_dir):
 
         csv_out = os.path.join(output_dir, "Genetic_Algorithm_Results.csv")  # Build path for consolidated CSV
 
-        df_existing = load_existing_results(csv_out)  # Load existing consolidated CSV if available
-        df_existing = normalize_elapsed_column_df(
-            df_existing
-        )  # Normalize legacy elapsed_time to elapsed_time_s in existing rows
+        if os.path.exists(csv_out):
+            df_existing = pd.read_csv(csv_out, dtype=str)
+            if "timestamp" not in df_existing.columns:
+                mtime = os.path.getmtime(csv_out)
+                back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")
+                df_existing["timestamp"] = back_ts
+            for c in GA_RESULTS_CSV_COLUMNS:
+                if c not in df_existing.columns:
+                    df_existing[c] = None
+            df_combined = pd.concat([df_existing[GA_RESULTS_CSV_COLUMNS], df_new], ignore_index=True, sort=False)
+            try:
+                df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")
+                df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)
+                df_combined = df_combined.drop(columns=["timestamp_dt"])
+            except Exception:
+                df_combined = df_combined.sort_values(by="timestamp", ascending=False)
+            df_out = df_combined.reset_index(drop=True)
+        else:
+            df_out = df_new
 
-        if df_existing.empty:  # If there is no existing consolidated CSV
-            df_combined = df_new.copy()  # Use the new DataFrame as the combined result
-        else:  # If existing consolidated CSV rows were loaded
-            df_combined = merge_replace_existing(
-                df_existing, df_new
-            )  # Merge new rows, replacing by dataset_path where needed
+        df_out = populate_hardware_column(df_out, column_name="hardware")  # Populate hardware column using system specs
 
-        columns = GA_RESULTS_CSV_COLUMNS  # Canonical column order for consolidated CSV
+        df_out = ensure_expected_columns(df_out, GA_RESULTS_CSV_COLUMNS)  # Add any missing expected columns with None values
 
-        populate_hardware_column(df_combined, column_name="hardware")  # Populate hardware column using system specs
-
-        df_combined = ensure_expected_columns(df_combined, columns)  # Add any missing expected columns with None values
-        df_combined = sort_run_index_first(
-            df_combined
-        )  # Sort so that 'best' run_index appears first for each dataset/dataset_path
-
-        df_combined = df_combined[columns]  # Reorder columns into the canonical order
-        df_combined.to_csv(csv_out, index=False, encoding="utf-8")  # Persist the consolidated CSV to disk
+        df_out = df_out[GA_RESULTS_CSV_COLUMNS]  # Reorder columns into the canonical order
+        df_out.to_csv(csv_out, index=False, encoding="utf-8")  # Persist the consolidated CSV to disk
         print(
             f"\n{BackgroundColors.GREEN}Genetic Algorithm consolidated results saved to {BackgroundColors.CYAN}{csv_out}{Style.RESET_ALL}"
         )  # Notify user of success
@@ -2439,7 +2443,7 @@ def save_results(
     X_final = X_scaled[:, sel_indices] if sel_indices else X_scaled
     final_model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)
     final_model.fit(X_final, y)
-    
+
     dump(final_model, model_path)
     dump(scaler, scaler_path)
     with open(features_path, "w", encoding="utf-8") as fh:
@@ -2504,17 +2508,27 @@ def save_results(
         cv_method = "train_test_split"
 
     run_results = [{
-        "model": final_model.__class__.__name__,
+        "timestamp": timestamp,
         "dataset": os.path.relpath(csv_path),
-        "accuracy": round(eval_metrics[0], 4) if eval_metrics[0] is not None else None,
-        "precision": round(eval_metrics[1], 4) if eval_metrics[1] is not None else None,
-        "recall": round(eval_metrics[2], 4) if eval_metrics[2] is not None else None,
-        "f1_score": round(eval_metrics[3], 4) if eval_metrics[3] is not None else None,
-        "fpr": round(eval_metrics[4], 4) if eval_metrics[4] is not None else None,
-        "fnr": round(eval_metrics[5], 4) if eval_metrics[5] is not None else None,
-        "elapsed_time_s": round(eval_metrics[6], 2) if eval_metrics[6] is not None else None,
+        "dataset_path": os.path.relpath(csv_path),
+        "run_index": "best",
+        "population_size": best_pop_size,
+        "n_generations": n_generations,
+        "cxpb": cxpb,
+        "mutpb": mutpb,
+        "n_train": n_train,
+        "n_test": n_test,
+        "train_test_ratio": test_frac,
+        "classifier": final_model.__class__.__name__,
+        "accuracy": format_value(eval_metrics[0]) if eval_metrics[0] is not None else None,
+        "precision": format_value(eval_metrics[1]) if eval_metrics[1] is not None else None,
+        "recall": format_value(eval_metrics[2]) if eval_metrics[2] is not None else None,
+        "f1_score": format_value(eval_metrics[3]) if eval_metrics[3] is not None else None,
+        "fpr": format_value(eval_metrics[4]) if eval_metrics[4] is not None else None,
+        "fnr": format_value(eval_metrics[5]) if eval_metrics[5] is not None else None,
+        "elapsed_time_s": format_value(eval_metrics[6]) if eval_metrics[6] is not None else None,
         "cv_method": cv_method,
-        "top_features": json.dumps(best_features),
+        "best_features": json.dumps(best_features),
         "rfe_ranking": json.dumps(rfe_ranking),
         "hyperparameters": json.dumps(model_params, default=str) if model_params is not None else None,
     }]
