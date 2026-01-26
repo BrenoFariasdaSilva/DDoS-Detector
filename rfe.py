@@ -721,9 +721,9 @@ def print_run_summary(run_results):
     print(f"  Model: {res.get('model')}")
     print(f"  CV Method: {res.get('cv_method')}")
     print(
-        f"  Accuracy: {res.get('accuracy'):.4f}  Precision: {res.get('precision'):.4f}  Recall: {res.get('recall'):.4f}  F1: {res.get('f1_score'):.4f}"
+        f"  Accuracy: {res.get('test_accuracy', res.get('accuracy')):.4f}  Precision: {res.get('test_precision', res.get('precision')):.4f}  Recall: {res.get('test_recall', res.get('recall')):.4f}  F1: {res.get('test_f1_score', res.get('f1_score')):.4f}"
     )
-    print(f"  FPR: {res.get('fpr'):.4f}  FNR: {res.get('fnr'):.4f}  Elapsed: {res.get('elapsed_time_s')}s")
+    print(f"  FPR: {res.get('test_fpr', res.get('fpr')):.4f}  FNR: {res.get('test_fnr', res.get('fnr')):.4f}  Elapsed: {res.get('elapsed_time_s')}s")
     print(f"  Top features: {res.get('top_features')}")
     if res.get("hyperparameters"):
         try:
@@ -931,14 +931,14 @@ def run_rfe(csv_path):
                 "model": final_model.__class__.__name__,  # model class name
                 "dataset": os.path.relpath(csv_path),  # added: relative dataset path used for this run
                 "hyperparameters": json.dumps(loaded_hyperparams) if loaded_hyperparams is not None else None,
-                "accuracy": round(eval_metrics[0], 4),
-                "f1_score": round(eval_metrics[3], 4),
-                "precision": round(eval_metrics[1], 4),
-                "recall": round(eval_metrics[2], 4),
-                "fpr": round(eval_metrics[4], 4),
-                "fnr": round(eval_metrics[5], 4),
-                "elapsed_time_s": round(eval_metrics[6], 2),
                 "cv_method": "single_train_test_split",
+                "test_accuracy": round(eval_metrics[0], 4),
+                "test_precision": round(eval_metrics[1], 4),
+                "test_recall": round(eval_metrics[2], 4),
+                "test_f1_score": round(eval_metrics[3], 4),
+                "test_fpr": round(eval_metrics[4], 4),
+                "test_fnr": round(eval_metrics[5], 4),
+                "elapsed_time_s": round(eval_metrics[6], 2),
                 "top_features": json.dumps(top_features),
                 "rfe_ranking": json.dumps(sorted_rfe_ranking),
             }
@@ -1045,17 +1045,23 @@ def run_rfe(csv_path):
         {
             "model": final_model.__class__.__name__,  # model class name
             "dataset": os.path.relpath(csv_path),  # added: relative dataset path used for this run
-            "accuracy": round(eval_metrics[0], 4),
-            "precision": round(eval_metrics[1], 4),
-            "recall": round(eval_metrics[2], 4),
-            "f1_score": round(eval_metrics[3], 4),
-            "fpr": round(eval_metrics[4], 4),
-            "fnr": round(eval_metrics[5], 4),
-            "elapsed_time_s": round(eval_metrics[6], 2),
+            "hyperparameters": json.dumps(loaded_hyperparams) if loaded_hyperparams is not None else None,
             "cv_method": f"StratifiedKFold(n_splits={n_splits})",
+            "cv_accuracy": round(mean_metrics[0], 4),
+            "cv_precision": round(mean_metrics[1], 4),
+            "cv_recall": round(mean_metrics[2], 4),
+            "cv_f1_score": round(mean_metrics[3], 4),
+            "cv_fpr": round(mean_metrics[4], 4),
+            "cv_fnr": round(mean_metrics[5], 4),
+            "test_accuracy": round(eval_metrics[0], 4),
+            "test_precision": round(eval_metrics[1], 4),
+            "test_recall": round(eval_metrics[2], 4),
+            "test_f1_score": round(eval_metrics[3], 4),
+            "test_fpr": round(eval_metrics[4], 4),
+            "test_fnr": round(eval_metrics[5], 4),
+            "elapsed_time_s": round(eval_metrics[6], 2),
             "top_features": json.dumps(top_features),  # JSON-encoded list of majority-selected features
             "rfe_ranking": json.dumps(sorted_rfe_ranking),  # JSON-encoded averaged and sorted rankings
-            "hyperparameters": json.dumps(loaded_hyperparams) if loaded_hyperparams is not None else None,
         }
     ]
 
