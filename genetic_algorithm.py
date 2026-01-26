@@ -1857,17 +1857,25 @@ def print_metrics(metrics):
     if not metrics:  # If metrics is None or empty
         return  # Do nothing
 
-    acc, prec, rec, f1, fpr, fnr, elapsed_time = metrics
+    cv_acc, cv_prec, cv_rec, cv_f1, cv_fpr, cv_fnr, test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr = metrics
     print(
-        f"\n{BackgroundColors.GREEN}Performance Metrics for the Random Forest Classifier using the best feature subset:{Style.RESET_ALL}"
+        f"\n{BackgroundColors.GREEN}CV Performance Metrics for the Random Forest Classifier using the best feature subset:{Style.RESET_ALL}"
     )
-    print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{acc:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{prec:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{rec:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{f1:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{fpr:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{fnr:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}Elapsed Time (s): {BackgroundColors.CYAN}{int(elapsed_time)}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{cv_acc:.4f}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{cv_prec:.4f}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{cv_rec:.4f}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{cv_f1:.4f}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{cv_fpr:.4f}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{cv_fnr:.4f}{Style.RESET_ALL}")
+    print(
+        f"\n{BackgroundColors.GREEN}Test Performance Metrics for the Random Forest Classifier using the best feature subset:{Style.RESET_ALL}"
+    )
+    print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{test_acc:.4f}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{test_prec:.4f}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{test_rec:.4f}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{test_f1:.4f}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{test_fpr:.4f}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{test_fnr:.4f}{Style.RESET_ALL}")
 
 
 def extract_rfe_ranking(csv_path):
