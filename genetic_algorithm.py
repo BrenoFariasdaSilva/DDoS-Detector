@@ -1093,7 +1093,7 @@ def evaluate_individual(
     :param run: Optional current run for progress display.
     :param runs: Optional total runs for progress display.
     :param progress_state: Optional progress state dict for tracking iterations.
-    :return: Tuple containing accuracy, precision, recall, F1-score, FPR, FNR
+    :return: Tuple containing CV accuracy, precision, recall, F1-score, FPR, FNR, test accuracy, precision, recall, F1-score, FPR, FNR
     """
 
     verbose_output(
@@ -1101,7 +1101,7 @@ def evaluate_individual(
     )  # Output the verbose message
 
     if sum(individual) == 0:  # If no features are selected
-        return 0, 0, 0, 0, 1, 1  # Return worst possible scores
+        return 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1  # Return worst possible scores for CV and test
 
     mask_tuple = tuple(individual)  # Convert individual to tuple for hashing
     if mask_tuple in fitness_cache:  # Verify if already evaluated
@@ -1138,7 +1138,7 @@ def evaluate_individual(
         fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # False positive rate
         fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # False negative rate
 
-        return acc, prec, rec, f1, fpr, fnr  # Return metrics
+        return acc, prec, rec, f1, fpr, fnr, acc, prec, rec, f1, fpr, fnr  # Return metrics for both CV and test
 
     y_train_np = np.array(y_train)  # Convert y_train to numpy array for fast indexing
     early_stop_triggered = False  # Flag for early stopping
@@ -1177,8 +1177,26 @@ def evaluate_individual(
     means = np.mean(metrics, axis=0) if metrics.shape[0] > 0 else np.zeros(6)  # Calculate means for each metric
     acc, prec, rec, f1, fpr, fnr = means  # Unpack mean metrics
 
-    result = acc, prec, rec, f1, fpr, fnr  # Prepare result tuple
+    # Compute test metrics
+    X_test_sel = X_test[:, mask]
+    model = instantiate_estimator(estimator_cls)
+    model.fit(X_train_sel, y_train)
+    y_pred_test = model.predict(X_test_sel)
+    test_acc = accuracy_score(y_test, y_pred_test)
+    test_prec = precision_score(y_test, y_pred_test, average="weighted", zero_division=0)
+    test_rec = recall_score(y_test, y_pred_test, average="weighted", zero_division=0)
+    test_f1 = f1_score(y_test, y_pred_test, average="weighted", zero_division=0)
+    cm = confusion_matrix(y_test, y_pred_test, labels=np.unique(y_test))
+    tn = cm[0, 0] if cm.shape == (2, 2) else 0
+    fp = cm[0, 1] if cm.shape == (2, 2) else 0
+    fn = cm[1, 0] if cm.shape == (2, 2) else 0
+    tp = cm[1, 1] if cm.shape == (2, 2) else 0
+    test_fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+    test_fnr = fn / (fn + tp) if (fn + tp) > 0 else 0
+
+    result = acc, prec, rec, f1, fpr, fnr, test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr  # Prepare result tuple
     fitness_cache[mask_tuple] = result  # Cache the result
+    
     return result  # Return vectorized average metrics
 
 
