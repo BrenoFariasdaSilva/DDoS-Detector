@@ -93,18 +93,25 @@ N_JOBS = -1  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
 SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, try loading exported models instead of retraining
 CSV_FILE = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Path to the CSV dataset file (set in main)
 RFE_RESULTS_CSV_COLUMNS = [  # Columns for the RFE results CSV
+    "tool",
     "model",
     "dataset",
-    "accuracy",
-    "precision",
-    "recall",
-    "f1_score",
-    "fpr",
-    "fnr",
-    "elapsed_time_s",
-    "Hardware",
-    "cv_method",
     "hyperparameters",
+    "cv_method",
+    "train_test_split",
+    "scaling",
+    "cv_accuracy",
+    "cv_precision",
+    "cv_recall",
+    "cv_f1_score",
+    "test_accuracy",
+    "test_precision",
+    "test_recall",
+    "test_f1_score",
+    "test_fpr",
+    "test_fnr",
+    "elapsed_time_s",
+    "hardware",
     "top_features",
     "rfe_ranking",
 ]
@@ -455,7 +462,7 @@ def get_hardware_specifications():
     }
 
 
-def populate_hardware_column_and_order(df, column_name="Hardware"):
+def populate_hardware_column_and_order(df, column_name="hardware"):
     """
     Add a hardware-specs column to `df` and reorder columns so the hardware
     column appears immediately after `elapsed_time_s`.
@@ -476,11 +483,9 @@ def populate_hardware_column_and_order(df, column_name="Hardware"):
         + " GB | OS: "
         + hardware_specs["os"]
     )  # Add hardware specs column
-    # Build the columns order from the canonical constant, substituting the
-    # runtime `column_name` for the placeholder "Hardware" so callers can
-    # choose a different name if needed.
+
     columns_order = [
-        (column_name if c == "Hardware" else c) for c in RFE_RESULTS_CSV_COLUMNS
+        (column_name if str(c).lower() == "hardware" else c) for c in RFE_RESULTS_CSV_COLUMNS
     ]
 
     return df_results.reindex(columns=columns_order)  # Reorder columns
@@ -556,59 +561,107 @@ def save_rfe_results(csv_path, run_results):
     :param csv_path: Original CSV file path
     :param run_results: List of dicts containing results from the current run
     """
-    verbose_output(
-        f"{BackgroundColors.GREEN}Saving RFE Run Results to CSV...{Style.RESET_ALL}"
-    )  # Output the verbose message
 
-    output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE/"  # Define output directory under RFE subdir
-    os.makedirs(output_dir, exist_ok=True)  # Create directory if it doesn't exist
+    verbose_output(f"{BackgroundColors.GREEN}Saving RFE run results to CSV...{Style.RESET_ALL}")
 
-    # Normalize and format run results so CSV contains consistent types/strings
-    metric_keys = [
-        "accuracy",
-        "precision",
-        "recall",
-        "f1_score",
-        "fpr",
-        "fnr",
-    ]
+    runs = run_results if isinstance(run_results, list) else [run_results]
 
     rows = []
-    for r in run_results:
-        # Make a shallow copy to avoid mutating caller data
-        rr = r.copy() if isinstance(r, dict) else {}
+    for r in runs:
+        data = {c: None for c in RFE_RESULTS_CSV_COLUMNS}
+        data["tool"] = "RFE"
+        model_obj = r.get("model") or r.get("estimator") or ""
+        try:
+            model_repr = model_obj if isinstance(model_obj, str) else getattr(model_obj, "__class__", type(model_obj)).__name__
+        except Exception:
+            model_repr = str(model_obj)
 
-        # Normalize dataset path to relative
-        rr["dataset"] = os.path.relpath(csv_path)
+        if isinstance(model_repr, str) and "random" in model_repr.lower() and "forest" in model_repr.lower():
+            data["model"] = "Random Forest"
+        else:
+            data["model"] = model_repr
+        
+        try:
+            data["dataset"] = os.path.relpath(csv_path)
+        except Exception:
+            data["dataset"] = csv_path
 
-        # Ensure hyperparameters is JSON string when possible
-        if "hyperparameters" in rr and rr.get("hyperparameters") is not None:
-            if not isinstance(rr.get("hyperparameters"), str):
+        hyper = r.get("hyperparameters") or r.get("params") or {}
+        try:
+            data["hyperparameters"] = json.dumps(hyper, sort_keys=True, ensure_ascii=False)
+        except Exception:
+            data["hyperparameters"] = str(hyper)
+
+        cv_method = r.get("cv_method") or r.get("cv")
+        if not cv_method:
+            n_splits = r.get("cv_n_splits") or r.get("n_splits")
+            if n_splits:
+                cv_method = f"StratifiedKFold(n_splits={n_splits})"
+        data["cv_method"] = cv_method
+
+        data["train_test_split"] = r.get("train_test_split") or f"test_size={r.get('test_size', 0.2)}"
+        data["scaling"] = r.get("scaling") or r.get("scaler") or r.get("preprocessing") or "standard"
+
+        metric_map = {
+            "cv_accuracy": ("cv", "accuracy"),
+            "cv_precision": ("cv", "precision"),
+            "cv_recall": ("cv", "recall"),
+            "cv_f1_score": ("cv", "f1_score"),
+            "test_accuracy": ("test", "accuracy"),
+            "test_precision": ("test", "precision"),
+            "test_recall": ("test", "recall"),
+            "test_f1_score": ("test", "f1_score"),
+            "test_fpr": ("test", "fpr"),
+            "test_fnr": ("test", "fnr"),
+        }
+
+        for col, (section, key) in metric_map.items():
+            val = r.get(col)
+            if val is None:
+                sec = r.get(section)
+                if isinstance(sec, dict):
+                    val = sec.get(key)
+
+            if val is not None:
                 try:
-                    rr["hyperparameters"] = json.dumps(rr.get("hyperparameters"))
+                    data[col] = format_value(float(val))
                 except Exception:
-                    rr["hyperparameters"] = str(rr.get("hyperparameters"))
+                    data[col] = val
 
-        # Format numeric metrics to 4 decimal places (as strings)
-        for k in metric_keys:
-            if k in rr:
-                rr[k] = format_value(rr.get(k))
+        elapsed = r.get("elapsed_time_s") or r.get("elapsed_time")
+        try:
+            data["elapsed_time_s"] = int(float(elapsed)) if elapsed is not None else None
+        except Exception:
+            data["elapsed_time_s"] = None
 
-        # convert elapsed_time_s to integer seconds
-        rr["elapsed_time_s"] = int(round(rr.get("elapsed_time_s", 0)))
+        try:
+            data["top_features"] = json.dumps(r.get("top_features") or [], ensure_ascii=False)
+        except Exception:
+            data["top_features"] = str(r.get("top_features") or [])
 
-        rows.append(rr)
+        try:
+            data["rfe_ranking"] = json.dumps(r.get("rfe_ranking") or {}, sort_keys=True, ensure_ascii=False)
+        except Exception:
+            data["rfe_ranking"] = str(r.get("rfe_ranking") or {})
 
-    try:  # Try saving CSV
-        df_run = pd.DataFrame(rows)  # Create DataFrame
-        df_run = populate_hardware_column_and_order(df_run, column_name="Hardware")
-        run_csv_path = f"{output_dir}RFE_Run_Results.csv"  # CSV path
-        df_run.to_csv(run_csv_path, index=False, encoding="utf-8")  # Write run results CSV
-        print(
-            f"{BackgroundColors.GREEN}Run results saved to {BackgroundColors.CYAN}{run_csv_path}{Style.RESET_ALL}"
-        )  # Notify CSV saved
-    except Exception as e:  # If saving CSV fails
-        print(f"{BackgroundColors.RED}Failed to save run results to CSV: {e}{Style.RESET_ALL}")  # Print error
+        rows.append(data)
+
+    # Build DataFrame and save to CSV
+    df_new = pd.DataFrame(rows, columns=RFE_RESULTS_CSV_COLUMNS)
+    output_dir = os.path.join(os.path.dirname(csv_path), "Feature_Analysis", "RFE")
+    os.makedirs(output_dir, exist_ok=True)
+    run_csv_path = os.path.join(output_dir, "RFE_Run_Results.csv")
+
+    # Populate hardware metadata and enforce ordering
+    df_out = populate_hardware_column_and_order(df_out, column_name="hardware")
+
+    try:
+        df_out.to_csv(run_csv_path, index=False, encoding="utf-8")
+        print(f"{BackgroundColors.GREEN}Run results saved to {BackgroundColors.CYAN}{run_csv_path}{Style.RESET_ALL}")
+    except Exception as e:
+        print(f"{BackgroundColors.RED}Failed to save run results to CSV: {e}{Style.RESET_ALL}")
+
+    return run_csv_path
 
 
 def print_run_summary(run_results):
