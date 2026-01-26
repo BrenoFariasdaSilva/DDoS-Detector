@@ -48,6 +48,7 @@ import argparse  # For command-line argument parsing
 import atexit  # For playing a sound when the program finishes
 import datetime  # For timestamping
 import json  # For saving lists and dicts as JSON strings
+import math  # For mathematical operations
 import matplotlib.pyplot as plt  # For plotting
 import numpy as np  # For numerical operations
 import os  # For file and directory operations
@@ -544,15 +545,19 @@ def export_final_model(X_numeric, feature_columns, top_features, y_array, csv_pa
 def format_value(value):
     """
     Format a numeric value to 4 decimal places, or return None if not possible.
-
+    
     :param value: Numeric value
     :return: Formatted string or None
     """
 
-    try:
-        return f"{float(value):.4f}" if value is not None else None
-    except Exception:
-        return None
+    try:  # Try to format the value
+        if value is None:  # If value is None
+            return None  # Return None
+        v = float(value)  # Convert to float
+        truncated = math.trunc(v * 10000) / 10000.0  # Truncate to 4 decimal places
+        return f"{truncated:.4f}"  # Return formatted string
+    except Exception:  # On failure
+        return None  # Return None
 
 
 def save_rfe_results(csv_path, run_results):
