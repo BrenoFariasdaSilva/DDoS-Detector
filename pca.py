@@ -96,6 +96,7 @@ VERBOSE = False  # Set to True to output verbose messages
 SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, try loading exported models instead of retraining
 CSV_FILE = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Path to the CSV dataset file (set in main)
 PCA_RESULTS_CSV_COLUMNS = [  # Columns for the PCA results CSV
+    "timestamp",
     "tool",
     "model",
     "dataset",
@@ -548,6 +549,7 @@ def save_pca_results(csv_path, all_results):
 
         # Build a single normalized row with canonical fields
         row = {
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d_%H_%M_%S"),
             "tool": "PCA",
             "model": eval_model,
             "dataset": os.path.relpath(csv_path),
@@ -574,15 +576,47 @@ def save_pca_results(csv_path, all_results):
     comparison_df = pd.DataFrame(rows)  # Create DataFrame from rows
     csv_output = f"{output_dir}/PCA_Results.csv"  # Output CSV path
 
-    comparison_df = populate_hardware_column(comparison_df, column_name="hardware")  # Add hardware specs column (lowercase)
+    # If existing file present, read and backfill timestamp if missing, then concat
+    if os.path.exists(csv_output):
+        try:
+            df_existing = pd.read_csv(csv_output, dtype=str)
+            # Backfill timestamp for legacy files without timestamp column
+            if "timestamp" not in df_existing.columns:
+                mtime = os.path.getmtime(csv_output)
+                back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")
+                df_existing["timestamp"] = back_ts
+
+            # Ensure all expected columns exist in existing dataframe
+            for c in PCA_RESULTS_CSV_COLUMNS:
+                if c not in df_existing.columns:
+                    df_existing[c] = None
+
+            df_combined = pd.concat([df_existing[PCA_RESULTS_CSV_COLUMNS], comparison_df], ignore_index=True, sort=False)
+
+            # Sort newest -> oldest by timestamp and reindex to canonical order
+            try:
+                df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")
+                df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)
+                df_combined = df_combined.drop(columns=["timestamp_dt"])
+            except Exception:
+                # fallback: string-sort (format chosen is lexicographically sortable)
+                df_combined = df_combined.sort_values(by="timestamp", ascending=False)
+
+            df_out = df_combined.reset_index(drop=True)
+        except Exception:
+            df_out = comparison_df
+    else:
+        df_out = comparison_df
+
+    df_out = populate_hardware_column(df_out, column_name="hardware")  # Add hardware specs column (lowercase)
 
     try:
-        comparison_df = comparison_df.reindex(columns=PCA_RESULTS_CSV_COLUMNS)
+        df_out = df_out.reindex(columns=PCA_RESULTS_CSV_COLUMNS)
     except Exception:
         pass
 
     try:  # Attempt to save the CSV
-        comparison_df.to_csv(csv_output, index=False)  # Save the DataFrame to CSV
+        df_out.to_csv(csv_output, index=False)  # Save the DataFrame to CSV
         print(f"{BackgroundColors.GREEN}PCA results saved to {BackgroundColors.CYAN}{csv_output}{Style.RESET_ALL}")
     except Exception as e:  # Handle exceptions during file saving
         print(f"{BackgroundColors.RED}Failed to save PCA CSV: {e}{Style.RESET_ALL}")
