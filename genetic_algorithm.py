@@ -2028,56 +2028,6 @@ def build_base_row(
     }
 
 
-def build_rows_list(rf_metrics, best_features, runs_list, feature_names, base_row):
-    """
-    Build the list of rows (dictionaries) that will be written to the consolidated GA CSV.
-
-    :param rf_metrics: Metrics tuple for the best RandomForest evaluation (or None).
-    :param best_features: List of features selected by the GA best individual.
-    :param runs_list: Optional list of per-run dictionaries with keys 'metrics', 'best_features', 'best_ind'.
-    :param feature_names: Original feature names list (used if per-run data includes binary masks).
-    :param base_row: Base row dictionary produced by `build_base_row`.
-    :return: List of dictionaries ready to be converted into a DataFrame.
-    """
-
-    rows = []  # List to hold CSV rows
-    rf_row = dict(base_row)  # Create Random Forest row
-    rf_row.update(
-        {
-            "classifier": "RandomForest",
-        }
-    )  # Set classifier
-    rf_row.update(metrics_to_dict(rf_metrics))  # Add RF metrics
-    rf_row.update(
-        {
-            "best_features": json.dumps(best_features, ensure_ascii=False),
-        }
-    )  # Add best features as JSON string
-    rows.append(rf_row)  # Add RF row to rows
-
-    if runs_list:  # If multiple runs data is provided
-        for idx, run_data in enumerate(runs_list, start=1):  # For each run
-            run_metrics = run_data.get("metrics") if run_data.get("metrics") is not None else None
-            run_features = (
-                run_data.get("best_features")
-                if run_data.get("best_features") is not None
-                else [
-                    f
-                    for f, bit in zip(feature_names if feature_names is not None else [], run_data.get("best_ind", []))
-                    if bit == 1
-                ]
-            )  # Extract features for this run
-            run_row = dict(base_row)  # Create row for this run
-
-            run_row.update({"classifier": "RandomForest"})  # Set classifier
-            run_row.update(metrics_to_dict(run_metrics))  # Add run metrics
-            run_row.update(
-                {"best_features": json.dumps(run_features, ensure_ascii=False), "run_index": idx}
-            )  # Add best features and run index
-            rows.append(run_row)  # Add run row to rows
-
-    return rows  # Return consolidated rows
-
 
 def format_value(value):
     """
