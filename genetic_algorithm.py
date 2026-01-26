@@ -45,6 +45,7 @@ import datetime  # For timestamping
 import glob  # For file pattern matching
 import hashlib  # For generating state identifiers
 import json  # For structured JSON output and parsing
+import math  # For mathematical operations
 import matplotlib.pyplot as plt  # For plotting graphs
 import multiprocessing  # For parallel fitness evaluation
 import numpy as np  # For numerical operations
@@ -64,7 +65,7 @@ import warnings  # For suppressing warnings
 from colorama import Style  # For coloring the terminal
 from deap import base, creator, tools, algorithms  # For the genetic algorithm
 from functools import partial  # For creating partial functions
-from joblib import load  # For loading exported models
+from joblib import dump, load  # For exporting and importing models
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.ensemble import RandomForestClassifier  # For the machine learning model
@@ -2049,6 +2050,24 @@ def build_rows_list(rf_metrics, best_features, runs_list, feature_names, base_ro
     return rows  # Return consolidated rows
 
 
+def format_value(value):
+    """
+    Format a numeric value to 4 decimal places, or return None if not possible.
+    
+    :param value: Numeric value
+    :return: Formatted string or None
+    """
+
+    try:  # Try to format the value
+        if value is None:  # If value is None
+            return None  # Return None
+        v = float(value)  # Convert to float
+        truncated = math.trunc(v * 10000) / 10000.0  # Truncate to 4 decimal places
+        return f"{truncated:.4f}"  # Return formatted string
+    except Exception:  # On failure
+        return None  # Return None
+
+
 def metrics_to_dict(metrics):
     """
     Convert a metrics tuple to a standardized dictionary.
@@ -2072,13 +2091,13 @@ def metrics_to_dict(metrics):
     acc, prec, rec, f1, fpr, fnr, elapsed = metrics  # Unpack metrics
 
     return {
-        "accuracy": float(round(acc, 4)),  # Accuracy
-        "precision": float(round(prec, 4)),  # Precision
-        "recall": float(round(rec, 4)),  # Recall
-        "f1_score": float(round(f1, 4)),  # F1 Score
-        "fpr": float(round(fpr, 4)),  # False Positive Rate
-        "fnr": float(round(fnr, 4)),  # False Negative Rate
-        "elapsed_time_s": int(round(elapsed)),  # Elapsed time in seconds
+        "accuracy": format_value(acc),  # Accuracy
+        "precision": format_value(prec),  # Precision
+        "recall": format_value(rec),  # Recall
+        "f1_score": format_value(f1),  # F1 Score
+        "fpr": format_value(fpr),  # False Positive Rate
+        "fnr": format_value(fnr),  # False Negative Rate
+        "elapsed_time_s": format_value(elapsed),  # Elapsed time in seconds
     }
 
 
@@ -2420,7 +2439,7 @@ def save_results(
     X_final = X_scaled[:, sel_indices] if sel_indices else X_scaled
     final_model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)
     final_model.fit(X_final, y)
-    from joblib import dump
+    
     dump(final_model, model_path)
     dump(scaler, scaler_path)
     with open(features_path, "w", encoding="utf-8") as fh:
