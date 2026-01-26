@@ -132,7 +132,8 @@ GA_RESULTS_CSV_COLUMNS = [  # Columns for the results CSV
     "f1_score",
     "fpr",
     "fnr",
-    "elapsed_time_s",
+    "training_time_s",
+    "testing_time_s",
     "best_features",
     "rfe_ranking",
 ]
@@ -2442,7 +2443,9 @@ def save_results(
     sel_indices = [i for i, f in enumerate(feature_names) if f in best_features]
     X_final = X_scaled[:, sel_indices] if sel_indices else X_scaled
     final_model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)
+    start_train = time.time()
     final_model.fit(X_final, y)
+    training_time_s = time.time() - start_train
 
     dump(final_model, model_path)
     dump(scaler, scaler_path)
@@ -2459,6 +2462,7 @@ def save_results(
     eval_metrics = None
     try:
         # Evaluate on full data using selected features
+        start_test = time.time()
         y_pred = final_model.predict(X_final)
         acc = accuracy_score(y, y_pred)
         prec = precision_score(y, y_pred, average="weighted", zero_division=0)
@@ -2494,8 +2498,8 @@ def save_results(
             total_support = float(supports.sum()) if supports.sum() > 0 else 1.0
             fpr = float(sum(v * s for v, s in fprs) / total_support)
             fnr = float(sum(v * s for v, s in fnrs) / total_support)
-        elapsed = None  # Not timing here, but could add
-        eval_metrics = (acc, prec, rec, f1, fpr, fnr, 0.0)
+        testing_time_s = time.time() - start_test
+        eval_metrics = (acc, prec, rec, f1, fpr, fnr, testing_time_s)
     except Exception:
         eval_metrics = (None, None, None, None, None, None, None)
 
@@ -2526,7 +2530,8 @@ def save_results(
         "f1_score": format_value(eval_metrics[3]) if eval_metrics[3] is not None else None,
         "fpr": format_value(eval_metrics[4]) if eval_metrics[4] is not None else None,
         "fnr": format_value(eval_metrics[5]) if eval_metrics[5] is not None else None,
-        "elapsed_time_s": format_value(eval_metrics[6]) if eval_metrics[6] is not None else None,
+        "training_time_s": int(round(training_time_s)),
+        "testing_time_s": int(round(testing_time_s)),
         "cv_method": cv_method,
         "best_features": json.dumps(best_features),
         "rfe_ranking": json.dumps(rfe_ranking),
