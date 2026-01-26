@@ -2345,7 +2345,13 @@ def save_results(
     output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/"  # Directory to save outputs
     os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
 
-    rf_metrics = metrics if metrics is not None else None  # Use provided metrics if available
+    if metrics is not None:
+        if len(metrics) >= 12:
+            rf_metrics = metrics[:12]
+        else:
+            rf_metrics = None
+    else:
+        rf_metrics = None  # Use provided metrics if available
 
     if rf_metrics is None and X_test is not None and y_test is not None:  # If no metrics provided, evaluate on test set
         rf_metrics = evaluate_individual(best_ind, X, y, X_test, y_test)  # Evaluate best individual
@@ -2385,6 +2391,7 @@ def save_results(
     X_scaled = scaler.fit_transform(df_features.values)
     sel_indices = [i for i, f in enumerate(feature_names) if f in best_features]
     X_final = X_scaled[:, sel_indices] if sel_indices else X_scaled
+    X_test_selected = X_test[:, sel_indices] if sel_indices else X_test
     final_model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)
     start_train = time.time()
     final_model.fit(X_final, y)
@@ -2404,16 +2411,16 @@ def save_results(
 
     eval_metrics = None
     try:
-        # Evaluate on full data using selected features
+        # Evaluate on test data using selected features
         start_test = time.time()
-        y_pred = final_model.predict(X_final)
-        acc = accuracy_score(y, y_pred)
-        prec = precision_score(y, y_pred, average="weighted", zero_division=0)
-        rec = recall_score(y, y_pred, average="weighted", zero_division=0)
-        f1 = f1_score(y, y_pred, average="weighted", zero_division=0)
+        y_pred = final_model.predict(X_test_selected)
+        acc = accuracy_score(y_test, y_pred)
+        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)
+        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)
+        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
         # FPR/FNR (binary or multiclass)
-        if len(np.unique(y)) == 2:
-            cm = confusion_matrix(y, y_pred)
+        if len(np.unique(y_test)) == 2:
+            cm = confusion_matrix(y_test, y_pred)
             if cm.shape == (2, 2):
                 tn, fp, fn, tp = cm.ravel()
                 fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
@@ -2423,7 +2430,7 @@ def save_results(
                 fpr = float(cm.sum() - np.trace(cm)) / float(total) if total > 0 else 0
                 fnr = fpr
         else:
-            cm = confusion_matrix(y, y_pred)
+            cm = confusion_matrix(y_test, y_pred)
             supports = cm.sum(axis=1)
             fprs = []
             fnrs = []
@@ -2456,29 +2463,31 @@ def save_results(
 
     run_results = [{
         "timestamp": timestamp,
-        "dataset": os.path.relpath(csv_path),
-        "dataset_path": os.path.relpath(csv_path),
+        "tool": "Genetic Algorithm",
         "run_index": "best",
-        "population_size": best_pop_size,
-        "n_generations": n_generations,
-        "cxpb": cxpb,
-        "mutpb": mutpb,
-        "n_train": n_train,
-        "n_test": n_test,
-        "train_test_ratio": test_frac,
-        "classifier": final_model.__class__.__name__,
-        "accuracy": format_value(eval_metrics[0]) if eval_metrics[0] is not None else None,
-        "precision": format_value(eval_metrics[1]) if eval_metrics[1] is not None else None,
-        "recall": format_value(eval_metrics[2]) if eval_metrics[2] is not None else None,
-        "f1_score": format_value(eval_metrics[3]) if eval_metrics[3] is not None else None,
-        "fpr": format_value(eval_metrics[4]) if eval_metrics[4] is not None else None,
-        "fnr": format_value(eval_metrics[5]) if eval_metrics[5] is not None else None,
+        "model": final_model.__class__.__name__,
+        "dataset": os.path.relpath(csv_path),
+        "hyperparameters": json.dumps(model_params, default=str) if model_params is not None else None,
+        "cv_method": cv_method,
+        "train_test_split": f"{1-test_frac:.0%}/{test_frac:.0%}" if test_frac is not None else "80/20",
+        "scaling": "StandardScaler",
+        "cv_accuracy": format_value(rf_metrics[0]) if rf_metrics and len(rf_metrics) > 0 else None,
+        "cv_precision": format_value(rf_metrics[1]) if rf_metrics and len(rf_metrics) > 1 else None,
+        "cv_recall": format_value(rf_metrics[2]) if rf_metrics and len(rf_metrics) > 2 else None,
+        "cv_f1_score": format_value(rf_metrics[3]) if rf_metrics and len(rf_metrics) > 3 else None,
+        "cv_fpr": format_value(rf_metrics[4]) if rf_metrics and len(rf_metrics) > 4 else None,
+        "cv_fnr": format_value(rf_metrics[5]) if rf_metrics and len(rf_metrics) > 5 else None,
+        "test_accuracy": format_value(rf_metrics[6]) if rf_metrics and len(rf_metrics) > 6 else None,
+        "test_precision": format_value(rf_metrics[7]) if rf_metrics and len(rf_metrics) > 7 else None,
+        "test_recall": format_value(rf_metrics[8]) if rf_metrics and len(rf_metrics) > 8 else None,
+        "test_f1_score": format_value(rf_metrics[9]) if rf_metrics and len(rf_metrics) > 9 else None,
+        "test_fpr": format_value(rf_metrics[10]) if rf_metrics and len(rf_metrics) > 10 else None,
+        "test_fnr": format_value(rf_metrics[11]) if rf_metrics and len(rf_metrics) > 11 else None,
         "training_time_s": int(round(training_time_s)),
         "testing_time_s": int(round(testing_time_s)),
-        "cv_method": cv_method,
+        "hardware": json.dumps(get_hardware_specifications()),
         "best_features": json.dumps(best_features),
         "rfe_ranking": json.dumps(rfe_ranking),
-        "hyperparameters": json.dumps(model_params, default=str) if model_params is not None else None,
     }]
     write_consolidated_csv(run_results, output_dir)
 
