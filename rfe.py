@@ -112,7 +112,8 @@ RFE_RESULTS_CSV_COLUMNS = [  # Columns for the RFE results CSV
     "test_f1_score",
     "test_fpr",
     "test_fnr",
-    "elapsed_time_s",
+    "training_time_s",
+    "testing_time_s",
     "hardware",
     "top_features",
     "rfe_ranking",
@@ -637,11 +638,17 @@ def save_rfe_results(csv_path, run_results):
                 except Exception:
                     data[col] = val
 
-        elapsed = r.get("elapsed_time_s") or r.get("elapsed_time")
+        training_time = r.get("training_time_s")
         try:
-            data["elapsed_time_s"] = int(float(elapsed)) if elapsed is not None else None
+            data["training_time_s"] = format_value(float(training_time)) if training_time is not None else None
         except Exception:
-            data["elapsed_time_s"] = None
+            data["training_time_s"] = None
+
+        testing_time = r.get("testing_time_s")
+        try:
+            data["testing_time_s"] = format_value(float(testing_time)) if testing_time is not None else None
+        except Exception:
+            data["testing_time_s"] = None
 
         try:
             data["top_features"] = json.dumps(r.get("top_features") or [], ensure_ascii=False)
@@ -938,7 +945,8 @@ def run_rfe(csv_path):
                 "test_f1_score": round(eval_metrics[3], 4),
                 "test_fpr": round(eval_metrics[4], 4),
                 "test_fnr": round(eval_metrics[5], 4),
-                "elapsed_time_s": round(eval_metrics[6], 2),
+                "training_time_s": float(metrics_tuple[6]),
+                "testing_time_s": float(eval_metrics[6]),
                 "top_features": json.dumps(top_features),
                 "rfe_ranking": json.dumps(sorted_rfe_ranking),
             }
@@ -1059,7 +1067,8 @@ def run_rfe(csv_path):
             "test_f1_score": round(eval_metrics[3], 4),
             "test_fpr": round(eval_metrics[4], 4),
             "test_fnr": round(eval_metrics[5], 4),
-            "elapsed_time_s": round(eval_metrics[6], 2),
+            "training_time_s": float(total_elapsed),
+            "testing_time_s": float(eval_metrics[6]),
             "top_features": json.dumps(top_features),  # JSON-encoded list of majority-selected features
             "rfe_ranking": json.dumps(sorted_rfe_ranking),  # JSON-encoded averaged and sorted rankings
         }
