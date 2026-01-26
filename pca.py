@@ -116,7 +116,7 @@ PCA_RESULTS_CSV_COLUMNS = [  # Columns for the PCA results CSV
     "test_fpr",
     "test_fnr",
     "elapsed_time_s",
-    "Hardware",
+    "hardware",
 ]
 
 # Logger Setup:
@@ -574,7 +574,7 @@ def save_pca_results(csv_path, all_results):
     comparison_df = pd.DataFrame(rows)  # Create DataFrame from rows
     csv_output = f"{output_dir}/PCA_Results.csv"  # Output CSV path
 
-    comparison_df = populate_hardware_column(comparison_df, column_name="Hardware")  # Add hardware specs column
+    comparison_df = populate_hardware_column(comparison_df, column_name="hardware")  # Add hardware specs column (lowercase)
 
     try:
         comparison_df = comparison_df.reindex(columns=PCA_RESULTS_CSV_COLUMNS)
