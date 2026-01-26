@@ -2028,7 +2028,6 @@ def build_base_row(
     }
 
 
-
 def format_value(value):
     """
     Format a numeric value to 4 decimal places, or return None if not possible.
@@ -2045,39 +2044,6 @@ def format_value(value):
         return f"{truncated:.4f}"  # Return formatted string
     except Exception:  # On failure
         return None  # Return None
-
-
-def metrics_to_dict(metrics):
-    """
-    Convert a metrics tuple to a standardized dictionary.
-
-    :param metrics: Metrics tuple in the form (accuracy, precision, recall, f1, fpr, fnr, elapsed_time)
-              or None.
-    :return: Dictionary with float values for each metric or None when input is falsy.
-    """
-
-    if not metrics:  # If metrics is None or falsy, return explicit keys with None
-        return {
-            "accuracy": None,
-            "precision": None,
-            "recall": None,
-            "f1_score": None,
-            "fpr": None,
-            "fnr": None,
-            "elapsed_time_s": None,
-        }
-
-    acc, prec, rec, f1, fpr, fnr, elapsed = metrics  # Unpack metrics
-
-    return {
-        "accuracy": format_value(acc),  # Accuracy
-        "precision": format_value(prec),  # Precision
-        "recall": format_value(rec),  # Recall
-        "f1_score": format_value(f1),  # F1 Score
-        "fpr": format_value(fpr),  # False Positive Rate
-        "fnr": format_value(fnr),  # False Negative Rate
-        "elapsed_time_s": format_value(elapsed),  # Elapsed time in seconds
-    }
 
 
 def normalize_elapsed_column_df(df):
