@@ -134,6 +134,7 @@ GA_RESULTS_CSV_COLUMNS = [  # Columns for the results CSV
     "test_fnr",
     "training_time_s",
     "testing_time_s",
+    "elapsed_run_time",
     "hardware",
     "best_features",
     "rfe_ranking",
@@ -2298,6 +2299,7 @@ def save_results(
     runs_list=None,
     cxpb=None,
     mutpb=None,
+    elapsed_run_time=None,
 ):
     """
     Persist the GA best-result information to disk (consolidated CSV and auxiliary files).
@@ -2318,6 +2320,9 @@ def save_results(
     :param n_generations: Number of GA generations used (for metadata only).
     :param best_pop_size: Population size that yielded the best result (for metadata only).
     :param runs_list: Optional list of per-run results (each a dict with keys 'metrics','best_features' or 'best_ind').
+    :param cxpb: Crossover probability used in the GA (for metadata only).
+    :param mutpb: Mutation probability used in the GA (for metadata only).
+    :param elapsed_run_time: Optional total elapsed time for the GA run (for metadata only
     :return: Dictionary with saved metadata: {
                 "best_features": list,
                 "rf_metrics": tuple or None,
@@ -2485,6 +2490,7 @@ def save_results(
         "test_fnr": format_value(rf_metrics[11]) if rf_metrics and len(rf_metrics) > 11 else None,
         "training_time_s": int(round(training_time_s)),
         "testing_time_s": int(round(testing_time_s)),
+        "elapsed_run_time": int(round(elapsed_run_time)) if elapsed_run_time is not None else None,
         "hardware": json.dumps(get_hardware_specifications()),
         "best_features": json.dumps(best_features),
         "rfe_ranking": json.dumps(rfe_ranking),
@@ -2672,6 +2678,7 @@ def run_population_sweep(
     for p in range(min_pop, max_pop + 1):  # For each population size
         results[p] = {"runs": [], "avg_metrics": None, "common_features": set()}  # Initialize results entry
 
+    start_run_time = time.time()  # Start timing the entire run process
     for run in range(runs):  # For each run
         for pop_size in range(min_pop, max_pop + 1):  # For each population size
             result = run_single_ga_iteration(
@@ -2701,6 +2708,8 @@ def run_population_sweep(
         results, min_pop, max_pop, bot, dataset_name
     )  # Aggregate results and find best
 
+    elapsed_run_time = time.time() - start_run_time  # Calculate elapsed time for the entire run process
+    
     if best_result:  # If a best result was found
         best_pop_size, runs_list, common_features = best_result  # Unpack the best result
         print(
@@ -2727,6 +2736,7 @@ def run_population_sweep(
             runs_list=runs_list,
             cxpb=cxpb,
             mutpb=mutpb,
+            elapsed_run_time=elapsed_run_time,
         )  # Save the best results
         analyze_results(saved, X_train, y_train, feature_names, csv_path)  # Analyze the saved results
     else:  # If no valid result was found
