@@ -52,6 +52,7 @@ import atexit  # For playing a sound when the program finishes
 import concurrent.futures  # For parallel execution
 import datetime  # For timestamping
 import json  # For serializing hyperparameters and other metadata
+import math  # For mathematical operations
 import numpy as np  # For numerical operations
 import os  # For file and directory operations
 import pandas as pd  # For data manipulation
@@ -99,7 +100,6 @@ PCA_RESULTS_CSV_COLUMNS = [  # Columns for the PCA results CSV
     "model",
     "dataset",
     "hyperparameters",
-    "method",
     "cv_method",
     "train_test_split",
     "scaling",
@@ -512,9 +512,13 @@ def format_value(value):
     :param value: Numeric value
     :return: Formatted string or None
     """
-    
+
     try:  # Try to format the value
-        return f"{float(value):.4f}" if value is not None else None  # Format to 4 decimal places
+        if value is None:  # If value is None
+            return None  # Return None
+        v = float(value)  # Convert to float
+        truncated = math.trunc(v * 10000) / 10000.0  # Truncate to 4 decimal places
+        return f"{truncated:.4f}"  # Return formatted string
     except Exception:  # On failure
         return None  # Return None
             
@@ -533,8 +537,7 @@ def save_pca_results(csv_path, all_results):
     output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/PCA/"  # Output directory under PCA subdir
     os.makedirs(output_dir, exist_ok=True)  # Create output directory if it doesn't exist
 
-    eval_method = "10-Fold Stratified CV"  # Evaluation method
-    eval_model = "Random Forest (100 trees)"  # Evaluation model
+    eval_model = "Random Forest"  # Evaluation model
     train_test_split = "80/20 split"  # Train/test split
     scaling = "StandardScaler"  # Scaling method
 
@@ -549,7 +552,6 @@ def save_pca_results(csv_path, all_results):
             "model": eval_model,
             "dataset": os.path.relpath(csv_path),
             "hyperparameters": json.dumps(evaluator_hyperparams),
-            "method": eval_method,
             "cv_method": cv_method,
             "train_test_split": train_test_split,
             "scaling": scaling,
