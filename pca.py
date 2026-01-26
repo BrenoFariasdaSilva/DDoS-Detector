@@ -116,7 +116,8 @@ PCA_RESULTS_CSV_COLUMNS = [  # Columns for the PCA results CSV
     "test_f1_score",
     "test_fpr",
     "test_fnr",
-    "elapsed_time_s",
+    "training_time_s",
+    "testing_time_s",
     "hardware",
 ]
 
@@ -278,6 +279,7 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
 
     pca = PCA(n_components=n_components, random_state=42)  # Initialize PCA
 
+    start_total = time.time()  # Start total training time (including PCA fit, CV, final fit)
     X_train_pca = pca.fit_transform(X_train)  # Fit PCA on training data and transform
     X_test_pca = pca.transform(X_test)  # Transform test data using the fitted PCA
 
@@ -321,10 +323,12 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
     cv_rec_mean = np.mean(cv_recs)  # Mean CV metrics
     cv_f1_mean = np.mean(cv_f1s)  # Mean CV metrics
 
-    start_time = time.time()  # Start timing for test set evaluation
     model.fit(X_train_pca, y_train)  # Fit model on full training data
+    training_time_s = time.time() - start_total  # Training time (PCA fit, CV, final fit)
+
+    start_predict = time.time()  # Start timing for inference
     y_pred = model.predict(X_test_pca)  # Predict on test data
-    elapsed_time = time.time() - start_time  # Elapsed time for test evaluation
+    testing_time_s = time.time() - start_predict  # Testing time (inference only)
 
     acc = accuracy_score(y_test, y_pred)  # Calculate test metrics
     prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test metrics
@@ -353,7 +357,8 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
         "test_f1_score": f1,
         "test_fpr": fpr,
         "test_fnr": fnr,
-        "elapsed_time_s": elapsed_time,
+        "training_time_s": training_time_s,
+        "testing_time_s": testing_time_s,
         "pca_object": pca,
         "scaler": scaler_export,
         "trained_classifier": model,
@@ -403,7 +408,7 @@ def print_pca_results(results):
     print(f"  {BackgroundColors.GREEN}Test FPR: {BackgroundColors.CYAN}{results['test_fpr']:.4f}{Style.RESET_ALL}")
     print(f"  {BackgroundColors.GREEN}Test FNR: {BackgroundColors.CYAN}{results['test_fnr']:.4f}{Style.RESET_ALL}")
     print(
-        f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{results['elapsed_time_s']:.2f}s{Style.RESET_ALL}"
+        f"  {BackgroundColors.GREEN}Training Time: {BackgroundColors.CYAN}{results['training_time_s']:.2f}s  Testing Time: {BackgroundColors.CYAN}{results['testing_time_s']:.2f}s{Style.RESET_ALL}"
     )
 
 
@@ -569,7 +574,8 @@ def save_pca_results(csv_path, all_results):
             "test_f1_score": format_value(results.get("test_f1_score")),
             "test_fpr": format_value(results.get("test_fpr")),
             "test_fnr": format_value(results.get("test_fnr")),
-            "elapsed_time_s": int(results.get("elapsed_time_s")),
+            "training_time_s": format_value(results.get("training_time_s")),
+            "testing_time_s": format_value(results.get("testing_time_s")),
         }
         rows.append(row)
 
