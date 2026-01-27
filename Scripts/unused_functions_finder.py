@@ -1,49 +1,43 @@
 """
 ================================================================================
-<PROJECT OR SCRIPT TITLE>
+Python Unused Functions Detector
 ================================================================================
 Author      : Breno Farias da Silva
-Created     : <YYYY-MM-DD>
+Created     : 2026-01-27
 Description :
-    <Provide a concise and complete overview of what this script does.>
-    <Mention its purpose, scope, and relevance to the larger project.>
+    This script scans Python files under a specified root directory (ROOT_DIR)
+    and detects functions that are defined but never used within the project.
 
     Key features include:
-        - <Feature 1 — e.g., automatic data loading and preprocessing>
-        - <Feature 2 — e.g., model training and evaluation>
-        - <Feature 3 — e.g., visualization or report generation>
-        - <Feature 4 — e.g., logging or notification system>
-        - <Feature 5 — e.g., integration with other modules or datasets>
+        - AST-based parsing for precise detection of function definitions and calls
+        - Recursive scanning of Python files (skips directories in IGNORE_DIRS)
+        - JSON report generation listing unused functions
+        - Integration with logging and terminal output
+        - Cross-platform handling and sound notification on completion
 
 Usage:
-    1. <Explain any configuration steps before running, such as editing variables or paths.>
-    2. <Describe how to execute the script — typically via Makefile or Python.>
-            $ make <target>   or   $ python <script_name>.py
-    3. <List what outputs are expected or where results are saved.>
+    1. Edit ROOT_DIR if necessary to point to the target directory.
+    2. Execute the script:
+        $ python detect_unused_functions.py
+    3. Verify the generated JSON report for unused functions.
 
 Outputs:
-    - <Output file or directory 1 — e.g., results.csv>
-    - <Output file or directory 2 — e.g., Feature_Analysis/plots/>
-    - <Output file or directory 3 — e.g., logs/output.txt>
+    - Scripts/unused_functions.json — structured report of unused functions
 
 TODOs:
-    - <Add a task or improvement — e.g., implement CLI argument parsing.>
-    - <Add another improvement — e.g., extend support to Parquet files.>
-    - <Add optimization — e.g., parallelize evaluation loop.>
-    - <Add robustness — e.g., error handling or data validation.>
+    - Add CLI arguments for root directory and output path
+    - Improve detection across multiple modules and imported functions
+    - Add logging instead of print statements
+    - Include function docstrings and line numbers in the report
 
 Dependencies:
-    - Python >= <version>
-    - <Library 1 — e.g., pandas>
-    - <Library 2 — e.g., numpy>
-    - <Library 3 — e.g., scikit-learn>
-    - <Library 4 — e.g., matplotlib, seaborn, tqdm, colorama>
+    - Python >= 3.8
+    - Standard library only (os, sys, ast, json, pathlib, typing, datetime, atexit, colorama)
 
 Assumptions & Notes:
-    - <List any key assumptions — e.g., last column is the target variable.>
-    - <Mention data format — e.g., CSV files only.>
-    - <Mention platform or OS-specific notes — e.g., sound disabled on Windows.>
-    - <Note on output structure or reusability.>
+    - ROOT_DIR contains Python source files to scan
+    - Files in IGNORE_DIRS are skipped
+    - The JSON report only includes functions defined and never called
 """
 
 import atexit  # For playing a sound when the program finishes
