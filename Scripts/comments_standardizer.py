@@ -143,19 +143,44 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
-def standardize_comment(raw: str) -> str:
+def capitalize_comment_text(raw_comment: str) -> str:
     """
-    Receives a full comment token starting with "#".
-    Ensures exactly one space after "#" and capitalizes the first letter of the text.
+    Standardize the text of a Python comment by ensuring capitalization and spacing after "#".
 
-    :param raw: Original comment token string.
+    :param raw_comment: Original comment token string.
     :return: Standardized comment string.
     """
 
-    body = raw[1:].strip()  # Remove "#" and trim spaces
-    if not body:  # Empty comment
-        return "#"  # Return just "#"
-    return "# " + body[0].upper() + body[1:]  # Standardize comment
+    body = raw_comment[1:].strip()  # Remove "#"" and trim surrounding whitespace
+    if not body:  # Handle empty comments like "#""
+        return "#"
+    return "# " + body[0].upper() + body[1:]  # Capitalize first letter and ensure one space
+
+
+def fix_inline_comment_whitespace(original_line: str, standardized_comment: str) -> str:
+    """
+    Fix whitespace before inline comments to ensure exactly one space before "#".
+
+    :param original_line: The original source code line containing the comment.
+    :param standardized_comment: The standardized comment text.
+    :return: Comment string with corrected whitespace if needed.
+    """
+
+    if "#" not in original_line:  # If no comment exists in the line, return as-is
+        return standardized_comment
+
+    hash_idx = original_line.find("#")  # Find index of "#"
+    spaces_before = 0  # Count spaces before "#"
+    i = hash_idx - 1  # Start checking characters before "#"
+
+    while i >= 0 and original_line[i] == " ":  # Count consecutive spaces before "#"
+        spaces_before += 1
+        i -= 1
+
+    if spaces_before == 1:  # If there is already exactly one space before "#"
+        return " " + standardized_comment  # Preserve single space before comment
+
+    return standardized_comment  # Otherwise, return comment without extra prefix
 
 
 def process_file(file_path: str) -> None:
@@ -175,24 +200,15 @@ def process_file(file_path: str) -> None:
 
     for tok in tokens:  # Iterate through all tokens
         if tok.type == tokenize.COMMENT:  # Verify if the token is a comment
-            new_comment = standardize_comment(tok.string)  # Standardize the comment
+            standardized_comment = capitalize_comment_text(tok.string)  # Standardize comment text
 
-            # Determine whether this is a full-line comment or inline.
             line = tok.line or ""  # Get the full line of code
-            is_full_line = line.strip().startswith("#")  # Verify if it's a full-line comment
+            is_full_line = line.strip().startswith("#")  # Check if it is a full-line comment
 
-            tok_str = new_comment  # Start with the standardized comment
+            tok_str = standardized_comment  # Start with standardized comment
 
-            if not is_full_line and "#" in line:  # Inline comment
-                hash_idx = line.find("#")  # Find index of '#'
-                spaces_before = 0  # Count spaces before '#'
-                i = hash_idx - 1  # Start checking before '#'
-                while i >= 0 and line[i] == " ":  # Count spaces before '#'
-                    spaces_before += 1  # Increment space count
-                    i -= 1  # Move left
-
-                if spaces_before == 1:  # Exactly one space before '#'
-                    tok_str = " " + new_comment  # Prepend single space
+            if not is_full_line:  # Handle inline comments only
+                tok_str = fix_inline_comment_whitespace(line, standardized_comment)  # Fix whitespace before "#"
 
             if tok_str != tok.string:  # If the comment was modified
                 tok = tokenize.TokenInfo(  # Create a new modified token
