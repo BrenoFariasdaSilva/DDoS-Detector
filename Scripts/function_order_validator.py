@@ -98,6 +98,62 @@ RUN_FUNCTIONS = {
     "Play Sound": True,  # Set to True to play a sound when the program finishes
 }
 
+
+# Class Definitions:
+
+class FunctionASTVisitor(ast.NodeVisitor):
+    """
+    AST visitor class to collect function definitions and function calls
+    from a Python source file.
+
+    Attributes:
+        defined_funcs (List[str]): Names of functions defined in the file.
+        called_funcs_map (Dict[str, List[str]]): Map of function names to functions they call.
+        current_function (str | None): Tracks the function currently being visited.
+    """
+
+    def __init__(self):
+        """
+        Initializes the FunctionASTVisitor instance with empty lists and dictionaries
+        to store function definitions and call relationships.
+        """
+        
+        self.defined_funcs: List[str] = []  # List to store defined function names
+        self.called_funcs_map: Dict[str, List[str]] = {}  # Map function -> functions it calls
+        self.current_function: str | None = None  # Currently visited function
+
+    def visit_FunctionDef(self, node):
+        """
+        Visits a function definition node in the AST.
+
+        Records the function name, initializes its call list, and traverses child nodes.
+
+        :param node: ast.FunctionDef node representing a function definition
+        :return: None
+        """
+        
+        func_name = node.name  # Get the function name
+        self.defined_funcs.append(func_name)  # Add the function name to the defined functions list
+        self.current_function = func_name  # Set the current function being visited
+        self.called_funcs_map[func_name] = []  # Initialize the call list for this function
+        self.generic_visit(node)  # Visit child nodes
+        self.current_function = None  # Reset the current function
+
+    def visit_Call(self, node):
+        """
+        Visits a function call node in the AST.
+
+        If the call is a simple function call (not a method), adds it to the current function's call list.
+
+        :param node: ast.Call node representing a function call
+        :return: None
+        """
+        
+        if isinstance(node.func, ast.Name) and self.current_function:  # If the call is a simple function call and we are inside a function
+            self.called_funcs_map[self.current_function].append(node.func.id)  # Add the called function to the current function's call list
+        self.generic_visit(node)  # Visit child nodes
+        
+
 # Functions Definitions:
 
 
