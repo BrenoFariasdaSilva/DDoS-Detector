@@ -178,4 +178,4 @@ clean:
 	find . -type f -name '*.pyc' -delete || del /S /Q *.pyc 2>nul
 	find . -type d -name '__pycache__' -delete || rmdir /S /Q __pycache__ 2>nul
 
-.PHONY: all main clean dependencies check-build fix-style generate_requirements dataset_converter dataset_descriptor download_datasets genetic_algorithm hyperparameters_optimization pca rfe stacking telegram wgangp
+.PHONY: all check-build clean comments_standardizer dataset_converter dataset_descriptor dependencies download_datasets fix-style generate_requirements genetic_algorithm hyperparameters_optimization main pca rfe stacking telegram wgangp
