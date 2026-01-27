@@ -5,44 +5,44 @@ Classifiers Hyperparameter Optimization
 Author      : Breno Farias da Silva
 Created     : 2025-12-08
 Description :
-   This script performs hyperparameter optimization for multiple machine learning
-   classifiers using GridSearchCV on DDoS detection datasets. It uses only the
-   features selected by the Genetic Algorithm for optimal performance. The script
-   evaluates Random Forest, SVM, XGBoost, Logistic Regression, KNN, Nearest Centroid,
-   Gradient Boosting, LightGBM, and MLP Neural Network classifiers.
+    This script performs hyperparameter optimization for multiple machine learning
+    classifiers using GridSearchCV on DDoS detection datasets. It uses only the
+    features selected by the Genetic Algorithm for optimal performance. The script
+    evaluates Random Forest, SVM, XGBoost, Logistic Regression, KNN, Nearest Centroid,
+    Gradient Boosting, LightGBM, and MLP Neural Network classifiers.
 
-   Key features include:
-      - Automatic loading of Genetic Algorithm selected features
-      - Data preprocessing with NaN/infinite value removal and zero-variance filtering
-      - Comprehensive hyperparameter search grids for each classifier
+    Key features include:
+        - Automatic loading of Genetic Algorithm selected features
+        - Data preprocessing with NaN/infinite value removal and zero-variance filtering
+        - Comprehensive hyperparameter search grids for each classifier
     - Cross-validation with stratified K-fold (cv=10) for robust evaluation
-      - F1-score optimization (weighted average for multi-class problems)
-      - Results saved to CSV with best parameters and cross-validation scores
-      - Progress tracking with tqdm progress bars
-      - Sound notification upon completion
+        - F1-score optimization (weighted average for multi-class problems)
+        - Results saved to CSV with best parameters and cross-validation scores
+        - Progress tracking with tqdm progress bars
+        - Sound notification upon completion
 
 Usage:
-   - Configure `DATASETS` or edit `main()` to point to dataset directories.
-   - Run: `python hyperparameters_optimization.py` (or integrate from other code).
+    - Configure `DATASETS` or edit `main()` to point to dataset directories.
+    - Run: `python hyperparameters_optimization.py` (or integrate from other code).
 
 Outputs:
-   - Classifiers_Hyperparameters/<dataset>_Hyperparameter_Optimization_Results.csv
-     containing best parameters, best CV F1 and timing for each model tested.
+    - Classifiers_Hyperparameters/<dataset>_Hyperparameter_Optimization_Results.csv
+        containing best parameters, best CV F1 and timing for each model tested.
 
 TODOs:
-   - Add `argparse` to control dataset selection, CV folds, and search strategy
-   - Add randomized/Bayesian search alternatives for large parameter grids
-   - Improve resumability for long-running searches and better exception traces
+    - Add `argparse` to control dataset selection, CV folds, and search strategy
+    - Add randomized/Bayesian search alternatives for large parameter grids
+    - Improve resumability for long-running searches and better exception traces
 
 Dependencies:
-   - Python >= 3.8
-   - pandas, numpy, scikit-learn, xgboost, lightgbm, tqdm, colorama
-   - psutil (optional, used for hardware reporting)
+    - Python >= 3.8
+    - pandas, numpy, scikit-learn, xgboost, lightgbm, tqdm, colorama
+    - psutil (optional, used for hardware reporting)
 
 Assumptions & Notes:
-   - Input CSV: last column is the target, numeric features only are used
-   - Genetic Algorithm results must be present under `Feature_Analysis/`
-   - Outputs are written next to each processed dataset directory
+    - Input CSV: last column is the target, numeric features only are used
+    - Genetic Algorithm results must be present under `Feature_Analysis/`
+    - Outputs are written next to each processed dataset directory
 """
 
 import argparse  # For command-line arguments
