@@ -5,62 +5,62 @@ Modular DDoS Detection Evaluation Framework (main.py)
 Author      : Breno Farias da Silva
 Created     : 2025-10-06
 Description :
-        This module implements a modular evaluation framework for DDoS
-        detection datasets. It centralizes dataset loading, preprocessing,
-        training and evaluation of multiple classifiers, and exports detailed
-        reports for reproducible experiments. The pipeline supports ARFF, CSV,
-        TXT and Parquet inputs and integrates explainability via SHAP and LIME.
+    This module implements a modular evaluation framework for DDoS
+    detection datasets. It centralizes dataset loading, preprocessing,
+    training and evaluation of multiple classifiers, and exports detailed
+    reports for reproducible experiments. The pipeline supports ARFF, CSV,
+    TXT and Parquet inputs and integrates explainability via SHAP and LIME.
 
-        Key features and behavior:
-                - Automatic detection of label column and common non-feature fields
-                - Optional feature selection support (Genetic Algorithm / RFE / PCA)
-                - Stratified train/test splits or k-fold cross-validation
-                - Per-dataset Results directory with classification and extended metrics
-                - SHAP / LIME explanation exports for selected models
-                - Robust ARFF loading with nominal value sanitization
+    Key features and behavior:
+        - Automatic detection of label column and common non-feature fields
+        - Optional feature selection support (Genetic Algorithm / RFE / PCA)
+        - Stratified train/test splits or k-fold cross-validation
+        - Per-dataset Results directory with classification and extended metrics
+        - SHAP / LIME explanation exports for selected models
+        - Robust ARFF loading with nominal value sanitization
 
-        Important configuration constants in this file:
-                - `SAMPLE_SIZE` (None|int): limit rows for quicker tests (None = full)
-                - `OUTPUT_DIR`: base directory for aggregated outputs
-                - `VERBOSE`: enable additional stdout diagnostics
-                - `RUN_FUNCTIONS` controls optional behaviors (e.g., play sound)
-                - Downsampling and t-SNE helpers enforce a per-class minimum of
-                  samples when requested (default min ≈ 50) to preserve minority classes
+    Important configuration constants in this file:
+        - `SAMPLE_SIZE` (None|int): limit rows for quicker tests (None = full)
+        - `OUTPUT_DIR`: base directory for aggregated outputs
+        - `VERBOSE`: enable additional stdout diagnostics
+        - `RUN_FUNCTIONS` controls optional behaviors (e.g., play sound)
+        - Downsampling and t-SNE helpers enforce a per-class minimum of
+            samples when requested (default min ≈ 50) to preserve minority classes
 
 Usage:
-        Configure the `DATASETS` mapping with dataset file paths and optional
-        feature files, then run via the provided Makefile target or directly:
+    Configure the `DATASETS` mapping with dataset file paths and optional
+    feature files, then run via the provided Makefile target or directly:
 
-                python3 main.py
-                # or
-                make main
+        python3 main.py
+        # or
+        make main
 
 Outputs:
-        - Per-model CSV reports: `NN-ModelName-Classification_report.csv`
-        - Per-model extended metrics: `NN-ModelName-Extended_metrics.csv`
-        - Aggregated `Overall_Performance*.csv` under the dataset Results folder
+    - Per-model CSV reports: `NN-ModelName-Classification_report.csv`
+    - Per-model extended metrics: `NN-ModelName-Extended_metrics.csv`
+    - Aggregated `Overall_Performance*.csv` under the dataset Results folder
 
 Notes:
-        - The script is designed for reproducible experiments; results are saved
-          per-dataset under a `Results` subfolder.
-        - The code includes compatibility workarounds for different versions of
-          common libraries (e.g., sklearn t-SNE parameter name differences).
-        - For debugging t-SNE and downsampling behaviour, set `VERBOSE = True`.
+    - The script is designed for reproducible experiments; results are saved
+        per-dataset under a `Results` subfolder.
+    - The code includes compatibility workarounds for different versions of
+        common libraries (e.g., sklearn t-SNE parameter name differences).
+    - For debugging t-SNE and downsampling behaviour, set `VERBOSE = True`.
 
 TODOs:
-        - Add CLI flags for `SAMPLE_SIZE`, `min_class_size`, and toggles such as
-          `CROSS_DATASET_VALIDATE` to make experiments configurable from the CLI.
-        - Add automated unit tests for preprocessing and feature-selection flows.
-        - Optionally parallelize model training and add resumable checkpoints.
+    - Add CLI flags for `SAMPLE_SIZE`, `min_class_size`, and toggles such as
+        `CROSS_DATASET_VALIDATE` to make experiments configurable from the CLI.
+    - Add automated unit tests for preprocessing and feature-selection flows.
+    - Optionally parallelize model training and add resumable checkpoints.
 
 Dependencies:
-        - Python >= 3.9
-        - pandas, numpy, scikit-learn, lightgbm, xgboost, shap, lime, colorama
+    - Python >= 3.9
+    - pandas, numpy, scikit-learn, lightgbm, xgboost, shap, lime, colorama
 
 Outputs (summary):
-        - Model performance reports (.csv)
-        - Extended confusion matrix with detailed class metrics
-        - Aggregated performance summaries by dataset and algorithm
+    - Model performance reports (.csv)
+    - Extended confusion matrix with detailed class metrics
+    - Aggregated performance summaries by dataset and algorithm
 """
 
 import arff as liac_arff  # For loading ARFF files
