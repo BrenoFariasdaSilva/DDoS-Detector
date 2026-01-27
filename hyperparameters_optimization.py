@@ -85,7 +85,7 @@ from sklearn.neighbors import KNeighborsClassifier, NearestCentroid  # For k-nea
 from sklearn.neural_network import MLPClassifier  # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For label encoding and feature scaling
 from sklearn.svm import SVC  # For Support Vector Machine model
-from typing import Any, cast
+from typing import Any, cast, Dict
 
 try:  # Attempt to import ThunderSVM
     from thundersvm import SVC as ThunderSVC  # For ThunderSVM classifier
@@ -1456,30 +1456,51 @@ def process_cached_combinations(
         if cache_key in cache_dict:  # If combination is cached
             cached_count += 1  # Increment cached count
             cached_row = cache_dict[cache_key]  # Get cached result
-            
+
+            # Ensure cached_row is a mapping
+            if not isinstance(cached_row, dict):
+                # Defensive: skip invalid cached entries
+                verbose_output(f"{BackgroundColors.YELLOW}Warning: Invalid cache row for key {cache_key}, skipping.{Style.RESET_ALL}")
+                continue
+
+            # Normalize elapsed time field: prefer 'execution_time', fall back to 'elapsed_time_s'
+            if "execution_time" not in cached_row and "elapsed_time_s" in cached_row:
+                cached_row["execution_time"] = cached_row.get("elapsed_time_s")
+
             # Reconstruct result entry from cache
-            result_entry = OrderedDict([
+            result_entry: Dict[str, Any] = OrderedDict([
                 ("params", params_json),
-                ("execution_time", cached_row.get("elapsed_time_s", 0.0))
+                ("execution_time", cached_row.get("execution_time", 0.0)),
             ])
-            
-            # Add all metrics from cache
-            for metric in ["f1_score", "accuracy", "precision", "recall",
-                          "false_positive_rate", "false_negative_rate",
-                          "true_positive_rate", "true_negative_rate",
-                          "matthews_corrcoef", "roc_auc_score", "cohen_kappa"]:
-                if metric in cached_row:
-                    result_entry[metric] = cached_row[metric]
-            
+
+            # Add all metrics from cache (safely handle missing / NaN values)
+            for metric in [
+                "f1_score",
+                "accuracy",
+                "precision",
+                "recall",
+                "false_positive_rate",
+                "false_negative_rate",
+                "true_positive_rate",
+                "true_negative_rate",
+                "matthews_corrcoef",
+                "roc_auc_score",
+                "cohen_kappa",
+            ]:
+                value = cached_row.get(metric)
+                # Only include the metric if present and not NaN
+                if value is not None and not (isinstance(value, float) and pd.isna(value)):
+                    result_entry[metric] = value
+
             all_results.append(result_entry)  # Add to results
-            
+
             # Update best from cache
-            cached_f1 = cached_row.get("f1_score") or result_entry.get("f1_score")  # FIXED: was "best_cv_f1_score"
+            cached_f1 = cached_row.get("f1_score") or result_entry.get("f1_score")
             if cached_f1 is not None and cached_f1 > best_score:
                 best_score = cached_f1
                 best_params = params_dict
-                best_elapsed = cached_row.get("execution_time", 0.0)  # FIXED: was "elapsed_time_s"
-            
+                best_elapsed = cached_row.get("execution_time", 0.0)
+
             global_counter += 1  # Increment global counter
         
         elif _is_valid_combination(model_name, params_dict):  # If not cached and valid
