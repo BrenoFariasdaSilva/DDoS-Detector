@@ -65,6 +65,17 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)  # Project root directory
+if PROJECT_ROOT not in sys.path:  # Ensure project root is in sys.path
+    sys.path.insert(0, PROJECT_ROOT)  # Insert at the beginning
+from Logger import Logger  # For logging output to both terminal and file
+
+ROOT_DIR = str(Path(__file__).resolve().parent / "..")  # Directory to scan
+IGNORE_DIRS = {  # Directories to ignore during the scan
+    ".assets", ".git", ".github", ".idea", "__pycache__",
+    "Datasets", "env", "Logs", "venv",
+}
+OUTPUT_FILE = os.path.join(ROOT_DIR, "Scripts", "unused_functions_report.json")  # Output JSON file path
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
