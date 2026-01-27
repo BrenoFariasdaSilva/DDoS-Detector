@@ -72,7 +72,7 @@ from tqdm import tqdm  # For progress bar visualization
 from sklearn.preprocessing import StandardScaler, LabelEncoder  # For data preprocessing
 from torch import autograd  # For gradient penalty
 from torch.utils.data import Dataset, DataLoader  # Dataset and DataLoader
-from typing import Any, List, Optional  # For Any type hint
+from typing import Any, List, Optional, cast  # For Any type hint and cast
 
 
 # Macros:
@@ -808,11 +808,12 @@ def train(args):
     # Initialize mixed precision scaler for AMP
     scaler = torch.cuda.amp.GradScaler() if args.use_amp and device.type == 'cuda' else None
 
+    # Create optimizers for generator and discriminator
     opt_D = torch.optim.Adam(
-        D.parameters(), lr=args.lr, betas=(args.beta1, args.beta2)
+        cast(Any, D).parameters(), lr=args.lr, betas=(args.beta1, args.beta2)
     )  # Create optimizer for discriminator
     opt_G = torch.optim.Adam(
-        G.parameters(), lr=args.lr, betas=(args.beta1, args.beta2)
+        cast(Any, G).parameters(), lr=args.lr, betas=(args.beta1, args.beta2)
     )  # Create optimizer for generator
 
     fixed_noise = torch.randn(args.sample_batch, args.latent_dim, device=device)  # Generate fixed noise for inspection
