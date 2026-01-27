@@ -600,19 +600,19 @@ def _is_valid_combination(model_name_local, params_local):
     penalty = params_local.get("penalty")  # Get penalty parameter
     l1_ratio = params_local.get("l1_ratio", 0.0)  # Get l1_ratio parameter (default to 0.0)
 
-    # lbfgs doesn't support l1 or elasticnet penalties
+    # Lbfgs doesn't support l1 or elasticnet penalties
     if solver == "lbfgs" and penalty in ("l1", "elasticnet"):
         return False
     
-    # elasticnet penalty requires saga solver
+    # Elasticnet penalty requires saga solver
     if penalty == "elasticnet" and solver != "saga":
         return False
     
-    # l1 penalty only works with saga and liblinear solvers
+    # L1 penalty only works with saga and liblinear solvers
     if penalty == "l1" and solver not in ("saga", "liblinear"):
         return False
     
-    # l1_ratio is only used with elasticnet penalty - filter out if used with other penalties
+    # L1_ratio is only used with elasticnet penalty - filter out if used with other penalties
     if l1_ratio not in (None, 0.0) and penalty != "elasticnet":
         return False
     
@@ -844,7 +844,7 @@ def get_thundersvm_estimator():
 
     if gpu_available and ThunderSVC is not None:  # If GPU and ThunderSVC available
         try:
-            # cast to Any to avoid static type checking on ThunderSVC constructor
+            # Cast to Any to avoid static type checking on ThunderSVC constructor
             clf = cast(Any, ThunderSVC)(random_state=42, probability=True, gpu_id=0)
             verbose_output(f"{BackgroundColors.GREEN}Using ThunderSVM on GPU (gpu_id=0).{Style.RESET_ALL}")
             return clf
