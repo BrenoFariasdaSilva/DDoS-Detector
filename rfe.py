@@ -5,42 +5,42 @@ Recursive Feature Elimination (RFE) Automation and Feature Analysis Tool (rfe.py
 Author      : Breno Farias da Silva
 Created     : 2025-10-07
 Description :
-   Utility to automate Recursive Feature Elimination (RFE) workflows for
-   structured classification datasets. The module bundles safe dataset
-   loading, preprocessing, scaling, RFE selection (Random Forest base),
-   evaluation and export of structured run results for reproducible analysis.
+    Utility to automate Recursive Feature Elimination (RFE) workflows for
+    structured classification datasets. The module bundles safe dataset
+    loading, preprocessing, scaling, RFE selection (Random Forest base),
+    evaluation and export of structured run results for reproducible analysis.
 
 Core features:
-   - Safe CSV loading with column sanitization and basic validation
-   - Z-score standardization of numeric features prior to RFE
-   - RFE using RandomForestClassifier (configurable number of selected features)
-   - Performance evaluation (accuracy, precision, recall, F1, FPR, FNR)
-   - Export of run results to `Feature_Analysis/RFE_Run_Results.csv` with hardware metadata
-   - Portable: skips platform-specific features on unsupported OS (e.g., sound on Windows)
+    - Safe CSV loading with column sanitization and basic validation
+    - Z-score standardization of numeric features prior to RFE
+    - RFE using RandomForestClassifier (configurable number of selected features)
+    - Performance evaluation (accuracy, precision, recall, F1, FPR, FNR)
+    - Export of run results to `Feature_Analysis/RFE_Run_Results.csv` with hardware metadata
+    - Portable: skips platform-specific features on unsupported OS (e.g., sound on Windows)
 
 Usage:
-   - Set `csv_file` in `main()` or call `run_rfe(csv_path)` programmatically.
-   - Run: `python3 rfe.py` or via the project Makefile target.
+    - Set `csv_file` in `main()` or call `run_rfe(csv_path)` programmatically.
+    - Run: `python3 rfe.py` or via the project Makefile target.
 
 Outputs:
-   - `Feature_Analysis/RFE_Run_Results.csv` summarizing each run
-   - Per-run JSON fields for `top_features` and `rfe_ranking` inside the CSV
+    - `Feature_Analysis/RFE_Run_Results.csv` summarizing each run
+    - Per-run JSON fields for `top_features` and `rfe_ranking` inside the CSV
 
 Notes & conventions:
-   - The last column of the input CSV is treated as the target variable.
-   - Only numeric columns (or coercible-to-numeric) are used for feature ranking.
-   - Defaults: 80/20 train-test split, RandomForest with 100 trees, fixed seed
-   - Toggle `VERBOSE = True` for detailed runtime logs useful during debugging
+    - The last column of the input CSV is treated as the target variable.
+    - Only numeric columns (or coercible-to-numeric) are used for feature ranking.
+    - Defaults: 80/20 train-test split, RandomForest with 100 trees, fixed seed
+    - Toggle `VERBOSE = True` for detailed runtime logs useful during debugging
 
 TODOs:
-   - Add CLI argument parsing for dataset path, `n_select`, and parallel runs.
-   - Support additional estimators (SVM, Gradient Boosting) and compare results.
-   - Integrate automatic handling for categorical and missing data.
-   - Add unit tests for preprocessing and metric computations.
+    - Add CLI argument parsing for dataset path, `n_select`, and parallel runs.
+    - Support additional estimators (SVM, Gradient Boosting) and compare results.
+    - Integrate automatic handling for categorical and missing data.
+    - Add unit tests for preprocessing and metric computations.
 
 Dependencies:
-   - Python >= 3.9
-   - pandas, numpy, scikit-learn, matplotlib, colorama
+    - Python >= 3.9
+    - pandas, numpy, scikit-learn, matplotlib, colorama
 """
 
 
