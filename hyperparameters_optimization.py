@@ -487,9 +487,12 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
     )  # Output the verbose message
 
     le = LabelEncoder()  # Initialize a LabelEncoder
-    y_encoded = pd.Series(
-        le.fit_transform(y), index=y.index
-    )  # Encode the target variable (essential for stratification)
+    
+    # Encode the target variable and preserve index for stratification
+    encoded = le.fit_transform(y)
+    y_index = getattr(y, "index", None)
+    encoded_arr = np.asarray(encoded, dtype=int)
+    y_encoded = pd.Series(encoded_arr, index=y_index, dtype=int)
 
     numeric_X = X.select_dtypes(include=np.number)  # Select only numeric columns for scaling
     non_numeric_X = X.select_dtypes(exclude=np.number)  # Identify non-numeric columns (to be dropped)
