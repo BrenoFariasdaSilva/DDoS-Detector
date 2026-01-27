@@ -69,6 +69,7 @@ from pathlib import Path  # For handling file paths
 from sklearn.manifold import TSNE  # For t-SNE dimensionality reduction
 from sklearn.preprocessing import StandardScaler  # For feature scaling
 from tqdm import tqdm  # For progress bars
+from typing import Any, cast
 
 
 # Macros:
@@ -998,21 +999,22 @@ def save_tsne_3d_plot(X_emb, labels, output_path, title):
         unique = list(labels_ser.unique())  # Unique class labels (preserve order)
         for cls in unique:  # Plot each class separately
             mask = labels_ser == cls  # Boolean mask for class
-            ax.scatter(
-                X_emb[mask, 0], 
-                X_emb[mask, 1], 
-                X_emb[mask, 2], 
-                label=f"{cls} ({int(counts.get(cls, 0))})", 
-                s=8
+            # Cast to Any to avoid 2D Axes type stub complaints; Axes3D accepts 3 positional arrays
+            cast(Any, ax).scatter(
+                X_emb[mask, 0],
+                X_emb[mask, 1],
+                X_emb[mask, 2],
+                label=f"{cls} ({int(counts.get(cls, 0))})",
+                s=8,
             )  # 3D scatter plot for class with count in label
         ax.legend(markerscale=2, fontsize="small")  # Add legend for classes
     else:  # No labels provided
-        ax.scatter(X_emb[:, 0], X_emb[:, 1], X_emb[:, 2], s=8)  # Plot all points uniformly
+        cast(Any, ax).scatter(X_emb[:, 0], X_emb[:, 1], X_emb[:, 2], s=8)  # Plot all points uniformly
 
     ax.set_title(title)  # Set plot title
     ax.set_xlabel("t-SNE 1")  # X-axis label
     ax.set_ylabel("t-SNE 2")  # Y-axis label
-    ax.set_zlabel("t-SNE 3")  # Z-axis label
+    cast(Any, ax).set_zlabel("t-SNE 3")  # Z-axis label (cast to Any for typing)
     plt.tight_layout()  # Adjust layout
     plt.savefig(output_path, dpi=150)  # Save figure to disk
     plt.close()  # Close figure to free memory
