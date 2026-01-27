@@ -69,13 +69,13 @@ from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.decomposition import PCA  # For Principal Component Analysis
 from sklearn.ensemble import RandomForestClassifier  # For the Random Forest model
-from sklearn.metrics import (
+from sklearn.metrics import (  # For performance metrics
     accuracy_score,
+    confusion_matrix,
+    f1_score,
     precision_score,
     recall_score,
-    f1_score,
-    confusion_matrix,
-)  # For performance metrics
+)
 from sklearn.model_selection import train_test_split, StratifiedKFold  # For splitting and cross-validation
 from sklearn.preprocessing import StandardScaler  # For scaling the data (standardization)
 from tqdm import tqdm  # For progress bars
