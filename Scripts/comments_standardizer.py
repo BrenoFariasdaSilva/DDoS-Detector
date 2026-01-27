@@ -143,6 +143,29 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def read_python_file(file_path: str) -> bytes:
+    """
+    Read a Python file in binary mode.
+
+    :param file_path: Path to the .py file.
+    :return: File content as bytes.
+    """
+
+    with open(file_path, "rb") as f:  # Open file in binary mode
+        return f.read()  # Return file content
+
+
+def tokenize_source(source: bytes):
+    """
+    Tokenize Python source code.
+
+    :param source: Python source code as bytes.
+    :return: List of tokens.
+    """
+
+    return list(tokenize.tokenize(BytesIO(source).readline))  # Tokenize source code
+
+
 def capitalize_comment_text(raw_comment: str) -> str:
     """
     Standardize the text of a Python comment by ensuring capitalization and spacing after "#".
@@ -181,29 +204,6 @@ def fix_inline_comment_whitespace(original_line: str, standardized_comment: str)
         return " " + standardized_comment  # Preserve single space before comment
 
     return standardized_comment  # Otherwise, return comment without extra prefix
-
-
-def read_python_file(file_path: str) -> bytes:
-    """
-    Read a Python file in binary mode.
-
-    :param file_path: Path to the .py file.
-    :return: File content as bytes.
-    """
-
-    with open(file_path, "rb") as f:  # Open file in binary mode
-        return f.read()  # Return file content
-
-
-def tokenize_source(source: bytes):
-    """
-    Tokenize Python source code.
-
-    :param source: Python source code as bytes.
-    :return: List of tokens.
-    """
-
-    return list(tokenize.tokenize(BytesIO(source).readline))  # Tokenize source code
 
 
 def process_comment_token(tok):
