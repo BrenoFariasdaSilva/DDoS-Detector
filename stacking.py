@@ -857,7 +857,6 @@ def preprocess_dataframe(df, remove_zero_variance=True):
             f"{BackgroundColors.GREEN}.{Style.RESET_ALL}"
         )
 
-
     if df is None:  # If the DataFrame is None
         return df  # Return None
 
