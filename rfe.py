@@ -204,9 +204,18 @@ def preprocess_dataframe(df, remove_zero_variance=True):
     :return: cleaned DataFrame
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Preprocessing the DataFrame by removing NaN/infinite values and zero-variance features.{Style.RESET_ALL}"
-    )  # Output the verbose message
+    if remove_zero_variance:  # If remove_zero_variance is set to True
+        verbose_output(
+            f"{BackgroundColors.GREEN}Preprocessing DataFrame: "
+            f"{BackgroundColors.CYAN}normalizing column names, removing NaN/infinite rows, and dropping zero-variance numeric features"
+            f"{BackgroundColors.GREEN}.{Style.RESET_ALL}"
+        )
+    else:  # If remove_zero_variance is set to False
+        verbose_output(
+            f"{BackgroundColors.GREEN}Preprocessing DataFrame: "
+            f"{BackgroundColors.CYAN}normalizing column names and removing NaN/infinite rows"
+            f"{BackgroundColors.GREEN}.{Style.RESET_ALL}"
+        )
 
     if df is None:  # If the DataFrame is None
         return df  # Return None
