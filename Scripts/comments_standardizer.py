@@ -182,7 +182,7 @@ def capitalize_comment_text(raw_comment: str) -> str:
 
 def fix_inline_comment_whitespace(original_line: str, standardized_comment: str) -> str:
     """
-    Fix whitespace before inline comments to ensure exactly one space before "#".
+    Fix whitespace before inline comments to ensure exactly two spaces before "#".
 
     :param original_line: The original source code line containing the comment.
     :param standardized_comment: The standardized comment text.
@@ -200,10 +200,7 @@ def fix_inline_comment_whitespace(original_line: str, standardized_comment: str)
         spaces_before += 1
         i -= 1
 
-    if spaces_before == 1:  # If there is already exactly one space before "#"
-        return " " + standardized_comment  # Preserve single space before comment
-
-    return standardized_comment  # Otherwise, return comment without extra prefix
+    return "  " + standardized_comment  # Always standardize to exactly two spaces before inline comments
 
 
 def process_comment_token(tok):
