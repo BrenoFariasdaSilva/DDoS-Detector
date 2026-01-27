@@ -311,13 +311,13 @@ def preprocess_dataframe(df, remove_zero_variance=True):
     if remove_zero_variance:  # If remove_zero_variance is set to True
         verbose_output(
             f"{BackgroundColors.GREEN}Preprocessing DataFrame: "
-            f"{BackgroundColors.CYAN}normalizing column names, removing NaN/infinite rows, and dropping zero-variance numeric features"
+            f"{BackgroundColors.CYAN}normalizing and sanitizing column names, removing NaN/infinite rows, and dropping zero-variance numeric features"
             f"{BackgroundColors.GREEN}.{Style.RESET_ALL}"
         )
     else:  # If remove_zero_variance is set to False
         verbose_output(
             f"{BackgroundColors.GREEN}Preprocessing DataFrame: "
-            f"{BackgroundColors.CYAN}normalizing column names and removing NaN/infinite rows"
+            f"{BackgroundColors.CYAN}normalizing and sanitizing column names and removing NaN/infinite rows"
             f"{BackgroundColors.GREEN}.{Style.RESET_ALL}"
         )
 
