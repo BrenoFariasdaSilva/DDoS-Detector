@@ -43,7 +43,7 @@ TODOs (short):
    - Provide more granular CLI control for cleaning rules
 """
 
-import arff  # liac-arff, used to save ARFF files
+import arff  # Liac-arff, used to save ARFF files
 import argparse  # For parsing command-line arguments
 import atexit  # For playing a sound when the program finishes
 import datetime  # For timestamping
@@ -57,7 +57,7 @@ from colorama import Style  # For coloring the terminal output
 from fastparquet import ParquetFile  # For handling Parquet file format
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
-from scipy.io import arff as scipy_arff  # used to read ARFF files
+from scipy.io import arff as scipy_arff  # Used to read ARFF files
 from tqdm import tqdm  # For showing a progress bar
 
 
