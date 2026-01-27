@@ -1064,8 +1064,8 @@ def train(args):
             # Prepare generator checkpoint with full training state
             g_checkpoint = {
                 "epoch": epoch + 1,  # Save current epoch number
-                "state_dict": G.state_dict(),  # Save generator state dict
-                "opt_G_state": opt_G.state_dict(),  # Save generator optimizer state
+                "state_dict": cast(Any, G).state_dict(),  # Save generator state dict
+                "opt_G_state": cast(Any, opt_G).state_dict(),  # Save generator optimizer state
                 "scaler": dataset.scaler,  # Save scaler for inverse transform
                 "label_encoder": dataset.label_encoder,  # Save label encoder for mapping
                 "feature_cols": dataset.feature_cols,  # Save feature column names for generation
@@ -1082,15 +1082,13 @@ def train(args):
             # Prepare discriminator checkpoint
             d_checkpoint = {
                 "epoch": epoch + 1,  # Save current epoch number
-                "state_dict": D.state_dict(),  # Save discriminator state dict
-                "opt_D_state": opt_D.state_dict(),  # Save discriminator optimizer state
+                "state_dict": cast(Any, D).state_dict(),  # Save discriminator state dict
+                "opt_D_state": cast(Any, opt_D).state_dict(),  # Save discriminator optimizer state
                 "args": vars(args),  # Save training arguments
             }
             torch.save(d_checkpoint, str(d_path))  # Save discriminator checkpoint to disk
             latest_path = checkpoint_dir / f"{checkpoint_prefix}_generator_latest.pt"  # Path for latest generator
-            torch.save(
-                G.state_dict(), str(latest_path)
-            )  # Save latest generator weights
+            torch.save(cast(Any, G).state_dict(), str(latest_path))  # Save latest generator weights
             
             # Save metrics history to separate JSON file for easy loading
             metrics_path = checkpoint_dir / f"{checkpoint_prefix}_metrics_history.json"  # Path for metrics JSON
