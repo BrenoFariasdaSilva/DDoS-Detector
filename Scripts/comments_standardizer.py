@@ -54,8 +54,8 @@ import os  # For running a command in the terminal
 import platform  # For getting the operating system name
 import sys  # For system-specific parameters and functions
 import tokenize  # For safe Python token parsing
-from io import BytesIO  # For tokenizing byte streams
 from colorama import Style  # For coloring the terminal
+from io import BytesIO  # For tokenizing byte streams
 from pathlib import Path  # For handling file paths
 
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)  # Project root directory
