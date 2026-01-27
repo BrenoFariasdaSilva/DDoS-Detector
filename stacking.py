@@ -5,49 +5,49 @@ Individual and Stacking Ensemble Classifier Evaluation Script (stacking.py)
 Author      : Breno Farias da Silva
 Created     : 2025-12-01
 Description :
-   Orchestrates evaluation of individual classifiers and a stacking ensemble
-   across multiple feature sets derived from the project's feature-analysis
-   artifacts (Genetic Algorithm, RFE, PCA). The script centralizes dataset
-   loading, preprocessing, feature-set assembly, per-model evaluation and the
-   export of consolidated CSV results for downstream analysis.
+    Orchestrates evaluation of individual classifiers and a stacking ensemble
+    across multiple feature sets derived from the project's feature-analysis
+    artifacts (Genetic Algorithm, RFE, PCA). The script centralizes dataset
+    loading, preprocessing, feature-set assembly, per-model evaluation and the
+    export of consolidated CSV results for downstream analysis.
 
 Core capabilities:
-   - Automatic loading and sanitization of CSV datasets (NaN/infinite removal)
-   - Integration of GA, RFE and PCA outputs to build alternative feature sets
-   - Scaling, optional PCA projection and selective feature subsetting
-   - Evaluation of many classifiers (RF, SVM, XGBoost, LightGBM, etc.) and a
-     stacking meta-classifier combining their predictions
-   - Calculation of standard metrics (accuracy, precision, recall, F1) plus
-     FPR/FNR and elapsed-time reporting
-   - Export of `Stacking_Classifier_Results.csv` including `features_list`
-     and hardware metadata for reproducibility
-   - Utilities to discover feature-analysis files at file, parent or dataset level
+    - Automatic loading and sanitization of CSV datasets (NaN/infinite removal)
+    - Integration of GA, RFE and PCA outputs to build alternative feature sets
+    - Scaling, optional PCA projection and selective feature subsetting
+    - Evaluation of many classifiers (RF, SVM, XGBoost, LightGBM, etc.) and a
+        stacking meta-classifier combining their predictions
+    - Calculation of standard metrics (accuracy, precision, recall, F1) plus
+        FPR/FNR and elapsed-time reporting
+    - Export of `Stacking_Classifier_Results.csv` including `features_list`
+        and hardware metadata for reproducibility
+    - Utilities to discover feature-analysis files at file, parent or dataset level
 
 Usage:
-   - Configure `DATASETS` mapping or call `main()` directly.
-   - Run: `python3 stacking.py` or via the repository Makefile target.
+    - Configure `DATASETS` mapping or call `main()` directly.
+    - Run: `python3 stacking.py` or via the repository Makefile target.
 
 Outputs:
-   - `Stacking_Classifier_Results.csv` (per-dataset `Feature_Analysis/` directory)
-   - Terminal logs, optional Telegram notifications and sound on completion
+    - `Stacking_Classifier_Results.csv` (per-dataset `Feature_Analysis/` directory)
+    - Terminal logs, optional Telegram notifications and sound on completion
 
 Notes & conventions:
-   - Input CSVs are expected under `Datasets/<DatasetName>/...` and the last
-     column conventionally contains the target variable.
-   - Feature-analysis artifacts are expected under `.../Feature_Analysis/`:
-     `Genetic_Algorithm_Results.csv`, `RFE_Run_Results.csv`, `PCA_Results.csv`.
-   - Defaults assume CSV input; Parquet support can be added as needed.
-   - Toggle `VERBOSE = True` for additional diagnostic output.
+    - Input CSVs are expected under `Datasets/<DatasetName>/...` and the last
+        column conventionally contains the target variable.
+    - Feature-analysis artifacts are expected under `.../Feature_Analysis/`:
+        `Genetic_Algorithm_Results.csv`, `RFE_Run_Results.csv`, `PCA_Results.csv`.
+    - Defaults assume CSV input; Parquet support can be added as needed.
+    - Toggle `VERBOSE = True` for additional diagnostic output.
 
 TODOs:
-   - Add CLI argument parsing for dataset paths and runtime flags.
-   - Add native Parquet support and safer large-file streaming.
-   - Add voting ensemble baseline and parallelize per-feature-set evaluations.
+    - Add CLI argument parsing for dataset paths and runtime flags.
+    - Add native Parquet support and safer large-file streaming.
+    - Add voting ensemble baseline and parallelize per-feature-set evaluations.
 
 Dependencies:
-   - Python >= 3.8
-   - pandas, numpy, scikit-learn, colorama, lightgbm, xgboost
-   - Optional: telegram_bot for notifications
+    - Python >= 3.8
+    - pandas, numpy, scikit-learn, colorama, lightgbm, xgboost
+    - Optional: telegram_bot for notifications
 """
 
 import argparse  # For parsing command-line arguments
