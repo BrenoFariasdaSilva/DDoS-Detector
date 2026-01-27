@@ -47,7 +47,6 @@ Assumptions & Notes:
 
 import argparse  # For command-line arguments
 import atexit  # For playing a sound when the program finishes
-import concurrent.futures  # For parallel execution with progress updates
 import datetime  # For getting the current date and time
 import json  # For handling JSON strings
 import lightgbm as lgb  # For LightGBM model
@@ -70,7 +69,7 @@ from pathlib import Path  # For handling file paths
 from sklearn.base import clone  # Import necessary modules for cloning
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier  # For ensemble models
 from sklearn.linear_model import LogisticRegression  # For logistic regression model
-from sklearn.metrics import (
+from sklearn.metrics import (  # For custom scoring metrics
     accuracy_score,
     cohen_kappa_score,
     confusion_matrix,
@@ -79,24 +78,25 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
     roc_auc_score,
-)  # For custom scoring metrics
-from sklearn.model_selection import train_test_split, StratifiedKFold  # For hyperparameter search, data splitting, and stratified K-Fold CV
+)
+from sklearn.model_selection import StratifiedKFold, train_test_split  # For hyperparameter search, data splitting, and stratified K-Fold CV
 from sklearn.neighbors import KNeighborsClassifier, NearestCentroid  # For k-nearest neighbors model
 from sklearn.neural_network import MLPClassifier  # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For label encoding and feature scaling
 from sklearn.svm import SVC  # For Support Vector Machine model
-from typing import Any, cast, Dict
+from thundersvm import SVC as ThunderSVC  # For ThunderSVM classifier (imported in try/except)
+from tqdm import tqdm  # For progress bars
+from typing import Any, cast, Dict  # For type hints
+from xgboost import XGBClassifier  # For XGBoost classifier
 
 try:  # Attempt to import ThunderSVM
     from thundersvm import SVC as ThunderSVC  # For ThunderSVM classifier
-
     THUNDERSVM_AVAILABLE = True  # Flag indicating ThunderSVM is available
 except Exception as _th_err:  # Import failed
     ThunderSVC = None  # ThunderSVM not available
     THUNDERSVM_AVAILABLE = False  # Set flag to False
     print(f"Warning: ThunderSVM import failed ({type(_th_err).__name__}: {_th_err}). Falling back to sklearn.SVC.")  # Print warning message
-from tqdm import tqdm  # For progress bars
-from xgboost import XGBClassifier  # For XGBoost classifier
+
 
 # Warnings:
 warnings.filterwarnings("ignore", category=pd.errors.DtypeWarning)  # Ignore pandas dtype warnings
