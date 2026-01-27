@@ -622,7 +622,7 @@ def save_pca_results(csv_path, all_results):
                 df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)
                 df_combined = df_combined.drop(columns=["timestamp_dt"])
             except Exception:
-                # fallback: string-sort (format chosen is lexicographically sortable)
+                # Fallback: string-sort (format chosen is lexicographically sortable)
                 df_combined = df_combined.sort_values(by="timestamp", ascending=False)
 
             df_out = df_combined.reset_index(drop=True)
