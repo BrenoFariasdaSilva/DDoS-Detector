@@ -666,7 +666,11 @@ def extract_principal_component_analysis_features(file_path):
             f"{BackgroundColors.GREEN}Successfully extracted best PCA configuration. Optimal components: {BackgroundColors.CYAN}{best_n_components}{Style.RESET_ALL}"
         )  # Output the verbose message
 
-        return int(best_n_components)  # Return the optimal number of principal components
+        best_n_components = df.loc[best_row_index, "n_components"]  # Get the optimal number of components
+
+        best_n_components_int = int(pd.to_numeric(best_n_components, errors="raise"))  # Ensure it's an integer
+
+        return best_n_components_int  # Return the optimal number of components
 
     except KeyError as e:  # Handle missing columns
         print(
