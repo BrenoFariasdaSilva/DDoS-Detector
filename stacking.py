@@ -837,8 +837,7 @@ def sanitize_feature_names(columns):
 def preprocess_dataframe(df, remove_zero_variance=True):
     """
     Preprocess a DataFrame by removing rows with NaN or infinite values and
-    dropping zero-variance numeric features. Also sanitizes feature names to
-    remove special JSON characters that cause issues with LightGBM.
+    dropping zero-variance numeric features.
 
     :param df: pandas DataFrame to preprocess
     :param remove_zero_variance: whether to drop numeric columns with zero variance
@@ -852,11 +851,9 @@ def preprocess_dataframe(df, remove_zero_variance=True):
     if df is None:  # If the DataFrame is None
         return df  # Return None
 
-    # Strip whitespace from all column names
     df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
-
-    # Sanitize feature names to remove special JSON characters (LightGBM requirement)
-    df.columns = sanitize_feature_names(df.columns)  # Sanitize column names
+    
+    df.columns = sanitize_feature_names(df.columns)  # Sanitize column names to remove special characters
 
     df_clean = df.replace([np.inf, -np.inf], np.nan).dropna()  # Remove rows with NaN or infinite values
 
