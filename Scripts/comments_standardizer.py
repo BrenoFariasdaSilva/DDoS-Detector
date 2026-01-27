@@ -221,20 +221,19 @@ def is_comment_in_string(tok, string_spans: list) -> bool:
     return False  # Comment is not inside string
 
 
-def process_comment_line(original_line: str, tok_string: str) -> str:
+def process_comment_line(original_line: str, tok_string: str, start_col: int) -> str:
     """
     Process a single comment line, standardizing the comment and adjusting whitespace.
 
     :param original_line: The original line containing the comment.
     :param tok_string: The original comment token string.
+    :param start_col: The column index where the comment starts (position of "#").
     :return: The modified line with standardized comment.
     """
 
     standardized = capitalize_comment_text(tok_string)  # Standardize the comment text
 
-    hash_idx = original_line.find("#")  # Find the position of "#"
-    if hash_idx == -1:  # If no "#" found, return original
-        return original_line
+    hash_idx = start_col  # Use the token"s start column for "#"
 
     prefix = original_line[:hash_idx]  # Get text before "#"
     suffix = original_line[hash_idx + len(tok_string) :]  # Get text after the comment
@@ -319,7 +318,7 @@ def process_file(file_path: str) -> None:
             continue  # Continue to next token
 
         original_line = lines[line_no - 1]  # Get original line
-        new_line = process_comment_line(original_line, tok.string)  # Process line
+        new_line = process_comment_line(original_line, tok.string, tok.start[1])  # Process line
 
         if new_line != original_line:  # If changed
             lines[line_no - 1] = new_line  # Update line
