@@ -155,6 +155,21 @@ def read_python_file(file_path: str) -> bytes:
         return f.read()  # Return file content
 
 
+def decode_source_to_text(source: bytes) -> str:
+    """
+    Decode the source bytes to a UTF-8 string, with fallback error handling.
+
+    :param source: The source code as bytes.
+    :return: The decoded text as a string.
+    """
+
+    try:
+        text = source.decode("utf-8")  # Attempt to decode as UTF-8
+    except Exception:
+        text = source.decode("utf-8", errors="replace")  # Fallback with replacement characters
+    return text  # Return the decoded text
+
+
 def tokenize_source(source: bytes):
     """
     Tokenize Python source code.
@@ -164,6 +179,80 @@ def tokenize_source(source: bytes):
     """
 
     return list(tokenize.tokenize(BytesIO(source).readline))  # Tokenize source code
+
+
+def build_string_spans(tokens) -> list:
+    """
+    Build a list of string token spans to identify string literals.
+
+    :param tokens: List of tokens from tokenize.
+    :return: List of tuples (start_row, start_col, end_row, end_col) for string tokens.
+    """
+
+    string_spans = []  # Initialize list for string spans
+    for t in tokens:  # Iterate through all tokens
+        if t.type == tokenize.STRING:  # Check if token is a string
+            srow, scol = t.start  # Get start row and column
+            erow, ecol = t.end  # Get end row and column
+            string_spans.append((srow, scol, erow, ecol))  # Append span to list
+    return string_spans  # Return the list of string spans
+
+
+def is_comment_in_string(tok, string_spans: list) -> bool:
+    """
+    Check if a comment token is located inside a string literal.
+
+    :param tok: The comment token.
+    :param string_spans: List of string spans.
+    :return: True if the comment is inside a string, False otherwise.
+    """
+
+    crow, ccol = tok.start  # Get comment's row and column
+    for srow, scol, erow, ecol in string_spans:  # Iterate through string spans
+        if srow <= crow <= erow:  # Check if comment row is within string span
+            if srow == erow:  # Single-line string
+                if scol <= ccol < ecol:  # Check if column is within span
+                    return True  # Comment is inside string
+            else:  # Multi-line string
+                if (srow < crow < erow) or (crow == srow and ccol >= scol) or (
+                    crow == erow and ccol < ecol
+                ):  # Check conditions for multi-line
+                    return True  # Comment is inside string
+    return False  # Comment is not inside string
+
+
+def process_comment_line(original_line: str, tok_string: str) -> str:
+    """
+    Process a single comment line, standardizing the comment and adjusting whitespace.
+
+    :param original_line: The original line containing the comment.
+    :param tok_string: The original comment token string.
+    :return: The modified line with standardized comment.
+    """
+
+    standardized = capitalize_comment_text(tok_string)  # Standardize the comment text
+
+    hash_idx = original_line.find("#")  # Find the position of '#'
+    if hash_idx == -1:  # If no '#' found, return original
+        return original_line
+
+    prefix = original_line[:hash_idx]  # Get text before '#'
+    suffix = original_line[hash_idx + len(tok_string) :]  # Get text after the comment
+
+    is_full_line = original_line.strip().startswith("#")  # Check if it's a full-line comment
+
+    if is_full_line:  # For full-line comments
+        new_line = prefix + standardized + suffix  # Replace comment
+    else:  # For inline comments
+        spaces_before = 0  # Count spaces before '#'
+        i = hash_idx - 1  # Start from before '#'
+        while i >= 0 and original_line[i] == " ":  # Count spaces
+            spaces_before += 1  # Increment count
+            i -= 1  # Move left
+        code_before = original_line[:hash_idx - spaces_before]  # Get code before spaces
+        new_line = code_before + "  " + standardized + suffix  # Ensure exactly two spaces
+
+    return new_line  # Return the modified line
 
 
 def capitalize_comment_text(raw_comment: str) -> str:
@@ -180,74 +269,24 @@ def capitalize_comment_text(raw_comment: str) -> str:
     return "# " + body[0].upper() + body[1:]  # Capitalize first letter and ensure one space
 
 
-def fix_inline_comment_whitespace(original_line: str, standardized_comment: str) -> str:
+def write_modified_file(file_path: str, lines: list, modified: bool) -> None:
     """
-    Fix whitespace before inline comments to ensure exactly two spaces before "#".
+    Write the modified lines back to the file if changes were made.
 
-    :param original_line: The original source code line containing the comment.
-    :param standardized_comment: The standardized comment text.
-    :return: Comment string with corrected whitespace if needed.
-    """
-
-    if "#" not in original_line:  # If no comment exists in the line, return as-is
-        return standardized_comment
-
-    hash_idx = original_line.find("#")  # Find index of "#"
-    spaces_before = 0  # Count spaces before "#"
-    i = hash_idx - 1  # Start verifying characters before "#"
-
-    while i >= 0 and original_line[i] == " ":  # Count consecutive spaces before "#"
-        spaces_before += 1
-        i -= 1
-
-    return "  " + standardized_comment  # Always standardize to exactly two spaces before inline comments
-
-
-def process_comment_token(tok):
-    """
-    Process a single comment token and return an updated token if modified.
-
-    :param tok: TokenInfo object representing a comment.
-    :return: Tuple (updated_token, modified_flag).
-    """
-
-    standardized_comment = capitalize_comment_text(tok.string)  # Standardize comment text
-
-    line = tok.line or ""  # Get the full line of code
-    is_full_line = line.strip().startswith("#")  # Verify if it is a full-line comment
-
-    tok_str = standardized_comment  # Start with standardized comment
-
-    if not is_full_line:  # Handle inline comments only
-        tok_str = fix_inline_comment_whitespace(line, standardized_comment)  # Fix whitespace before "#"
-
-    if tok_str != tok.string:  # If the comment was modified
-        tok = tokenize.TokenInfo(  # Create a new modified token
-            tok.type,
-            tok_str,
-            tok.start,
-            tok.end,
-            tok.line,
-        )
-        return tok, True  # Return modified token and flag
-
-    return tok, False  # Return original token and no modification
-
-
-def write_python_file(file_path: str, tokens) -> None:
-    """
-    Write modified tokens back to the Python file.
-
-    :param file_path: Path to the .py file.
-    :param tokens: List of tokens.
+    :param file_path: Path to the file.
+    :param lines: List of modified lines.
+    :param modified: Flag indicating if modifications occurred.
     :return: None
     """
 
-    new_source = tokenize.untokenize(tokens)  # Rebuild source code
-    data = new_source if isinstance(new_source, (bytes, bytearray)) else new_source.encode("utf-8")  # Ensure bytes
-
-    with open(file_path, "wb") as f:  # Open file in binary mode
-        f.write(data)  # Write updated content
+    if modified:  # Only write if modified
+        new_text = "".join(lines)  # Join lines into text
+        data = new_text.encode("utf-8")  # Encode to bytes
+        with open(file_path, "wb") as f:  # Open file in binary mode
+            f.write(data)  # Write data
+        verbose_output(  # Output success message
+            f"{BackgroundColors.GREEN}Updated comments in: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}"
+        )
 
 
 def process_file(file_path: str) -> None:
@@ -258,24 +297,35 @@ def process_file(file_path: str) -> None:
     :return: None
     """
 
-    source = read_python_file(file_path)  # Read file content
+    source = read_python_file(file_path)  # Read file content as bytes
+    text = decode_source_to_text(source)  # Decode to text
+
     tokens = tokenize_source(source)  # Tokenize source code
 
-    modified = False  # Track if any modifications were made
-    new_tokens = []  # List to hold modified tokens
+    lines = text.splitlines(keepends=True)  # Prepare mutable list of lines
+    modified = False  # Track modifications
 
-    for tok in tokens:  # Iterate through all tokens
-        if tok.type == tokenize.COMMENT:  # Process only comment tokens
-            tok, was_modified = process_comment_token(tok)  # Process comment token
-            modified = modified or was_modified  # Update modification flag
+    string_spans = build_string_spans(tokens)  # Build string spans
 
-        new_tokens.append(tok)  # Append token (modified or not)
+    for tok in tokens:  # Iterate through tokens
+        if tok.type != tokenize.COMMENT:  # Skip non-comment tokens
+            continue  # Continue to next token
 
-    if modified:  # Rewrite file only if changes were made
-        write_python_file(file_path, new_tokens)  # Write updated tokens to file
-        verbose_output(
-            f"{BackgroundColors.GREEN}Updated comments in: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}"
-        )
+        line_no = tok.start[0]  # Get line number
+        if line_no < 1 or line_no > len(lines):  # Validate line number
+            continue  # Skip invalid line numbers
+
+        if is_comment_in_string(tok, string_spans):  # Skip if in string
+            continue  # Continue to next token
+
+        original_line = lines[line_no - 1]  # Get original line
+        new_line = process_comment_line(original_line, tok.string)  # Process line
+
+        if new_line != original_line:  # If changed
+            lines[line_no - 1] = new_line  # Update line
+            modified = True  # Mark as modified
+
+    write_modified_file(file_path, lines, modified)  # Write back if modified
 
 
 def run_comment_standardization():
