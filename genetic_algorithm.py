@@ -2163,7 +2163,7 @@ def populate_hardware_column(df, column_name="hardware"):
 
     :param df: pandas.DataFrame to modify in-place
     :param column_name: Name of the column to set (default: "hardware")
-    :return: None
+    :return: The modified DataFrame
     """
 
     try:  # Try to fetch hardware specifications
@@ -2175,6 +2175,8 @@ def populate_hardware_column(df, column_name="hardware"):
         df[column_name] = hardware_str  # Set the hardware column
     except Exception:  # On any failure
         df[column_name] = None  # Set hardware column to None
+
+    return df  # Return the modified DataFrame
 
 
 def ensure_expected_columns(df_combined, columns):
