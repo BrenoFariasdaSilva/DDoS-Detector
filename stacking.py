@@ -1513,6 +1513,8 @@ def add_hardware_column(df, columns_order, column_name="Hardware"):
             (columns_order.index("elapsed_time_s") + 1) if "elapsed_time_s" in columns_order else len(columns_order)
         )  # Determine insertion index
         columns_order.insert(insert_idx, column_name)  # Insert hardware column into the desired position
+        
+    return df  # Return the modified DataFrame
 
 
 def save_stacking_results(csv_path, results_list):
@@ -1569,7 +1571,7 @@ def save_stacking_results(csv_path, results_list):
     df = add_hardware_column(df, existing_columns)
 
     try:
-        df.to_csv(output_path, index=False, encoding="utf-8")
+        df.to_csv(str(output_path), index=False, encoding="utf-8")
         print(
             f"\n{BackgroundColors.GREEN}Stacking classifier results successfully saved to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
         )
