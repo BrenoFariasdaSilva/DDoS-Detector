@@ -639,15 +639,15 @@ def stratified_sample(numeric_df, labels, max_samples, random_state=42, min_per_
         f"{BackgroundColors.GREEN}Stratified sampling to a maximum of {max_samples} samples while preserving class proportions and ensuring min {min_per_class} per class when possible.{Style.RESET_ALL}"
     )  # Verbose message
 
-    n_rows = len(numeric_df)  # total rows available
-    if n_rows <= max_samples:  # nothing to do
+    n_rows = len(numeric_df)  # Total rows available
+    if n_rows <= max_samples:  # Nothing to do
         return numeric_df.reset_index(drop=True), labels.reset_index(drop=True)  # Return original DataFrame and labels
 
-    counts = labels.value_counts()  # per-class counts
-    classes = list(counts.index)  # list of class labels
-    total = int(counts.sum())  # total available samples
+    counts = labels.value_counts()  # Per-class counts
+    classes = list(counts.index)  # List of class labels
+    total = int(counts.sum())  # Total available samples
 
-    initial_alloc, s_min = compute_initial_alloc(counts, min_per_class)  # compute initial allocations and their sum
+    initial_alloc, s_min = compute_initial_alloc(counts, min_per_class)  # Compute initial allocations and their sum
 
     allocations = {c: 0 for c in classes}  # Final allocations per class
 
