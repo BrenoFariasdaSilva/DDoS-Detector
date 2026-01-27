@@ -936,6 +936,45 @@ def build_run_results(final_model, csv_path, hyperparameters, cv_method, cv_metr
     return [result]
 
 
+def build_results_with_hyperparams(final_model, csv_path, loaded_hyperparams, fallback_hyperparameters, cv_method, cv_metrics=None, test_metrics=None, training_time=None, top_features=None, rfe_ranking=None):
+    """
+    Determine hyperparameters to save (prefer loaded_hyperparams, else model.get_params(), else fallback)
+    and build the run_results via `build_run_results`.
+
+    :param final_model: trained or loaded model
+    :param csv_path: dataset path
+    :param loaded_hyperparams: params loaded from params.json (or None)
+    :param fallback_hyperparameters: fallback dict supplied by caller
+    :param cv_method: string describing CV method
+    :param cv_metrics: optional CV metrics tuple
+    :param test_metrics: optional test metrics tuple
+    :param training_time: optional training time
+    :param top_features: optional list of top features
+    :param rfe_ranking: optional rfe ranking mapping
+    :return: list containing a single run_results dict
+    """
+    
+    if loaded_hyperparams is not None:
+        hyperparams_to_save = loaded_hyperparams
+    else:
+        try:
+            hyperparams_to_save = final_model.get_params()
+        except Exception:
+            hyperparams_to_save = fallback_hyperparameters or {}
+
+    return build_run_results(
+        final_model,
+        csv_path,
+        hyperparams_to_save,
+        cv_method,
+        cv_metrics=cv_metrics,
+        test_metrics=test_metrics,
+        training_time=training_time,
+        top_features=top_features,
+        rfe_ranking=rfe_ranking,
+    )
+
+
 def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
     """
     Handles RFE for datasets with insufficient samples for stratified CV (fallback to single train/test split).
@@ -962,7 +1001,17 @@ def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparamet
     final_model, scaler_full, top_features, loaded_hyperparams = get_final_model(csv_path, X_numeric, y_array, top_features, feature_columns)  # get final model/scaler
     eval_metrics = evaluate_exported_model(final_model, scaler_full, X_numeric, feature_columns, top_features, y_array)  # evaluate on full dataset
 
-    run_results = build_run_results(final_model, csv_path, hyperparameters, "single_train_test_split", test_metrics=eval_metrics, training_time=metrics_tuple[6], top_features=top_features, rfe_ranking=sorted_rfe_ranking)  # build results dict
+    run_results = build_results_with_hyperparams(
+        final_model,
+        csv_path,
+        loaded_hyperparams,
+        hyperparameters,
+        "single_train_test_split",
+        test_metrics=eval_metrics,
+        training_time=metrics_tuple[6],
+        top_features=top_features,
+        rfe_ranking=sorted_rfe_ranking,
+    )  # build results dict
 
     save_rfe_results(csv_path, run_results)  # save fallback run results
     print_run_summary(run_results)  # concise terminal summary
@@ -1042,7 +1091,19 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
 
     # Evaluate final_model (loaded or newly trained) on the held-out test set
     eval_metrics = evaluate_exported_model(final_model, scaler_full, X_test_df, feature_columns, top_features, y_test_array)
-    run_results = build_run_results(final_model, csv_path, hyperparameters, f"StratifiedKFold(n_splits={n_splits})", cv_metrics=mean_metrics, test_metrics=eval_metrics, training_time=total_elapsed, top_features=top_features, rfe_ranking=sorted_rfe_ranking)  # build results dict
+
+    run_results = build_results_with_hyperparams(
+        final_model,
+        csv_path,
+        loaded_hyperparams,
+        hyperparameters,
+        f"StratifiedKFold(n_splits={n_splits})",
+        cv_metrics=mean_metrics,
+        test_metrics=eval_metrics,
+        training_time=total_elapsed,
+        top_features=top_features,
+        rfe_ranking=sorted_rfe_ranking,
+    )  # build results dict
 
     print_metrics(tuple(mean_metrics)) if VERBOSE else None  # optionally print aggregated metrics
     print_top_features(top_features, avg_rfe_ranking) if VERBOSE else None  # optionally print aggregated top features and avg ranks
@@ -1065,12 +1126,7 @@ def run_rfe(csv_path):
         f"{BackgroundColors.GREEN}Starting RFE analysis on dataset: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}"
     )
 
-    hyperparameters = {  # Default hyperparameters for documentation
-        "model": "RandomForestClassifier",
-        "n_estimators": 100,
-        "random_state": 42,
-        "n_jobs": N_JOBS,
-    }
+    hyperparameters = {}  # Default hyperparameters (to be extended later)
 
     df = load_dataset(csv_path)  # Load dataset
 
