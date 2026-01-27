@@ -61,26 +61,25 @@ import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
 import threading  # For optional background resource monitor
 import time  # For measuring execution time
-import warnings  # For suppressing warnings
 from colorama import Style  # For coloring the terminal
-from deap import base, creator, tools, algorithms  # For the genetic algorithm
+from deap import algorithms, base, creator, tools  # For the genetic algorithm
 from functools import partial  # For creating partial functions
-from typing import Any, Callable
 from joblib import dump, load  # For exporting and importing models
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.ensemble import RandomForestClassifier  # For the machine learning model
 from sklearn.metrics import (
     accuracy_score,
+    confusion_matrix,
+    f1_score,
     precision_score,
     recall_score,
-    f1_score,
-    confusion_matrix,
 )  # For model evaluation
-from sklearn.model_selection import train_test_split, StratifiedKFold  # For splitting the dataset and cross-validation
+from sklearn.model_selection import StratifiedKFold, train_test_split  # For splitting the dataset and cross-validation
 from sklearn.preprocessing import StandardScaler  # For feature scaling
 from telegram_bot import TelegramBot  # For Telegram notifications
 from tqdm import tqdm  # For progress bars
+from typing import Any, Callable  # For type hints
 
 psutil = (
     __import__("psutil") if __import__("importlib").util.find_spec("psutil") else None
@@ -639,6 +638,26 @@ def load_dataset(csv_path):
     return df  # Return the loaded DataFrame
 
 
+def sanitize_feature_names(columns):
+    r"""
+    Sanitize column names by removing special JSON characters that LightGBM doesn't support.
+    Replaces: { } [ ] : , " \ with underscores.
+
+    :param columns: pandas Index or list of column names
+    :return: list of sanitized column names
+    """
+    
+    sanitized = []  # List to store sanitized column names
+    
+    for col in columns:  # Iterate over each column name
+        clean_col = re.sub(r"[{}\[\]:,\"\\]", "_", str(col))  # Replace special characters with underscores
+        clean_col = re.sub(r"_+", "_", clean_col)  # Replace multiple underscores with a single underscore
+        clean_col = clean_col.strip("_")  # Remove leading/trailing underscores
+        sanitized.append(clean_col)  # Add sanitized column name to the list
+        
+    return sanitized  # Return the list of sanitized column names
+
+
 def preprocess_dataframe(df, remove_zero_variance=True):
     """
     Preprocess a DataFrame by removing rows with NaN or infinite values and
@@ -666,6 +685,8 @@ def preprocess_dataframe(df, remove_zero_variance=True):
         return df  # Return None
 
     df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+    
+    df.columns = sanitize_feature_names(df.columns)  # Sanitize column names to remove special characters
 
     df_clean = df.replace([np.inf, -np.inf], np.nan).dropna()  # Remove rows with NaN or infinite values
 
