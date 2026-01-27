@@ -1156,8 +1156,14 @@ def generate(args):
     if args.feature_dim is not None:  # If feature dimension is provided
         feature_dim = args.feature_dim  # Use provided feature dimension
     else:
-        if scaler is not None and hasattr(scaler, "mean_"):
-            feature_dim = scaler.mean_.shape[0]  # Infer feature dimension from scaler
+        mean_attr = getattr(scaler, "mean_", None) if scaler is not None else None
+        if mean_attr is not None:
+            mean_arr = np.asarray(mean_attr)
+            if mean_arr.ndim == 0:
+                raise RuntimeError(
+                    "Scaler.mean_ is scalar; unable to infer feature dimension. Provide --feature_dim."
+                )
+            feature_dim = int(mean_arr.shape[0])  # Infer feature dimension from scaler
         else:
             raise RuntimeError(
                 "Unable to determine feature dimension; provide --feature_dim or a checkpoint with scaler."
