@@ -1548,8 +1548,8 @@ def manual_grid_search(
 
     verbose_output(f"{BackgroundColors.GREEN}Manually optimizing {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN} using parallel processing...{Style.RESET_ALL}")  # Log manual optimization start
 
-    if not param_grid:
-        return None, None, None, global_counter_start  # No hyperparameters to optimize
+    if not param_grid:  # No hyperparameters to optimize — return a full tuple matching the caller's unpack
+        return None, -float("inf"), 0.0, [], global_counter_start
 
     keys = list(param_grid.keys())  # Parameter names
     values = [v if isinstance(v, (list, tuple)) else [v] for v in param_grid.values()]  # Ensure each value is iterable
@@ -1660,7 +1660,7 @@ def build_result_entry_from_best(csv_path, model_name, best_params, best_score, 
         if result.get("params") == json.dumps(best_params):
             best_result = result
             break
-    result_dict = OrderedDict([
+    result_dict: Dict[str, Any] = OrderedDict([
         ("base_csv", os.path.basename(csv_path)),
         ("model", model_name),
         ("best_params", json.dumps(best_params)),
