@@ -6,51 +6,51 @@ Author      : Breno Farias da Silva
 Created     : 2025-10-07
 
 What this module does
-   - Recursively scans a directory (or single CSV file) and collects all
-      matching CSV datasets.
-   - Extracts metadata and summaries per file: sample/feature counts,
-      feature types, missing values, detected label column and class
-      distributions.
-   - Optionally generates a 2D t-SNE plot per file (`Data_Separability/`),
-      using class-aware downsampling with a default target of 2000 (config
-      in callers); small classes (default min 50) are preserved in full.
-   - Optionally computes cross-dataset compatibility reports comparing
-      feature unions/intersections between dataset groups (`CROSS_DATASET_VALIDATE`).
+    - Recursively scans a directory (or single CSV file) and collects all
+        matching CSV datasets.
+    - Extracts metadata and summaries per file: sample/feature counts,
+        feature types, missing values, detected label column and class
+        distributions.
+    - Optionally generates a 2D t-SNE plot per file (`Data_Separability/`),
+        using class-aware downsampling with a default target of 2000 (config
+        in callers); small classes (default min 50) are preserved in full.
+    - Optionally computes cross-dataset compatibility reports comparing
+        feature unions/intersections between dataset groups (`CROSS_DATASET_VALIDATE`).
 
 Key defaults and globals
-   - File discovery default extension: .csv
-   - Results saved under each dataset base directory in `RESULTS_DIR`
-      (default: ./Dataset_Description/). The per-dataset CSV is named
-      `Dataset_Descriptor.csv` (config: `RESULTS_FILENAME`).
-   - Cross-group report: saved as `Cross_{RESULTS_FILENAME}` in each
-      group's results directory when `CROSS_DATASET_VALIDATE = True`.
-   - t-SNE: uses sklearn.manifold.TSNE and adapts to `n_iter`/`max_iter`
-      parameter name differences across scikit-learn versions.
+    - File discovery default extension: .csv
+    - Results saved under each dataset base directory in `RESULTS_DIR`
+        (default: ./Dataset_Description/). The per-dataset CSV is named
+        `Dataset_Descriptor.csv` (config: `RESULTS_FILENAME`).
+    - Cross-group report: saved as `Cross_{RESULTS_FILENAME}` in each
+        group's results directory when `CROSS_DATASET_VALIDATE = True`.
+    - t-SNE: uses sklearn.manifold.TSNE and adapts to `n_iter`/`max_iter`
+        parameter name differences across scikit-learn versions.
 
 Behavioral notes & guarantees
-   - Downsampling is class-aware: classes with >= `min_class_size` receive
-      at least `min_class_size` samples when possible; classes with fewer
-      samples are included entirely. Remaining budget is distributed
-      proportionally using a fractional remainder method.
-   - Numeric extraction tries `select_dtypes(include=["number"])` and
-      attempts coercion of object/string columns to numeric when needed.
-   - The script performs disk-space checks before writing large outputs.
-   - The generator writes one cross-dataset CSV per dataset group and
-      normalizes rows so the file's group appears as "Dataset A".
+    - Downsampling is class-aware: classes with >= `min_class_size` receive
+        at least `min_class_size` samples when possible; classes with fewer
+        samples are included entirely. Remaining budget is distributed
+        proportionally using a fractional remainder method.
+    - Numeric extraction tries `select_dtypes(include=["number"])` and
+        attempts coercion of object/string columns to numeric when needed.
+    - The script performs disk-space checks before writing large outputs.
+    - The generator writes one cross-dataset CSV per dataset group and
+        normalizes rows so the file's group appears as "Dataset A".
 
 Usage
-   - Run the script directly: `python3 dataset_descriptor.py` (adjust
-      `DATASETS` constant or call `generate_dataset_report()` programmatically).
+    - Run the script directly: `python3 dataset_descriptor.py` (adjust
+        `DATASETS` constant or call `generate_dataset_report()` programmatically).
 
 Dependencies
-   - Python 3.9+
-   - pandas, numpy, matplotlib, scikit-learn, tqdm, colorama
+    - Python 3.9+
+    - pandas, numpy, matplotlib, scikit-learn, tqdm, colorama
 
 Limitations / TODO
-   - Header detection and CSV parsing are pragmatic; malformed CSVs may
-      require preprocessing.
-   - Add CLI flags for `sample_size`, `min_class_size`, `CROSS_DATASET_VALIDATE`.
-   - Consider structured logging instead of printing/redirecting stdout.
+    - Header detection and CSV parsing are pragmatic; malformed CSVs may
+        require preprocessing.
+    - Add CLI flags for `sample_size`, `min_class_size`, `CROSS_DATASET_VALIDATE`.
+    - Consider structured logging instead of printing/redirecting stdout.
 """
 
 import atexit  # For playing a sound when the program finishes
