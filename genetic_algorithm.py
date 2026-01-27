@@ -65,6 +65,7 @@ import warnings  # For suppressing warnings
 from colorama import Style  # For coloring the terminal
 from deap import base, creator, tools, algorithms  # For the genetic algorithm
 from functools import partial  # For creating partial functions
+from typing import Any, Callable
 from joblib import dump, load  # For exporting and importing models
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
@@ -1004,18 +1005,31 @@ def setup_genetic_algorithm(n_features, population_size=None):
         f"{BackgroundColors.GREEN}Setting up Genetic Algorithm with {n_features} features and population size {population_size}.{Style.RESET_ALL}"
     )  # Output the verbose message
 
-    # Avoid re-creating FitnessMax and Individual
-    if not hasattr(creator, "FitnessMax"):  # If FitnessMax is not already created
-        creator.create("FitnessMax", base.Fitness, weights=(1.0,))  # Maximize F1-score
-    if not hasattr(creator, "Individual"):  # If Individual is not already created
-        creator.create("Individual", list, fitness=creator.FitnessMax)  # Individual = list with fitness
+    # Get or create FitnessMax
+    FitnessMax = getattr(creator, "FitnessMax", None)
+    if FitnessMax is None:
+        FitnessMax = creator.create("FitnessMax", base.Fitness, weights=(1.0,))
 
-    toolbox = base.Toolbox()  # Create a toolbox
-    toolbox.register("attr_bool", random.randint, 0, 1)  # Attribute generator (0 or 1)
-    toolbox.register(
-        "individual", tools.initRepeat, creator.Individual, toolbox.attr_bool, n=n_features
-    )  # Individual generator
-    toolbox.register("population", tools.initRepeat, list, toolbox.individual)  # Population generator
+    # Get or create Individual
+    Individual = getattr(creator, "Individual", None)
+    if Individual is None:
+        Individual = creator.create("Individual", list, fitness=FitnessMax)
+
+    # Toolbox (typed Any to avoid analyzer confusion)
+    toolbox: Any = base.Toolbox()
+
+    # Binary attribute generator
+    def _attr_bool() -> int:
+        return random.randint(0, 1)
+
+    toolbox.register("attr_bool", random.randint, 0, 1)
+
+    # Individual factory and registration
+    individual_factory: Callable[[], Any] = partial(tools.initRepeat, Individual, _attr_bool, n_features)
+    toolbox.register("individual", individual_factory)
+
+    # Population factory and registration
+    toolbox.register("population", tools.initRepeat, list, individual_factory)
 
     toolbox.register("mate", tools.cxTwoPoint)  # Crossover operator
     toolbox.register("mutate", tools.mutFlipBit, indpb=0.05)  # Mutation operator
