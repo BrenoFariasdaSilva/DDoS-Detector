@@ -5,46 +5,46 @@ Principal Component Analysis (PCA) Feature Extraction & Evaluation Tool (pca.py)
 Author      : Breno Farias da Silva
 Created     : 2025-11-21
 Description :
-        Utility to run PCA-based dimensionality reduction and evaluate downstream
-        classification performance. The script bundles dataset loading, cleaning,
-        scaling, PCA transformation, stratified cross-validation evaluation and
-        export of consolidated results for easy comparison between configurations.
+    Utility to run PCA-based dimensionality reduction and evaluate downstream
+    classification performance. The script bundles dataset loading, cleaning,
+    scaling, PCA transformation, stratified cross-validation evaluation and
+    export of consolidated results for easy comparison between configurations.
 
 Core features:
-        - Safe dataset loading and basic validation
-        - Z-score standardization of numeric features prior to PCA
-        - PCA transform with configurable `n_components` grid
-        - 10-fold Stratified CV on the training set and final evaluation on a held-out test split
-        - Aggregated metrics including Accuracy, Precision, Recall, F1, FPR and FNR
-        - Export of `PCA_Results.csv` (per-dataset `Feature_Analysis/`) with hardware metadata
-        - Optional parallel execution for multiple component configurations
+    - Safe dataset loading and basic validation
+    - Z-score standardization of numeric features prior to PCA
+    - PCA transform with configurable `n_components` grid
+    - 10-fold Stratified CV on the training set and final evaluation on a held-out test split
+    - Aggregated metrics including Accuracy, Precision, Recall, F1, FPR and FNR
+    - Export of `PCA_Results.csv` (per-dataset `Feature_Analysis/`) with hardware metadata
+    - Optional parallel execution for multiple component configurations
 
 Usage:
-        - Configure `csv_file` in `main()` or call `run_pca_analysis(csv_path, ...)`
-        - Adjust `n_components_list` to test desired component counts
-        - Run: `python3 pca.py` or via the repository Makefile
+    - Configure `csv_file` in `main()` or call `run_pca_analysis(csv_path, ...)`
+    - Adjust `n_components_list` to test desired component counts
+    - Run: `python3 pca.py` or via the repository Makefile
 
 Outputs:
-        - `Feature_Analysis/PCA_Results.csv` (one row per configuration)
-        - Saved PCA objects for reproducibility (optional)
-        - Console summary and best-configuration selection by CV F1-score
+    - `Feature_Analysis/PCA_Results.csv` (one row per configuration)
+    - Saved PCA objects for reproducibility (optional)
+    - Console summary and best-configuration selection by CV F1-score
 
 Notes & conventions:
-        - The code expects the last column to be the target variable.
-        - Only numeric input columns are used for PCA (non-numeric columns are ignored).
-        - Defaults: 80/20 train-test split, 10-fold Stratified CV on training data,
-          RandomForest (100 trees) used for evaluation.
-        - Toggle `VERBOSE = True` for extra diagnostic output.
+    - The code expects the last column to be the target variable.
+    - Only numeric input columns are used for PCA (non-numeric columns are ignored).
+    - Defaults: 80/20 train-test split, 10-fold Stratified CV on training data,
+        RandomForest (100 trees) used for evaluation.
+    - Toggle `VERBOSE = True` for extra diagnostic output.
 
 TODOs:
-        - Add CLI argument parsing for dataset path, `n_components_list`, `parallel` and `max_workers`.
-        - Add visualization for explained variance and component loadings.
-        - Provide incremental / out-of-core PCA for very large datasets.
-        - Add unit tests for preprocessing and evaluation functions.
+    - Add CLI argument parsing for dataset path, `n_components_list`, `parallel` and `max_workers`.
+    - Add visualization for explained variance and component loadings.
+    - Provide incremental / out-of-core PCA for very large datasets.
+    - Add unit tests for preprocessing and evaluation functions.
 
 Dependencies:
-        - Python >= 3.9
-        - pandas, numpy, scikit-learn, colorama
+    - Python >= 3.9
+    - pandas, numpy, scikit-learn, colorama
 """
 
 import argparse  # For command-line argument parsing
