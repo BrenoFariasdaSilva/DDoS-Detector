@@ -6,36 +6,36 @@ Author      : Breno Farias da Silva
 Created     : 2025-10-07
 
 Purpose:
-   Runs a DEAP-based genetic algorithm to perform feature selection for
-   classification tasks. The pipeline includes dataset loading and cleaning,
-   scaling, GA setup and execution, fitness evaluation (RandomForest by
-   default), and result export/analysis (CSV summaries, feature boxplots,
-   and optional Telegram notifications).
+    Runs a DEAP-based genetic algorithm to perform feature selection for
+    classification tasks. The pipeline includes dataset loading and cleaning,
+    scaling, GA setup and execution, fitness evaluation (RandomForest by
+    default), and result export/analysis (CSV summaries, feature boxplots,
+    and optional Telegram notifications).
 
 Highlights:
-   - Binary-mask GA using DEAP with configurable population sweep support
-   - Fitness returns multi-metrics: accuracy, precision, recall, F1, FPR, FNR
-   - Exports consolidated results to Feature_Analysis/ and saves plots
-   - Optional Telegram progress notifications and background resource monitor
+    - Binary-mask GA using DEAP with configurable population sweep support
+    - Fitness returns multi-metrics: accuracy, precision, recall, F1, FPR, FNR
+    - Exports consolidated results to Feature_Analysis/ and saves plots
+    - Optional Telegram progress notifications and background resource monitor
 
 Usage:
-   - Configure the CSV path in `main()` or call the functions programmatically.
-   - The script assumes CSV format where the last column is the target and
-     only numeric features are used by the GA pipeline.
+    - Configure the CSV path in `main()` or call the functions programmatically.
+    - The script assumes CSV format where the last column is the target and
+        only numeric features are used by the GA pipeline.
 
 Outputs:
-   - Feature_Analysis/Genetic_Algorithm_Results.csv (consolidated results)
-   - Per-dataset feature summaries and boxplots in Feature_Analysis/
+    - Feature_Analysis/Genetic_Algorithm_Results.csv (consolidated results)
+    - Per-dataset feature summaries and boxplots in Feature_Analysis/
 
 Notes & TODOs:
-   - Add argparse/CLI for run-time configuration (sample paths, generations,
-     population sizes, runs). Currently `main()` contains the defaults.
-   - Improve reproducibility (seed propagation), CV strategy, and parallelism.
-   - Add more robust categorical handling, imputation, and unit tests.
+    - Add argparse/CLI for run-time configuration (sample paths, generations,
+        population sizes, runs). Currently `main()` contains the defaults.
+    - Improve reproducibility (seed propagation), CV strategy, and parallelism.
+    - Add more robust categorical handling, imputation, and unit tests.
 
 Dependencies:
-   Python >= 3.9 and: pandas, numpy, scikit-learn, deap, tqdm, matplotlib,
-   seaborn, colorama. Optional: psutil, python-telegram-bot.
+    Python >= 3.9 and: pandas, numpy, scikit-learn, deap, tqdm, matplotlib,
+    seaborn, colorama. Optional: psutil, python-telegram-bot.
 """
 
 import argparse  # For command-line argument parsing
