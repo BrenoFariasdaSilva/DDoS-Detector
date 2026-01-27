@@ -239,6 +239,37 @@ def extract_functions_and_calls(file_path: str) -> Dict[str, List[str]]:
     return {"defined": visitor.defined_funcs, "called": visitor.called_funcs}  # Return results
 
 
+def detect_unused_functions(root_dir: str) -> Dict[str, List[str]]:
+    """
+    Detects functions that are defined but never called in a Python project.
+
+    :param root_dir: Root directory of the project to scan
+    :return: Dictionary mapping relative file paths to lists of unused function names
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Detecting unused functions under root directory: {BackgroundColors.CYAN}{root_dir}{Style.RESET_ALL}"
+    )  # Output the verbose message
+    
+    unused_map = {}  # Map to store unused functions per file
+    all_defined = {}  # Map of relative file paths to defined function names
+    all_called = set()  # Set of all called function names in the project
+
+    py_files = collect_python_files(root_dir)  # Collect all Python files
+    for f in py_files:  # Process each Python file
+        funcs = extract_functions_and_calls(f)  # Extract defined and called functions
+        rel_path = os.path.relpath(f, root_dir).replace("\\", "/")  # Compute relative path
+        all_defined[rel_path] = funcs["defined"]  # Store defined functions
+        all_called.update(funcs["called"])  # Add called functions to global set
+
+    for rel_path, funcs in all_defined.items():  # Verify each file's defined functions
+        unused = [fn for fn in funcs if fn not in all_called]  # Functions never called
+        if unused:  # Only include files with unused functions
+            unused_map[rel_path] = unused
+
+    return unused_map  # Return the unused functions map
+
+
 def calculate_execution_time(start_time, finish_time):
     """
     Calculates the execution time between start and finish times and formats it as hh:mm:ss.
