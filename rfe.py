@@ -837,6 +837,53 @@ def evaluate_exported_model(model, scaler, X_numeric, feature_columns, top_featu
     return float(acc), float(prec), float(rec), float(f1), float(fpr), float(fnr), float(elapsed)
 
 
+def get_final_model(csv_path, X_train, y_train, top_features, feature_columns):
+    """
+    Helper function to load or export the final model, scaler, and parameters.
+
+    :param csv_path: Path to the CSV dataset file
+    :param X_train: Training features DataFrame
+    :param y_train: Training target array
+    :param top_features: List of top features
+    :param feature_columns: Feature column names
+    :return: final_model, scaler_full, top_features, loaded_hyperparams
+    """
+    loaded_hyperparams = None
+    if SKIP_TRAIN_IF_MODEL_EXISTS:
+        loaded = load_exported_artifacts(csv_path)
+        if loaded is not None:
+            final_model, scaler_full, loaded_features, loaded_params = loaded
+            top_features = loaded_features
+            loaded_hyperparams = loaded_params
+            print(f"{BackgroundColors.GREEN}Loaded exported model and scaler for {BackgroundColors.CYAN}{Path(csv_path).stem}{Style.RESET_ALL}")
+        else:
+            (
+                final_model,
+                scaler_full,
+                top_features,
+                _model_path,
+                _scaler_path,
+                _features_path,
+                model_params,
+                _params_path,
+            ) = export_final_model(X_train, feature_columns, top_features, y_train, csv_path)
+            loaded_hyperparams = model_params
+    else:
+        (
+            final_model,
+            scaler_full,
+            top_features,
+            _model_path,
+            _scaler_path,
+            _features_path,
+            model_params,
+            _params_path,
+        ) = export_final_model(X_train, feature_columns, top_features, y_train, csv_path)
+        loaded_hyperparams = model_params
+
+    return final_model, scaler_full, top_features, loaded_hyperparams
+
+
 def run_rfe(csv_path):
     """
     Runs Recursive Feature Elimination on the provided dataset, prints the single
@@ -904,39 +951,8 @@ def run_rfe(csv_path):
         print_metrics(metrics_tuple) if VERBOSE else None  # optionally print metrics
         print_top_features(top_features, rfe_ranking) if VERBOSE else None  # optionally print top features
 
-        # If enabled, try loading existing exported artifacts instead of retraining (fallback)
-        loaded_hyperparams = None
-        if SKIP_TRAIN_IF_MODEL_EXISTS:
-            loaded = load_exported_artifacts(csv_path)  # try to load latest exported artifacts
-            if loaded is not None:
-                final_model, scaler_full, loaded_features, loaded_params = loaded  # unpack loaded objects and params
-                top_features = loaded_features  # use loaded feature list
-                loaded_hyperparams = loaded_params  # store loaded hyperparameters
-                print(f"{BackgroundColors.GREEN}Loaded exported model and scaler for {BackgroundColors.CYAN}{Path(csv_path).stem}{Style.RESET_ALL}")  # notify load
-            else:
-                (
-                    final_model,
-                    scaler_full,
-                    top_features,
-                    _model_path,
-                    _scaler_path,
-                    _features_path,
-                    model_params,
-                    _params_path,
-                ) = export_final_model(X_numeric, feature_columns, top_features, y_array, csv_path)  # train and export final model, scaler and features
-                loaded_hyperparams = model_params
-        else:
-            (
-                final_model,
-                scaler_full,
-                top_features,
-                _model_path,
-                _scaler_path,
-                _features_path,
-                model_params,
-                _params_path,
-            ) = export_final_model(X_numeric, feature_columns, top_features, y_array, csv_path)  # train and export final model, scaler and features
-            loaded_hyperparams = model_params
+        # Get final model, scaler, and parameters
+        final_model, scaler_full, top_features, loaded_hyperparams = get_final_model(csv_path, X_numeric, y_array, top_features, feature_columns)
 
         # Evaluate final_model (loaded or newly trained) on the full dataset
         eval_metrics = evaluate_exported_model(final_model, scaler_full, X_numeric, feature_columns, top_features, y_array)
@@ -1022,39 +1038,9 @@ def run_rfe(csv_path):
 
     sorted_rfe_ranking = sorted(avg_rfe_ranking.items(), key=lambda x: x[1])  # sort averaged rankings ascending
 
-    # If enabled, try loading existing exported artifacts instead of retraining
-    loaded_hyperparams = None
-    if SKIP_TRAIN_IF_MODEL_EXISTS:
-        loaded = load_exported_artifacts(csv_path)  # try to load latest exported artifacts
-        if loaded is not None:
-            final_model, scaler_full, loaded_features, loaded_params = loaded  # unpack loaded objects and params
-            top_features = loaded_features  # use loaded feature list
-            loaded_hyperparams = loaded_params  # store loaded hyperparameters
-            print(f"{BackgroundColors.GREEN}Loaded exported model and scaler for {BackgroundColors.CYAN}{Path(csv_path).stem}{Style.RESET_ALL}")  # notify load
-        else:
-            (
-                final_model,
-                scaler_full,
-                top_features,
-                _model_path,
-                _scaler_path,
-                _features_path,
-                model_params,
-                _params_path,
-            ) = export_final_model(X_train_df, feature_columns, top_features, y_train_array, csv_path)  # train and export final model, scaler and features on training set
-            loaded_hyperparams = model_params
-    else:
-        (
-            final_model,
-            scaler_full,
-            top_features,
-            _model_path,
-            _scaler_path,
-            _features_path,
-            model_params,
-            _params_path,
-        ) = export_final_model(X_train_df, feature_columns, top_features, y_train_array, csv_path)  # train and export final model, scaler and features on training set
-        loaded_hyperparams = model_params
+    # Get final model, scaler, and parameters
+    final_model, scaler_full, top_features, loaded_hyperparams = get_final_model(csv_path, X_train_df, y_train_array, top_features, feature_columns)
+
     # Evaluate final_model (loaded or newly trained) on the held-out test set
     eval_metrics = evaluate_exported_model(final_model, scaler_full, X_test_df, feature_columns, top_features, y_test_array)
     run_results = [  # prepare aggregated run results for saving
