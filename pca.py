@@ -344,6 +344,12 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
 
     # Attach scaler and trained classifier for export
     scaler_export = StandardScaler().fit(np.vstack([X_train, X_test]))
+    
+    try:  # Try to get trained classifier parameters
+        trained_classifier_params = model.get_params()  # Get model parameters
+    except Exception:  # On failure
+        trained_classifier_params = None  # Set to None
+
     return {
         "n_components": n_components,
         "explained_variance": explained_variance,
@@ -362,6 +368,7 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
         "pca_object": pca,
         "scaler": scaler_export,
         "trained_classifier": model,
+        "trained_classifier_params": trained_classifier_params,
     }
 
 
@@ -548,9 +555,19 @@ def save_pca_results(csv_path, all_results):
     scaling = "StandardScaler"  # Scaling method
 
     rows = []  # List to store one normalized row per result
-    evaluator_hyperparams = {"model": "RandomForestClassifier", "n_estimators": 100, "random_state": 42, "n_jobs": -1}
+    
+    # Fallback evaluator hyperparameters (used only if trained classifier params unavailable)
+    evaluator_fallback = {"model": "RandomForestClassifier", "n_estimators": 100, "random_state": 42, "n_jobs": -1}
     cv_method = "StratifiedKFold(n_splits=10)"
     for results in all_results:
+        # Prefer hyperparameters from the trained classifier attached to `results`.
+        eval_params = None
+        trained_clf = results.get("trained_classifier")
+        if trained_clf is not None:
+            try:
+                eval_params = trained_clf.get_params()
+            except Exception:
+                eval_params = None
 
         # Build a single normalized row with canonical fields
         row = {
@@ -558,7 +575,7 @@ def save_pca_results(csv_path, all_results):
             "tool": "PCA",
             "model": eval_model,
             "dataset": os.path.relpath(csv_path),
-            "hyperparameters": json.dumps(evaluator_hyperparams),
+            "hyperparameters": json.dumps(eval_params or evaluator_fallback, sort_keys=True, ensure_ascii=False, default=str),
             "cv_method": cv_method,
             "train_test_split": train_test_split,
             "scaling": scaling,
