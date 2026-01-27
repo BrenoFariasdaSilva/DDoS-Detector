@@ -270,6 +270,28 @@ def detect_unused_functions(root_dir: str) -> Dict[str, List[str]]:
     return unused_map  # Return the unused functions map
 
 
+def write_unused_functions_report(unused_map: Dict[str, List[str]]):
+    """
+    Writes a JSON report of unused functions if any are found.
+
+    :param unused_map: Dictionary mapping relative file paths to unused function names
+    :return: None
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Writing unused functions report to: {BackgroundColors.CYAN}{OUTPUT_FILE}{Style.RESET_ALL}"
+    )  # Output the verbose message
+    
+    if not unused_map:  # Verify if any unused functions were detected
+        print("No unused functions found.")
+        return  # Exit if nothing to report
+
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:  # Open output JSON file
+        json.dump(unused_map, f, indent=4)  # Write the map with indentation
+
+    print(f"Unused functions report generated: {OUTPUT_FILE}")  # Notify user
+
+
 def calculate_execution_time(start_time, finish_time):
     """
     Calculates the execution time between start and finish times and formats it as hh:mm:ss.
