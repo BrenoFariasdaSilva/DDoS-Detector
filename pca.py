@@ -446,7 +446,7 @@ def get_hardware_specifications():
                         cpu_model = line.split(":", 1)[1].strip()  # Extract name
                         break  # Stop after first match
 
-        elif system == "Darwin":  # macOS: use sysctl
+        elif system == "Darwin":  # MacOS: use sysctl
             out = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"])  # Run sysctl
             cpu_model = out.decode().strip()  # Extract model string
 
