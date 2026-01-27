@@ -95,6 +95,63 @@ RUN_FUNCTIONS = {
     "Play Sound": True,  # Set to True to play a sound when the program finishes
 }
 
+# Class Definitions:
+
+class FunctionASTVisitor(ast.NodeVisitor):
+    """
+    AST visitor class to collect function definitions and function calls
+    from a Python source file.
+
+    This class traverses the abstract syntax tree (AST) of a Python file,
+    recording:
+        - All function definitions (names of functions defined in the file)
+        - All function calls (names of functions invoked in the file)
+
+    Attributes:
+        defined_funcs (List[str]): Names of functions defined in the file.
+        called_funcs (List[str]): Names of functions called in the file.
+    """
+
+    def __init__(self):
+        """
+        Initializes the FunctionASTVisitor instance with empty lists for storing
+        function definitions and calls.
+        """
+        
+        self.defined_funcs: List[str] = []  # List to store defined function names
+        self.called_funcs: List[str] = []  # List to store called function names
+
+    def visit_FunctionDef(self, node):
+        """
+        Visits each function definition node in the AST.
+
+        Adds the function name to the 'defined_funcs' list and
+        continues traversing child nodes.
+
+        :param node: ast.FunctionDef node representing a function definition
+        :return: None
+        """
+        
+        self.defined_funcs.append(node.name)  # Record the defined function name
+        self.generic_visit(node)  # Continue traversing child nodes
+
+    def visit_Call(self, node):
+        """
+        Visits each function call node in the AST.
+
+        If the call is a simple function call (not a method or attribute),
+        adds the function name to the 'called_funcs' list. Then continues
+        traversing child nodes.
+
+        :param node: ast.Call node representing a function call
+        :return: None
+        """
+        
+        if isinstance(node.func, ast.Name):  # Only simple function calls
+            self.called_funcs.append(node.func.id)  # Record the called function name
+        self.generic_visit(node)  # Continue traversing child nodes
+
+
 # Functions Definitions:
 
 
