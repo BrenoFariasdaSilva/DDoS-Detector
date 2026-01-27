@@ -227,6 +227,10 @@ class TelegramBot:
 
         chat_id = self._get_chat_id(chat_id)  # Get the chat ID to use
 
+        if chat_id is None:  # If chat ID is not set
+            print(f"{BackgroundColors.RED}Chat ID not set.{Style.RESET_ALL}")
+            return  # Exit the function
+
         self.verbose_output(
             f"{BackgroundColors.GREEN}Running Telegram bot to send messages to chat ID {BackgroundColors.CYAN}{chat_id}{Style.RESET_ALL}"
         )  # Output the verbose message
