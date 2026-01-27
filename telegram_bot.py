@@ -228,7 +228,7 @@ class TelegramBot:
 
     async def send_messages(self, messages, chat_id=None):
         """
-        Synchronous wrapper to send messages.
+        Asynchronous wrapper to send messages.
 
         :param messages: List of message strings or a single string
         :param chat_id: The chat ID to send messages to (optional)
@@ -242,7 +242,7 @@ class TelegramBot:
             print(f"{BackgroundColors.RED}TELEGRAM_API_KEY or CHAT_ID not set.{Style.RESET_ALL}")
             return  # Exit the function
 
-        asyncio.run(self.run_bot(messages, chat_id))  # Run the bot to send messages
+        await self.run_bot(messages, chat_id)  # Run the bot to send messages
 
 
 def verify_filepath_exists(filepath):
@@ -281,7 +281,7 @@ def play_sound():
         )
 
 
-def main():
+async def main():
     """
     Main function for standalone execution.
 
@@ -304,9 +304,9 @@ def main():
     ]
 
     if messages:  # If there are messages to send
-        bot.send_messages(messages)  # Send messages
+        await bot.send_messages(messages)  # Send messages
         print(f"{BackgroundColors.GREEN}Messages sent to Telegram chat.{Style.RESET_ALL}")
-
+    
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
     )  # Output the end of the program message
@@ -323,4 +323,4 @@ if __name__ == "__main__":
     :return: None
     """
 
-    main()  # Call the main function
+    asyncio.run(main())  # Call the main function
