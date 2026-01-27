@@ -884,104 +884,103 @@ def get_final_model(csv_path, X_train, y_train, top_features, feature_columns):
     return final_model, scaler_full, top_features, loaded_hyperparams
 
 
-def run_rfe(csv_path):
+def build_run_results(final_model, csv_path, hyperparameters, cv_method, cv_metrics=None, test_metrics=None, training_time=None, top_features=None, rfe_ranking=None):
     """
-    Runs Recursive Feature Elimination on the provided dataset, prints the single
-    set of top features selected, computes and prints performance metrics, and
-    saves the structured results.
+    Helper function to build the run_results dictionary.
 
+    :param final_model: The trained model
     :param csv_path: Path to the CSV dataset file
-    :return: None
+    :param hyperparameters: Hyperparameters dict
+    :param cv_method: CV method string
+    :param cv_metrics: Tuple of CV metrics (optional)
+    :param test_metrics: Tuple of test metrics
+    :param training_time: Training time
+    :param top_features: List of top features
+    :param rfe_ranking: Sorted RFE ranking
+    :return: List containing the results dict
     """
-
-    verbose_output(
-        f"{BackgroundColors.GREEN}Starting RFE analysis on dataset: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}"
-    )  # Output the verbose message
-
-    hyperparameters = {
-        "model": "RandomForestClassifier",
-        "n_estimators": 100,
-        "random_state": 42,
-        "n_jobs": N_JOBS,
+    
+    result = {
+        "model": final_model.__class__.__name__,
+        "dataset": os.path.relpath(csv_path),
+        "hyperparameters": json.dumps(hyperparameters),
+        "cv_method": cv_method,
+        "top_features": json.dumps(top_features),
+        "rfe_ranking": json.dumps(rfe_ranking),
     }
 
-    df = load_dataset(csv_path)  # Load the dataset
+    if cv_metrics:
+        result.update({
+            "cv_accuracy": round(cv_metrics[0], 4),
+            "cv_precision": round(cv_metrics[1], 4),
+            "cv_recall": round(cv_metrics[2], 4),
+            "cv_f1_score": round(cv_metrics[3], 4),
+            "cv_fpr": round(cv_metrics[4], 4),
+            "cv_fnr": round(cv_metrics[5], 4),
+        })
 
-    if df is None:  # If dataset loading failed
-        return  # Return None (no need for empty dict)
+    if test_metrics:
+        result.update({
+            "test_accuracy": round(test_metrics[0], 4),
+            "test_precision": round(test_metrics[1], 4),
+            "test_recall": round(test_metrics[2], 4),
+            "test_f1_score": round(test_metrics[3], 4),
+            "test_fpr": round(test_metrics[4], 4),
+            "test_fnr": round(test_metrics[5], 4),
+            "testing_time_s": float(test_metrics[6]),
+        })
 
-    cleaned_df = preprocess_dataframe(df)  # Preprocess the DataFrame
+    if training_time is not None:
+        result["training_time_s"] = float(training_time)
 
-    X = cleaned_df.iloc[:, :-1]  # Features DataFrame
-    y = cleaned_df.iloc[:, -1]  # Target Series
+    return [result]
 
-    if X is None or y is None:  # If loading failed
-        return  # Exit the function
 
-    # Coerce numeric features (keep only columns with numeric content)
-    X_numeric = X.select_dtypes(include=["number"]).copy()  # select numeric columns from X
-    if X_numeric.shape[1] == 0:  # check if no numeric columns were found
-        coerced_cols = {}  # prepare dict to hold columns coerced to numeric
-        for col in X.columns:  # iterate over all original columns
-            coerced = pd.to_numeric(X[col], errors="coerce")  # attempt to coerce column to numeric (invalid -> NaN)
-            if coerced.notna().sum() > 0:  # if coercion produced any valid numeric values
-                coerced_cols[col] = coerced  # keep this coerced column
-        if coerced_cols:  # if at least one column was successfully coerced to numeric
-            X_numeric = pd.DataFrame(coerced_cols, index=X.index)  # build DataFrame from coerced numeric columns
-        else:
-            print(f"{BackgroundColors.RED}No numeric features found after preprocessing. Cannot run RFE.{Style.RESET_ALL}")  # warn user
-            return  # exit because RFE requires numeric features
+def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
+    """
+    Handles RFE for datasets with insufficient samples for stratified CV (fallback to single train/test split).
 
-    feature_columns = X_numeric.columns  # save the numeric feature column names for later mapping
+    :param csv_path: Path to the CSV dataset file
+    :param X_numeric: Numeric features DataFrame
+    :param y_array: Target array
+    :param feature_columns: Feature column names
+    :param hyperparameters: Hyperparameters dict
+    """
+    
+    print(f"{BackgroundColors.YELLOW}Not enough samples per class for stratified CV; falling back to single train/test split.{Style.RESET_ALL}")
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_numeric.values, y_array, test_size=0.2, random_state=42, stratify=None
+    )  # perform a single non-stratified train/test split
+    selector, model = run_rfe_selector(X_train, y_train, random_state=42)  # run RFE on the single split
+    metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42)  # compute metrics on split
+    top_features, rfe_ranking = extract_top_features(selector, feature_columns)  # extract selected features and rankings
+    sorted_rfe_ranking = sorted(rfe_ranking.items(), key=lambda x: x[1])  # sort features by ranking (ascending)
 
-    # Determine stratified CV splits safely
-    y_array = np.array(y)  # convert target to numpy array for splitting and counting
-    unique, counts = np.unique(y_array, return_counts=True)  # compute class labels and their counts
-    min_class_count = counts.min() if counts.size > 0 else 0  # get smallest class sample count
-    if min_class_count < 2:  # if any class has fewer than 2 samples
-        print(f"{BackgroundColors.YELLOW}Not enough samples per class for stratified CV; falling back to single train/test split.{Style.RESET_ALL}")  # notify fallback
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_numeric.values, y_array, test_size=0.2, random_state=42, stratify=None
-        )  # perform a single non-stratified train/test split
-        selector, model = run_rfe_selector(X_train, y_train, random_state=42)  # run RFE on the single split
-        metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42)  # compute metrics on split
-        top_features, rfe_ranking = extract_top_features(selector, feature_columns)  # extract selected features and rankings
-        sorted_rfe_ranking = sorted(rfe_ranking.items(), key=lambda x: x[1])  # sort features by ranking (ascending)
+    print_metrics(metrics_tuple) if VERBOSE else None  # optionally print metrics
+    print_top_features(top_features, rfe_ranking) if VERBOSE else None  # optionally print top features
 
-        print_metrics(metrics_tuple) if VERBOSE else None  # optionally print metrics
-        print_top_features(top_features, rfe_ranking) if VERBOSE else None  # optionally print top features
+    final_model, scaler_full, top_features, loaded_hyperparams = get_final_model(csv_path, X_numeric, y_array, top_features, feature_columns)  # get final model/scaler
+    eval_metrics = evaluate_exported_model(final_model, scaler_full, X_numeric, feature_columns, top_features, y_array)  # evaluate on full dataset
 
-        # Get final model, scaler, and parameters
-        final_model, scaler_full, top_features, loaded_hyperparams = get_final_model(csv_path, X_numeric, y_array, top_features, feature_columns)
+    run_results = build_run_results(final_model, csv_path, hyperparameters, "single_train_test_split", test_metrics=eval_metrics, training_time=metrics_tuple[6], top_features=top_features, rfe_ranking=sorted_rfe_ranking)  # build results dict
 
-        # Evaluate final_model (loaded or newly trained) on the full dataset
-        eval_metrics = evaluate_exported_model(final_model, scaler_full, X_numeric, feature_columns, top_features, y_array)
+    save_rfe_results(csv_path, run_results)  # save fallback run results
+    print_run_summary(run_results)  # concise terminal summary
 
-        run_results = [  # prepare run results dict for saving based on final exported model
-            {
-                "model": final_model.__class__.__name__,  # model class name
-                "dataset": os.path.relpath(csv_path),  # added: relative dataset path used for this run
-                "hyperparameters": json.dumps(hyperparameters),
-                "cv_method": "single_train_test_split",
-                "test_accuracy": round(eval_metrics[0], 4),
-                "test_precision": round(eval_metrics[1], 4),
-                "test_recall": round(eval_metrics[2], 4),
-                "test_f1_score": round(eval_metrics[3], 4),
-                "test_fpr": round(eval_metrics[4], 4),
-                "test_fnr": round(eval_metrics[5], 4),
-                "training_time_s": float(metrics_tuple[6]),
-                "testing_time_s": float(eval_metrics[6]),
-                "top_features": json.dumps(top_features),
-                "rfe_ranking": json.dumps(sorted_rfe_ranking),
-            }
-        ]
 
-        save_rfe_results(csv_path, run_results)  # save fallback run results
-        print_run_summary(run_results)  # concise terminal summary
+def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
+    """
+    Handles RFE with stratified cross-validation.
 
-        return  # exit after fallback run
+    :param csv_path: Path to the CSV dataset file
+    :param X_numeric: Numeric features DataFrame
+    :param y_array: Target array
+    :param feature_columns: Feature column names
+    :param hyperparameters: Hyperparameters dict
+    """
 
-    # Create an 80/20 stratified hold-out
+    verbose_output(f"{BackgroundColors.GREEN}Starting RFE with Stratified K-Fold Cross-Validation...{Style.RESET_ALL}")
+    
     stratify_param = y_array if len(np.unique(y_array)) > 1 else None
     X_train_df, X_test_df, y_train_array, y_test_array = train_test_split(
         X_numeric, y_array, test_size=0.2, random_state=42, stratify=stratify_param
@@ -1043,36 +1042,72 @@ def run_rfe(csv_path):
 
     # Evaluate final_model (loaded or newly trained) on the held-out test set
     eval_metrics = evaluate_exported_model(final_model, scaler_full, X_test_df, feature_columns, top_features, y_test_array)
-    run_results = [  # prepare aggregated run results for saving
-        {
-            "model": final_model.__class__.__name__,  # model class name
-            "dataset": os.path.relpath(csv_path),  # added: relative dataset path used for this run
-            "hyperparameters": json.dumps(hyperparameters),
-            "cv_method": f"StratifiedKFold(n_splits={n_splits})",
-            "cv_accuracy": round(mean_metrics[0], 4),
-            "cv_precision": round(mean_metrics[1], 4),
-            "cv_recall": round(mean_metrics[2], 4),
-            "cv_f1_score": round(mean_metrics[3], 4),
-            "cv_fpr": round(mean_metrics[4], 4),
-            "cv_fnr": round(mean_metrics[5], 4),
-            "test_accuracy": round(eval_metrics[0], 4),
-            "test_precision": round(eval_metrics[1], 4),
-            "test_recall": round(eval_metrics[2], 4),
-            "test_f1_score": round(eval_metrics[3], 4),
-            "test_fpr": round(eval_metrics[4], 4),
-            "test_fnr": round(eval_metrics[5], 4),
-            "training_time_s": float(total_elapsed),
-            "testing_time_s": float(eval_metrics[6]),
-            "top_features": json.dumps(top_features),  # JSON-encoded list of majority-selected features
-            "rfe_ranking": json.dumps(sorted_rfe_ranking),  # JSON-encoded averaged and sorted rankings
-        }
-    ]
+    run_results = build_run_results(final_model, csv_path, hyperparameters, f"StratifiedKFold(n_splits={n_splits})", cv_metrics=mean_metrics, test_metrics=eval_metrics, training_time=total_elapsed, top_features=top_features, rfe_ranking=sorted_rfe_ranking)  # build results dict
 
     print_metrics(tuple(mean_metrics)) if VERBOSE else None  # optionally print aggregated metrics
     print_top_features(top_features, avg_rfe_ranking) if VERBOSE else None  # optionally print aggregated top features and avg ranks
 
     save_rfe_results(csv_path, run_results)  # save aggregated run results to CSV
     print_run_summary(run_results)  # concise terminal summary
+
+
+def run_rfe(csv_path):
+    """
+    Runs Recursive Feature Elimination on the provided dataset, prints the single
+    set of top features selected, computes and prints performance metrics, and
+    saves the structured results.
+
+    :param csv_path: Path to the CSV dataset file
+    :return: None
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Starting RFE analysis on dataset: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}"
+    )
+
+    hyperparameters = {  # Default hyperparameters for documentation
+        "model": "RandomForestClassifier",
+        "n_estimators": 100,
+        "random_state": 42,
+        "n_jobs": N_JOBS,
+    }
+
+    df = load_dataset(csv_path)  # Load dataset
+
+    if df is None:  # If loading failed
+        return  # Exit the function
+
+    cleaned_df = preprocess_dataframe(df)  # Preprocess the DataFrame
+
+    X = cleaned_df.iloc[:, :-1]  # Features are all columns except the last
+    y = cleaned_df.iloc[:, -1]  # Target is the last column
+
+    if X is None or y is None:  # If feature or target extraction failed
+        return  # Exit the function
+
+    X_numeric = X.select_dtypes(include=["number"]).copy()  # Select only numeric features
+    if X_numeric.shape[1] == 0:  # If no numeric features found
+        coerced_cols = {}  # Dictionary to hold coerced numeric columns
+        for col in X.columns:  # Iterate through all columns
+            coerced = pd.to_numeric(X[col], errors="coerce")  # Attempt to coerce to numeric
+            if coerced.notna().sum() > 0:  # If any values were successfully coerced
+                coerced_cols[col] = coerced  # Add to coerced columns
+        if coerced_cols:  # If any columns were successfully coerced
+            X_numeric = pd.DataFrame(coerced_cols, index=X.index)  # Create DataFrame from coerced columns
+        else:  # If no columns could be coerced
+            print(f"{BackgroundColors.RED}No numeric features found after preprocessing. Cannot run RFE.{Style.RESET_ALL}")
+            return  # Exit the function
+
+    feature_columns = X_numeric.columns  # Get the feature column names
+
+    y_array = np.array(y)  # Convert target to numpy array
+    unique, counts = np.unique(y_array, return_counts=True)  # Get unique classes and their counts
+    min_class_count = counts.min() if counts.size > 0 else 0  # Minimum samples in any class
+
+    if min_class_count < 2:  # If any class has fewer than 2 samples
+        run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparameters)  # Run fallback RFE
+    else:  # If sufficient samples for stratified CV
+        run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters)  # Run RFE with CV
 
 
 def verbose_output(true_string="", false_string=""):
