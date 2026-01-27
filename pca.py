@@ -224,7 +224,6 @@ def preprocess_dataframe(df, remove_zero_variance=True):
     if df is None:  # If the DataFrame is None
         return df  # Return None
 
-    # Strip whitespace from all column names
     df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
 
     df_clean = df.replace([np.inf, -np.inf], np.nan).dropna()  # Remove rows with NaN or infinite values
