@@ -1916,15 +1916,15 @@ def extract_rfe_ranking(csv_path):
             with open(json_path, "r", encoding="utf-8") as jf:  # Open JSON file
                 data = json.load(jf)  # Load JSON content
             if isinstance(data, dict):  # Ensure data is a dictionary
-                if "rfe_ranking" in data and isinstance(data["rfe_ranking"], dict):  # rfe_ranking key
+                if "rfe_ranking" in data and isinstance(data["rfe_ranking"], dict):  # Rfe_ranking key
                     rfe_ranking = data["rfe_ranking"]  # Use provided ranking
                 elif (
                     "per_run" in data and isinstance(data["per_run"], list) and len(data["per_run"]) > 0
-                ):  # per_run list exists
+                ):  # Per_run list exists
                     first = data["per_run"][0]  # First run entry
                     if (
                         isinstance(first, dict) and "ranking" in first and isinstance(first["ranking"], dict)
-                    ):  # ranking dict
+                    ):  # Ranking dict
                         rfe_ranking = first["ranking"]  # Use ranking
         except Exception as e:  # If parsing JSON fails
             print(
@@ -1947,7 +1947,7 @@ def extract_rfe_ranking(csv_path):
                                 ):  # Likely ranking
                                     rfe_ranking = parsed  # Use parsed dict as ranking
                                     return rfe_ranking  # Return early
-                            except Exception:  # ignore parse errors and continue
+                            except Exception:  # Ignore parse errors and continue
                                 pass
         except Exception as e:  # If reading CSV fails
             print(
@@ -2148,7 +2148,7 @@ def get_hardware_specifications():
                         cpu_model = line.split(":", 1)[1].strip()  # Extract name
                         break  # Stop after first match
 
-        elif system == "Darwin":  # macOS: use sysctl
+        elif system == "Darwin":  # MacOS: use sysctl
             out = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"])  # Run sysctl
             cpu_model = out.decode().strip()  # Extract model string
 
