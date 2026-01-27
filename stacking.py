@@ -1327,12 +1327,12 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
                     try:
                         loaded = load(str(matches[0]))
                         model = loaded
-                        # try load scaler with same base name
+                        # Try load scaler with same base name
                         scaler_path = str(matches[0]).replace("_model.joblib", "_scaler.joblib")
                         if os.path.exists(scaler_path):
                             scaler = load(scaler_path)
                         verbose_output(f"Loaded existing model from {matches[0]}")
-                        # compute predictions and metrics without retraining
+                        # Compute predictions and metrics without retraining
                         y_pred = model.predict(X_test)
                         elapsed_time = 0.0
                         acc = accuracy_score(y_test, y_pred)
@@ -1348,7 +1348,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
                             fnr = 0.0
                         return (acc, prec, rec, f1, fpr, fnr, elapsed_time)
                     except Exception:
-                        # fallback to training if loading fails
+                        # Fallback to training if loading fails
                         verbose_output(f"Failed to load existing model for {model_name}; retraining.")
         except Exception:
             pass
