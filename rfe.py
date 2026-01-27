@@ -692,7 +692,7 @@ def save_rfe_results(csv_path, run_results):
                 df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)
                 df_combined = df_combined.drop(columns=["timestamp_dt"])
             except Exception:
-                # fallback: string-sort (format chosen is lexicographically sortable)
+                # Fallback: string-sort (format chosen is lexicographically sortable)
                 df_combined = df_combined.sort_values(by="timestamp", ascending=False)
 
             df_out = df_combined.reset_index(drop=True)
@@ -759,7 +759,7 @@ def load_exported_artifacts(csv_path):
     if not candidates:
         return None  # no exported models found
 
-    # pick latest by modification time
+    # Pick latest by modification time
     latest_model = max(candidates, key=os.path.getmtime)  # select most recent model file
     scaler_path = latest_model.replace("-model.joblib", "-scaler.joblib")  # infer scaler path
     features_path = latest_model.replace("-model.joblib", "-features.json")  # infer features path
@@ -802,7 +802,7 @@ def evaluate_exported_model(model, scaler, X_numeric, feature_columns, top_featu
     rec = recall_score(y_array, y_pred, average="weighted", zero_division=0)  # recall
     f1 = f1_score(y_array, y_pred, average="weighted", zero_division=0)  # f1 score
 
-    # compute FPR/FNR similarly to compute_rfe_metrics
+    # Compute FPR/FNR similarly to compute_rfe_metrics
     if len(np.unique(y_array)) == 2:
         cm = confusion_matrix(y_array, y_pred)
         if cm.shape == (2, 2):
