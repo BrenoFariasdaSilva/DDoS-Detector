@@ -860,7 +860,7 @@ def train(args):
                     try:  # Try to load checkpoint
                         print(f"{BackgroundColors.GREEN}Loading generator checkpoint: {g_checkpoint_path.name}{Style.RESET_ALL}")
                         g_checkpoint = torch.load(g_checkpoint_path, map_location=device, weights_only=False)  # Load generator checkpoint with sklearn objects
-                        G.load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights
+                        cast(Any, G).load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights
                         start_epoch = g_checkpoint["epoch"]  # Set starting epoch
                         
                         # Load optimizer state if available
@@ -896,7 +896,7 @@ def train(args):
                         if d_checkpoint_path.exists():  # If discriminator checkpoint exists
                             print(f"{BackgroundColors.GREEN}Loading discriminator checkpoint: {d_checkpoint_path.name}{Style.RESET_ALL}")
                             d_checkpoint = torch.load(d_checkpoint_path, map_location=device, weights_only=False)  # Load discriminator checkpoint
-                            D.load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights
+                            cast(Any, D).load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights
                             
                             # Load optimizer state if available
                             if "opt_D_state" in d_checkpoint:  # If optimizer state saved
