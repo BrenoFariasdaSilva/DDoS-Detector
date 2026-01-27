@@ -67,13 +67,13 @@ from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.ensemble import RandomForestClassifier  # For the Random Forest model
 from sklearn.feature_selection import RFE  # For Recursive Feature Elimination
-from sklearn.metrics import (
+from sklearn.metrics import (  # For performance metrics
     accuracy_score,
     confusion_matrix,
     f1_score,
     precision_score,
     recall_score,
-)  # For performance metrics
+)
 from sklearn.model_selection import StratifiedKFold, train_test_split  # For train/test split and stratified K-Fold CV
 from sklearn.preprocessing import StandardScaler  # For scaling the data (standardization)
 from typing import Any, Dict, Optional  # For type hinting
