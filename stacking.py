@@ -814,7 +814,7 @@ def load_dataset(csv_path):
 
 
 def sanitize_feature_names(columns):
-    """
+    r"""
     Sanitize column names by removing special JSON characters that LightGBM doesn't support.
     Replaces: { } [ ] : , " \ with underscores.
 
