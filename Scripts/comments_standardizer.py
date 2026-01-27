@@ -232,11 +232,11 @@ def process_comment_line(original_line: str, tok_string: str) -> str:
 
     standardized = capitalize_comment_text(tok_string)  # Standardize the comment text
 
-    hash_idx = original_line.find("#")  # Find the position of '#'
-    if hash_idx == -1:  # If no '#' found, return original
+    hash_idx = original_line.find("#")  # Find the position of "#"
+    if hash_idx == -1:  # If no "#" found, return original
         return original_line
 
-    prefix = original_line[:hash_idx]  # Get text before '#'
+    prefix = original_line[:hash_idx]  # Get text before "#"
     suffix = original_line[hash_idx + len(tok_string) :]  # Get text after the comment
 
     is_full_line = original_line.strip().startswith("#")  # Check if it's a full-line comment
@@ -244,8 +244,8 @@ def process_comment_line(original_line: str, tok_string: str) -> str:
     if is_full_line:  # For full-line comments
         new_line = prefix + standardized + suffix  # Replace comment
     else:  # For inline comments
-        spaces_before = 0  # Count spaces before '#'
-        i = hash_idx - 1  # Start from before '#'
+        spaces_before = 0  # Count spaces before "#"
+        i = hash_idx - 1  # Start from before "#"
         while i >= 0 and original_line[i] == " ":  # Count spaces
             spaces_before += 1  # Increment count
             i -= 1  # Move left
