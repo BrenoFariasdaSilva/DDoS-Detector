@@ -1222,21 +1222,6 @@ def generate(args):
     print(f"{BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} generated samples to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message
 
 
-def verify_filepath_exists(filepath):
-    """
-    Verify if a file or folder exists at the specified path.
-
-    :param filepath: Path to the file or folder
-    :return: True if the file or folder exists, False otherwise
-    """
-
-    verbose_output(
-        f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
-    )  # Output the verbose message
-
-    return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
-
-
 def calculate_execution_time(start_time, finish_time):
     """
     Calculates the execution time between start and finish times and formats it as hh:mm:ss.
