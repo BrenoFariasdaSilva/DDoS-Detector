@@ -73,6 +73,25 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder  # For data prepr
 from torch import autograd  # For gradient penalty
 from torch.utils.data import Dataset, DataLoader  # Dataset and DataLoader
 from typing import Any, List, Optional, cast  # For Any type hint and cast
+from contextlib import nullcontext  # For safe autocast fallback
+
+# Prefer CUDA autocast when available; provide a safe fallback context manager
+try:
+    from torch.cuda.amp import autocast as _torch_autocast
+except Exception:
+    _torch_autocast = None
+
+
+def autocast(device_type: str, enabled: bool = True):
+    """Return an autocast context manager when enabled on CUDA, else a nullcontext.
+
+    This avoids referencing `torch.amp.autocast` directly (Pylance warning) and
+    supports environments without CUDA.
+    """
+
+    if enabled and device_type == "cuda" and _torch_autocast is not None:
+        return _torch_autocast()
+    return nullcontext()
 
 
 # Macros:
@@ -960,7 +979,7 @@ def train(args):
             
             # Train discriminator with optional mixed precision
             for _ in range(args.critic_steps):  # Train discriminator multiple steps
-                with torch.amp.autocast(device_type=device.type, enabled=(scaler is not None)):  # Enable AMP if available
+                with autocast(device.type, enabled=(scaler is not None)):  # Enable AMP if available
                     z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for discriminator step
                     fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
                     d_real = D(real_x, labels)  # Get discriminator score for real samples
@@ -982,7 +1001,7 @@ def train(args):
                 d_fake_score = d_fake.mean()  # Store average fake score
 
             # Train generator with optional mixed precision
-            with torch.amp.autocast(device_type=device.type, enabled=(scaler is not None)):  # Enable AMP if available
+            with autocast(device.type, enabled=(scaler is not None)):  # Enable AMP if available
                 z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for generator step
                 gen_labels = torch.randint(0, n_classes, (args.batch_size,), device=device)  # Sample labels for generator
                 fake_x = G(z, gen_labels)  # Generate fake samples with generator
