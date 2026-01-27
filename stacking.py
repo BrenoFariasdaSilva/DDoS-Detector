@@ -822,16 +822,15 @@ def sanitize_feature_names(columns):
     :return: list of sanitized column names
     """
     
-    sanitized = []
-    for col in columns:
-        # Replace special JSON characters with underscores
-        clean_col = re.sub(r'[{}\[\]:,"\\]', '_', str(col))
-        # Remove multiple consecutive underscores
-        clean_col = re.sub(r'_+', '_', clean_col)
-        # Remove leading/trailing underscores
-        clean_col = clean_col.strip('_')
-        sanitized.append(clean_col)
-    return sanitized
+    sanitized = []  # List to store sanitized column names
+    
+    for col in columns:  # Iterate over each column name
+        clean_col = re.sub(r"[{}\[\]:,\"\\]", "_", str(col))  # Replace special characters with underscores
+        clean_col = re.sub(r"_+", "_", clean_col)  # Replace multiple underscores with a single underscore
+        clean_col = clean_col.strip("_")  # Remove leading/trailing underscores
+        sanitized.append(clean_col)  # Add sanitized column name to the list
+        
+    return sanitized  # Return the list of sanitized column names
 
 
 def preprocess_dataframe(df, remove_zero_variance=True):
