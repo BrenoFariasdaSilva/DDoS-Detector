@@ -68,13 +68,13 @@ from joblib import dump, load  # For exporting and importing models
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.ensemble import RandomForestClassifier  # For the machine learning model
-from sklearn.metrics import (
+from sklearn.metrics import (  # For model evaluation
     accuracy_score,
     confusion_matrix,
     f1_score,
     precision_score,
     recall_score,
-)  # For model evaluation
+)
 from sklearn.model_selection import StratifiedKFold, train_test_split  # For splitting the dataset and cross-validation
 from sklearn.preprocessing import StandardScaler  # For feature scaling
 from telegram_bot import TelegramBot  # For Telegram notifications
