@@ -5,50 +5,50 @@ Telegram Bot Notification Module (telegram_bot.py)
 Author      : Breno Farias da Silva
 Created     : 2025-11-25
 Description :
-        This module provides a TelegramBot class for sending notifications via a
-        Telegram bot. It loads configuration from a .env file, including the bot
-        token and chat ID. It supports sending multiple messages and handles long
-        messages by splitting them into parts to comply with Telegram's 4096
-        character limit.
+    This module provides a TelegramBot class for sending notifications via a
+    Telegram bot. It loads configuration from a .env file, including the bot
+    token and chat ID. It supports sending multiple messages and handles long
+    messages by splitting them into parts to comply with Telegram's 4096
+    character limit.
 
-        Key features include:
-                - Loading configuration from .env file
-                - Sending messages to a specified Telegram chat
-                - Handling long messages by splitting into parts
-                - Error handling for message sending failures
-                - Integration with sound notification system (optional)
+    Key features include:
+        - Loading configuration from .env file
+        - Sending messages to a specified Telegram chat
+        - Handling long messages by splitting into parts
+        - Error handling for message sending failures
+        - Integration with sound notification system (optional)
 
 Usage:
-        As a module:
-                from telegram_bot import TelegramBot
-                bot = TelegramBot()
-                bot.send_messages(["Hello", "World"])
+    As a module:
+        from telegram_bot import TelegramBot
+        bot = TelegramBot()
+        bot.send_messages(["Hello", "World"])
 
-        Standalone:
-                1. Create a .env file in the project root with TELEGRAM_API_KEY and CHAT_ID.
-                2. Install dependencies: pip install python-telegram-bot python-dotenv
-                3. Run the script: $ python telegram_bot.py
-                4. Outputs are sent to the Telegram chat specified in .env.
+    Standalone:
+        1. Create a .env file in the project root with TELEGRAM_API_KEY and CHAT_ID.
+        2. Install dependencies: pip install python-telegram-bot python-dotenv
+        3. Run the script: $ python telegram_bot.py
+        4. Outputs are sent to the Telegram chat specified in .env.
 
 Outputs:
-        - Messages sent to Telegram chat (no local files generated)
+    - Messages sent to Telegram chat (no local files generated)
 
 TODOs:
-        - Add support for sending images or files
-        - Implement message queuing for batch processing
-        - Add retry mechanism for failed sends
-        - Support multiple chat IDs for different notifications
+    - Add support for sending images or files
+    - Implement message queuing for batch processing
+    - Add retry mechanism for failed sends
+    - Support multiple chat IDs for different notifications
 
 Dependencies:
-        - Python >= 3.8
-        - python-telegram-bot
-        - python-dotenv
-        - colorama
+    - Python >= 3.8
+    - python-telegram-bot
+    - python-dotenv
+    - colorama
 
 Assumptions & Notes:
-        - .env file must be present with TELEGRAM_API_KEY and CHAT_ID
-        - Bot must be added to the chat and have send message permissions
-        - Sound notification is optional and follows project conventions
+    - .env file must be present with TELEGRAM_API_KEY and CHAT_ID
+    - Bot must be added to the chat and have send message permissions
+    - Sound notification is optional and follows project conventions
 """
 
 import atexit  # For playing a sound when the program finishes
