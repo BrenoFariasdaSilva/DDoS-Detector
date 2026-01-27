@@ -1,6 +1,6 @@
 """
 ================================================================================
-Python Unused Functions Detector
+Python Unused Functions Detector (unused_functions_finder.py
 ================================================================================
 Author      : Breno Farias da Silva
 Created     : 2026-01-27
