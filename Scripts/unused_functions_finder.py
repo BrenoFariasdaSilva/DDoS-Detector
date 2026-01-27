@@ -234,12 +234,13 @@ def main():
     """
 
     print(
-        f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Main Template Python{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
+        f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Unused Functions Finder{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
         end="\n\n",
     )  # Output the welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
 
-    # Your code goes here
+    unused = detect_unused_functions(ROOT_DIR)  # Detect unused functions
+    write_unused_functions_report(unused)  # Get the unused functions report
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
