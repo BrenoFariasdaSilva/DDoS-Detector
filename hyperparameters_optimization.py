@@ -842,38 +842,35 @@ def get_thundersvm_estimator():
         gpu_available = False  # GPU is not available
 
     if gpu_available:  # If a GPU is available
-        try:  # Attempt to create ThunderSVM with GPU
-            clf = ThunderSVC(random_state=42, probability=True, gpu_id=0)  # Try to use GPU with gpu_id=0
-            verbose_output(
-                f"{BackgroundColors.GREEN}Using ThunderSVM on GPU (gpu_id=0).{Style.RESET_ALL}"
-            )  # Verbose message
-            return clf  # Return the GPU-enabled classifier
-        except TypeError:  # Constructor may not accept gpu_id; fall back to default constructor
-            try:  # Attempt default ThunderSVM constructor
-                clf = ThunderSVC(random_state=42, probability=True)  # Default constructor (may auto-detect GPU)
-                verbose_output(
-                    f"{BackgroundColors.GREEN}Using ThunderSVM (GPU preferred) with default constructor.{Style.RESET_ALL}"
-                )  # Verbose message
-                return clf  # Return the classifier
-            except Exception:  # Any error means fall back to CPU
-                pass  # Fall through to CPU handling
+        # Use ThunderSVC if available, otherwise fallback to sklearn SVC
+        thunder_cls = ThunderSVC if ThunderSVC is not None else SVC
+        try:
+            clf = thunder_cls(random_state=42, probability=True, gpu_id=0)  # Try GPU arg
+            verbose_output(f"{BackgroundColors.GREEN}Using ThunderSVM on GPU (gpu_id=0).{Style.RESET_ALL}")
+            return clf
+        except TypeError:
+            try:
+                clf = thunder_cls(random_state=42, probability=True)
+                verbose_output(f"{BackgroundColors.GREEN}Using ThunderSVM (GPU preferred) with default constructor.{Style.RESET_ALL}")
+                return clf
+            except Exception:
+                pass
 
     cpu_threads = max(1, (os.cpu_count() or 2) - 1)  # Use all but one CPU core if no GPU is available
-    for param in ("n_jobs", "nthread", "nthreads", "nproc", "threads"):  # Try common ThunderSVM CPU thread parameters
-        try:  # Attempt to create ThunderSVM with CPU threads
-            clf = ThunderSVC(random_state=42, probability=True, **{param: cpu_threads})  # Set CPU threads
-            verbose_output(
-                f"{BackgroundColors.GREEN}Using ThunderSVM on CPU with {cpu_threads} threads ({param}).{Style.RESET_ALL}"
-            )  # Verbose message
-            return clf  # Return the CPU-enabled classifier
-        except Exception:  # Any error means try next parameter
-            continue  # Try next parameter
+    thunder_cls = ThunderSVC if ThunderSVC is not None else SVC
+    for param in ("n_jobs", "nthread", "nthreads", "nproc", "threads"):
+        try:
+            clf = thunder_cls(random_state=42, probability=True, **{param: cpu_threads})
+            verbose_output(f"{BackgroundColors.GREEN}Using ThunderSVM on CPU with {cpu_threads} threads ({param}).{Style.RESET_ALL}")
+            return clf
+        except Exception:
+            continue
 
     verbose_output(
         f"{BackgroundColors.YELLOW}Using ThunderSVM default CPU instantiation.{Style.RESET_ALL}"
     )  # Verbose message
 
-    return ThunderSVC(random_state=42, probability=True)  # Default CPU ThunderSVM
+    return thunder_cls(random_state=42, probability=True)  # Default CPU ThunderSVM/SVC
 
 
 def get_models_and_param_grids():
