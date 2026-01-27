@@ -444,7 +444,7 @@ def get_hardware_specifications():
                         cpu_model = line.split(":", 1)[1].strip()  # Extract name
                         break  # Stop after first match
 
-        elif system == "Darwin":  # macOS: use sysctl
+        elif system == "Darwin":  # MacOS: use sysctl
             out = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"])  # Run sysctl
             cpu_model = out.decode().strip()  # Extract model string
 
@@ -511,37 +511,37 @@ def export_final_model(X_numeric, feature_columns, top_features, y_array, csv_pa
     :return: model_path, scaler_path, features_path
     """
 
-    scaler_full = StandardScaler()  # create a scaler for full-data training
-    X_full_scaled = scaler_full.fit_transform(X_numeric.values)  # scale all numeric features
-    sel_indices = [i for i, f in enumerate(feature_columns) if f in top_features]  # get indices for top features
-    X_final = X_full_scaled[:, sel_indices] if sel_indices else X_full_scaled  # select columns or keep all if none
-    final_model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)  # instantiate final RF
-    final_model.fit(X_final, y_array)  # fit final model on entire dataset using selected features
+    scaler_full = StandardScaler()  # Create a scaler for full-data training
+    X_full_scaled = scaler_full.fit_transform(X_numeric.values)  # Scale all numeric features
+    sel_indices = [i for i, f in enumerate(feature_columns) if f in top_features]  # Get indices for top features
+    X_final = X_full_scaled[:, sel_indices] if sel_indices else X_full_scaled  # Select columns or keep all if none
+    final_model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)  # Instantiate final RF
+    final_model.fit(X_final, y_array)  # Fit final model on entire dataset using selected features
 
-    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE/Models/"  # models output directory under RFE/Models subdir
-    os.makedirs(models_dir, exist_ok=True)  # ensure directory exists
-    timestamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")  # timestamp for filenames (YYYY_MM_DD-HH_MM_SS)
-    base_name = safe_filename(Path(csv_path).stem)  # safe base name from dataset path
-    model_path = f"{models_dir}RFE-{base_name}-{timestamp}-model.joblib"  # model file path
-    scaler_path = f"{models_dir}RFE-{base_name}-{timestamp}-scaler.joblib"  # scaler file path
-    features_path = f"{models_dir}RFE-{base_name}-{timestamp}-features.json"  # selected features file path
-    params_path = f"{models_dir}RFE-{base_name}-{timestamp}-params.json"  # hyperparameters file path
-    dump(final_model, model_path)  # save trained model to disk
-    dump(scaler_full, scaler_path)  # save fitted scaler to disk
+    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE/Models/"  # Models output directory under RFE/Models subdir
+    os.makedirs(models_dir, exist_ok=True)  # Ensure directory exists
+    timestamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")  # Timestamp for filenames (YYYY_MM_DD-HH_MM_SS)
+    base_name = safe_filename(Path(csv_path).stem)  # Safe base name from dataset path
+    model_path = f"{models_dir}RFE-{base_name}-{timestamp}-model.joblib"  # Model file path
+    scaler_path = f"{models_dir}RFE-{base_name}-{timestamp}-scaler.joblib"  # Scaler file path
+    features_path = f"{models_dir}RFE-{base_name}-{timestamp}-features.json"  # Selected features file path
+    params_path = f"{models_dir}RFE-{base_name}-{timestamp}-params.json"  # Hyperparameters file path
+    dump(final_model, model_path)  # Save trained model to disk
+    dump(scaler_full, scaler_path)  # Save fitted scaler to disk
     
-    with open(features_path, "w", encoding="utf-8") as fh:  # write selected features to json
-        fh.write(json.dumps(top_features))  # save feature list as JSON
+    with open(features_path, "w", encoding="utf-8") as fh:  # Write selected features to json
+        fh.write(json.dumps(top_features))  # Save feature list as JSON
         
     # Save model hyperparameters (so we can reproduce training configuration)
-    model_params = final_model.get_params()  # get hyperparameters from trained estimator
-    with open(params_path, "w", encoding="utf-8") as ph:  # write params to json
-        ph.write(json.dumps(model_params, default=str))  # save params as JSON (default=str for non-serializable)
+    model_params = final_model.get_params()  # Get hyperparameters from trained estimator
+    with open(params_path, "w", encoding="utf-8") as ph:  # Write params to json
+        ph.write(json.dumps(model_params, default=str))  # Save params as JSON (default=str for non-serializable)
 
-    print(f"{BackgroundColors.GREEN}Saved final model to {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}")  # notify saved model
-    print(f"{BackgroundColors.GREEN}Saved scaler to {BackgroundColors.CYAN}{scaler_path}{Style.RESET_ALL}")  # notify saved scaler
-    print(f"{BackgroundColors.GREEN}Saved params to {BackgroundColors.CYAN}{params_path}{Style.RESET_ALL}")  # notify saved params
+    print(f"{BackgroundColors.GREEN}Saved final model to {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}")  # Notify saved model
+    print(f"{BackgroundColors.GREEN}Saved scaler to {BackgroundColors.CYAN}{scaler_path}{Style.RESET_ALL}")  # Notify saved scaler
+    print(f"{BackgroundColors.GREEN}Saved params to {BackgroundColors.CYAN}{params_path}{Style.RESET_ALL}")  # Notify saved params
 
-    return final_model, scaler_full, top_features, model_path, scaler_path, features_path, model_params, params_path  # return objects, paths and params
+    return final_model, scaler_full, top_features, model_path, scaler_path, features_path, model_params, params_path  # Return objects, paths and params
 
 
 def format_value(value):
@@ -748,40 +748,40 @@ def load_exported_artifacts(csv_path):
     :return: (model, scaler, features) or None if not found
     """
 
-    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE/Models/"  # location where RFE artifacts are stored
+    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE/Models/"  # Location where RFE artifacts are stored
     
     if not os.path.isdir(models_dir):
-        return None  # no models directory
+        return None  # No models directory
 
-    base_name = safe_filename(Path(csv_path).stem)  # safe base name
-    pattern = os.path.join(models_dir, f"RFE-{base_name}-*-model.joblib")  # glob pattern for RFE model files
-    candidates = glob.glob(pattern)  # find matching model files
+    base_name = safe_filename(Path(csv_path).stem)  # Safe base name
+    pattern = os.path.join(models_dir, f"RFE-{base_name}-*-model.joblib")  # Glob pattern for RFE model files
+    candidates = glob.glob(pattern)  # Find matching model files
     if not candidates:
-        return None  # no exported models found
+        return None  # No exported models found
 
     # Pick latest by modification time
-    latest_model = max(candidates, key=os.path.getmtime)  # select most recent model file
-    scaler_path = latest_model.replace("-model.joblib", "-scaler.joblib")  # infer scaler path
-    features_path = latest_model.replace("-model.joblib", "-features.json")  # infer features path
+    latest_model = max(candidates, key=os.path.getmtime)  # Select most recent model file
+    scaler_path = latest_model.replace("-model.joblib", "-scaler.joblib")  # Infer scaler path
+    features_path = latest_model.replace("-model.joblib", "-features.json")  # Infer features path
     if not os.path.exists(scaler_path) or not os.path.exists(features_path):
-        return None  # incomplete artifact set
+        return None  # Incomplete artifact set
 
     try:
-        model = load(latest_model)  # load model with joblib
-        scaler = load(scaler_path)  # load scaler with joblib
+        model = load(latest_model)  # Load model with joblib
+        scaler = load(scaler_path)  # Load scaler with joblib
         with open(features_path, "r", encoding="utf-8") as fh:
-            features = json.load(fh)  # load features list
+            features = json.load(fh)  # Load features list
         params = None
-        params_path = latest_model.replace("-model.joblib", "-params.json")  # infer params path
+        params_path = latest_model.replace("-model.joblib", "-params.json")  # Infer params path
         if os.path.exists(params_path):
             try:
                 with open(params_path, "r", encoding="utf-8") as ph:
-                    params = json.load(ph)  # load hyperparameters if available
+                    params = json.load(ph)  # Load hyperparameters if available
             except Exception:
                 params = None
         return model, scaler, features, params
     except Exception:
-        return None  # any loading error -> treat as not found
+        return None  # Any loading error -> treat as not found
 
 
 def evaluate_exported_model(model, scaler, X_numeric, feature_columns, top_features, y_array):
@@ -791,16 +791,16 @@ def evaluate_exported_model(model, scaler, X_numeric, feature_columns, top_featu
     :return: tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
 
-    start_time = time.time()  # measure prediction/eval time
-    X_scaled = scaler.transform(X_numeric.values)  # scale full numeric data with provided scaler
-    sel_indices = [i for i, f in enumerate(feature_columns) if f in top_features]  # indices for chosen features
-    X_eval = X_scaled[:, sel_indices] if sel_indices else X_scaled  # selected eval array
-    y_pred = model.predict(X_eval)  # model predictions on full dataset
+    start_time = time.time()  # Measure prediction/eval time
+    X_scaled = scaler.transform(X_numeric.values)  # Scale full numeric data with provided scaler
+    sel_indices = [i for i, f in enumerate(feature_columns) if f in top_features]  # Indices for chosen features
+    X_eval = X_scaled[:, sel_indices] if sel_indices else X_scaled  # Selected eval array
+    y_pred = model.predict(X_eval)  # Model predictions on full dataset
 
-    acc = accuracy_score(y_array, y_pred)  # compute accuracy
-    prec = precision_score(y_array, y_pred, average="weighted", zero_division=0)  # precision
-    rec = recall_score(y_array, y_pred, average="weighted", zero_division=0)  # recall
-    f1 = f1_score(y_array, y_pred, average="weighted", zero_division=0)  # f1 score
+    acc = accuracy_score(y_array, y_pred)  # Compute accuracy
+    prec = precision_score(y_array, y_pred, average="weighted", zero_division=0)  # Precision
+    rec = recall_score(y_array, y_pred, average="weighted", zero_division=0)  # Recall
+    f1 = f1_score(y_array, y_pred, average="weighted", zero_division=0)  # F1 score
 
     # Compute FPR/FNR similarly to compute_rfe_metrics
     if len(np.unique(y_array)) == 2:
@@ -989,17 +989,17 @@ def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparamet
     print(f"{BackgroundColors.YELLOW}Not enough samples per class for stratified CV; falling back to single train/test split.{Style.RESET_ALL}")
     X_train, X_test, y_train, y_test = train_test_split(
         X_numeric.values, y_array, test_size=0.2, random_state=42, stratify=None
-    )  # perform a single non-stratified train/test split
-    selector, model = run_rfe_selector(X_train, y_train, random_state=42)  # run RFE on the single split
-    metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42)  # compute metrics on split
-    top_features, rfe_ranking = extract_top_features(selector, feature_columns)  # extract selected features and rankings
-    sorted_rfe_ranking = sorted(rfe_ranking.items(), key=lambda x: x[1])  # sort features by ranking (ascending)
+    )  # Perform a single non-stratified train/test split
+    selector, model = run_rfe_selector(X_train, y_train, random_state=42)  # Run RFE on the single split
+    metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42)  # Compute metrics on split
+    top_features, rfe_ranking = extract_top_features(selector, feature_columns)  # Extract selected features and rankings
+    sorted_rfe_ranking = sorted(rfe_ranking.items(), key=lambda x: x[1])  # Sort features by ranking (ascending)
 
-    print_metrics(metrics_tuple) if VERBOSE else None  # optionally print metrics
-    print_top_features(top_features, rfe_ranking) if VERBOSE else None  # optionally print top features
+    print_metrics(metrics_tuple) if VERBOSE else None  # Optionally print metrics
+    print_top_features(top_features, rfe_ranking) if VERBOSE else None  # Optionally print top features
 
-    final_model, scaler_full, top_features, loaded_hyperparams = get_final_model(csv_path, X_numeric, y_array, top_features, feature_columns)  # get final model/scaler
-    eval_metrics = evaluate_exported_model(final_model, scaler_full, X_numeric, feature_columns, top_features, y_array)  # evaluate on full dataset
+    final_model, scaler_full, top_features, loaded_hyperparams = get_final_model(csv_path, X_numeric, y_array, top_features, feature_columns)  # Get final model/scaler
+    eval_metrics = evaluate_exported_model(final_model, scaler_full, X_numeric, feature_columns, top_features, y_array)  # Evaluate on full dataset
 
     run_results = build_results_with_hyperparams(
         final_model,
@@ -1011,10 +1011,10 @@ def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparamet
         training_time=metrics_tuple[6],
         top_features=top_features,
         rfe_ranking=sorted_rfe_ranking,
-    )  # build results dict
+    )  # Build results dict
 
-    save_rfe_results(csv_path, run_results)  # save fallback run results
-    print_run_summary(run_results)  # concise terminal summary
+    save_rfe_results(csv_path, run_results)  # Save fallback run results
+    print_run_summary(run_results)  # Concise terminal summary
 
 
 def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
@@ -1043,48 +1043,48 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
     # Determine CV splits based on the training portion
     unique_tr, counts_tr = np.unique(y_train_array, return_counts=True)
     min_class_count_tr = counts_tr.min() if counts_tr.size > 0 else 0
-    n_splits = min(10, len(y_train_array), min_class_count_tr)  # up to 10 splits but not more than samples or smallest class in train
-    n_splits = max(2, int(n_splits))  # ensure at least 2 splits
+    n_splits = min(10, len(y_train_array), min_class_count_tr)  # Up to 10 splits but not more than samples or smallest class in train
+    n_splits = max(2, int(n_splits))  # Ensure at least 2 splits
 
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)  # create stratified K-Fold iterator
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)  # Create stratified K-Fold iterator
 
-    fold_metrics = []  # list to collect per-fold metric tuples
-    fold_rankings = []  # list to collect per-fold ranking arrays
-    fold_supports = []  # list to collect per-fold support masks
-    total_elapsed = 0.0  # accumulator for elapsed times across folds
+    fold_metrics = []  # List to collect per-fold metric tuples
+    fold_rankings = []  # List to collect per-fold ranking arrays
+    fold_supports = []  # List to collect per-fold support masks
+    total_elapsed = 0.0  # Accumulator for elapsed times across folds
 
     for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X_train_scaled, y_train_array), start=1):
-        verbose_output(f"{BackgroundColors.CYAN}Running fold {fold_idx}/{n_splits}{Style.RESET_ALL}")  # optional fold progress
+        verbose_output(f"{BackgroundColors.CYAN}Running fold {fold_idx}/{n_splits}{Style.RESET_ALL}")  # Optional fold progress
 
         X_train_fold = X_train_scaled[train_idx]
         X_test_fold = X_train_scaled[test_idx]
         y_train_fold = y_train_array[train_idx]
         y_test_fold = y_train_array[test_idx]
 
-        selector, model = run_rfe_selector(X_train_fold, y_train_fold, random_state=42)  # fit RFE on this fold's training data
+        selector, model = run_rfe_selector(X_train_fold, y_train_fold, random_state=42)  # Fit RFE on this fold's training data
 
-        metrics_tuple = compute_rfe_metrics(selector, X_train_fold, X_test_fold, y_train_fold, y_test_fold, random_state=42)  # compute metrics for this fold
-        fold_metrics.append(metrics_tuple)  # append per-fold metrics tuple
-        fold_rankings.append(selector.ranking_)  # append per-fold ranking array
-        fold_supports.append(selector.support_.astype(int))  # append per-fold support mask as integers
-        total_elapsed += metrics_tuple[6]  # accumulate elapsed time from this fold
+        metrics_tuple = compute_rfe_metrics(selector, X_train_fold, X_test_fold, y_train_fold, y_test_fold, random_state=42)  # Compute metrics for this fold
+        fold_metrics.append(metrics_tuple)  # Append per-fold metrics tuple
+        fold_rankings.append(selector.ranking_)  # Append per-fold ranking array
+        fold_supports.append(selector.support_.astype(int))  # Append per-fold support mask as integers
+        total_elapsed += metrics_tuple[6]  # Accumulate elapsed time from this fold
 
     # Aggregate metrics (mean across folds)
-    metrics_arr = np.array(fold_metrics)  # convert list of tuples to numpy array
-    mean_metrics = metrics_arr.mean(axis=0)  # compute mean metric values across folds
+    metrics_arr = np.array(fold_metrics)  # Convert list of tuples to numpy array
+    mean_metrics = metrics_arr.mean(axis=0)  # Compute mean metric values across folds
 
     # Aggregate rankings: mean rank per feature across folds
-    rankings_arr = np.vstack(fold_rankings)  # shape: (n_folds, n_features) stack rankings
-    mean_rankings = rankings_arr.mean(axis=0)  # mean ranking per feature
-    avg_rfe_ranking = {f: float(r) for f, r in zip(feature_columns, mean_rankings)}  # map feature->avg rank
+    rankings_arr = np.vstack(fold_rankings)  # Shape: (n_folds, n_features) stack rankings
+    mean_rankings = rankings_arr.mean(axis=0)  # Mean ranking per feature
+    avg_rfe_ranking = {f: float(r) for f, r in zip(feature_columns, mean_rankings)}  # Map feature->avg rank
 
     # Aggregate supports to decide top features (selected in majority of folds)
-    supports_arr = np.vstack(fold_supports)  # shape: (n_folds, n_features) stack support masks
-    support_counts = supports_arr.sum(axis=0)  # count how many folds selected each feature
-    majority_threshold = (n_splits // 2) + 1  # require strict majority to consider a feature selected
-    top_features = [f for f, c in zip(feature_columns, support_counts) if c >= majority_threshold]  # select majority-chosen features
+    supports_arr = np.vstack(fold_supports)  # Shape: (n_folds, n_features) stack support masks
+    support_counts = supports_arr.sum(axis=0)  # Count how many folds selected each feature
+    majority_threshold = (n_splits // 2) + 1  # Require strict majority to consider a feature selected
+    top_features = [f for f, c in zip(feature_columns, support_counts) if c >= majority_threshold]  # Select majority-chosen features
 
-    sorted_rfe_ranking = sorted(avg_rfe_ranking.items(), key=lambda x: x[1])  # sort averaged rankings ascending
+    sorted_rfe_ranking = sorted(avg_rfe_ranking.items(), key=lambda x: x[1])  # Sort averaged rankings ascending
 
     # Get final model, scaler, and parameters
     final_model, scaler_full, top_features, loaded_hyperparams = get_final_model(csv_path, X_train_df, y_train_array, top_features, feature_columns)
@@ -1103,13 +1103,13 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
         training_time=total_elapsed,
         top_features=top_features,
         rfe_ranking=sorted_rfe_ranking,
-    )  # build results dict
+    )  # Build results dict
 
-    print_metrics(tuple(mean_metrics)) if VERBOSE else None  # optionally print aggregated metrics
-    print_top_features(top_features, avg_rfe_ranking) if VERBOSE else None  # optionally print aggregated top features and avg ranks
+    print_metrics(tuple(mean_metrics)) if VERBOSE else None  # Optionally print aggregated metrics
+    print_top_features(top_features, avg_rfe_ranking) if VERBOSE else None  # Optionally print aggregated top features and avg ranks
 
-    save_rfe_results(csv_path, run_results)  # save aggregated run results to CSV
-    print_run_summary(run_results)  # concise terminal summary
+    save_rfe_results(csv_path, run_results)  # Save aggregated run results to CSV
+    print_run_summary(run_results)  # Concise terminal summary
 
 
 def run_rfe(csv_path):
