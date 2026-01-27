@@ -61,6 +61,7 @@ import numpy as np  # For numerical operations
 import os  # For running a command in the terminal
 import pandas as pd  # For data manipulation
 import platform  # For getting the operating system name
+import re  # For regex operations
 import sys  # For system-specific parameters and functions
 import warnings  # For suppressing pandas warnings when requested
 from colorama import Style  # For coloring the terminal
@@ -69,7 +70,7 @@ from pathlib import Path  # For handling file paths
 from sklearn.manifold import TSNE  # For t-SNE dimensionality reduction
 from sklearn.preprocessing import StandardScaler  # For feature scaling
 from tqdm import tqdm  # For progress bars
-from typing import Any, cast
+from typing import Any, cast  # For type hinting
 
 
 # Macros:
@@ -298,6 +299,26 @@ def load_dataset(filepath, low_memory=True):
         return None  # Return None if an error occurs
 
 
+def sanitize_feature_names(columns):
+    r"""
+    Sanitize column names by removing special JSON characters that LightGBM doesn't support.
+    Replaces: { } [ ] : , " \ with underscores.
+
+    :param columns: pandas Index or list of column names
+    :return: list of sanitized column names
+    """
+    
+    sanitized = []  # List to store sanitized column names
+    
+    for col in columns:  # Iterate over each column name
+        clean_col = re.sub(r"[{}\[\]:,\"\\]", "_", str(col))  # Replace special characters with underscores
+        clean_col = re.sub(r"_+", "_", clean_col)  # Replace multiple underscores with a single underscore
+        clean_col = clean_col.strip("_")  # Remove leading/trailing underscores
+        sanitized.append(clean_col)  # Add sanitized column name to the list
+        
+    return sanitized  # Return the list of sanitized column names
+
+
 def preprocess_dataframe(df, remove_zero_variance=True):
     """
     Preprocess a DataFrame by removing rows with NaN or infinite values and
@@ -325,6 +346,8 @@ def preprocess_dataframe(df, remove_zero_variance=True):
         return df  # Return None
 
     df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+    
+    df.columns = sanitize_feature_names(df.columns)  # Sanitize column names to remove special characters
 
     df_clean = df.replace([np.inf, -np.inf], np.nan).dropna()  # Remove rows with NaN or infinite values
 
