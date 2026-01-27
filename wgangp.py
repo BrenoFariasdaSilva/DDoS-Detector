@@ -275,16 +275,20 @@ class CSVFlowDataset(Dataset):
         self.label_col = label_col  # Save label column name
         self.feature_cols = feature_cols  # Save list of feature columns
 
-        self.labels_raw = df[label_col].values.astype(str)  # Extract raw labels and convert to strings
+        # Ensure labels_raw is a plain numpy array of Python strings to satisfy type checkers
+        self.labels_raw: np.ndarray = np.asarray(df[label_col].values, dtype=str)
 
         self.labels: Any  # Must be Any or Pylance will error
 
+        # Use a normalized numpy array for LabelEncoder input
+        labels_arr = np.asarray(self.labels_raw, dtype=str)
+
         if label_encoder is None:  # If no label encoder is given
             self.label_encoder = LabelEncoder()  # Create a fresh label encoder
-            self.labels = self.label_encoder.fit_transform(self.labels_raw)  # Fit encoder and encode labels
+            self.labels = self.label_encoder.fit_transform(labels_arr)  # Fit encoder and encode labels
         else:  # If encoder is provided
             self.label_encoder = label_encoder  # Store provided encoder
-            self.labels = self.label_encoder.transform(self.labels_raw)  # Encode labels with given encoder
+            self.labels = self.label_encoder.transform(labels_arr)  # Encode labels with given encoder
 
         X = df[feature_cols].values.astype(np.float32)  # Extract features and cast to float32
 
