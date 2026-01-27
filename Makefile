@@ -172,10 +172,15 @@ fix-style: dependencies
 generate_requirements: $(VENV)
 	$(PIP) freeze > requirements.txt
 
+unused_functions_finder: dependencies
+	$(ENSURE_LOG_DIR)
+	$(CLEAR_CMD)
+	$(call RUN_AND_LOG, ./Scripts/unused_functions_finder.py $(ARGS))
+
 # Clean artifacts
 clean:
 	rm -rf $(VENV) || rmdir /S /Q $(VENV) 2>nul
 	find . -type f -name '*.pyc' -delete || del /S /Q *.pyc 2>nul
 	find . -type d -name '__pycache__' -delete || rmdir /S /Q __pycache__ 2>nul
 
-.PHONY: all check-build clean comments_standardizer dataset_converter dataset_descriptor dependencies download_datasets fix-style generate_requirements genetic_algorithm hyperparameters_optimization main pca rfe stacking telegram wgangp
+.PHONY: all check-build clean comments_standardizer dataset_converter dataset_descriptor dependencies download_datasets fix-style generate_requirements genetic_algorithm hyperparameters_optimization main pca rfe stacking telegram unused_functions_finder wgangp
