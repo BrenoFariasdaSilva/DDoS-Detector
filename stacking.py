@@ -711,8 +711,11 @@ def extract_recursive_feature_elimination_features(file_path):
         df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
 
         if not df.empty:  # Verify if the DataFrame is not empty
-            top_features_str = df.loc[0, "top_features"]  # Get the Python literal string from the first row
-            rfe_features = ast.literal_eval(top_features_str)  # Parse the Python literal string into a Python list
+            top_features_raw = df.loc[0, "top_features"]  # Get the "top_features" from the first row
+
+            top_features_str = str(top_features_raw)  # Ensure it's a string
+
+            rfe_features = ast.literal_eval(top_features_str)  # Convert string to list
 
             verbose_output(
                 f"{BackgroundColors.GREEN}Successfully extracted RFE top features from Run 1. Total features: {BackgroundColors.CYAN}{len(rfe_features)}{Style.RESET_ALL}"
