@@ -882,10 +882,12 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
         f"{BackgroundColors.GREEN}Scaling features and splitting data (train/test ratio: {BackgroundColors.CYAN}{1-test_size}/{test_size}{BackgroundColors.GREEN})...{Style.RESET_ALL}"
     )  # Output the verbose message
 
+    y = pd.Series(y)  # Normalize target to pandas Series
+
     le = LabelEncoder()  # Initialize a LabelEncoder
-    y_encoded = pd.Series(
-        le.fit_transform(y), index=y.index
-    )  # Encode the target variable (essential for stratification)
+    encoded_values: np.ndarray = np.asarray(le.fit_transform(y.to_numpy()), dtype=int)  # Encode target labels as integers
+
+    y_encoded = pd.Series(encoded_values, index=y.index)  # Create a Series for the encoded target
 
     numeric_X = X.select_dtypes(include=np.number)  # Select only numeric columns for scaling
     non_numeric_X = X.select_dtypes(exclude=np.number)  # Identify non-numeric columns (to be dropped)
