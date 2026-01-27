@@ -46,6 +46,7 @@ Dependencies:
 
 import argparse  # For command-line argument parsing
 import atexit  # For playing a sound when the program finishes
+import csv  # For CSV quoting options
 import datetime  # For timestamping
 import json  # For saving lists and dicts as JSON strings
 import math  # For mathematical operations
@@ -704,7 +705,7 @@ def save_rfe_results(csv_path, run_results):
     df_out = populate_hardware_column_and_order(df_out, column_name="hardware")
 
     try:
-        df_out.to_csv(run_csv_path, index=False, encoding="utf-8")
+        df_out.to_csv(run_csv_path, index=False, encoding="utf-8", quoting=csv.QUOTE_ALL)
         print(f"{BackgroundColors.GREEN}Run results saved to {BackgroundColors.CYAN}{run_csv_path}{Style.RESET_ALL}")
     except Exception as e:
         print(f"{BackgroundColors.RED}Failed to save run results to CSV: {e}{Style.RESET_ALL}")
@@ -850,6 +851,13 @@ def run_rfe(csv_path):
         f"{BackgroundColors.GREEN}Starting RFE analysis on dataset: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}"
     )  # Output the verbose message
 
+    hyperparameters = {
+        "model": "RandomForestClassifier",
+        "n_estimators": 100,
+        "random_state": 42,
+        "n_jobs": N_JOBS,
+    }
+
     df = load_dataset(csv_path)  # Load the dataset
 
     if df is None:  # If dataset loading failed
@@ -937,7 +945,7 @@ def run_rfe(csv_path):
             {
                 "model": final_model.__class__.__name__,  # model class name
                 "dataset": os.path.relpath(csv_path),  # added: relative dataset path used for this run
-                "hyperparameters": json.dumps(loaded_hyperparams) if loaded_hyperparams is not None else None,
+                "hyperparameters": json.dumps(hyperparameters),
                 "cv_method": "single_train_test_split",
                 "test_accuracy": round(eval_metrics[0], 4),
                 "test_precision": round(eval_metrics[1], 4),
@@ -1053,7 +1061,7 @@ def run_rfe(csv_path):
         {
             "model": final_model.__class__.__name__,  # model class name
             "dataset": os.path.relpath(csv_path),  # added: relative dataset path used for this run
-            "hyperparameters": json.dumps(loaded_hyperparams) if loaded_hyperparams is not None else None,
+            "hyperparameters": json.dumps(hyperparameters),
             "cv_method": f"StratifiedKFold(n_splits={n_splits})",
             "cv_accuracy": round(mean_metrics[0], 4),
             "cv_precision": round(mean_metrics[1], 4),
