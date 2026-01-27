@@ -2285,6 +2285,313 @@ def write_consolidated_csv(rows, output_dir):
         )  # Print failure message with exception
 
 
+def determine_best_features_and_ranking(best_ind, feature_names, csv_path):
+    """
+    Determine the selected feature names for a binary GA individual and
+    extract RFE rankings from existing results.
+
+    :param best_ind: Sequence (list/array) representing the GA individual (0/1 mask).
+    :param feature_names: List of feature names aligned with `best_ind`.
+    :param csv_path: Path to the dataset CSV (used to locate RFE summary files).
+    :return: Tuple `(best_feats, ranking)` where `best_feats` is a list of selected
+             feature names and `ranking` is the RFE ranking dictionary (may be empty).
+    """
+
+    # Build list of features selected by the binary mask
+    best_feats = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1]
+    # Try to extract an existing RFE ranking for additional metadata
+    ranking = extract_rfe_ranking(csv_path)
+    # Verbose output for user
+    print(f"\n{BackgroundColors.GREEN}Best features subset found: {BackgroundColors.CYAN}{best_feats}{Style.RESET_ALL}")
+    return best_feats, ranking
+
+
+def determine_rf_metrics(metrics_in):
+    """
+    Normalize a metrics tuple/sequence to the expected RF-metrics slice used
+    downstream by `save_results`. The consolidated CSV expects up to 12
+    metric values (cv + test metrics); this helper ensures the returned
+    value is either a 12-element-like slice or `None` when not available.
+
+    :param metrics_in: Metrics sequence or None.
+    :return: Sliced metrics (first 12 elements) or None.
+    """
+
+    if metrics_in is not None:
+        # Only keep first 12 values if available (cv metrics + test metrics)
+        return metrics_in[:12] if len(metrics_in) >= 12 else None
+    return None
+
+
+def maybe_evaluate_on_test(rf_m, best_ind_local, X, y, X_test, y_test):
+    """
+    If RF metrics are not provided, optionally evaluate the best individual on
+    the provided test set to produce test metrics.
+
+    :param rf_m: Existing RF metrics (may be None).
+    :param best_ind_local: GA individual (binary mask) to evaluate.
+    :param X: Full feature matrix used for training (numpy array or DataFrame).
+    :param y: Training labels.
+    :param X_test: Optional test feature matrix.
+    :param y_test: Optional test labels.
+    :return: RF metrics tuple (possibly produced by `evaluate_individual`) or the original `rf_m`.
+    """
+
+    # Only perform evaluation if metrics are missing and a test set is available
+    if rf_m is None and X_test is not None and y_test is not None:
+        return evaluate_individual(best_ind_local, X, y, X_test, y_test)
+    return rf_m
+
+
+def prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generations, rfe_ranking, y, y_test, cxpb, mutpb):
+    """
+    Prepare filesystem paths and base CSV row metadata for the GA run.
+
+    This helper computes train/test counts and fraction, extracts a base
+    elapsed time from provided RF metrics, constructs the canonical base row
+    used in the consolidated CSV and creates a timestamped models directory
+    and filenames for the model, scaler, features and params artifacts.
+
+    :param csv_path: Path to the original dataset CSV file.
+    :param rf_metrics: RF metrics tuple (used to extract an elapsed time if present).
+    :param best_pop_size: Population size that produced the best result.
+    :param n_generations: Number of generations used by GA (for metadata).
+    :param rfe_ranking: RFE ranking dictionary to include in base row.
+    :param y: Training labels (used to compute `n_train`).
+    :param y_test: Optional test labels (used to compute `n_test`).
+    :param cxpb: Crossover probability used (included in base row).
+    :param mutpb: Mutation probability used (included in base row).
+    :return: Tuple containing computed values and prepared paths:
+             (n_train, n_test, test_frac, elapsed_base, base_row,
+              models_dir, ts, base_name, model_path, scaler_path,
+              features_path, params_path)
+    """
+
+    # Compute counts and test fraction
+    n_train_local = len(y) if y is not None else None
+    n_test_local = len(y_test) if y_test is not None else None
+    test_frac_local = None
+    if n_train_local is not None and n_test_local is not None and (n_train_local + n_test_local) > 0:
+        test_frac_local = float(n_test_local) / float(n_train_local + n_test_local)
+
+    # Extract elapsed seconds from RF metrics (if present)
+    elapsed_base = extract_elapsed_from_metrics(rf_metrics)
+    # Build the canonical base row used by consolidated CSV
+    base_row_local = build_base_row(
+        csv_path,
+        best_pop_size,
+        n_generations,
+        n_train_local,
+        n_test_local,
+        test_frac_local,
+        rfe_ranking,
+        elapsed_time_s=elapsed_base,
+        cxpb=cxpb,
+        mutpb=mutpb,
+    )
+
+    # Prepare model artifact directory and filenames
+    models_dir_local = f"{os.path.dirname(csv_path)}/Feature_Analysis/Genetic_Algorithm/Models/"
+    os.makedirs(models_dir_local, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
+    base_name_local = re.sub(r'[^A-Za-z0-9_.-]+', '_', os.path.splitext(os.path.basename(csv_path))[0])
+    model_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-model.joblib")
+    scaler_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-scaler.joblib")
+    features_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-features.json")
+    params_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-params.json")
+
+    return (
+        n_train_local,
+        n_test_local,
+        test_frac_local,
+        elapsed_base,
+        base_row_local,
+        models_dir_local,
+        ts,
+        base_name_local,
+        model_path_local,
+        scaler_path_local,
+        features_path_local,
+        params_path_local,
+    )
+
+
+def train_and_save_final_model(best_feats_local, X, y, feature_names, X_test, model_path_local, scaler_path_local, features_path_local, params_path_local):
+    """
+    Train a RandomForestClassifier on the selected feature subset, persist the
+    trained model, scaler, selected-features list and model parameters.
+
+    :param best_feats_local: List of selected feature names.
+    :param X: Full feature matrix (DataFrame or ndarray).
+    :param y: Training labels.
+    :param feature_names: List of all feature names corresponding to columns in `X`.
+    :param X_test: Optional test feature matrix (used to select test columns consistently).
+    :param model_path_local: Path where the trained model `.joblib` will be saved.
+    :param scaler_path_local: Path where the fitted scaler `.joblib` will be saved.
+    :param features_path_local: Path where the JSON file with `best_feats_local` will be saved.
+    :param params_path_local: Path where the model `get_params()` JSON will be saved.
+    :return: Tuple `(model_local, model_params_local, training_time_local, X_test_selected_local)`.
+    """
+
+    df_features_local = prepare_feature_dataframe(X, feature_names)
+    scaler_local = StandardScaler()
+    X_scaled_local = scaler_local.fit_transform(df_features_local.values)
+    sel_indices_local = [i for i, f in enumerate(feature_names) if f in best_feats_local]
+    X_final_local = X_scaled_local[:, sel_indices_local] if sel_indices_local else X_scaled_local
+    X_test_selected_local = X_test[:, sel_indices_local] if sel_indices_local and X_test is not None else X_test
+    model_local = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)
+    start_train_local = time.time()
+    model_local.fit(X_final_local, y)
+    training_time_local = time.time() - start_train_local
+
+    dump(model_local, model_path_local)
+    dump(scaler_local, scaler_path_local)
+    with open(features_path_local, "w", encoding="utf-8") as fh:
+        json.dump(best_feats_local, fh)
+    model_params_local = model_local.get_params()
+    with open(params_path_local, "w", encoding="utf-8") as ph:
+        json.dump(model_params_local, ph, default=str)
+
+    print(f"{BackgroundColors.GREEN}Saved final model to {BackgroundColors.CYAN}{model_path_local}{Style.RESET_ALL}")
+    print(f"{BackgroundColors.GREEN}Saved scaler to {BackgroundColors.CYAN}{scaler_path_local}{Style.RESET_ALL}")
+    print(f"{BackgroundColors.GREEN}Saved params to {BackgroundColors.CYAN}{params_path_local}{Style.RESET_ALL}")
+
+    return model_local, model_params_local, training_time_local, X_test_selected_local
+
+
+def evaluate_final_on_test(model_local, X_test_selected_local, y_test):
+    """
+    Evaluate a trained classifier on the provided test set and compute a
+    standard set of metrics (accuracy, precision, recall, f1, fpr, fnr,
+    testing_time_seconds).
+
+    :param model_local: Trained classifier with a `predict` method.
+    :param X_test_selected_local: Test features selected to match training subset.
+    :param y_test: True test labels.
+    :return: Tuple `(metrics_tuple, testing_time_seconds)` where `metrics_tuple` is
+             `(acc, prec, rec, f1, fpr, fnr, testing_time)` or a tuple of Nones on error.
+    """
+
+    eval_m = None
+    testing_time_local = None
+    try:
+        start_test_local = time.time()
+        y_pred_local = model_local.predict(X_test_selected_local)
+        acc_local = accuracy_score(y_test, y_pred_local)
+        prec_local = precision_score(y_test, y_pred_local, average="weighted", zero_division=0)
+        rec_local = recall_score(y_test, y_pred_local, average="weighted", zero_division=0)
+        f1_local = f1_score(y_test, y_pred_local, average="weighted", zero_division=0)
+        if len(np.unique(y_test)) == 2:
+            cm_local = confusion_matrix(y_test, y_pred_local)
+            if cm_local.shape == (2, 2):
+                tn_local, fp_local, fn_local, tp_local = cm_local.ravel()
+                fpr_local = fp_local / (fp_local + tn_local) if (fp_local + tn_local) > 0 else 0
+                fnr_local = fn_local / (fn_local + tp_local) if (fn_local + tp_local) > 0 else 0
+            else:
+                total_local = cm_local.sum() if cm_local.size > 0 else 1
+                fpr_local = float(cm_local.sum() - np.trace(cm_local)) / float(total_local) if total_local > 0 else 0
+                fnr_local = fpr_local
+        else:
+            cm_local = confusion_matrix(y_test, y_pred_local)
+            supports_local = cm_local.sum(axis=1)
+            fprs_local = []
+            fnrs_local = []
+            for i_local in range(cm_local.shape[0]):
+                tp_l = cm_local[i_local, i_local]
+                fn_l = cm_local[i_local, :].sum() - tp_l
+                fp_l = cm_local[:, i_local].sum() - tp_l
+                tn_l = cm_local.sum() - (tp_l + fp_l + fn_l)
+                denom_fnr_l = (tp_l + fn_l) if (tp_l + fn_l) > 0 else 1
+                denom_fpr_l = (fp_l + tn_l) if (fp_l + tn_l) > 0 else 1
+                fnr_i_l = fn_l / denom_fnr_l
+                fpr_i_l = fp_l / denom_fpr_l
+                fprs_local.append((fpr_i_l, supports_local[i_local]))
+                fnrs_local.append((fnr_i_l, supports_local[i_local]))
+            total_support_local = float(supports_local.sum()) if supports_local.sum() > 0 else 1.0
+            fpr_local = float(sum(v * s for v, s in fprs_local) / total_support_local)
+            fnr_local = float(sum(v * s for v, s in fnrs_local) / total_support_local)
+        testing_time_local = time.time() - start_test_local
+        eval_m = (acc_local, prec_local, rec_local, f1_local, fpr_local, fnr_local, testing_time_local)
+    except Exception:
+        eval_m = (None, None, None, None, None, None, None)
+    return eval_m, testing_time_local
+
+
+def build_and_write_run_results(
+    ts,
+    model_local,
+    model_params_local,
+    training_time_local,
+    testing_time_local,
+    rf_metrics_local,
+    test_frac_local,
+    elapsed_run_time,
+    n_generations,
+    best_pop_size,
+    cxpb,
+    mutpb,
+    best_features,
+    rfe_ranking,
+    output_dir,
+    csv_path,
+):
+    """
+    Build the consolidated run row dictionary for the best GA individual and
+    write it to the consolidated CSV via `write_consolidated_csv`.
+
+    :param ts: Timestamp string used for this run artifacts.
+    :param model_local: Trained model instance.
+    :param model_params_local: Dictionary of model hyperparameters (`get_params()`).
+    :param training_time_local: Training duration in seconds.
+    :param testing_time_local: Testing duration in seconds (or None).
+    :param rf_metrics_local: RF metrics tuple (cv/test metrics slice) or None.
+    :param test_frac_local: Fraction of data used for testing (float) or None.
+    :param elapsed_run_time: Total GA elapsed time in seconds (or None).
+    :param n_generations: Number of generations used (or None).
+    :param best_pop_size: Population size used for best run (or None).
+    :param cxpb: Crossover probability used (included for metadata).
+    :param mutpb: Mutation probability used (included for metadata).
+    :param best_features: List of selected feature names.
+    :param rfe_ranking: RFE ranking dictionary.
+    :param output_dir: Directory where consolidated CSV is stored.
+    :param csv_path: Original dataset CSV path (used for dataset name/path metadata).
+    :return: None
+    """
+
+    cv_method_local = "StratifiedKFold(n_splits=10)" if n_generations is not None or best_pop_size is not None else "train_test_split"
+
+    run_row = {
+        "timestamp": ts,
+        "tool": "Genetic Algorithm",
+        "run_index": "best",
+        "model": model_local.__class__.__name__,
+        "dataset": os.path.relpath(csv_path),
+        "hyperparameters": json.dumps(model_params_local, default=str) if model_params_local is not None else None,
+        "cv_method": cv_method_local,
+        "train_test_split": f"{1-test_frac_local:.0%}/{test_frac_local:.0%}" if test_frac_local is not None else "80/20",
+        "scaling": "StandardScaler",
+        "cv_accuracy": format_value(rf_metrics_local[0]) if rf_metrics_local and len(rf_metrics_local) > 0 else None,
+        "cv_precision": format_value(rf_metrics_local[1]) if rf_metrics_local and len(rf_metrics_local) > 1 else None,
+        "cv_recall": format_value(rf_metrics_local[2]) if rf_metrics_local and len(rf_metrics_local) > 2 else None,
+        "cv_f1_score": format_value(rf_metrics_local[3]) if rf_metrics_local and len(rf_metrics_local) > 3 else None,
+        "cv_fpr": format_value(rf_metrics_local[4]) if rf_metrics_local and len(rf_metrics_local) > 4 else None,
+        "cv_fnr": format_value(rf_metrics_local[5]) if rf_metrics_local and len(rf_metrics_local) > 5 else None,
+        "test_accuracy": format_value(rf_metrics_local[6]) if rf_metrics_local and len(rf_metrics_local) > 6 else None,
+        "test_precision": format_value(rf_metrics_local[7]) if rf_metrics_local and len(rf_metrics_local) > 7 else None,
+        "test_recall": format_value(rf_metrics_local[8]) if rf_metrics_local and len(rf_metrics_local) > 8 else None,
+        "test_f1_score": format_value(rf_metrics_local[9]) if rf_metrics_local and len(rf_metrics_local) > 9 else None,
+        "test_fpr": format_value(rf_metrics_local[10]) if rf_metrics_local and len(rf_metrics_local) > 10 else None,
+        "test_fnr": format_value(rf_metrics_local[11]) if rf_metrics_local and len(rf_metrics_local) > 11 else None,
+        "training_time_s": int(round(training_time_local)) if training_time_local is not None else None,
+        "testing_time_s": int(round(testing_time_local)) if testing_time_local is not None else None,
+        "elapsed_run_time": int(round(elapsed_run_time)) if elapsed_run_time is not None else None,
+        "hardware": json.dumps(get_hardware_specifications()),
+        "best_features": json.dumps(best_features),
+        "rfe_ranking": json.dumps(rfe_ranking),
+    }
+    
+    write_consolidated_csv([run_row], output_dir)
+
 def save_results(
     best_ind,
     feature_names,
@@ -2337,165 +2644,51 @@ def save_results(
              }
     """
 
-    best_features = [
-        f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1
-    ]  # Extract best features
-    rfe_ranking = extract_rfe_ranking(csv_path)  # Extract RFE rankings
-
-    print(
-        f"\n{BackgroundColors.GREEN}Best features subset found: {BackgroundColors.CYAN}{best_features}{Style.RESET_ALL}"
-    )
-
-    dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Get the base name of the dataset
-    output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/"  # Directory to save outputs
-    os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
-
-    if metrics is not None:
-        if len(metrics) >= 12:
-            rf_metrics = metrics[:12]
-        else:
-            rf_metrics = None
-    else:
-        rf_metrics = None  # Use provided metrics if available
-
-    if rf_metrics is None and X_test is not None and y_test is not None:  # If no metrics provided, evaluate on test set
-        rf_metrics = evaluate_individual(best_ind, X, y, X_test, y_test)  # Evaluate best individual
-
-    n_train = len(y) if y is not None else None  # Number of training samples
-    n_test = len(y_test) if y_test is not None else None  # Number of testing samples
-
-    test_frac = None  # Initialize train/test fraction
-    if n_train is not None and n_test is not None and (n_train + n_test) > 0:  # If both lengths are valid
-        test_frac = float(n_test) / float(n_train + n_test)  # Calculate train/test fraction
-
-    elapsed_for_base = extract_elapsed_from_metrics(rf_metrics)
-
-    base_row = build_base_row(
-        csv_path,
-        best_pop_size,
-        n_generations,
+    best_features, rfe_ranking = determine_best_features_and_ranking(best_ind, feature_names, csv_path)
+    rf_metrics = determine_rf_metrics(metrics)
+    rf_metrics = maybe_evaluate_on_test(rf_metrics, best_ind, X, y, X_test, y_test)
+    (
         n_train,
         n_test,
         test_frac,
+        elapsed_for_base,
+        base_row,
+        models_dir,
+        ts,
+        base_name,
+        model_path,
+        scaler_path,
+        features_path,
+        params_path,
+    ) = prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generations, rfe_ranking, y, y_test, cxpb, mutpb)
+
+    model_local, model_params, training_time_s, X_test_selected = train_and_save_final_model(
+        best_features, X, y, feature_names, X_test, model_path, scaler_path, features_path, params_path
+    )
+    
+    eval_metrics, testing_time_s = evaluate_final_on_test(model_local, X_test_selected, y_test)
+    
+    output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/"  # Directory to save outputs
+    os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
+
+    build_and_write_run_results(
+        ts,
+        model_local,
+        model_params,
+        training_time_s,
+        testing_time_s,
+        rf_metrics,
+        test_frac,
+        elapsed_run_time,
+        n_generations,
+        best_pop_size,
+        cxpb,
+        mutpb,
+        best_features,
         rfe_ranking,
-        elapsed_time_s=elapsed_for_base,
-        cxpb=cxpb,
-        mutpb=mutpb,
-    )  # Base row for CSV
-    models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/Genetic_Algorithm/Models/"
-    os.makedirs(models_dir, exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
-    base_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', os.path.splitext(os.path.basename(csv_path))[0])
-    model_path = os.path.join(models_dir, f"GA-{base_name}-{timestamp}-model.joblib")
-    scaler_path = os.path.join(models_dir, f"GA-{base_name}-{timestamp}-scaler.joblib")
-    features_path = os.path.join(models_dir, f"GA-{base_name}-{timestamp}-features.json")
-    params_path = os.path.join(models_dir, f"GA-{base_name}-{timestamp}-params.json")
-
-    df_features = prepare_feature_dataframe(X, feature_names)
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(df_features.values)
-    sel_indices = [i for i, f in enumerate(feature_names) if f in best_features]
-    X_final = X_scaled[:, sel_indices] if sel_indices else X_scaled
-    X_test_selected = X_test[:, sel_indices] if sel_indices else X_test
-    final_model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)
-    start_train = time.time()
-    final_model.fit(X_final, y)
-    training_time_s = time.time() - start_train
-
-    dump(final_model, model_path)
-    dump(scaler, scaler_path)
-    with open(features_path, "w", encoding="utf-8") as fh:
-        json.dump(best_features, fh)
-    model_params = final_model.get_params()
-    with open(params_path, "w", encoding="utf-8") as ph:
-        json.dump(model_params, ph, default=str)
-
-    print(f"{BackgroundColors.GREEN}Saved final model to {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}")
-    print(f"{BackgroundColors.GREEN}Saved scaler to {BackgroundColors.CYAN}{scaler_path}{Style.RESET_ALL}")
-    print(f"{BackgroundColors.GREEN}Saved params to {BackgroundColors.CYAN}{params_path}{Style.RESET_ALL}")
-
-    eval_metrics = None
-    try:
-        # Evaluate on test data using selected features
-        start_test = time.time()
-        y_pred = final_model.predict(X_test_selected)
-        acc = accuracy_score(y_test, y_pred)
-        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)
-        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)
-        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
-        # FPR/FNR (binary or multiclass)
-        if len(np.unique(y_test)) == 2:
-            cm = confusion_matrix(y_test, y_pred)
-            if cm.shape == (2, 2):
-                tn, fp, fn, tp = cm.ravel()
-                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
-                fnr = fn / (fn + tp) if (fn + tp) > 0 else 0
-            else:
-                total = cm.sum() if cm.size > 0 else 1
-                fpr = float(cm.sum() - np.trace(cm)) / float(total) if total > 0 else 0
-                fnr = fpr
-        else:
-            cm = confusion_matrix(y_test, y_pred)
-            supports = cm.sum(axis=1)
-            fprs = []
-            fnrs = []
-            for i in range(cm.shape[0]):
-                tp = cm[i, i]
-                fn = cm[i, :].sum() - tp
-                fp = cm[:, i].sum() - tp
-                tn = cm.sum() - (tp + fp + fn)
-                denom_fnr = (tp + fn) if (tp + fn) > 0 else 1
-                denom_fpr = (fp + tn) if (fp + tn) > 0 else 1
-                fnr_i = fn / denom_fnr
-                fpr_i = fp / denom_fpr
-                fprs.append((fpr_i, supports[i]))
-                fnrs.append((fnr_i, supports[i]))
-            total_support = float(supports.sum()) if supports.sum() > 0 else 1.0
-            fpr = float(sum(v * s for v, s in fprs) / total_support)
-            fnr = float(sum(v * s for v, s in fnrs) / total_support)
-        testing_time_s = time.time() - start_test
-        eval_metrics = (acc, prec, rec, f1, fpr, fnr, testing_time_s)
-    except Exception:
-        eval_metrics = (None, None, None, None, None, None, None)
-
-    # Determine CV method string for results
-    cv_method = None
-    # If n_generations or best_pop_size is set, assume GA used StratifiedKFold with 10 splits (default in run_population_sweep)
-    if n_generations is not None or best_pop_size is not None:
-        cv_method = "StratifiedKFold(n_splits=10)"
-    else:
-        cv_method = "train_test_split"
-
-    run_results = [{
-        "timestamp": timestamp,
-        "tool": "Genetic Algorithm",
-        "run_index": "best",
-        "model": final_model.__class__.__name__,
-        "dataset": os.path.relpath(csv_path),
-        "hyperparameters": json.dumps(model_params, default=str) if model_params is not None else None,
-        "cv_method": cv_method,
-        "train_test_split": f"{1-test_frac:.0%}/{test_frac:.0%}" if test_frac is not None else "80/20",
-        "scaling": "StandardScaler",
-        "cv_accuracy": format_value(rf_metrics[0]) if rf_metrics and len(rf_metrics) > 0 else None,
-        "cv_precision": format_value(rf_metrics[1]) if rf_metrics and len(rf_metrics) > 1 else None,
-        "cv_recall": format_value(rf_metrics[2]) if rf_metrics and len(rf_metrics) > 2 else None,
-        "cv_f1_score": format_value(rf_metrics[3]) if rf_metrics and len(rf_metrics) > 3 else None,
-        "cv_fpr": format_value(rf_metrics[4]) if rf_metrics and len(rf_metrics) > 4 else None,
-        "cv_fnr": format_value(rf_metrics[5]) if rf_metrics and len(rf_metrics) > 5 else None,
-        "test_accuracy": format_value(rf_metrics[6]) if rf_metrics and len(rf_metrics) > 6 else None,
-        "test_precision": format_value(rf_metrics[7]) if rf_metrics and len(rf_metrics) > 7 else None,
-        "test_recall": format_value(rf_metrics[8]) if rf_metrics and len(rf_metrics) > 8 else None,
-        "test_f1_score": format_value(rf_metrics[9]) if rf_metrics and len(rf_metrics) > 9 else None,
-        "test_fpr": format_value(rf_metrics[10]) if rf_metrics and len(rf_metrics) > 10 else None,
-        "test_fnr": format_value(rf_metrics[11]) if rf_metrics and len(rf_metrics) > 11 else None,
-        "training_time_s": int(round(training_time_s)),
-        "testing_time_s": int(round(testing_time_s)),
-        "elapsed_run_time": int(round(elapsed_run_time)) if elapsed_run_time is not None else None,
-        "hardware": json.dumps(get_hardware_specifications()),
-        "best_features": json.dumps(best_features),
-        "rfe_ranking": json.dumps(rfe_ranking),
-    }]
-    write_consolidated_csv(run_results, output_dir)
+        output_dir,
+        csv_path,
+    )
 
     return {
         "best_features": best_features,
