@@ -48,6 +48,7 @@ import argparse  # For command-line argument parsing
 import atexit  # For playing a sound when the program finishes
 import csv  # For CSV quoting options
 import datetime  # For timestamping
+import glob  # For finding exported model files
 import json  # For saving lists and dicts as JSON strings
 import math  # For mathematical operations
 import matplotlib.pyplot as plt  # For plotting
@@ -62,20 +63,20 @@ import sys  # For system-specific parameters and functions
 import time  # For measuring elapsed time
 from colorama import Style  # For coloring the terminal
 from joblib import dump, load  # For exporting and loading trained models and scalers
-import glob  # For finding exported model files
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.ensemble import RandomForestClassifier  # For the Random Forest model
 from sklearn.feature_selection import RFE  # For Recursive Feature Elimination
 from sklearn.metrics import (
     accuracy_score,
+    confusion_matrix,
+    f1_score,
     precision_score,
     recall_score,
-    f1_score,
-    confusion_matrix,
 )  # For performance metrics
 from sklearn.model_selection import StratifiedKFold, train_test_split  # For train/test split and stratified K-Fold CV
 from sklearn.preprocessing import StandardScaler  # For scaling the data (standardization)
+from typing import Any, Dict, Optional  # For type hinting
 
 
 # Macros:
@@ -576,7 +577,7 @@ def save_rfe_results(csv_path, run_results):
 
     rows = []
     for r in runs:
-        data = {c: None for c in RFE_RESULTS_CSV_COLUMNS}
+        data: Dict[str, Optional[Any]] = {c: None for c in RFE_RESULTS_CSV_COLUMNS}
         # Timestamp for this row (YYYY-MM-DD_HH_MM_SS)
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
         data["timestamp"] = ts
