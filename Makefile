@@ -51,6 +51,11 @@ main: dependencies
 	$(CLEAR_CMD)
 	$(call RUN_AND_LOG, ./main.py $(ARGS))
 
+comments_standardizer: dependencies
+	$(ENSURE_LOG_DIR)
+	$(CLEAR_CMD)
+	$(call RUN_AND_LOG, ./Scripts/comments_standardizer.py $(ARGS))
+
 dataset_converter: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
