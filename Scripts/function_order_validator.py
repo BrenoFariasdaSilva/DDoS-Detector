@@ -77,7 +77,7 @@ IGNORE_DIRS = {  # Directories to ignore during the scan
     ".assets", ".git", ".github", ".idea", "__pycache__",
     "Datasets", "env", "Logs", "venv",
 }
-OUTPUT_FILE = os.path.join(ROOT_DIR, "Scripts", "functions_order_report.json")  # Output JSON file path
+OUTPUT_FILE = os.path.abspath(os.path.join(ROOT_DIR, "Scripts", "functions_order_report.json"))  # Output JSON file path
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
