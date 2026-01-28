@@ -241,6 +241,41 @@ def extract_functions_and_calls(file_path: str) -> Dict[str, Any]:
     return {"defined": visitor.defined_funcs, "called": visitor.called_funcs_map}  # Return the collected data
 
 
+def detect_function_order_violations(root_dir: str) -> Dict[str, List[str]]:
+    """
+    Detects functions that are called before being defined in Python files.
+
+    :param root_dir: Root directory of Python project
+    :return: Dict mapping relative file paths to list of violations
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Detecting function order violations in root directory: {BackgroundColors.CYAN}{root_dir}{Style.RESET_ALL}"
+    )  # Output the verbose message
+    
+    violations: Dict[str, List[str]] = {}  # Initialize dictionary to store violations
+    py_files = collect_python_files(root_dir)  # Collect all Python files
+    
+    for py_file in py_files:  # Iterate over each Python file
+        funcs_info = extract_functions_and_calls(py_file)  # Extract functions and calls
+        defined_funcs = funcs_info["defined"]  # Get defined functions
+        calls_map = funcs_info["called"]  # Get calls map
+        defined_set = set()  # Set to track defined functions
+        file_violations = []  # List to store violations for this file
+        
+        for func in defined_funcs:  # Iterate over defined functions in order
+            for called in calls_map.get(func, []):  # Verify each function it calls
+                if called not in defined_set:  # If the called function is not yet defined
+                    file_violations.append(
+                        f"{BackgroundColors.RED}Function '{func}' calls '{called}' before it is defined.{Style.RESET_ALL}"
+                    )  # Record the violation
+            defined_set.add(func)  # Mark this function as defined
+        if file_violations:  # If there are violations in this file
+            rel_path = os.path.relpath(py_file, root_dir).replace("\\", "/")  # Get relative path
+            violations[rel_path] = file_violations  # Store violations for this file
+    return violations  # Return all violations found
+
+
 def calculate_execution_time(start_time, finish_time):
     """
     Calculates the execution time between start and finish times and formats it as hh:mm:ss.
