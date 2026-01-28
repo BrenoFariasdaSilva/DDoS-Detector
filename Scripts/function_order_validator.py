@@ -276,6 +276,27 @@ def detect_function_order_violations(root_dir: str) -> Dict[str, List[str]]:
     return violations  # Return all violations found
 
 
+def write_order_report(violations: Dict[str, List[str]]):
+    """
+    Writes JSON report of function order violations.
+
+    :param violations: Dict mapping file paths to list of violations
+    :return: None
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Writing function order report to file: {BackgroundColors.CYAN
+        }{OUTPUT_FILE}{Style.RESET_ALL}"
+    )  # Output the verbose message
+    
+    if not violations:  # If no violations found
+        print("{BackgroundColors.GREEN}No function order violations detected.{Style.RESET_ALL}")
+        return  # Exit the function
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as file:  # Open output file with UTF-8 encoding
+        json.dump(violations, file, indent=4)  # Write violations to JSON file
+    print(f"{BackgroundColors.YELLOW}Function order violations detected! Report saved to {BackgroundColors.CYAN}{OUTPUT_FILE}{Style.RESET_ALL}")
+
+
 def calculate_execution_time(start_time, finish_time):
     """
     Calculates the execution time between start and finish times and formats it as hh:mm:ss.
