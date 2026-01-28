@@ -8,12 +8,12 @@ Description :
     This script scans Python files under a specified root directory (ROOT_DIR)
     and verifies whether functions are defined in the correct order according
     to the call hierarchy: each called function must appear above the function
-    that calls it.
+    that calls it. It also detects functions defined multiple times.
 
     Key features include:
         - AST-based parsing for precise detection of function definitions and calls
         - Recursive scanning of Python files (skips directories in IGNORE_DIRS)
-        - JSON report generation listing function order violations
+        - JSON report generation listing function order violations and multiple definitions
         - Integration with logging and terminal output
         - Cross-platform handling and sound notification on completion
 
@@ -21,10 +21,10 @@ Usage:
     1. Edit ROOT_DIR if necessary to point to the target directory.
     2. Execute the script:
         $ python function_order_validator.py
-    3. Verify the generated JSON report for function order violations.
+    3. Verify the generated JSON report for function order issues.
 
 Outputs:
-    - Scripts/function_order_report.json — structured report of order violations
+    - Scripts/functions_order_report.json — structured report of order violations and multiple definitions
 
 TODOs:
     - Add CLI arguments for root directory and output path
@@ -39,7 +39,7 @@ Dependencies:
 Assumptions & Notes:
     - ROOT_DIR contains Python source files to scan
     - Files in IGNORE_DIRS are skipped
-    - The report only includes functions defined after they are called
+    - The report includes order violations and multiple function definitions
 """
 
 import ast  # For parsing Python code into an AST
@@ -49,6 +49,7 @@ import json  # For saving the function order report
 import os  # For running a command in the terminal
 import platform  # For getting the operating system name
 import sys  # For system-specific parameters and functions
+from collections import Counter  # For counting duplicates
 from colorama import Style  # For coloring the terminal
 from pathlib import Path  # For handling file paths
 from typing import Any, Dict, List  # For type hinting
@@ -240,19 +241,19 @@ def extract_functions_and_calls(file_path: str) -> Dict[str, Any]:
     return {"defined": visitor.defined_funcs, "called": visitor.called_funcs_map}  # Return the collected data
 
 
-def detect_function_order_violations(root_dir: str) -> Dict[str, List[str]]:
+def detect_function_order_violations(root_dir: str) -> Dict[str, Dict[str, List[str]]]:
     """
-    Detects functions that are called before being defined in Python files.
+    Detects functions that are called before being defined and functions defined multiple times in Python files.
 
     :param root_dir: Root directory of Python project
-    :return: Dict mapping relative file paths to list of violations
+    :return: Dict mapping relative file paths to dict with 'order_violations' and 'multiple_definitions'
     """
     
     verbose_output(
         f"{BackgroundColors.GREEN}Detecting function order violations in root directory: {BackgroundColors.CYAN}{root_dir}{Style.RESET_ALL}"
     )  # Output the verbose message
     
-    violations: Dict[str, List[str]] = {}  # Initialize dictionary to store violations
+    violations: Dict[str, Dict[str, List[str]]] = {}  # Initialize dictionary to store violations
     py_files = collect_python_files(root_dir)  # Collect all Python files
         
     for py_file in py_files:  # Iterate over each Python file
@@ -270,9 +271,10 @@ def detect_function_order_violations(root_dir: str) -> Dict[str, List[str]]:
                         f"Function '{func}' calls '{called}' before it is defined."
                     )  # Record the violation
             defined_set.add(func)  # Mark this function as defined
-        if file_violations:  # If there are violations in this file
+        duplicates = [name for name, count in Counter(defined_funcs).items() if count > 1]  # Find functions defined multiple times
+        if file_violations or duplicates:  # If there are violations or duplicates in this file
             rel_path = os.path.relpath(py_file, root_dir).replace("\\", "/")  # Get relative path
-            violations[rel_path] = file_violations  # Store violations for this file
+            violations[rel_path] = {"order_violations": file_violations, "multiple_definitions": duplicates}  # Store data for this file
     return violations  # Return all violations found
 
 
