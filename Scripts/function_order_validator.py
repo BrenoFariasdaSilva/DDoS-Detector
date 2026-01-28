@@ -266,7 +266,7 @@ def detect_function_order_violations(root_dir: str) -> Dict[str, List[str]]:
             for called in calls_map.get(func, []):  # Verify each function it calls
                 if called not in defined_set:  # If the called function is not yet defined
                     file_violations.append(
-                        f"{BackgroundColors.RED}Function '{func}' calls '{called}' before it is defined.{Style.RESET_ALL}"
+                        f"Function '{func}' calls '{called}' before it is defined."
                     )  # Record the violation
             defined_set.add(func)  # Mark this function as defined
         if file_violations:  # If there are violations in this file
