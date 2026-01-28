@@ -254,17 +254,18 @@ def detect_function_order_violations(root_dir: str) -> Dict[str, List[str]]:
     
     violations: Dict[str, List[str]] = {}  # Initialize dictionary to store violations
     py_files = collect_python_files(root_dir)  # Collect all Python files
-    
+        
     for py_file in py_files:  # Iterate over each Python file
         funcs_info = extract_functions_and_calls(py_file)  # Extract functions and calls
         defined_funcs = funcs_info["defined"]  # Get defined functions
         calls_map = funcs_info["called"]  # Get calls map
         defined_set = set()  # Set to track defined functions
+        all_defined = set(defined_funcs)  # Set of all defined functions in the file
         file_violations = []  # List to store violations for this file
         
         for func in defined_funcs:  # Iterate over defined functions in order
             for called in calls_map.get(func, []):  # Verify each function it calls
-                if called not in defined_set:  # If the called function is not yet defined
+                if called not in defined_set and called in all_defined:  # If the called function is not yet defined and is user-defined in this file
                     file_violations.append(
                         f"Function '{func}' calls '{called}' before it is defined."
                     )  # Record the violation
