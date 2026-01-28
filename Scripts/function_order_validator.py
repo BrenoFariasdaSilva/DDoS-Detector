@@ -214,6 +214,33 @@ def collect_python_files(root_dir: str) -> List[str]:
     return py_files  # Return all Python files found
 
 
+def extract_functions_and_calls(file_path: str) -> Dict[str, Any]:
+    """
+    Parses a Python file to extract all function definitions and function calls.
+
+    Utilizes the FunctionASTVisitor class to traverse the AST of the file.
+
+    :param file_path: Path to the Python file to parse
+    :return: Dictionary with keys:
+        - 'defined': list of function names defined in the file
+        - 'called': list of function names called in the file
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Extracting functions and calls from file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}"
+    )  # Output the verbose message
+    
+    with open(file_path, "r", encoding="utf-8") as f:  # Open file with UTF-8 encoding
+        source = f.read()  # Read the entire file content
+
+    tree = ast.parse(source, filename=file_path)  # Parse the file into an AST
+
+    visitor = FunctionASTVisitor()  # Instantiate the AST visitor
+    visitor.visit(tree)  # Traverse the AST
+
+    return {"defined": visitor.defined_funcs, "called": visitor.called_funcs_map}  # Return the collected data
+
+
 def calculate_execution_time(start_time, finish_time):
     """
     Calculates the execution time between start and finish times and formats it as hh:mm:ss.
