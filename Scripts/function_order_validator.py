@@ -20,7 +20,7 @@ Description :
 Usage:
     1. Edit ROOT_DIR if necessary to point to the target directory.
     2. Execute the script:
-        $ python validate_function_order.py
+        $ python function_order_validator.py
     3. Verify the generated JSON report for function order violations.
 
 Outputs:
