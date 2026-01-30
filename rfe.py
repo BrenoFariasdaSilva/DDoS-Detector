@@ -192,6 +192,7 @@ def setup_telegram_bot():
     
     return bot  # Return the initialized bot
 
+
 def safe_filename(name):
     """
     Converts a string to a safe filename by replacing invalid characters with underscores.
