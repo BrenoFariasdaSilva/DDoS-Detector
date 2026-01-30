@@ -63,8 +63,8 @@ from telegram.error import BadRequest  # For handling Telegram errors
 
 
 # Telegram Configuration:
-TELEGRAM_PREFIX = ""  # Prefix for Telegram messages, set by calling script
 TELEGRAM_DEVICE_INFO = ""  # Device info for Telegram messages, set by calling script
+RUNNING_CODE = ""  # Name of the running script, set by calling script
 
 # Macros:
 class BackgroundColors:  # Colors for the terminal
@@ -296,7 +296,7 @@ def send_telegram_message(bot, messages, condition=True):
         try:  # Try to send message
             if isinstance(messages, str):  # If a single string is provided
                 messages = [messages]  # Convert it to a list
-            prefixed_messages = [f"{TELEGRAM_PREFIX} {TELEGRAM_DEVICE_INFO}: {msg}" for msg in messages]
+            prefixed_messages = [f"{TELEGRAM_DEVICE_INFO} - {RUNNING_CODE}: {msg}" for msg in messages]
             asyncio.run(bot.send_messages(prefixed_messages))  # Run the async method synchronously
         except Exception:  # Silently ignore Telegram errors
             pass  # Do nothing
