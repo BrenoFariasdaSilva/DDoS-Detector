@@ -330,7 +330,15 @@ def send_telegram_message(bot, messages, condition=True):
         try:  # Try to send message
             if isinstance(messages, str):  # If a single string is provided
                 messages = [messages]  # Convert it to a list
-            prefixed_messages = [f"{TELEGRAM_DEVICE_INFO} - {RUNNING_CODE}: {escape_markdown_v2(strip_ansi(str(msg)))}" for msg in messages]
+            
+            prefixed_messages = [  # Prefix each message with device info and running code
+                escape_markdown_v2(
+                    strip_ansi(
+                        f"{str(TELEGRAM_DEVICE_INFO)} - {str(RUNNING_CODE)}: {str(msg)}"
+                    )
+                )
+                for msg in messages
+            ]
             asyncio.run(bot.send_messages(prefixed_messages))  # Run the async method synchronously
         except Exception:  # Silently ignore Telegram errors
             pass  # Do nothing
