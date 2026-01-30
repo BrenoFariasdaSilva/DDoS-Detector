@@ -55,6 +55,7 @@ import atexit  # For playing a sound when the program finishes
 import asyncio  # For asynchronous operations
 import os  # For environment variables and file operations
 import platform  # For getting the operating system name
+import re  # For stripping ANSI sequences
 import socket  # For getting the local IP address
 from colorama import Style  # For coloring the terminal
 from dotenv import load_dotenv  # For loading .env file
@@ -282,6 +283,22 @@ def get_local_ip():
         return "127.0.0.1"  # Fallback to localhost
 
 
+def strip_ansi(text: str) -> str:
+    """
+    Strips ANSI escape sequences from the given text.
+    
+    :param text: The text to strip ANSI sequences from
+    :return: The text without ANSI sequences
+    """
+    
+    try:  # Try to strip ANSI sequences
+        text = re.sub(r"\x1B\[[0-?]*[ -/]*[@-~]", "", text)  # Remove ANSI escape sequences
+        text = re.sub(r"\[\d+(?:;\d+)*m", "", text)  # Remove color codes
+        return text  # Return the cleaned text
+    except Exception:  # If any error occurs
+        return text  # Return the original text
+
+
 def send_telegram_message(bot, messages, condition=True):
     """
     Sends a message via Telegram bot if configured and condition is met.
@@ -296,7 +313,7 @@ def send_telegram_message(bot, messages, condition=True):
         try:  # Try to send message
             if isinstance(messages, str):  # If a single string is provided
                 messages = [messages]  # Convert it to a list
-            prefixed_messages = [f"{TELEGRAM_DEVICE_INFO} - {RUNNING_CODE}: {msg}" for msg in messages]
+            prefixed_messages = [f"{TELEGRAM_DEVICE_INFO} - {RUNNING_CODE}: {strip_ansi(str(msg))}" for msg in messages]
             asyncio.run(bot.send_messages(prefixed_messages))  # Run the async method synchronously
         except Exception:  # Silently ignore Telegram errors
             pass  # Do nothing
