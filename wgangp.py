@@ -1336,6 +1336,8 @@ def main():
     )  # Output the welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
 
+    bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
+
     args = parse_args()  # Parse command-line arguments
     
     if args.csv_path is not None:  # Single file mode (csv_path provided):
