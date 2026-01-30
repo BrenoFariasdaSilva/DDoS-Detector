@@ -53,11 +53,13 @@ import pandas as pd  # For handling CSV and TXT file formats
 import platform  # For getting the operating system name
 import shutil  # For checking disk usage
 import sys  # For system-specific parameters and functions
+import telegram_bot  # For setting Telegram prefix and device info
 from colorama import Style  # For coloring the terminal output
 from fastparquet import ParquetFile  # For handling Parquet file format
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from scipy.io import arff as scipy_arff  # Used to read ARFF files
+from telegram_bot import TelegramBot, send_telegram_message  # For sending progress messages to Telegram
 from tqdm import tqdm  # For showing a progress bar
 
 
