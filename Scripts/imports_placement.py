@@ -163,6 +163,18 @@ class ImportPlacementVisitor(ast.NodeVisitor):
         self.generic_visit(node)  # Visit child nodes
         self.container_stack.pop()  # Pop function from stack
 
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+        """
+        Visit an async function definition node.
+
+        :param node: The AsyncFunctionDef AST node
+        :return: None
+        """
+        
+        self.container_stack.append({"type": "async_function", "name": node.name})  # Push async function to stack
+        self.generic_visit(node)  # Visit child nodes
+        self.container_stack.pop()  # Pop async function from stack
+
 
 # Functions Definitions:
 
