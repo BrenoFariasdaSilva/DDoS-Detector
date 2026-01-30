@@ -529,26 +529,6 @@ def populate_hardware_column(df, column_name="Hardware"):
     return df  # Return DataFrame as-is if no repositioning needed
 
 
-def get_file_size_string(file_path):
-    """
-    Get the file size in human-readable format (KB, MB, GB).
-
-    :param file_path: Path to the file
-    :return: String representing the file size
-    """
-
-    file_size = os.path.getsize(file_path)  # Get the file size in bytes
-
-    if file_size < 1024 * 1024:  # If less than 1 MB
-        size_str = f"{file_size / 1024:.2f} KB"  # Size in KB
-    elif file_size < 1024 * 1024 * 1024:  # If less than 1 GB
-        size_str = f"{file_size / (1024 * 1024):.2f} MB"  # Size in MB
-    else:  # Otherwise
-        size_str = f"{file_size / (1024 * 1024 * 1024):.2f} GB"  # Size in GB
-
-    return size_str  # Return the size string
-
-
 def format_value(value):
     """
     Format a numeric value to 4 decimal places, or return None if not possible.
