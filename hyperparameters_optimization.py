@@ -1186,16 +1186,19 @@ def compute_metrics_from_predictions(model, y_true, y_pred, X=None):
     return metrics  # Return assembled metrics dict
 
 
-def evaluate_single_combination(model, keys, combination, X_train, y_train):
+def evaluate_single_combination(model, model_name, keys, combination, X_train, y_train, current_index, total_combinations):
     """
     Helper function to evaluate a single parameter combination.
     Designed to be called in parallel via ThreadPoolExecutor with memory safety.
 
     :param model: Clone of the model instance
+    :param model_name: Name of the model being tested
     :param keys: Parameter names
     :param combination: Parameter values for this combination
     :param X_train: Training features
     :param y_train: Training labels
+    :param current_index: Current combination index (1-based)
+    :param total_combinations: Total number of combinations to test
     :return: Tuple (current_params, metrics_dict, elapsed)
     """
 
@@ -1205,6 +1208,8 @@ def evaluate_single_combination(model, keys, combination, X_train, y_train):
         penalty = current_params.get("penalty")  # Get penalty parameter
         if penalty != "elasticnet" and "l1_ratio" in current_params:  # If penalty is not elasticnet, remove l1_ratio
             current_params = {k: v for k, v in current_params.items() if k != "l1_ratio"}  # Remove l1_ratio if not needed
+
+    send_telegram_message(TELEGRAM_BOT, [f"Testing {model_name} combination {current_index}/{total_combinations}: {current_params}"])
     
     start_time = time.time()  # Start timing
     metrics = None  # Initialize metrics as None
@@ -1440,7 +1445,7 @@ def run_parallel_evaluation(
 
     for combo in combinations_to_test:  # Process each combination sequentially
         try:  # Try to evaluate
-            current_params, metrics, elapsed = evaluate_single_combination(clone(model), keys, combo, X_train, y_train)  # Evaluate
+            current_params, metrics, elapsed = evaluate_single_combination(clone(model), model_name, keys, combo, X_train, y_train, local_counter + 1, len(combinations_to_test))  # Evaluate
         except Exception as worker_err:  # Catch exceptions
             current_params = dict(zip(keys, combo))  # Reconstruct params
             metrics = None  # No metrics on failure
