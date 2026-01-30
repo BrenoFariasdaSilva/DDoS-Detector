@@ -167,7 +167,7 @@ fix-style: dependencies
 generate_requirements: $(VENV)
 	$(PIP) freeze > requirements.txt
 
-# Custom auxiliary scripts
+# Comments standardizer
 comments_standardizer: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
