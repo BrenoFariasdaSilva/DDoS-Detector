@@ -193,10 +193,29 @@ def main():
     """
 
     print(
-        f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Main Template Python{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
+        f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Imports Placement Verifier{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
         end="\n\n",
     )  # Output the welcome message
+
     start_time = datetime.datetime.now()  # Get the start time of the program
+
+    files = collect_python_files(ROOT_DIR)  # Collect all Python files under the project root
+    report: Dict[str, Any] = {}  # Initialize the report dictionary
+    
+    for current_file in files:  # Iterate over each Python file
+        nested = analyze_file(current_file)  # Analyze the file for nested imports
+        
+        if nested:  # If nested imports were found
+            rel = os.path.relpath(current_file, ROOT_DIR).replace("\\", "/")  # Get relative path and normalize separators
+            report[rel] = nested  # Add to report
+            verbose_output(true_string=f"Found {len(nested)} nested import(s) in: {rel}")
+        
+    write_report(report, OUTPUT_FILE)  # Write the report to the output file
+    
+    if report:  # If there are nested imports in the report
+        print(f"{BackgroundColors.YELLOW}Nested imports detected in {len(report)} file(s). Report: {BackgroundColors.CYAN}{OUTPUT_FILE}{Style.RESET_ALL}")
+    else:  # If there are no nested imports in the report
+        print(f"{BackgroundColors.GREEN}No nested imports detected.{Style.RESET_ALL}")
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
