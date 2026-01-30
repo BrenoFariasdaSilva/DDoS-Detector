@@ -218,11 +218,12 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
-def load_dataset(csv_path):
+def load_dataset(csv_path, telegram_bot):
     """
     Load CSV and return DataFrame.
 
     :param csv_path: Path to CSV dataset.
+    :param telegram_bot: Telegram bot instance for progress messages
     :return: DataFrame
     """
 
@@ -241,6 +242,8 @@ def load_dataset(csv_path):
     if df.shape[1] < 2:  # If there are less than 2 columns
         print(f"{BackgroundColors.RED}CSV must have at least 1 feature and 1 target.{Style.RESET_ALL}")
         return None  # Return None
+    
+    send_telegram_message(telegram_bot, [f"Dataset loaded from: {csv_path}"])  # Send message about dataset loading
 
     return df  # Return the loaded DataFrame
 
@@ -478,11 +481,12 @@ def print_top_features(top_features, rfe_ranking):
         print(f"{i}. {feat}{rank_info}")  # Print the feature and its ranking
 
 
-def print_metrics(metrics_tuple):
+def print_metrics(metrics_tuple, telegram_bot=None):
     """
     Prints metrics for the current run to the terminal.
 
     :param metrics_tuple: Tuple of average metrics
+    :param telegram_bot: Telegram bot instance for progress messages
     """
 
     print(f"\n{BackgroundColors.BOLD}Average Metrics:{Style.RESET_ALL}")
@@ -497,6 +501,20 @@ def print_metrics(metrics_tuple):
         f"  {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{metrics_tuple[5]:.4f}{Style.RESET_ALL}"
     )
     print(f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{metrics_tuple[6]:.2f}s{Style.RESET_ALL}")
+    
+    send_telegram_message(
+        telegram_bot,
+        [
+            f"Average Metrics:\n"
+            f"  Accuracy: {metrics_tuple[0]:.4f}\n"
+            f"  Precision: {metrics_tuple[1]:.4f}\n"
+            f"  Recall: {metrics_tuple[2]:.4f}\n"
+            f"  F1-Score: {metrics_tuple[3]:.4f}\n"
+            f"  False Positive Rate (FPR): {metrics_tuple[4]:.4f}\n"
+            f"  False Negative Rate (FNR): {metrics_tuple[5]:.4f}\n"
+            f"  Elapsed Time: {metrics_tuple[6]:.2f}s"
+        ],
+    )  # Send metrics to Telegram
 
 
 def get_hardware_specifications():
@@ -1057,7 +1075,7 @@ def build_results_with_hyperparams(final_model, csv_path, loaded_hyperparams, fa
     )
 
 
-def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
+def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparameters, telegram_bot):
     """
     Handles RFE for datasets with insufficient samples for stratified CV (fallback to single train/test split).
 
@@ -1066,9 +1084,13 @@ def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparamet
     :param y_array: Target array
     :param feature_columns: Feature column names
     :param hyperparameters: Hyperparameters dict
+    :param telegram_bot: Telegram bot instance for notifications
+    :return: None
     """
     
     print(f"{BackgroundColors.YELLOW}Not enough samples per class for stratified CV; falling back to single train/test split.{Style.RESET_ALL}")
+    send_telegram_message(telegram_bot, f"RFE: Falling back to single train/test split for dataset {Path(csv_path).stem}") if telegram_bot else None
+    
     X_train, X_test, y_train, y_test = train_test_split(
         X_numeric.values, y_array, test_size=0.2, random_state=42, stratify=None
     )  # Perform a single non-stratified train/test split
@@ -1077,7 +1099,7 @@ def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparamet
     top_features, rfe_ranking = extract_top_features(selector, feature_columns)  # Extract selected features and rankings
     sorted_rfe_ranking = sorted(rfe_ranking.items(), key=lambda x: x[1])  # Sort features by ranking (ascending)
 
-    print_metrics(metrics_tuple) if VERBOSE else None  # Optionally print metrics
+    print_metrics(metrics_tuple, telegram_bot) if VERBOSE else None  # Optionally print metrics
     print_top_features(top_features, rfe_ranking) if VERBOSE else None  # Optionally print top features
 
     final_model, scaler_full, top_features, loaded_hyperparams = get_final_model(csv_path, X_numeric, y_array, top_features, feature_columns)  # Get final model/scaler
@@ -1099,7 +1121,7 @@ def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparamet
     print_run_summary(run_results)  # Concise terminal summary
 
 
-def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
+def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, telegram_bot):
     """
     Handles RFE with stratified cross-validation.
 
@@ -1108,6 +1130,8 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
     :param y_array: Target array
     :param feature_columns: Feature column names
     :param hyperparameters: Hyperparameters dict
+    :param telegram_bot: Telegram bot instance for notifications
+    :return: None
     """
 
     verbose_output(f"{BackgroundColors.GREEN}Starting RFE with Stratified K-Fold Cross-Validation...{Style.RESET_ALL}")
@@ -1137,6 +1161,7 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
 
     for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X_train_scaled, y_train_array), start=1):
         verbose_output(f"{BackgroundColors.CYAN}Running fold {fold_idx}/{n_splits}{Style.RESET_ALL}")  # Optional fold progress
+        send_telegram_message(telegram_bot, f"RFE: Starting fold {fold_idx}/{n_splits} for dataset {Path(csv_path).stem}") if telegram_bot else None
 
         X_train_fold = X_train_scaled[train_idx]
         X_test_fold = X_train_scaled[test_idx]
@@ -1187,20 +1212,21 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
         rfe_ranking=sorted_rfe_ranking,
     )  # Build results dict
 
-    print_metrics(tuple(mean_metrics)) if VERBOSE else None  # Optionally print aggregated metrics
+    print_metrics(tuple(mean_metrics), telegram_bot) if VERBOSE else None  # Optionally print aggregated metrics
     print_top_features(top_features, avg_rfe_ranking) if VERBOSE else None  # Optionally print aggregated top features and avg ranks
 
     save_rfe_results(csv_path, run_results)  # Save aggregated run results to CSV
     print_run_summary(run_results)  # Concise terminal summary
 
 
-def run_rfe(csv_path):
+def run_rfe(csv_path, telegram_bot):
     """
     Runs Recursive Feature Elimination on the provided dataset, prints the single
     set of top features selected, computes and prints performance metrics, and
     saves the structured results.
 
     :param csv_path: Path to the CSV dataset file
+    :param telegram_bot: Telegram bot instance for progress messages
     :return: None
     """
 
@@ -1210,7 +1236,7 @@ def run_rfe(csv_path):
 
     hyperparameters = {}  # Default hyperparameters (to be extended later)
 
-    df = load_dataset(csv_path)  # Load dataset
+    df = load_dataset(csv_path, telegram_bot)  # Load dataset
 
     if df is None:  # If loading failed
         return  # Exit the function
@@ -1243,9 +1269,9 @@ def run_rfe(csv_path):
     min_class_count = counts.min() if counts.size > 0 else 0  # Minimum samples in any class
 
     if min_class_count < 2:  # If any class has fewer than 2 samples
-        run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparameters)  # Run fallback RFE
+        run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparameters, telegram_bot)  # Run fallback RFE
     else:  # If sufficient samples for stratified CV
-        run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters)  # Run RFE with CV
+        run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, telegram_bot)  # Run RFE with CV
 
 
 def calculate_execution_time(start_time, finish_time):
@@ -1307,7 +1333,7 @@ def main():
 
     send_telegram_message(telegram_bot, [f"Starting RFE analysis on {dataset_name}"])  # Send start message
 
-    run_rfe(CSV_FILE)  # Run RFE on the specified CSV file
+    run_rfe(CSV_FILE, telegram_bot)  # Run RFE on the specified CSV file
 
     send_telegram_message(telegram_bot, [f"RFE analysis completed for {dataset_name}"])  # Send completion message
 
