@@ -151,6 +151,18 @@ class ImportPlacementVisitor(ast.NodeVisitor):
         }
         self.nested_imports.append(entry)  # Add to the list of nested imports
 
+    def visit_FunctionDef(self, node: ast.FunctionDef):
+        """
+        Visit a function definition node.
+
+        :param node: The FunctionDef AST node
+        :return: None
+        """
+        
+        self.container_stack.append({"type": "function", "name": node.name})  # Push function to stack
+        self.generic_visit(node)  # Visit child nodes
+        self.container_stack.pop()  # Pop function from stack
+
 
 # Functions Definitions:
 
