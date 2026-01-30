@@ -111,6 +111,27 @@ RUN_FUNCTIONS = {
     "Play Sound": True,  # Set to True to play a sound when the program finishes
 }
 
+
+# Classes Definitions:
+
+
+class ImportPlacementVisitor(ast.NodeVisitor):
+    """
+    AST visitor that records imports that appear inside functions or classes.
+    """
+
+    def __init__(self):
+        """
+        Initialize the ImportPlacementVisitor.
+
+        :param: None
+        :return: None
+        """
+        
+        self.container_stack: List[Dict[str, Any]] = []  # Stack to track current container (function/class)
+        self.nested_imports: List[Dict[str, Any]] = []  # List to store detected nested imports
+
+
 # Functions Definitions:
 
 
