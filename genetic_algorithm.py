@@ -77,7 +77,7 @@ from sklearn.metrics import (  # For model evaluation
 )
 from sklearn.model_selection import StratifiedKFold, train_test_split  # For splitting the dataset and cross-validation
 from sklearn.preprocessing import StandardScaler  # For feature scaling
-from telegram_bot import TelegramBot  # For Telegram notifications
+from telegram_bot import TelegramBot, send_telegram_message  # For Telegram notifications
 from tqdm import tqdm  # For progress bars
 from typing import Any, Callable  # For type hints
 
@@ -1510,15 +1510,9 @@ def run_genetic_algorithm_loop(
                 GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
                 break  # Stop the loop early
 
-        if (
-            bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID and show_progress and gen % max(1, n_generations // 100) == 0
-        ):  # Send periodic updates to Telegram in every ~1% of generations
-            try:  # Try to send message
-                bot.send_messages(
-                    [f"GA Progress: Generation {gen}/{n_generations}, Best F1-Score: {best_fitness:.4f}"]
-                )  # Send message to Telegram bot
-            except Exception:  # Silently ignore Telegram errors
-                pass  # Do nothing
+        send_telegram_message(bot, [
+            f"GA Progress: Generation {gen}/{n_generations}, Best F1-Score: {best_fitness:.4f}"
+        ], show_progress and gen % max(1, n_generations // 100) == 0)  # Send periodic updates to Telegram bot
 
         gens_ran = gen  # Update gens_ran each generation
         GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
@@ -1877,15 +1871,9 @@ def aggregate_sweep_results(results, min_pop, max_pop, bot, dataset_name):
                 f"  {BackgroundColors.GREEN}Run {BackgroundColors.CYAN}{i+1}{BackgroundColors.GREEN}: {BackgroundColors.GREEN}unique features {BackgroundColors.CYAN}{len(unique)}{Style.RESET_ALL}"
             )  # Print unique features count
 
-        if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID:  # If Telegram is configured
-            try:  # Try to send message
-                bot.send_messages(
-                    [
-                        f"Completed {len(runs_list)} runs for population size **{pop_size}** on **{dataset_name}** -> **Avg F1: {f1_avg:.4f}**"
-                    ]
-                )  # Send progress message
-            except (Exception, RuntimeWarning):  # Silently ignore Telegram errors and warnings
-                pass  # Do nothing
+        send_telegram_message(bot, [
+            f"Completed {len(runs_list)} runs for population size **{pop_size}** on **{dataset_name}** -> **Avg F1: {f1_avg:.4f}**"
+        ])  # Send progress message
 
     return best_score, best_result, best_metrics, results  # Return aggregated results
 
@@ -2893,13 +2881,9 @@ def run_population_sweep(
         f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {min_pop} to {max_pop}, running {n_generations} generations and {runs} runs each.{Style.RESET_ALL}"
     )
 
-    if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID:  # If Telegram is configured
-        try:  # Try to send message
-            bot.send_messages(
-                [f"Starting population sweep for dataset **{dataset_name}** from size **{min_pop}** to **{max_pop}**"]
-            )  # Send start message
-        except (Exception, RuntimeWarning):  # Silently ignore Telegram errors and warnings
-            pass  # Do nothing
+    send_telegram_message(bot, [
+        f"Starting population sweep for dataset **{dataset_name}** from size **{min_pop}** to **{max_pop}**"
+    ])  # Send start message
 
     data = prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations)  # Prepare dataset
     if data is None:  # If preparation failed
@@ -2980,11 +2964,7 @@ def run_population_sweep(
     else:  # If no valid result was found
         print(f"{BackgroundColors.RED}No valid results found during the sweep.{Style.RESET_ALL}")
 
-    if bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID:  # If Telegram is configured
-        try:  # Try to send message
-            bot.send_messages([f"Population sweep completed for **{dataset_name}**"])  # Send completion message
-        except (Exception, RuntimeWarning):  # Silently ignore Telegram errors and warnings
-            pass  # Do nothing
+    send_telegram_message(bot, [f"Population sweep completed for **{dataset_name}**"])  # Send completion message
 
     return results  # Return the results dictionary
 

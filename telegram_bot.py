@@ -257,6 +257,23 @@ class TelegramBot:
         await self.run_bot(messages, chat_id)  # Run the bot to send messages
 
 
+def send_telegram_message(bot, messages, condition=True):
+    """
+    Sends a message via Telegram bot if configured and condition is met.
+
+    :param bot: TelegramBot instance
+    :param messages: List of messages to send
+    :param condition: Additional condition to check before sending
+    :return: None
+    """
+
+    if condition and bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID:  # If condition met and Telegram is configured
+        try:  # Try to send message
+            asyncio.run(bot.send_messages(messages))  # Run the async method synchronously
+        except Exception:  # Silently ignore Telegram errors
+            pass  # Do nothing
+
+
 def verify_filepath_exists(filepath):
     """
     Verify if a file or folder exists at the specified path.
