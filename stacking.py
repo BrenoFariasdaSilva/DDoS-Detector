@@ -1244,29 +1244,6 @@ def get_feature_subset(X_scaled, features, feature_names):
         return np.empty((X_scaled.shape[0], 0)), []  # Return empty array and empty list
 
 
-def get_features_list_for_feature_set(feature_set_name, feature_names, ga_selected_features, rfe_selected_features):
-    """
-    Determines the list of features used for a given feature set.
-
-    :param feature_set_name: Name of the feature set (e.g., "Full Features", "GA Features")
-    :param feature_names: List of all feature names
-    :param ga_selected_features: List of GA selected features or None
-    :param rfe_selected_features: List of RFE selected features or None
-    :return: List of features for the feature set
-    """
-
-    if feature_set_name == "Full Features":  # If the feature set is "Full Features"
-        return feature_names  # Return all feature names
-    elif feature_set_name == "RFE Features":  # If the feature set is "RFE Features"
-        return rfe_selected_features if rfe_selected_features else []  # Return RFE selected features or empty list
-    elif feature_set_name == "GA Features":  # If the feature set is "GA Features"
-        return ga_selected_features if ga_selected_features else []  # Return GA selected features or empty list
-    elif feature_set_name == "PCA Components":  # If the feature set is "PCA Components"
-        return feature_names  # Original features used for PCA
-    else:  # Unknown feature set
-        return []  # Default empty list
-
-
 def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_names, best_params=None, feature_set=None, dataset_csv_path=None):
     """
     Export model, scaler and metadata for stacking evaluations.
