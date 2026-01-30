@@ -1554,10 +1554,7 @@ def main():
     )  # Output the Welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
     
-    send_telegram_message(
-        TELEGRAM_BOT,
-        "Dataset Descriptor started.",
-    )
+    send_telegram_message(TELEGRAM_BOT, [f"Starting Dataset Descriptor at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Send start message
 
     for dataset_name, paths in DATASETS.items():  # For each dataset in the DATASETS dictionary
         print(
