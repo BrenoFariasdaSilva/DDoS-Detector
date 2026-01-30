@@ -67,7 +67,7 @@ import psutil  # For checking system RAM
 import re  # For regular expressions
 import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
-import telegram_bot  # For setting Telegram prefix and device info
+import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import time  # For measuring execution time
 from colorama import Style  # For terminal text styling
 from joblib import dump, load  # For exporting and loading trained models and scalers
@@ -154,6 +154,9 @@ MODEL_EXPORT_BASE = "Feature_Analysis/Stacking/Models/"
 SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, load exported models instead of retraining when available
 CSV_FILE = None  # Optional CSV override from CLI
 
+# Telegram Bot Setup:
+TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
+
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
 sys.stdout = logger  # Redirect stdout to the logger
@@ -216,7 +219,7 @@ def setup_telegram_bot():
     """
     Sets up the Telegram bot for progress messages.
 
-    :return: Initialized TelegramBot instance
+    :return: None
     """
     
     verbose_output(
@@ -225,11 +228,15 @@ def setup_telegram_bot():
 
     verify_dot_env_file()  # Verify if the .env file exists
 
-    bot = TelegramBot()  # Initialize Telegram bot for progress messages
-    telegram_bot.TELEGRAM_DEVICE_INFO = f"{telegram_bot.get_local_ip()} - {platform.system()}"  # Set device info for Telegram messages
-    telegram_bot.RUNNING_CODE = os.path.basename(__file__)  # Set prefix for Telegram messages
-    
-    return bot  # Return the initialized bot
+    global TELEGRAM_BOT  # Declare the module-global telegram_bot variable
+
+    try:  # Try to initialize the Telegram bot
+        TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
+        telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
+        telegram_module.RUNNING_CODE = os.path.basename(__file__)
+    except Exception as e:
+        print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+        TELEGRAM_BOT = None  # Set to None if initialization fails
 
 
 def set_threads_limit_based_on_ram():
@@ -2033,8 +2040,6 @@ def main():
         )
     
     start_time = datetime.datetime.now()  # Get the start time of the program
-
-    telegram_bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
 
     set_threads_limit_based_on_ram()  # Adjust THREADS_LIMIT based on system RAM
 
