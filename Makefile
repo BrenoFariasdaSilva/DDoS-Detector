@@ -51,11 +51,6 @@ main: dependencies
 	$(CLEAR_CMD)
 	$(call RUN_AND_LOG, ./main.py $(ARGS))
 
-comments_standardizer: dependencies
-	$(ENSURE_LOG_DIR)
-	$(CLEAR_CMD)
-	$(call RUN_AND_LOG, ./Scripts/comments_standardizer.py $(ARGS))
-
 dataset_converter: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
@@ -172,10 +167,11 @@ fix-style: dependencies
 generate_requirements: $(VENV)
 	$(PIP) freeze > requirements.txt
 
-unused_functions_finder: dependencies
+# Custom auxiliary scripts
+comments_standardizer: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(call RUN_AND_LOG, ./Scripts/unused_functions_finder.py $(ARGS))
+	$(call RUN_AND_LOG, ./Scripts/comments_standardizer.py $(ARGS))
 
 # Clean artifacts
 clean:
@@ -183,4 +179,4 @@ clean:
 	find . -type f -name '*.pyc' -delete || del /S /Q *.pyc 2>nul
 	find . -type d -name '__pycache__' -delete || rmdir /S /Q __pycache__ 2>nul
 
-.PHONY: all check-build clean comments_standardizer dataset_converter dataset_descriptor dependencies download_datasets fix-style generate_requirements genetic_algorithm hyperparameters_optimization main pca rfe stacking telegram unused_functions_finder wgangp
+.PHONY: all check-build clean comments_standardizer dataset_converter dataset_descriptor dependencies download_datasets fix-style generate_requirements genetic_algorithm hyperparameters_optimization main pca rfe stacking telegram wgangp
