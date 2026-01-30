@@ -55,6 +55,7 @@ import atexit  # For playing a sound when the program finishes
 import asyncio  # For asynchronous operations
 import os  # For environment variables and file operations
 import platform  # For getting the operating system name
+import socket  # For getting the local IP address
 from colorama import Style  # For coloring the terminal
 from dotenv import load_dotenv  # For loading .env file
 from telegram import Bot  # For Telegram bot operations
@@ -256,6 +257,25 @@ def verbose_output(true_string="", false_string=""):
         print(true_string)
     elif false_string != "":  # If a false_string was provided
         print(false_string)
+
+
+def get_local_ip():
+    """
+    Get the local IP address of the device in a cross-platform way.
+
+    :return: Local IP address as string
+    """
+    
+    verbose_output(f"Attempting to get local IP address...")  # Output the verbose message
+    
+    try:  # Try to get the local IP address
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # Use UDP socket
+        s.connect(("8.8.8.8", 80))  # Connect to Google's DNS
+        ip = s.getsockname()[0]  # Get the local IP address
+        s.close()  # Close the socket
+        return ip  # Return the local IP address
+    except:  # If any error occurs
+        return "127.0.0.1"  # Fallback to localhost
 
 
 def send_telegram_message(bot, messages, condition=True):
