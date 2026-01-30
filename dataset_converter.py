@@ -992,7 +992,7 @@ def main():
     if input_path is None or output_path is None:  # If either path is invalid
         return  # Exit early if input/output paths are invalid
     
-    send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter started for input: {input_path} and output: {output_path}.")  # Notify start via Telegram
+    send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter started for input: {input_path} and output: {output_path} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")  # Notify start via Telegram
 
     configure_verbose_mode(args)  # Enable verbose mode if requested
 
