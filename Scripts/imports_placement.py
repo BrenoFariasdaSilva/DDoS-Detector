@@ -129,6 +129,18 @@ def verbose_output(true_string="", false_string=""):
         print(false_string)  # Output the false statement string
 
 
+def is_ignored(path: str) -> bool:
+    """
+    Verify if a path should be ignored based on IGNORE_DIRS.
+
+    :param path: The file path to verify
+    :return: True if the path contains any ignored directory, False otherwise
+    """
+    
+    parts = set(Path(path).parts)  # Get the path parts as a set
+    return bool(parts.intersection(IGNORE_DIRS))  # Check if any part intersects with ignored directories
+
+
 def collect_python_files(root_dir: str) -> List[str]:
     """
     Collect all Python files under the root directory, excluding ignored directories.
