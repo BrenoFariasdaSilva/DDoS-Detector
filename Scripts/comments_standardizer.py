@@ -48,6 +48,7 @@ Assumptions & Notes:
 	- Files are rewritten only if modifications are detected.
 """
 
+
 import atexit  # For playing a sound when the program finishes
 import datetime  # For getting the current date and time
 import os  # For running a command in the terminal
