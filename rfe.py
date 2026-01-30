@@ -157,6 +157,22 @@ def verbose_output(true_string="", false_string=""):
     elif false_string != "":  # If a false_string was provided
         print(false_string)  # Output the false statement string
 
+
+def verify_dot_env_file():
+    """
+    Verifies if the .env file exists in the current directory.
+
+    :return: True if the .env file exists, False otherwise
+    """
+
+    env_path = Path(__file__).parent / ".env"  # Path to the .env file
+    if not env_path.exists():  # If the .env file does not exist
+        print(f"{BackgroundColors.CYAN}.env{BackgroundColors.YELLOW} file not found at {BackgroundColors.CYAN}{env_path}{BackgroundColors.YELLOW}. Telegram messages may not be sent.{Style.RESET_ALL}")
+        return False  # Return False
+
+    return True  # Return True if the .env file exists
+
+
 def setup_telegram_bot():
     """
     Sets up the Telegram bot for progress messages.
@@ -167,6 +183,8 @@ def setup_telegram_bot():
     verbose_output(
         f"{BackgroundColors.GREEN}Setting up Telegram bot for messages...{Style.RESET_ALL}"
     )  # Output the verbose message
+
+    verify_dot_env_file()  # Verify if the .env file exists
 
     bot = TelegramBot()  # Initialize Telegram bot for progress messages
     telegram_bot.TELEGRAM_DEVICE_INFO = f"{telegram_bot.get_local_ip()} - {platform.system()}"  # Set device info for Telegram messages
