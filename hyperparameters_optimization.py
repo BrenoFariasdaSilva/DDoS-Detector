@@ -58,6 +58,7 @@ import psutil  # RAM and CPU core info
 import re  # For regular expressions
 import subprocess  # WMIC call
 import sys  # For system-specific parameters and functions
+import telegram_bot  # For setting Telegram prefix and device info
 import time  # For measuring execution time
 import warnings  # For suppressing warnings
 from collections import OrderedDict  # For deterministic results column ordering when saving
@@ -84,6 +85,7 @@ from sklearn.neighbors import KNeighborsClassifier, NearestCentroid  # For k-nea
 from sklearn.neural_network import MLPClassifier  # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For label encoding and feature scaling
 from sklearn.svm import SVC  # For Support Vector Machine model
+from telegram_bot import TelegramBot, send_telegram_message  # For sending progress messages to Telegram
 from thundersvm import SVC as ThunderSVC  # For ThunderSVM classifier (imported in try/except)
 from tqdm import tqdm  # For progress bars
 from typing import Any, cast, Dict  # For type hints
