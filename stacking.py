@@ -67,6 +67,7 @@ import psutil  # For checking system RAM
 import re  # For regular expressions
 import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
+import telegram_bot  # For setting Telegram prefix and device info
 import time  # For measuring execution time
 from colorama import Style  # For terminal text styling
 from joblib import dump, load  # For exporting and loading trained models and scalers
@@ -91,6 +92,7 @@ from sklearn.neighbors import KNeighborsClassifier, NearestCentroid  # For k-nea
 from sklearn.neural_network import MLPClassifier  # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For label encoding and feature scaling
 from sklearn.svm import SVC  # For Support Vector Machine model
+from telegram_bot import TelegramBot, send_telegram_message  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
 from xgboost import XGBClassifier  # For XGBoost classifier
 
