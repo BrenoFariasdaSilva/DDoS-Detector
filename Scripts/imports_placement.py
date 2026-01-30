@@ -78,11 +78,23 @@ class BackgroundColors:  # Colors for the terminal
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
 
-# Telegram Bot Setup:
-TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
+# Project paths and settings
+ROOT_DIR = str(Path(__file__).resolve().parent.parent)
+OUTPUT_FILE = os.path.abspath(os.path.join(Path(__file__).resolve().parent, "imports_placement_report.json"))
+IGNORE_DIRS = {  # Directories to ignore
+    ".assets",
+    ".git",
+    ".github",
+    ".idea",
+    "__pycache__",
+    "Datasets",
+    "env",
+    "Logs",
+    "venv",
+}
 
 # Logger Setup:
-logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
+logger = Logger(f"../Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
 sys.stdout = logger  # Redirect stdout to the logger
 sys.stderr = logger  # Redirect stderr to the logger
 
