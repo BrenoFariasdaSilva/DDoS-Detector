@@ -187,6 +187,18 @@ class ImportPlacementVisitor(ast.NodeVisitor):
         self.generic_visit(node)  # Visit child nodes
         self.container_stack.pop()  # Pop class from stack
 
+    def (self, node: ast.Import):
+        """
+        Visit an import statement node.
+
+        :param node: The Import AST node
+        :return: None
+        """
+        
+        if self.container_stack:  # If inside a container
+            names = [alias.name for alias in node.names]  # Extract imported names
+            self.record_import(node, names, module=None)  # Record the nested import
+
 
 # Functions Definitions:
 
