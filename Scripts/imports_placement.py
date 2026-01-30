@@ -175,6 +175,18 @@ class ImportPlacementVisitor(ast.NodeVisitor):
         self.generic_visit(node)  # Visit child nodes
         self.container_stack.pop()  # Pop async function from stack
 
+    def visit_ClassDef(self, node: ast.ClassDef):
+        """
+        Visit a class definition node.
+
+        :param node: The ClassDef AST node
+        :return: None
+        """
+        
+        self.container_stack.append({"type": "class", "name": node.name})  # Push class to stack
+        self.generic_visit(node)  # Visit child nodes
+        self.container_stack.pop()  # Pop class from stack
+
 
 # Functions Definitions:
 
