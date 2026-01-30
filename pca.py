@@ -353,6 +353,8 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
             f"n_components ({n_components}) cannot be greater than number of features ({X_train.shape[1]})"
         )
 
+
+    send_telegram_message(TELEGRAM_BOT, f"Starting PCA training for n_components={n_components}")
     pca = PCA(n_components=n_components, random_state=42)  # Initialize PCA
 
     start_total = time.time()  # Start total training time (including PCA fit, CV, final fit)
@@ -370,7 +372,9 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
 
     cv_accs, cv_precs, cv_recs, cv_f1s = [], [], [], []  # Lists to store CV metrics
 
-    for train_idx, val_idx in skf.split(X_train_pca, y_train):  # Loop over each fold
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_train_pca, y_train), start=1):  # Loop over each fold
+        send_telegram_message(TELEGRAM_BOT, f"Starting CV fold {fold_idx}/{cv_folds} for n_components={n_components}")
+        fold_start = time.time()
         X_train_fold = X_train_pca[train_idx]  # Training data for this fold
         X_val_fold = X_train_pca[val_idx]  # Validation data for this fold
         y_train_fold = (
@@ -393,6 +397,16 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
         cv_f1s.append(
             f1_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
         )  # Calculate and store metrics
+        fold_elapsed = time.time() - fold_start
+        send_telegram_message(TELEGRAM_BOT, f"Finished CV fold {fold_idx}/{cv_folds} for n_components={n_components} in {int(fold_elapsed)}s")
+
+    cv_acc_mean = np.mean(cv_accs)  # Mean CV metrics
+    cv_prec_mean = np.mean(cv_precs)  # Mean CV metrics
+    cv_rec_mean = np.mean(cv_recs)  # Mean CV metrics
+    cv_f1_mean = np.mean(cv_f1s)  # Mean CV metrics
+
+    total_elapsed = time.time() - start_total
+    send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} in {int(total_elapsed)}s with CV F1: {cv_f1_mean:.4f}")
 
     cv_acc_mean = np.mean(cv_accs)  # Mean CV metrics
     cv_prec_mean = np.mean(cv_precs)  # Mean CV metrics
@@ -853,12 +867,16 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
         for n_components in tqdm(
             n_components_list, desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}", unit="config"
         ):
+            send_telegram_message(TELEGRAM_BOT, f"Starting PCA training for n_components={n_components}")
             print(
                 f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Testing PCA with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}"
             )
+            comp_start = time.time()
             results = apply_pca_and_evaluate(
                 X_train, y_train, X_test, y_test, n_components, workers=1
             )  # Apply PCA and evaluate (single worker)
+            comp_elapsed = time.time() - comp_start
+            send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} in {comp_elapsed:.2f}s")
             all_results.append(results)  # Append results to the list
             print_pca_results(results) if VERBOSE else None
 
@@ -949,6 +967,8 @@ def main():
 
     print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}PCA Feature Extraction{BackgroundColors.GREEN} program!{Style.RESET_ALL}")
     start_time = datetime.datetime.now()  # Get the start time of the program
+    
+    send_telegram_message(TELEGRAM_BOT, [f"Starting PCA Feature Extraction on {CSV_FILE} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])
 
     run_pca_analysis(CSV_FILE, n_components_list, max_workers=max_workers)  # Run the PCA analysis
 
@@ -959,6 +979,8 @@ def main():
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
     )  # Output the end of the program message
+    
+    send_telegram_message(TELEGRAM_BOT, [f"PCA Feature Extraction completed on {CSV_FILE} at {finish_time.strftime('%Y-%m-%d %H:%M:%S')}.\nExecution time: {calculate_execution_time(start_time, finish_time)}"])
 
     (
         atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
