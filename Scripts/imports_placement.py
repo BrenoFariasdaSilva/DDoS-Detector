@@ -50,14 +50,18 @@ Assumptions & Notes:
     - Sound notifications disabled on Windows.
 """
 
+
+import ast  # For parsing Python code
 import atexit  # For playing a sound when the program finishes
 import datetime  # For getting the current date and time
+import json  # For generating JSON reports
 import os  # For running a command in the terminal
 import platform  # For getting the operating system name
 import sys  # For system-specific parameters and functions
 from colorama import Style  # For coloring the terminal
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
+from typing import Any, Dict, List  # For type hints
 
 
 # Macros:
