@@ -884,6 +884,7 @@ def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIREC
     )  # Output the verbose message
 
     dataset_files = resolve_dataset_files(input_directory)  # Get all dataset files from the input directory
+    len_dataset_files = len(dataset_files)  # Get the number of dataset files found
 
     if not dataset_files:  # If no dataset files were found
         print(
@@ -895,12 +896,14 @@ def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIREC
 
     pbar = tqdm(
         dataset_files,
-        desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len(dataset_files)}{BackgroundColors.GREEN} {'file' if len(dataset_files) == 1 else 'files'}{Style.RESET_ALL}",
+        desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}",
         unit="file",
         colour="green",
-        total=len(dataset_files),
+        total=len_dataset_files,
     )  # Create a progress bar for the conversion process
-    for input_path in pbar:  # Iterate through each dataset file
+    for idx, input_path in enumerate(pbar, start=1):  # Iterate through each dataset file with index
+        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path}")  # Notify progress via Telegram
+        
         file = os.path.basename(input_path)  # Extract the file name from the full path
         name, ext = os.path.splitext(file)  # Split file name into base name and extension
         ext = ext.lower()  # Normalize extension to lowercase
