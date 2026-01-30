@@ -1263,7 +1263,7 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
     )
     start_time = datetime.datetime.now()  # Get the start time of the program
 
-    bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
+    telegram_bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
 
     sorted_datasets = sorted(DATASETS.items())  # Sort datasets alphabetically by keys
 
