@@ -59,8 +59,8 @@ import seaborn as sns  # For enhanced plotting
 import shutil  # For checking disk usage
 import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
+import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import threading  # For optional background resource monitor
-import telegram_bot  # For setting Telegram prefix and device info
 import time  # For measuring execution time
 from colorama import Style  # For coloring the terminal
 from deap import algorithms, base, creator, tools  # For the genetic algorithm
@@ -141,6 +141,9 @@ GA_RESULTS_CSV_COLUMNS = [  # Columns for the results CSV
     "rfe_ranking",
 ]
 
+# Telegram Bot Setup:
+TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
+
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
 sys.stdout = logger  # Redirect stdout to the logger
@@ -199,7 +202,7 @@ def setup_telegram_bot():
     """
     Sets up the Telegram bot for progress messages.
 
-    :return: Initialized TelegramBot instance
+    :return: None
     """
     
     verbose_output(
@@ -208,11 +211,15 @@ def setup_telegram_bot():
 
     verify_dot_env_file()  # Verify if the .env file exists
 
-    bot = TelegramBot()  # Initialize Telegram bot for progress messages
-    telegram_bot.TELEGRAM_DEVICE_INFO = f"{telegram_bot.get_local_ip()} - {platform.system()}"  # Set device info for Telegram messages
-    telegram_bot.RUNNING_CODE = os.path.basename(__file__)  # Set prefix for Telegram messages
-    
-    return bot  # Return the initialized bot
+    global TELEGRAM_BOT  # Declare the module-global telegram_bot variable
+
+    try:  # Try to initialize the Telegram bot
+        TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
+        telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
+        telegram_module.RUNNING_CODE = os.path.basename(__file__)
+    except Exception as e:
+        print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+        TELEGRAM_BOT = None  # Set to None if initialization fails
 
 
 def verify_filepath_exists(filepath):
@@ -1404,7 +1411,6 @@ def save_generation_state(output_dir, state_id, gen, population, hof_best, fitne
 
 
 def run_genetic_algorithm_loop(
-    bot,
     toolbox,
     population,
     hof,
@@ -1428,7 +1434,6 @@ def run_genetic_algorithm_loop(
     """
     Run Genetic Algorithm generations with a tqdm progress bar.
 
-    :param bot: TelegramBot instance for sending messages.
     :param toolbox: DEAP toolbox with registered functions.
     :param population: Initial population.
     :param hof: Hall of Fame to store the best individual.
@@ -1546,9 +1551,9 @@ def run_genetic_algorithm_loop(
                 GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
                 break  # Stop the loop early
 
-        send_telegram_message(bot, [
+        send_telegram_message(TELEGRAM_BOT, [
             f"GA Progress: Generation {gen}/{n_generations}, Best F1-Score: {best_fitness:.4f}"
-        ], show_progress and gen % max(1, n_generations // 100) == 0)  # Send periodic updates to Telegram bot
+        ], show_progress and gen % max(1, n_generations // 100) == 0)  # Send periodic updates to Telegram telegram_bot
 
         gens_ran = gen  # Update gens_ran each generation
         GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
@@ -1710,7 +1715,6 @@ def cleanup_state_for_id(output_dir, state_id):
 
 
 def run_single_ga_iteration(
-    bot,
     X_train,
     y_train,
     X_test,
@@ -1732,7 +1736,6 @@ def run_single_ga_iteration(
     """
     Execute one GA run for a specific population size.
 
-    :param bot: TelegramBot instance.
     :param X_train: Training features.
     :param y_train: Training labels.
     :param X_test: Test features.
@@ -1784,7 +1787,6 @@ def run_single_ga_iteration(
 
     toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size)  # Setup GA components
     best_ind, gens_ran, fitness_history = run_genetic_algorithm_loop(
-        bot,
         toolbox,
         population,
         hof,
@@ -1861,14 +1863,13 @@ def run_single_ga_iteration(
         return result  # Return results
 
 
-def aggregate_sweep_results(results, min_pop, max_pop, bot, dataset_name):
+def aggregate_sweep_results(results, min_pop, max_pop, dataset_name):
     """
     Aggregate results per population size and find best.
 
     :param results: Dict mapping pop_size to runs list.
     :param min_pop: Minimum population size.
     :param max_pop: Maximum population size.
-    :param bot: TelegramBot instance.
     :param dataset_name: Dataset name.
     :return: Tuple (best_score, best_result, best_metrics, results_dict).
     """
@@ -1907,8 +1908,8 @@ def aggregate_sweep_results(results, min_pop, max_pop, bot, dataset_name):
                 f"  {BackgroundColors.GREEN}Run {BackgroundColors.CYAN}{i+1}{BackgroundColors.GREEN}: {BackgroundColors.GREEN}unique features {BackgroundColors.CYAN}{len(unique)}{Style.RESET_ALL}"
             )  # Print unique features count
 
-        send_telegram_message(bot, [
-            f"Completed {len(runs_list)} runs for population size **{pop_size}** on **{dataset_name}** -> **Avg F1: {f1_avg:.4f}**"
+        send_telegram_message(TELEGRAM_BOT, [
+            f"Completed {len(runs_list)} runs for population size {pop_size} on {dataset_name} -> AVG F1-Score: {f1_avg:.4f}"
         ])  # Send progress message
 
     return best_score, best_result, best_metrics, results  # Return aggregated results
@@ -2881,7 +2882,6 @@ def analyze_results(saved_info, X, y, feature_names, csv_path):
 
 
 def run_population_sweep(
-    bot,
     dataset_name,
     csv_path,
     n_generations=200,
@@ -2900,7 +2900,6 @@ def run_population_sweep(
     (F1-Score) on the training dataset using 10-fold Stratified Cross-Validation.
     For each population size, it runs the GA multiple times to verify for divergence.
 
-    :param bot: TelegramBot instance for sending notifications.
     :param dataset_name: Name of the dataset being processed.
     :param csv_path: Path to the CSV dataset.
     :param n_generations: Number of generations to run the GA for each population size.
@@ -2917,8 +2916,8 @@ def run_population_sweep(
         f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {min_pop} to {max_pop}, running {n_generations} generations and {runs} runs each.{Style.RESET_ALL}"
     )
 
-    send_telegram_message(bot, [
-        f"Starting population sweep for dataset **{dataset_name}** from size **{min_pop}** to **{max_pop}**"
+    send_telegram_message(TELEGRAM_BOT, [
+        f"Starting population sweep for dataset {dataset_name} from size {min_pop} to {max_pop}"
     ])  # Send start message
 
     data = prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations)  # Prepare dataset
@@ -2939,8 +2938,10 @@ def run_population_sweep(
     start_run_time = time.time()  # Start timing the entire run process
     for run in range(runs):  # For each run
         for pop_size in range(min_pop, max_pop + 1):  # For each population size
+            send_telegram_message(TELEGRAM_BOT, [
+                f"Run {run + 1}/{runs} - population size {pop_size}/{max_pop}"
+            ])  # Send start message for this run and population size
             result = run_single_ga_iteration(
-                bot,
                 X_train,
                 y_train,
                 X_test,
@@ -2963,7 +2964,7 @@ def run_population_sweep(
                 results[pop_size]["runs"].append(result)  # Append result to runs list
 
     best_score, best_result, best_metrics, results = aggregate_sweep_results(
-        results, min_pop, max_pop, bot, dataset_name
+        results, min_pop, max_pop, dataset_name
     )  # Aggregate results and find best
 
     elapsed_run_time = time.time() - start_run_time  # Calculate elapsed time for the entire run process
@@ -3000,7 +3001,7 @@ def run_population_sweep(
     else:  # If no valid result was found
         print(f"{BackgroundColors.RED}No valid results found during the sweep.{Style.RESET_ALL}")
 
-    send_telegram_message(bot, [f"Population sweep completed for **{dataset_name}**"])  # Send completion message
+    send_telegram_message(TELEGRAM_BOT, [f"Population sweep completed for {dataset_name}"])  # Send completion message
 
     return results  # Return the results dictionary
 
@@ -3093,8 +3094,9 @@ def main():
     cxpb = 0.5
     mutpb = 0.01
     runs = RUNS
-    bot = TelegramBot()
     dataset_name = os.path.splitext(os.path.basename(csv_path))[0]
+    
+    send_telegram_message(TELEGRAM_BOT, [f"Starting Genetic Algorithm feature selection for {dataset_name}"])  # Send start message
 
     # --- SKIP_TRAIN_IF_MODEL_EXISTS logic ---
     loaded = None
@@ -3115,7 +3117,6 @@ def main():
 
     # Run the GA pipeline as usual
     sweep_results = run_population_sweep(
-        bot,
         dataset_name,
         csv_path,
         n_generations=n_generations,
@@ -3143,6 +3144,9 @@ def main():
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
     )
+    
+    send_telegram_message(TELEGRAM_BOT, [f"Genetic Algorithm feature selection completed for {dataset_name}. Execution time: {calculate_execution_time(start_time, finish_time)}"])  # Send completion message
+    
     atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
 
 
