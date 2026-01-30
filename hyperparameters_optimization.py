@@ -2065,7 +2065,7 @@ def main():
     )  # Output the welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
 
-    bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
+    telegram_bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
 
     for dataset_name, dirpath in iterate_dataset_directories():  # Iterate valid dataset directories
         csv_files = get_files_to_process(
