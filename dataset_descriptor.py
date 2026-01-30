@@ -63,12 +63,14 @@ import pandas as pd  # For data manipulation
 import platform  # For getting the operating system name
 import re  # For regex operations
 import sys  # For system-specific parameters and functions
+import telegram_bot  # For setting Telegram prefix and device info
 import warnings  # For suppressing pandas warnings when requested
 from colorama import Style  # For coloring the terminal
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.manifold import TSNE  # For t-SNE dimensionality reduction
 from sklearn.preprocessing import StandardScaler  # For feature scaling
+from telegram_bot import TelegramBot, send_telegram_message  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
 from typing import Any, cast  # For type hinting
 
