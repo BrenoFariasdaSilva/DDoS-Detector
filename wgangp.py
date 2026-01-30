@@ -816,6 +816,8 @@ def train(args):
     )  # Select device for training
     set_seed(args.seed)  # Set random seed for reproducibility
 
+    send_telegram_message(TELEGRAM_BOT, f"Starting WGAN-GP training on {Path(args.csv_path).name} for {args.epochs} epochs")
+
     # Print optimization settings
     print(f"{BackgroundColors.GREEN}Device: {BackgroundColors.CYAN}{device.type.upper()}{Style.RESET_ALL}")
     if args.use_amp and device.type == 'cuda':
@@ -1162,6 +1164,8 @@ def train(args):
         else:  # No CSV path, use default out_dir
             plot_training_metrics(metrics_history, args.out_dir, "training_metrics.png")  # Create and save plots
 
+    send_telegram_message(TELEGRAM_BOT, f"Finished WGAN-GP training on {Path(args.csv_path).name} after {args.epochs} epochs")
+
 
 def generate(args):
     """
@@ -1174,6 +1178,8 @@ def generate(args):
     device = torch.device(
         "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
     )  # Select device for generation
+
+    send_telegram_message(TELEGRAM_BOT, f"Starting WGAN-GP generation from {Path(args.checkpoint).name}")
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)  # Load checkpoint from disk with sklearn objects
     args_ck = ckpt.get("args", {})  # Retrieve saved arguments from checkpoint
     scaler = ckpt.get("scaler", None)  # Try to get scaler from checkpoint
@@ -1288,6 +1294,8 @@ def generate(args):
     df.to_csv(args.out_file, index=False)  # Save generated data to CSV file
     print(f"{BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} generated samples to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message
 
+    send_telegram_message(TELEGRAM_BOT, f"Finished WGAN-GP generation, saved {n} samples to {Path(args.out_file).name}")
+
 
 def calculate_execution_time(start_time, finish_time):
     """
@@ -1342,6 +1350,8 @@ def main():
     )  # Output the welcome message
     
     start_time = datetime.datetime.now()  # Get the start time of the program
+    
+    send_telegram_message(TELEGRAM_BOT, [f"Starting WGAN-GP Data Augmentation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Send Telegram notification
 
     args = parse_args()  # Parse command-line arguments
     
@@ -1464,6 +1474,8 @@ def main():
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
     )  # Output the end of the program message
+
+    send_telegram_message(TELEGRAM_BOT, [f"WGAN-GP Data Augmentation finished. Execution time: {calculate_execution_time(start_time, finish_time)}"])
 
     (
         atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
