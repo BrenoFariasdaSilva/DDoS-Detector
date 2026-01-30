@@ -1164,7 +1164,6 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
 
     for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X_train_scaled, y_train_array), start=1):
         verbose_output(f"{BackgroundColors.CYAN}Running fold {fold_idx}/{n_splits}{Style.RESET_ALL}")  # Optional fold progress
-        send_telegram_message(TELEGRAM_BOT, f"RFE: Starting fold {fold_idx}/{n_splits} for dataset {Path(csv_path).stem}")
 
         X_train_fold = X_train_scaled[train_idx]
         X_test_fold = X_train_scaled[test_idx]
@@ -1178,6 +1177,12 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
         fold_rankings.append(selector.ranking_)  # Append per-fold ranking array
         fold_supports.append(selector.support_.astype(int))  # Append per-fold support mask as integers
         total_elapsed += metrics_tuple[6]  # Accumulate elapsed time from this fold
+
+        # Send Telegram message with fold timing
+        send_telegram_message(
+            TELEGRAM_BOT,
+            f"RFE: Finished fold {fold_idx}/{n_splits} for dataset {Path(csv_path).stem} in {metrics_tuple[6]:.2f}s"
+        )
 
     # Aggregate metrics (mean across folds)
     metrics_arr = np.array(fold_metrics)  # Convert list of tuples to numpy array
