@@ -196,6 +196,23 @@ def analyze_file(path: str) -> List[Dict[str, Any]]:
     return visitor.nested_imports  # Return the list of nested imports found
 
 
+def write_report(report: Dict[str, Any], out_path: str):
+    """
+    Write the report to a JSON file.
+
+    :param report: The report dictionary
+    :param out_path: The output file path
+    :return: None
+    """
+    
+    verbose_output(true_string=f"{BackgroundColors.GREEN}Writing report to: {BackgroundColors.CYAN}{out_path}{Style.RESET_ALL}")  # Output the verbose message
+    
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)  # Ensure the output directory exists
+    
+    with open(out_path, "w", encoding="utf-8") as fh:  # Open file for writing with UTF-8 encoding
+        json.dump(report, fh, indent=4)  # Write the report as formatted JSON
+
+
 def calculate_execution_time(start_time, finish_time):
     """
     Calculates the execution time between start and finish times and formats it as hh:mm:ss.
