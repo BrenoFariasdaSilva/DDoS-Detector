@@ -168,6 +168,26 @@ def verify_dot_env_file():
     return True  # Return True if the .env file exists
 
 
+def setup_telegram_bot():
+    """
+    Sets up the Telegram bot for progress messages.
+
+    :return: Initialized TelegramBot instance
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Setting up Telegram bot for messages...{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    verify_dot_env_file()  # Verify if the .env file exists
+
+    bot = TelegramBot()  # Initialize Telegram bot for progress messages
+    telegram_bot.TELEGRAM_DEVICE_INFO = f"{telegram_bot.get_local_ip()} - {platform.system()}"  # Set device info for Telegram messages
+    telegram_bot.RUNNING_CODE = os.path.basename(__file__)  # Set prefix for Telegram messages
+    
+    return bot  # Return the initialized bot
+
+
 def verify_filepath_exists(filepath):
     """
     Verify if a file or folder exists at the specified path.
