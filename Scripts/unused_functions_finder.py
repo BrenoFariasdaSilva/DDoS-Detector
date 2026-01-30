@@ -153,6 +153,9 @@ class FunctionASTVisitor(ast.NodeVisitor):
         elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == 'atexit' and node.func.attr == "register":  # Special case for atexit.register
             if node.args and isinstance(node.args[0], ast.Name):  # Ensure there is at least one argument and it's a simple name
                 self.called_funcs.append(node.args[0].id)  # Record the function passed to atexit.register
+        elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == 'executor' and node.func.attr == "submit":  # Special case for executor.submit
+            if node.args and isinstance(node.args[0], ast.Name):  # Ensure there is at least one argument and it's a simple name
+                self.called_funcs.append(node.args[0].id)  # Record the function passed to executor.submit
         self.generic_visit(node)  # Continue traversing child nodes
 
 
