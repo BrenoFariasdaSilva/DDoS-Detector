@@ -1263,6 +1263,9 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
         metrics = None
 
     elapsed = time.time() - start_time
+    
+    send_telegram_message(TELEGRAM_BOT, [f"Completed {model_name} combination {current_index}/{total_combinations} in {int(elapsed)} seconds. F1-score: {metrics.get('f1_score') if metrics else 'N/A'}"])
+    
     return current_params, metrics, elapsed
 
 
