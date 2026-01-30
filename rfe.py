@@ -940,7 +940,7 @@ def build_run_results(final_model, csv_path, hyperparameters, cv_method, cv_metr
         "rfe_ranking": json.dumps(rfe_ranking),
     }
 
-    if cv_metrics:
+    if cv_metrics is not None:
         result.update({
             "cv_accuracy": round(cv_metrics[0], 4),
             "cv_precision": round(cv_metrics[1], 4),
@@ -950,7 +950,7 @@ def build_run_results(final_model, csv_path, hyperparameters, cv_method, cv_metr
             "cv_fnr": round(cv_metrics[5], 4),
         })
 
-    if test_metrics:
+    if test_metrics is not None:
         result.update({
             "test_accuracy": round(test_metrics[0], 4),
             "test_precision": round(test_metrics[1], 4),
