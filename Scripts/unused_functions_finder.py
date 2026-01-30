@@ -140,8 +140,9 @@ class FunctionASTVisitor(ast.NodeVisitor):
         Visits each function call node in the AST.
 
         If the call is a simple function call (not a method or attribute),
-        adds the function name to the 'called_funcs' list. Then continues
-        traversing child nodes.
+        adds the function name to the 'called_funcs' list. Also handles
+        special cases like atexit.register where a function is passed as
+        an argument. Then continues traversing child nodes.
 
         :param node: ast.Call node representing a function call
         :return: None
@@ -149,6 +150,9 @@ class FunctionASTVisitor(ast.NodeVisitor):
         
         if isinstance(node.func, ast.Name):  # Only simple function calls
             self.called_funcs.append(node.func.id)  # Record the called function name
+        elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == 'atexit' and node.func.attr == "register":  # Special case for atexit.register
+            if node.args and isinstance(node.args[0], ast.Name):  # Ensure there is at least one argument and it's a simple name
+                self.called_funcs.append(node.args[0].id)  # Record the function passed to atexit.register
         self.generic_visit(node)  # Continue traversing child nodes
 
 
