@@ -1302,6 +1302,7 @@ def main():
     start_time = datetime.datetime.now()  # Get the start time of the program
 
     bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
+
     dataset_name = os.path.splitext(os.path.basename(CSV_FILE))[0]  # Get dataset name for messages
 
     send_telegram_message(bot, [f"Starting RFE analysis on {dataset_name}"])  # Send start message
