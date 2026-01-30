@@ -95,7 +95,7 @@ stacking: dependencies
 telegram_bot: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(call RUN_AND_LOG, ./telegram_bot_bot.py $(ARGS))
+	$(call RUN_AND_LOG, ./telegram_bot.py $(ARGS))
 
 wgangp: dependencies
 	$(ENSURE_LOG_DIR)
