@@ -1,49 +1,53 @@
 """
 ================================================================================
-<PROJECT OR SCRIPT TITLE>
+Imports Placement Verifier (imports_placement.py)
 ================================================================================
-Author      : Breno Farias da Silva
-Created     : <YYYY-MM-DD>
+Author      : Breno Farias da Silva (adapted)
+Created     : 2026-01-30
 Description :
-    <Provide a concise and complete overview of what this script does.>
-    <Mention its purpose, scope, and relevance to the larger project.>
+    Scans Python files under the project tree and detects import statements
+    that occur inside function or class bodies. All imports should be at the
+    module top-level header; this tool reports nested imports with file and
+    location details so they can be moved to the header.
 
     Key features include:
-        - <Feature 1 — e.g., automatic data loading and preprocessing>
-        - <Feature 2 — e.g., model training and evaluation>
-        - <Feature 3 — e.g., visualization or report generation>
-        - <Feature 4 — e.g., logging or notification system>
-        - <Feature 5 — e.g., integration with other modules or datasets>
+        - AST-based parsing for accurate import detection
+        - Recursive scanning of project directories
+        - JSON report generation with detailed location info
+        - Exclusion of irrelevant directories (e.g., venv, __pycache__)
+        - Verbose output for debugging
 
 Usage:
-    1. <Explain any configuration steps before running, such as editing variables or paths.>
-    2. <Describe how to execute the script — typically via Makefile or Python.>
-            $ make <target>   or   $ python <script_name>.py
-    3. <List what outputs are expected or where results are saved.>
+    1. Ensure Python environment is set up.
+    2. Run the script via Python.
+            $ python Scripts/imports_placement.py
+    3. Verify the output JSON report for any nested imports found.
 
 Outputs:
-    - <Output file or directory 1 — e.g., results.csv>
-    - <Output file or directory 2 — e.g., Feature_Analysis/plots/>
-    - <Output file or directory 3 — e.g., logs/output.txt>
+    - Scripts/imports_placement_report.json: JSON report mapping files to nested imports
 
 TODOs:
-    - <Add a task or improvement — e.g., implement CLI argument parsing.>
-    - <Add another improvement — e.g., extend support to Parquet files.>
-    - <Add optimization — e.g., parallelize evaluation loop.>
-    - <Add robustness — e.g., error handling or data validation.>
+    - Implement CLI argument parsing for custom root directories.
+    - Add support for ignoring specific files or patterns.
+    - Optimize for large codebases with parallel processing.
+    - Add error handling for malformed Python files.
 
 Dependencies:
-    - Python >= <version>
-    - <Library 1 — e.g., pandas>
-    - <Library 2 — e.g., numpy>
-    - <Library 3 — e.g., scikit-learn>
-    - <Library 4 — e.g., matplotlib, seaborn, tqdm, colorama>
+    - Python >= 3.8
+    - ast (built-in)
+    - json (built-in)
+    - os (built-in)
+    - sys (built-in)
+    - pathlib (built-in)
+    - typing (built-in)
+    - colorama
 
 Assumptions & Notes:
-    - <List any key assumptions — e.g., last column is the target variable.>
-    - <Mention data format — e.g., CSV files only.>
-    - <Mention platform or OS-specific notes — e.g., sound disabled on Windows.>
-    - <Note on output structure or reusability.>
+    - Scans all .py files under the project root, excluding ignored directories.
+    - Assumes UTF-8 encoding for Python files.
+    - Nested imports are those inside functions, async functions, or classes.
+    - Report is overwritten on each run.
+    - Sound notifications disabled on Windows.
 """
 
 import atexit  # For playing a sound when the program finishes
