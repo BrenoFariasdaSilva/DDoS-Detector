@@ -1431,7 +1431,7 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
     )  # Output the end of the program message
     
-    send_telegram_message(TELEGRAM_BOT, [f"{BackgroundColors.GREEN}DDoS Detector main.py execution finished at {finish_time.strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}. Execution time: {calculate_execution_time(start_time, finish_time)}"])
+    send_telegram_message(TELEGRAM_BOT, [f"{BackgroundColors.GREEN}DDoS Detector main.py execution finished. Execution time: {calculate_execution_time(start_time, finish_time)}"])
 
     atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None  # Register sound on exit if enabled
 
