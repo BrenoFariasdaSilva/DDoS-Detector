@@ -1552,7 +1552,7 @@ def run_genetic_algorithm_loop(
                 break  # Stop the loop early
 
         send_telegram_message(TELEGRAM_BOT, [
-            f"GA Progress: Generation {gen}/{n_generations}, Best F1-Score: {best_fitness:.4f}"
+            f"Pop Size {pop_size}: Generation {gen}/{n_generations}, Best F1-Score: {best_fitness:.4f}"
         ], show_progress and gen % max(1, n_generations // 100) == 0)  # Send periodic updates to Telegram telegram_bot
 
         gens_ran = gen  # Update gens_ran each generation
