@@ -62,6 +62,7 @@ import pandas as pd  # For CSV handling
 import platform  # For getting the operating system name
 import random  # For reproducibility
 import sys  # For system-specific parameters and functions
+import telegram_bot  # For setting Telegram prefix and device info
 import torch  # PyTorch core
 import torch.nn as nn  # Neural network modules
 import traceback  # For printing tracebacks on exceptions
@@ -70,6 +71,7 @@ from contextlib import nullcontext  # For null context manager
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For data preprocessing
+from telegram_bot import TelegramBot, send_telegram_message  # For sending progress messages to Telegram
 from torch import autograd  # For gradient penalty
 from torch.utils.data import DataLoader, Dataset  # Dataset and DataLoader
 from tqdm import tqdm  # For progress bar visualization
