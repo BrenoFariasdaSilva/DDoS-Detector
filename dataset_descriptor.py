@@ -133,19 +133,24 @@ IGNORE_DIRS = [
 # Functions Definitions:
 
 
-def verbose_output(true_string="", false_string=""):
+def verbose_output(true_string="", false_string="", telegram_bot=None):
     """
     Outputs a message if the VERBOSE constant is set to True.
 
     :param true_string: The string to be outputted if the VERBOSE constant is set to True.
     :param false_string: The string to be outputted if the VERBOSE constant is set to False.
+    :param telegram_bot: Optional TelegramBot instance to send the message to Telegram.
     :return: None
     """
 
-    if VERBOSE and true_string != "":  # If the VERBOSE constant is set to True and the true_string is set
+    if VERBOSE and true_string != "":  # If VERBOSE is True and a true_string was provided
         print(true_string)  # Output the true statement string
-    elif false_string != "":  # If the false_string is set
+        if telegram_bot is not None:  # If a Telegram bot instance was provided
+            send_telegram_message(telegram_bot, [true_string])  # Send the true_string to Telegram
+    elif false_string != "":  # If a false_string was provided
         print(false_string)  # Output the false statement string
+        if telegram_bot is not None:  # If a Telegram bot instance was provided
+            send_telegram_message(telegram_bot, [false_string])  # Send the false_string to Telegram
 
 
 def verify_filepath_exists(filepath):
