@@ -143,24 +143,19 @@ RUN_FUNCTIONS = {
 # Functions Definitions:
 
 
-def verbose_output(true_string="", false_string="", telegram_bot=None):
+def verbose_output(true_string="", false_string=""):
     """
     Outputs a message if the VERBOSE constant is set to True.
 
     :param true_string: The string to be outputted if the VERBOSE constant is set to True.
     :param false_string: The string to be outputted if the VERBOSE constant is set to False.
-    :param telegram_bot: Optional TelegramBot instance to send the message to Telegram.
     :return: None
     """
 
     if VERBOSE and true_string != "":  # If VERBOSE is True and a true_string was provided
         print(true_string)  # Output the true statement string
-        if telegram_bot is not None:  # If a Telegram bot instance was provided
-            send_telegram_message(telegram_bot, [true_string])  # Send the true_string to Telegram
     elif false_string != "":  # If a false_string was provided
         print(false_string)  # Output the false statement string
-        if telegram_bot is not None:  # If a Telegram bot instance was provided
-            send_telegram_message(telegram_bot, [false_string])  # Send the false_string to Telegram
 
 def setup_telegram_bot():
     """
