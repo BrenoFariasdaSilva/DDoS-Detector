@@ -53,7 +53,7 @@ import pandas as pd  # For handling CSV and TXT file formats
 import platform  # For getting the operating system name
 import shutil  # For checking disk usage
 import sys  # For system-specific parameters and functions
-import telegram_bot  # For setting Telegram prefix and device info
+import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 from colorama import Style  # For coloring the terminal output
 from fastparquet import ParquetFile  # For handling Parquet file format
 from Logger import Logger  # For logging output to both terminal and file
@@ -81,6 +81,9 @@ OUTPUT_DIRECTORY = "./Output"  # Output directory path
 IGNORE_DIRECTORY_NAMED_WITH = [
     "Results"
 ]  # List of directory names to ignore if they have any of this words in their nameLOGGER = Logger(log_to_file=True, log_file_path="./Logs/dataset_converter.log")
+
+# Telegram Bot Setup:
+TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
@@ -131,7 +134,7 @@ def setup_telegram_bot():
     """
     Sets up the Telegram bot for progress messages.
 
-    :return: Initialized TelegramBot instance
+    :return: None
     """
     
     verbose_output(
@@ -140,11 +143,15 @@ def setup_telegram_bot():
 
     verify_dot_env_file()  # Verify if the .env file exists
 
-    bot = TelegramBot()  # Initialize Telegram bot for progress messages
-    telegram_bot.TELEGRAM_DEVICE_INFO = f"{telegram_bot.get_local_ip()} - {platform.system()}"  # Set device info for Telegram messages
-    telegram_bot.RUNNING_CODE = os.path.basename(__file__)  # Set prefix for Telegram messages
-    
-    return bot  # Return the initialized bot
+    global TELEGRAM_BOT  # Declare the module-global telegram_bot variable
+
+    try:  # Try to initialize the Telegram bot
+        TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
+        telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
+        telegram_module.RUNNING_CODE = os.path.basename(__file__)
+    except Exception as e:
+        print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+        TELEGRAM_BOT = None  # Set to None if initialization fails
 
 
 def parse_cli_arguments():
@@ -975,14 +982,14 @@ def main():
         f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Multi-Format Dataset Converter{BackgroundColors.GREEN}!{Style.RESET_ALL}\n"
     )  # Output the Welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
-
-    telegram_bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
     
     args = parse_cli_arguments()  # Parse CLI arguments
 
     input_path, output_path = resolve_io_paths(args)  # Resolve and validate paths
     if input_path is None or output_path is None:  # If either path is invalid
         return  # Exit early if input/output paths are invalid
+    
+    send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter started for input: {input_path} and output: {output_path}.")  # Notify start via Telegram
 
     configure_verbose_mode(args)  # Enable verbose mode if requested
 
@@ -997,6 +1004,8 @@ def main():
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
     )  # Output the end of the program message
+    
+    send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter started for input: {input_path} and output: {output_path} finished. Execution time: {calculate_execution_time(start_time, finish_time)}.")  # Notify finish via Telegram
 
     (
         atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
