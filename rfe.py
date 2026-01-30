@@ -1301,15 +1301,16 @@ def main():
     )  # Output the welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
 
-    bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
+    telegram_bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
 
     dataset_name = os.path.splitext(os.path.basename(CSV_FILE))[0]  # Get dataset name for messages
 
-    send_telegram_message(bot, [f"Starting RFE analysis on {dataset_name}"])  # Send start message
+    send_telegram_message(telegram_bot, [f"Starting RFE analysis on {dataset_name}"])  # Send start message
 
     run_rfe(CSV_FILE)  # Run RFE on the specified CSV file
 
-    send_telegram_message(bot, [f"RFE analysis completed for {dataset_name}"])  # Send completion message
+    send_telegram_message(telegram_bot, [f"RFE analysis completed for {dataset_name}"])  # Send completion message
+
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
         f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
