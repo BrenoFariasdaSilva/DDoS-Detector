@@ -1028,6 +1028,7 @@ def train_and_evaluate_models(
 
     for index, (name, model) in enumerate(model_pbar, start=1):  # Iterate through each model with progress bar
         model_pbar.set_description(f"[{index}/{total_models}] {name}")  # Update progress bar description
+        send_telegram_message(TELEGRAM_BOT, [f"Training model {index}/{total_models}: {name} for dataset {dataset_name}"])
         if use_cv:  # If cross-validation is to be used
             mean_score, std_score = cross_validate_model(model, X_train, y_train)  # Perform cross-validation
             duration = [0, "CV"]  # CV is not timed here
@@ -1269,6 +1270,8 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
         end="\n\n",
     )
     start_time = datetime.datetime.now()  # Get the start time of the program
+    
+    send_telegram_message(TELEGRAM_BOT, [f"{BackgroundColors.GREEN}DDoS Detector main.py execution started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}"])
 
     sorted_datasets = sorted(DATASETS.items())  # Sort datasets alphabetically by keys
 
@@ -1295,6 +1298,8 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset {BackgroundColors.CYAN}{index}/{len(sorted_datasets)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN}{Style.RESET_ALL}"
         )
+
+        send_telegram_message(TELEGRAM_BOT, [f"Processing dataset {index}/{len(sorted_datasets)}: {dataset_name}"])
 
         if not verify_filepath_exists(training_file_path):  # Verify train file
             print(f"{BackgroundColors.RED}Missing training file for {dataset_name}. Skipping.{Style.RESET_ALL}")
@@ -1425,6 +1430,8 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
     )  # Output the end of the program message
+    
+    send_telegram_message(TELEGRAM_BOT, [f"{BackgroundColors.GREEN}DDoS Detector main.py execution finished at {finish_time.strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}. Execution time: {calculate_execution_time(start_time, finish_time)}"])
 
     atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None  # Register sound on exit if enabled
 
