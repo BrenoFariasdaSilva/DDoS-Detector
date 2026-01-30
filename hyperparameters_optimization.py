@@ -58,7 +58,7 @@ import psutil  # RAM and CPU core info
 import re  # For regular expressions
 import subprocess  # WMIC call
 import sys  # For system-specific parameters and functions
-import telegram_bot  # For setting Telegram prefix and device info
+import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import time  # For measuring execution time
 import warnings  # For suppressing warnings
 from collections import OrderedDict  # For deterministic results column ordering when saving
@@ -172,6 +172,9 @@ DATASETS = {  # Dictionary containing dataset paths and feature files
     ],
 }
 
+# Telegram Bot Setup:
+TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
+
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
 sys.stdout = logger  # Redirect stdout to the logger
@@ -227,7 +230,7 @@ def setup_telegram_bot():
     """
     Sets up the Telegram bot for progress messages.
 
-    :return: Initialized TelegramBot instance
+    :return: None
     """
     
     verbose_output(
@@ -236,11 +239,15 @@ def setup_telegram_bot():
 
     verify_dot_env_file()  # Verify if the .env file exists
 
-    bot = TelegramBot()  # Initialize Telegram bot for progress messages
-    telegram_bot.TELEGRAM_DEVICE_INFO = f"{telegram_bot.get_local_ip()} - {platform.system()}"  # Set device info for Telegram messages
-    telegram_bot.RUNNING_CODE = os.path.basename(__file__)  # Set prefix for Telegram messages
-    
-    return bot  # Return the initialized bot
+    global TELEGRAM_BOT  # Declare the module-global telegram_bot variable
+
+    try:  # Try to initialize the Telegram bot
+        TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
+        telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
+        telegram_module.RUNNING_CODE = os.path.basename(__file__)
+    except Exception as e:
+        print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+        TELEGRAM_BOT = None  # Set to None if initialization fails
 
 
 def parse_args(default_verbose=False):
@@ -1892,7 +1899,7 @@ def process_single_csv_file(csv_path, dir_results_list):
 
     # Extract dataset name for export directory
     dataset_name = os.path.basename(os.path.dirname(csv_path))
-    run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=scaler, dataset_name=dataset_name, feature_names=ga_selected_features)
+    run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=scaler, dataset_name=dataset_name, feature_names=ga_selected_features)  # Run optimizations
 
     added_slice = dir_results_list[start_idx:]  # Extract slice
     print(
@@ -2064,10 +2071,16 @@ def main():
         end="\n\n",
     )  # Output the welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
-
-    telegram_bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
+    
+    send_telegram_message(
+        TELEGRAM_BOT,[f"Starting Classifiers Hyperparameters Optimization"]
+    )  # Send starting message
 
     for dataset_name, dirpath in iterate_dataset_directories():  # Iterate valid dataset directories
+        send_telegram_message(
+            TELEGRAM_BOT,[f"Processing dataset: {dataset_name}"]
+        )  # Send dataset processing message
+        
         csv_files = get_files_to_process(
             dirpath, file_extension=".csv"
         )  # Discover CSV files in this directory (non-recursive)
@@ -2080,6 +2093,9 @@ def main():
         dir_results_list = []  # Aggregate results for all CSVs in this dirpath
 
         for csv_path in csv_files:  # Process each CSV file found in the current dirpath
+            send_telegram_message(
+                TELEGRAM_BOT,[f"Processing CSV file: {os.path.basename(csv_path)}"]
+            )  # Send CSV file processing message
             try:  # Process the current csv_path inside a try/except to continue on errors
                 process_single_csv_file(csv_path, dir_results_list)  # Process CSV end-to-end
             except Exception as e:  # Catch any unhandled exceptions during CSV processing
@@ -2101,6 +2117,13 @@ def main():
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
     )  # Output the end of the program message
+
+    send_telegram_message(
+        TELEGRAM_BOT,
+        [
+            f"Finished Classifiers Hyperparameters Optimization\nStart time: {start_time.strftime('%d/%m/%Y - %H:%M:%S')}\nFinish time: {finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\nExecution time: {calculate_execution_time(start_time, finish_time)}"
+        ],
+    )  # Send finishing message
 
     (
         atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
