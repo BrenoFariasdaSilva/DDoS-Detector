@@ -1549,7 +1549,7 @@ def main():
     )  # Output the Welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
 
-    bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
+    telegram_bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
 
     for dataset_name, paths in DATASETS.items():  # For each dataset in the DATASETS dictionary
         print(
