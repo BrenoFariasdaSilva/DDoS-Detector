@@ -74,6 +74,7 @@ import platform  # For detecting the operating system
 import re  # For regular expressions
 import shap  # For SHAP value explanations
 import sys  # For system-specific parameters and functions
+import telegram_bot  # For setting Telegram prefix and device info
 import time  # For measuring time taken by operations
 from colorama import Style  # For terminal text styling
 from lime.lime_tabular import LimeTabularExplainer  # For LIME explanations
@@ -91,6 +92,7 @@ from sklearn.neighbors import KNeighborsClassifier, NearestCentroid  # For k-nea
 from sklearn.neural_network import MLPClassifier  # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For preprocessing data
 from sklearn.svm import SVC  # For Support Vector Machine model
+from telegram_bot import TelegramBot, send_telegram_message  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
 from xgboost import XGBClassifier  # For XGBoost classifier
 
