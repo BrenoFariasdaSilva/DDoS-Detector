@@ -1336,7 +1336,7 @@ def main():
 
     dataset_name = os.path.splitext(os.path.basename(CSV_FILE))[0]  # Get dataset name for messages
 
-    send_telegram_message(TELEGRAM_BOT, [f"Starting RFE Feature Selection on {dataset_name}"])  # Send start message
+    send_telegram_message(TELEGRAM_BOT, [f"Starting RFE Feature Selection on {dataset_name} at {start_time.strftime('%d/%m/%Y - %H:%M:%S')}"])  # Send starting message
 
     run_rfe(CSV_FILE)  # Run RFE on the specified CSV file
 
