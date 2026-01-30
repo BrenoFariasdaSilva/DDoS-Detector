@@ -2941,6 +2941,7 @@ def run_population_sweep(
             send_telegram_message(TELEGRAM_BOT, [
                 f"Run {run + 1}/{runs} - population size {pop_size}/{max_pop}"
             ])  # Send start message for this run and population size
+            start_pop_time = time.time()  # Start timing this population size iteration
             result = run_single_ga_iteration(
                 X_train,
                 y_train,
@@ -2960,8 +2961,15 @@ def run_population_sweep(
                 progress_state,
                 folds,
             )  # Run GA iteration
+            elapsed_pop_time = time.time() - start_pop_time  # Calculate elapsed time for this population size
             if result:  # If result is valid
                 results[pop_size]["runs"].append(result)  # Append result to runs list
+
+            # Send completion message with timing
+            send_telegram_message(
+                TELEGRAM_BOT,
+                f"Completed run {run + 1}/{runs} - population size {pop_size}/{max_pop} in {int(elapsed_pop_time)}s"
+            )
 
     best_score, best_result, best_metrics, results = aggregate_sweep_results(
         results, min_pop, max_pop, dataset_name
