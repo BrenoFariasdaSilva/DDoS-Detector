@@ -299,6 +299,23 @@ def strip_ansi(text: str) -> str:
         return text  # Return the original text
 
 
+def escape_markdown_v2(text: str) -> str:
+    """
+    Escape Telegram MarkdownV2 special characters in `text` by prefixing
+    them with a backslash so Telegram will not interpret them as formatting.
+
+    Characters escaped: _ * [ ] ( ) ~ ` > # + - = | { } . !
+
+    :param text: Input string
+    :return: Escaped string safe for MarkdownV2
+    """
+
+    try:  # Try to escape special characters
+        return re.sub(r"([_\*\[\]\(\)~`>\#\+\-\=\|\{\}\.\!])", r"\\\1", str(text))  # Escape the set of special characters for MarkdownV2
+    except Exception:  # If any error occurs
+        return text  # Return the original text
+
+
 def send_telegram_message(bot, messages, condition=True):
     """
     Sends a message via Telegram bot if configured and condition is met.
@@ -313,7 +330,7 @@ def send_telegram_message(bot, messages, condition=True):
         try:  # Try to send message
             if isinstance(messages, str):  # If a single string is provided
                 messages = [messages]  # Convert it to a list
-            prefixed_messages = [f"{TELEGRAM_DEVICE_INFO} - {RUNNING_CODE}: {strip_ansi(str(msg))}" for msg in messages]
+            prefixed_messages = [f"{TELEGRAM_DEVICE_INFO} - {RUNNING_CODE}: {escape_markdown_v2(strip_ansi(str(msg)))}" for msg in messages]
             asyncio.run(bot.send_messages(prefixed_messages))  # Run the async method synchronously
         except Exception:  # Silently ignore Telegram errors
             pass  # Do nothing
