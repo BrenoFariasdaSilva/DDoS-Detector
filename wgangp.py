@@ -128,7 +128,6 @@ DATASETS = {  # Dictionary containing dataset paths and feature files
 }
 
 # Logger Setup:
-original_stdout = sys.stdout  # Store original stdout for tqdm before redirection
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
 sys.stdout = logger  # Redirect stdout to the logger
 sys.stderr = logger  # Redirect stderr to the logger
@@ -1000,7 +999,7 @@ def train(args):
             dataloader, 
             desc=f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL}", 
             unit="batch",
-            file=original_stdout,  # Use original stdout before Logger redirection
+            file=sys.stdout,  # Use original stdout before Logger redirection
             ncols=None,  # Auto-detect terminal width
             bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'  # Custom format
         )
