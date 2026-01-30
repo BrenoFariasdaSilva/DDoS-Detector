@@ -63,7 +63,7 @@ import pandas as pd  # For data manipulation
 import platform  # For getting the operating system name
 import re  # For regex operations
 import sys  # For system-specific parameters and functions
-import telegram_bot  # For setting Telegram prefix and device info
+import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import warnings  # For suppressing pandas warnings when requested
 from colorama import Style  # For coloring the terminal
 from Logger import Logger  # For logging output to both terminal and file
@@ -88,6 +88,9 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
+
+# Telegram Bot Setup:
+TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
@@ -169,7 +172,7 @@ def setup_telegram_bot():
     """
     Sets up the Telegram bot for progress messages.
 
-    :return: Initialized TelegramBot instance
+    :return: None
     """
     
     verbose_output(
@@ -178,11 +181,15 @@ def setup_telegram_bot():
 
     verify_dot_env_file()  # Verify if the .env file exists
 
-    bot = TelegramBot()  # Initialize Telegram bot for progress messages
-    telegram_bot.TELEGRAM_DEVICE_INFO = f"{telegram_bot.get_local_ip()} - {platform.system()}"  # Set device info for Telegram messages
-    telegram_bot.RUNNING_CODE = os.path.basename(__file__)  # Set prefix for Telegram messages
-    
-    return bot  # Return the initialized bot
+    global TELEGRAM_BOT  # Declare the module-global telegram_bot variable
+
+    try:  # Try to initialize the Telegram bot
+        TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
+        telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
+        telegram_module.RUNNING_CODE = os.path.basename(__file__)
+    except Exception as e:
+        print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+        TELEGRAM_BOT = None  # Set to None if initialization fails
 
 
 def verify_filepath_exists(filepath):
@@ -1548,13 +1555,22 @@ def main():
         end="\n\n",
     )  # Output the Welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
-
-    telegram_bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
+    
+    send_telegram_message(
+        TELEGRAM_BOT,
+        "Dataset Descriptor started.",
+    )
 
     for dataset_name, paths in DATASETS.items():  # For each dataset in the DATASETS dictionary
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
         )
+        
+        send_telegram_message(
+            TELEGRAM_BOT,
+            f"Processing dataset: {dataset_name}",
+        )  # Send Telegram message about the dataset being processed
+        
         safe_dataset_name = (
             str(dataset_name).replace(" ", "_").replace("/", "_")
         )  # Create a safe dataset name for filenames
@@ -1583,6 +1599,11 @@ def main():
         CROSS_DATASET_VALIDATE and len(DATASETS) > 1
     ):  # If cross-dataset validation is enabled and there is more than one dataset
         try:  # Try to generate the cross-dataset report
+            send_telegram_message(
+                TELEGRAM_BOT,
+                "Starting cross-dataset validation...",
+            )  # Send Telegram message about starting cross-dataset validation
+            
             success = generate_cross_dataset_report(
                 DATASETS, file_extension=".csv"
             )  # Generate the cross-dataset report
@@ -1604,6 +1625,11 @@ def main():
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
     )  # Output the end of the program message
+
+    send_telegram_message(
+        TELEGRAM_BOT,
+        f"Dataset Descriptor finished. Execution time: {calculate_execution_time(start_time, finish_time)}",
+    )  # Send Telegram message about program completion
 
     (
         atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
