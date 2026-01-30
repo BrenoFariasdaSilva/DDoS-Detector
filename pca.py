@@ -62,6 +62,7 @@ import psutil  # For system memory and CPU counts
 import re  # For regex operations
 import subprocess  # For fetching CPU model on some OSes
 import sys  # For system-specific parameters and functions
+import telegram_bot  # For setting Telegram prefix and device info
 import time  # For measuring elapsed time
 from colorama import Style  # For coloring the terminal
 from joblib import dump  # For saving scalers and models
@@ -78,6 +79,7 @@ from sklearn.metrics import (  # For performance metrics
 )
 from sklearn.model_selection import train_test_split, StratifiedKFold  # For splitting and cross-validation
 from sklearn.preprocessing import StandardScaler  # For scaling the data (standardization)
+from telegram_bot import TelegramBot, send_telegram_message  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
 
 
