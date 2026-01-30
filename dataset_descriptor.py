@@ -648,57 +648,6 @@ def sample_indices_from_alloc(labels, allocations, random_state):
     return sampled_indices_local  # Return list of sampled indices
 
 
-def stratified_sample(numeric_df, labels, max_samples, random_state=42, min_per_class=50):
-    """
-    Downsample numeric features and labels to at most `max_samples` rows while
-    attempting to ensure a minimum number of samples per class.
-
-    The function will try to allocate up to `min_per_class` samples to each
-    class, then distribute remaining capacity proportionally. If the minimum
-    cannot be satisfied for every class the allocation falls back to a
-    proportional distribution.
-
-    :param numeric_df: DataFrame with numeric features
-    :param labels: pandas Series aligned with `numeric_df`
-    :param max_samples: Maximum total samples to return
-    :param random_state: Seed for reproducible sampling (default: 42)
-    :param min_per_class: Preferred minimum samples per class (default: 50)
-    :return: Tuple (sampled_numeric_df, sampled_labels)
-    """
-
-    verbose_output(
-        f"{BackgroundColors.GREEN}Stratified sampling to a maximum of {max_samples} samples while preserving class proportions and ensuring min {min_per_class} per class when possible.{Style.RESET_ALL}"
-    )  # Verbose message
-
-    n_rows = len(numeric_df)  # Total rows available
-    if n_rows <= max_samples:  # Nothing to do
-        return numeric_df.reset_index(drop=True), labels.reset_index(drop=True)  # Return original DataFrame and labels
-
-    counts = labels.value_counts()  # Per-class counts
-    classes = list(counts.index)  # List of class labels
-    total = int(counts.sum())  # Total available samples
-
-    initial_alloc, s_min = compute_initial_alloc(counts, min_per_class)  # Compute initial allocations and their sum
-
-    allocations = {c: 0 for c in classes}  # Final allocations per class
-
-    if s_min <= max_samples:  # Can satisfy minimum for all classes
-        allocations.update(allocate_with_min(initial_alloc, counts, max_samples))  # Apply min-aware allocation
-    else:  # Cannot satisfy minimum for all classes; allocate proportionally
-        allocations = proportional_alloc(counts, max_samples)  # Apply proportional allocation
-
-    sampled_idx = sample_indices_from_alloc(
-        labels, allocations, random_state
-    )  # Sample indices according to allocations
-
-    if len(sampled_idx) > max_samples:  # Safety check to guard against slight over-allocation
-        sampled_idx = sampled_idx[:max_samples]  # Trim to max_samples if exceeded
-
-    return numeric_df.loc[sampled_idx].reset_index(drop=True), labels.loc[sampled_idx].reset_index(
-        drop=True
-    )  # Return sampled DataFrame and labels
-
-
 def prepare_numeric_dataset(filepath, low_memory=True, sample_size=5000, random_state=42):
     """
     Load CSV dataset, clean it, extract numeric features, optionally downsample,
