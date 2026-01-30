@@ -943,7 +943,7 @@ def main():
     print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}PCA Feature Extraction{BackgroundColors.GREEN} program!{Style.RESET_ALL}")
     start_time = datetime.datetime.now()  # Get the start time of the program
 
-    bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
+    telegram_bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
 
     run_pca_analysis(CSV_FILE, n_components_list, max_workers=max_workers)  # Run the PCA analysis
 
