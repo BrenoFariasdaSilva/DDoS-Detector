@@ -162,6 +162,22 @@ def verbose_output(true_string="", false_string="", telegram_bot=None):
         if telegram_bot is not None:  # If a Telegram bot instance was provided
             send_telegram_message(telegram_bot, [false_string])  # Send the false_string to Telegram
 
+def setup_telegram_bot():
+    """
+    Sets up the Telegram bot for progress messages.
+
+    :return: Initialized TelegramBot instance
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Setting up Telegram bot for messages...{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    bot = TelegramBot()  # Initialize Telegram bot for progress messages
+    telegram_bot.TELEGRAM_DEVICE_INFO = f"{telegram_bot.get_local_ip()} - {platform.system()}"  # Set device info for Telegram messages
+    telegram_bot.RUNNING_CODE = os.path.basename(__file__)  # Set prefix for Telegram messages
+    
+    return bot  # Return the initialized bot
 
 def safe_filename(name):
     """
@@ -1271,9 +1287,7 @@ def main():
     )  # Output the welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
 
-    bot = TelegramBot()  # Initialize Telegram bot for progress messages
-    telegram_bot.TELEGRAM_DEVICE_INFO = f"{telegram_bot.get_local_ip()} - {platform.system()}"  # Set device info for Telegram messages
-    telegram_bot.RUNNING_CODE = os.path.basename(__file__)  # Set prefix for Telegram messages
+    bot = setup_telegram_bot()  # Set up Telegram bot for progress messages
     dataset_name = os.path.splitext(os.path.basename(CSV_FILE))[0]  # Get dataset name for messages
 
     send_telegram_message(bot, [f"Starting RFE analysis on {dataset_name}"])  # Send start message
