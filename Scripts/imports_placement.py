@@ -129,6 +129,34 @@ def verbose_output(true_string="", false_string=""):
         print(false_string)  # Output the false statement string
 
 
+def collect_python_files(root_dir: str) -> List[str]:
+    """
+    Collect all Python files under the root directory, excluding ignored directories.
+
+    :param root_dir: The root directory to scan
+    :return: A sorted list of Python file paths
+    """
+    
+    verbose_output(true_string=f"{BackgroundColors.GREEN}Collecting Python files under: {BackgroundColors.CYAN}{root_dir}{Style.RESET_ALL}")  # Output the verbose message
+    
+    py_files: List[str] = []  # Initialize list for Python files
+    for dirpath, dirnames, filenames in os.walk(root_dir):  # Walk through the directory tree
+        dirnames[:] = [d for d in dirnames if d not in IGNORE_DIRS]  # Modify dirnames in place to skip ignored dirs
+        
+        for fname in filenames:  # Iterate over filenames in current directory
+            if not fname.endswith(".py"):  # Skip non-Python files
+                continue  # Continue to next file
+            
+            full = os.path.join(dirpath, fname)  # Construct full file path
+            
+            if not os.path.isfile(full) or is_ignored(full):  # Skip if not a file or in ignored path
+                continue  # Continue to next file
+            
+            py_files.append(full)  # Add valid Python file to list
+            
+    return sorted(py_files)  # Return sorted list of Python files
+
+
 def calculate_execution_time(start_time, finish_time):
     """
     Calculates the execution time between start and finish times and formats it as hh:mm:ss.
