@@ -76,7 +76,7 @@ from typing import Any, List, Optional, cast  # For Any type hint and cast
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:
-    from torch.cuda.amp import autocast as _torch_autocast
+    from torch.amp.autocast_mode import autocast as _torch_autocast
 except Exception:
     _torch_autocast = None
 
@@ -89,7 +89,7 @@ def autocast(device_type: str, enabled: bool = True):
     """
 
     if enabled and device_type == "cuda" and _torch_autocast is not None:
-        return _torch_autocast()
+        return _torch_autocast(device_type)
     return nullcontext()
 
 
