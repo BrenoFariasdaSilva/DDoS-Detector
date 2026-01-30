@@ -59,6 +59,7 @@ import psutil  # For hardware information
 import re  # For regular expressions
 import subprocess  # For executing system commands
 import sys  # For system-specific parameters and functions
+import telegram_bot  # For setting Telegram prefix and device info
 import time  # For measuring elapsed time
 from colorama import Style  # For coloring the terminal
 from joblib import dump, load  # For exporting and loading trained models and scalers
@@ -1266,14 +1267,15 @@ def main():
     start_time = datetime.datetime.now()  # Get the start time of the program
 
     bot = TelegramBot()  # Initialize Telegram bot for progress messages
+    telegram_bot.TELEGRAM_DEVICE_INFO = f"{telegram_bot.get_local_ip()} - {platform.system()}"  # Set device info for Telegram messages
+    telegram_bot.RUNNING_CODE = os.path.basename(__file__)  # Set prefix for Telegram messages
     dataset_name = os.path.splitext(os.path.basename(CSV_FILE))[0]  # Get dataset name for messages
 
-    send_telegram_message(bot, [f"Starting RFE analysis on **{dataset_name}**"])  # Send start message
+    send_telegram_message(bot, [f"Starting RFE analysis on {dataset_name}"])  # Send start message
 
     run_rfe(CSV_FILE)  # Run RFE on the specified CSV file
 
-    send_telegram_message(bot, [f"RFE analysis completed for **{dataset_name}**"])  # Send completion message
-
+    send_telegram_message(bot, [f"RFE analysis completed for {dataset_name}"])  # Send completion message
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
         f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
