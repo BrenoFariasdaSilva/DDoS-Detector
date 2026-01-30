@@ -51,6 +51,7 @@ import argparse  # For command-line argument parsing
 import atexit  # For playing a sound when the program finishes
 import concurrent.futures  # For parallel execution
 import datetime  # For timestamping
+import glob  # For file pattern matching
 import json  # For serializing hyperparameters and other metadata
 import math  # For mathematical operations
 import numpy as np  # For numerical operations
@@ -750,7 +751,6 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
     base_name = Path(csv_path).stem
     timestamp = None
     if SKIP_TRAIN_IF_MODEL_EXISTS:
-        import glob
         found = False
         for n_comp in n_components_list:
             pattern = f"{models_dir}/PCA-{base_name}-{n_comp}c-*-model.joblib"
