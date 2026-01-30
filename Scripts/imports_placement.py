@@ -51,11 +51,9 @@ import datetime  # For getting the current date and time
 import os  # For running a command in the terminal
 import platform  # For getting the operating system name
 import sys  # For system-specific parameters and functions
-import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 from colorama import Style  # For coloring the terminal
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
-from telegram_bot import TelegramBot, send_telegram_message  # For sending progress messages to Telegram
 
 
 # Macros:
@@ -111,43 +109,19 @@ def verbose_output(true_string="", false_string=""):
         print(false_string)  # Output the false statement string
 
 
-def verify_dot_env_file():
+def calculate_execution_time(start_time, finish_time):
     """
-    Verifies if the .env file exists in the current directory.
+    Calculates the execution time between start and finish times and formats it as hh:mm:ss.
 
-    :return: True if the .env file exists, False otherwise
+    :param start_time: The start datetime object
+    :param finish_time: The finish datetime object
+    :return: String formatted as hh:mm:ss representing the execution time
     """
 
-    env_path = Path(__file__).parent / ".env"  # Path to the .env file
-    if not env_path.exists():  # If the .env file does not exist
-        print(f"{BackgroundColors.CYAN}.env{BackgroundColors.YELLOW} file not found at {BackgroundColors.CYAN}{env_path}{BackgroundColors.YELLOW}. Telegram messages may not be sent.{Style.RESET_ALL}")
-        return False  # Return False
-
-    return True  # Return True if the .env file exists
-
-
-def setup_telegram_bot():
-    """
-    Sets up the Telegram bot for progress messages.
-
-    :return: None
-    """
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Setting up Telegram bot for messages...{Style.RESET_ALL}"
-    )  # Output the verbose message
-
-    verify_dot_env_file()  # Verify if the .env file exists
-
-    global TELEGRAM_BOT  # Declare the module-global telegram_bot variable
-
-    try:  # Try to initialize the Telegram bot
-        TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
-        telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
-        telegram_module.RUNNING_CODE = os.path.basename(__file__)
-    except Exception as e:
-        print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
-        TELEGRAM_BOT = None  # Set to None if initialization fails
+    delta = finish_time - start_time  # Calculate the time difference
+    hours, remainder = divmod(delta.seconds, 3600)  # Calculate the hours, minutes and seconds
+    minutes, seconds = divmod(remainder, 60)  # Calculate the minutes and seconds
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"  # Format the execution time
 
 
 def verify_filepath_exists(filepath):
@@ -163,21 +137,6 @@ def verify_filepath_exists(filepath):
     )  # Output the verbose message
 
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
-
-
-def calculate_execution_time(start_time, finish_time):
-    """
-    Calculates the execution time between start and finish times and formats it as hh:mm:ss.
-
-    :param start_time: The start datetime object
-    :param finish_time: The finish datetime object
-    :return: String formatted as hh:mm:ss representing the execution time
-    """
-
-    delta = finish_time - start_time  # Calculate the time difference
-    hours, remainder = divmod(delta.seconds, 3600)  # Calculate the hours, minutes and seconds
-    minutes, seconds = divmod(remainder, 60)  # Calculate the minutes and seconds
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"  # Format the execution time
 
 
 def play_sound():
@@ -219,8 +178,6 @@ def main():
     )  # Output the welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
 
-    send_telegram_message(TELEGRAM_BOT, [f"Starting the Main Template Python program at {start_time.strftime('%d/%m/%Y - %H:%M:%S')}"])  # Send start message to Telegram
-
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
         f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
@@ -228,8 +185,6 @@ def main():
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
     )  # Output the end of the program message
-    
-    send_telegram_message(TELEGRAM_BOT, [f"Finished the Main Template Python program at {finish_time.strftime('%d/%m/%Y - %H:%M:%S')} with execution time {calculate_execution_time(start_time, finish_time)}"])  # Send finish message to Telegram
 
     (
         atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
