@@ -1879,6 +1879,8 @@ def evaluate_on_dataset(
 
     all_results = {}  # Dictionary to store results: (feature_set, model_name) -> result_entry
 
+    current_combination = 1  # Counter for combination index
+
     for idx, (name, (X_train_subset, X_test_subset, subset_feature_names_list)) in enumerate(feature_sets.items(), start=1):
         if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
             print(
@@ -1916,6 +1918,7 @@ def evaluate_on_dataset(
         ) as executor:  # Create a thread pool executor for parallel evaluation
             future_to_model = {}  # Dictionary to map futures to model names
             for model_name, model in individual_models.items():  # Iterate over each individual model
+                send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - {model_name}")
                 future = executor.submit(
                     evaluate_individual_classifier,
                     model,
@@ -1930,10 +1933,11 @@ def evaluate_on_dataset(
                     name,
                 )  # Submit evaluation task to thread pool (using .values for numpy arrays)
                 # Store both the model name and its class name for richer metadata
-                future_to_model[future] = (model_name, model.__class__.__name__)
+                future_to_model[future] = (model_name, model.__class__.__name__, current_combination)
+                current_combination += 1
             
             for future in concurrent.futures.as_completed(future_to_model):  # As each evaluation completes
-                model_name, model_class = future_to_model[future]  # Get metadata from mapping
+                model_name, model_class, comb_idx = future_to_model[future]  # Get metadata from mapping
                 metrics = future.result()  # Get the metrics from the completed future
                 # Flatten metrics into named fields and include extra metadata similar to rfe.py
                 acc, prec, rec, f1, fpr, fnr, elapsed = metrics
@@ -1961,6 +1965,7 @@ def evaluate_on_dataset(
                     "features_list": subset_feature_names,
                 }  # Prepare result entry
                 all_results[(name, model_name)] = result_entry  # Store result with key
+                send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} in {int(elapsed)}s with F1: {f1:.4f}")
                 print(
                     f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{metrics[0]:.4f}{Style.RESET_ALL}"
                 )  # Output accuracy
@@ -1972,6 +1977,8 @@ def evaluate_on_dataset(
         progress_bar.set_description(
             f"{data_source_label} - {name} (Stacking)"
         )  # Update progress bar description for stacking
+
+        send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - StackingClassifier")
 
         stacking_metrics = evaluate_stacking_classifier(
             stacking_model, X_train_df, y_train, X_test_df, y_test
@@ -2010,10 +2017,12 @@ def evaluate_on_dataset(
             "features_list": subset_feature_names,
         }  # Prepare stacking result entry
         all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store result with key
+        send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier in {int(s_elapsed)}s with F1: {s_f1:.4f}")
         print(
             f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{stacking_metrics[0]:.4f}{Style.RESET_ALL}"
         )  # Output accuracy
         progress_bar.update(1)  # Update progress after stacking
+        current_combination += 1
 
     progress_bar.close()  # Close progress bar
     return all_results  # Return dictionary of results
@@ -2040,6 +2049,8 @@ def main():
         )
     
     start_time = datetime.datetime.now()  # Get the start time of the program
+    
+    send_telegram_message(TELEGRAM_BOT, [f"Starting Classifiers Stacking at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Send Telegram message indicating start
 
     set_threads_limit_based_on_ram()  # Adjust THREADS_LIMIT based on system RAM
 
@@ -2379,6 +2390,8 @@ def main():
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
     )  # Output the end of the program message
+
+    send_telegram_message(TELEGRAM_BOT, [f"Finished Classifiers Stacking at {finish_time.strftime('%Y-%m-%d %H:%M:%S')} | Execution time: {calculate_execution_time(start_time, finish_time)}"])  # Send Telegram message indicating finish
 
     (
         atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
