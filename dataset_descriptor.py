@@ -66,7 +66,9 @@ import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import warnings  # For suppressing pandas warnings when requested
 from colorama import Style  # For coloring the terminal
+from inspect import signature  # For inspecting function signatures
 from Logger import Logger  # For logging output to both terminal and file
+from mpl_toolkits.mplot3d import Axes3D  # For 3D plotting
 from pathlib import Path  # For handling file paths
 from sklearn.manifold import TSNE  # For t-SNE dimensionality reduction
 from sklearn.preprocessing import StandardScaler  # For feature scaling
@@ -924,8 +926,6 @@ def initialize_and_fit_tsne(X, n_components=2, perplexity=30, n_iter=1000, rando
     """
 
     try:  # Inspect TSNE init signature for compatibility
-        from inspect import signature  # Import signature function
-
         sig = signature(TSNE.__init__).parameters  # Get TSNE init signature
     except Exception:  # If inspection fails
         sig = {}  # Fallback to empty signature
@@ -1011,8 +1011,6 @@ def save_tsne_3d_plot(X_emb, labels, output_path, title):
     :param title: plot title string
     :return: None
     """
-
-    from mpl_toolkits.mplot3d import Axes3D  # Import 3D plotting tools
 
     fig = plt.figure(figsize=(10, 8))  # Create matplotlib figure
     ax = fig.add_subplot(111, projection='3d')  # Create 3D axis
