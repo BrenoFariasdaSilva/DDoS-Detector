@@ -131,6 +131,26 @@ class ImportPlacementVisitor(ast.NodeVisitor):
         self.container_stack: List[Dict[str, Any]] = []  # Stack to track current container (function/class)
         self.nested_imports: List[Dict[str, Any]] = []  # List to store detected nested imports
 
+    def record_import(self, node: ast.AST, names: List[str], module: str | None = None):
+        """
+        Record a nested import with its details.
+
+        :param node: The AST node of the import
+        :param names: List of imported names
+        :param module: The module name for from imports, None for regular imports
+        :return: None
+        """
+        
+        container = self.container_stack[-1] if self.container_stack else None  # Get the current container
+        entry = {
+            "lineno": getattr(node, "lineno", None),  # Line number of the import
+            "container_type": container["type"] if container else None,  # Type of container (function/class)
+            "container_name": container["name"] if container else None,  # Name of the container
+            "module": module,  # Module name
+            "names": names,  # List of imported names
+        }
+        self.nested_imports.append(entry)  # Add to the list of nested imports
+
 
 # Functions Definitions:
 
