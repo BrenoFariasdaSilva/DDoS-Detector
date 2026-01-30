@@ -120,6 +120,7 @@ class FunctionASTVisitor(ast.NodeVisitor):
         
         self.defined_funcs: List[str] = []  # List to store defined function names
         self.called_funcs: List[str] = []  # List to store called function names
+        self.classes_with_init: set = set()  # Set to store class names that have __init__
 
     def visit_FunctionDef(self, node):
         """
@@ -132,7 +133,25 @@ class FunctionASTVisitor(ast.NodeVisitor):
         :return: None
         """
         
-        self.defined_funcs.append(node.name)  # Record the defined function name
+        if node.name != '__init__':  # Exclude __init__ methods from unused check
+            self.defined_funcs.append(node.name)  # Record the defined function name
+        self.generic_visit(node)  # Continue traversing child nodes
+
+    def visit_ClassDef(self, node):
+        """
+        Visits each class definition node in the AST.
+
+        Checks if the class has an __init__ method and records the class name
+        in classes_with_init set.
+
+        :param node: ast.ClassDef node representing a class definition
+        :return: None
+        """
+        
+        for item in node.body:  # Iterate over class body items
+            if isinstance(item, ast.FunctionDef) and item.name == "__init__":  # Verify for __init__ method
+                self.classes_with_init.add(node.name)  # Record class name
+                break  # No need to check further
         self.generic_visit(node)  # Continue traversing child nodes
 
     def visit_Call(self, node):
@@ -156,6 +175,8 @@ class FunctionASTVisitor(ast.NodeVisitor):
         elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == 'executor' and node.func.attr == "submit":  # Special case for executor.submit
             if node.args and isinstance(node.args[0], ast.Name):  # Ensure there is at least one argument and it's a simple name
                 self.called_funcs.append(node.args[0].id)  # Record the function passed to executor.submit
+        elif isinstance(node.func, ast.Name) and node.func.id in self.classes_with_init:  # Special case for class instantiation calling __init__
+            self.called_funcs.append("__init__")  # Record that __init__ is called
         self.generic_visit(node)  # Continue traversing child nodes
 
 
