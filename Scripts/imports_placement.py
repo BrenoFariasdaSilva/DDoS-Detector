@@ -62,6 +62,11 @@ from colorama import Style  # For coloring the terminal
 from pathlib import Path  # For handling file paths
 from typing import Any, Dict, List  # For type hints
 
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)  # Project root directory
+if PROJECT_ROOT not in sys.path:  # Add project root to sys.path
+    sys.path.insert(0, PROJECT_ROOT)  # Insert at the beginning of sys.path
+from Logger import Logger  # For logging output to both terminal and file
+
 
 # Macros:
 class BackgroundColors:  # Colors for the terminal
@@ -76,13 +81,6 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
-
-# Project paths and settings
-PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)  # Project root directory
-if PROJECT_ROOT not in sys.path:  # Ensure project root is in sys.path
-    sys.path.insert(0, PROJECT_ROOT)  # Insert at the beginning
-from Logger import Logger  # For logging output to both terminal and file
-
 OUTPUT_FILE = os.path.abspath(os.path.join(Path(__file__).resolve().parent, "imports_placement_report.json"))
 IGNORE_DIRS = {  # Directories to ignore
     ".assets",
