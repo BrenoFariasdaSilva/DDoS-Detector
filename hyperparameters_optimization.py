@@ -2081,7 +2081,7 @@ def main():
     start_time = datetime.datetime.now()  # Get the start time of the program
     
     send_telegram_message(
-        TELEGRAM_BOT,[f"Starting Classifiers Hyperparameters Optimization"]
+        TELEGRAM_BOT,[f"Starting Classifiers Hyperparameters Optimization at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"]
     )  # Send starting message
 
     for dataset_name, dirpath in iterate_dataset_directories():  # Iterate valid dataset directories
