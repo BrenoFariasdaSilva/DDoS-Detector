@@ -60,6 +60,7 @@ import shutil  # For checking disk usage
 import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
 import threading  # For optional background resource monitor
+import telegram_bot  # For setting Telegram prefix and device info
 import time  # For measuring execution time
 from colorama import Style  # For coloring the terminal
 from deap import algorithms, base, creator, tools  # For the genetic algorithm
