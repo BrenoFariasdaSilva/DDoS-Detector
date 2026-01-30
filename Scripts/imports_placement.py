@@ -169,6 +169,33 @@ def collect_python_files(root_dir: str) -> List[str]:
     return sorted(py_files)  # Return sorted list of Python files
 
 
+def analyze_file(path: str) -> List[Dict[str, Any]]:
+    """
+    Analyze a Python file for nested imports using AST.
+
+    :param path: The path to the Python file
+    :return: A list of nested import entries
+    """
+    
+    verbose_output(true_string=f"{BackgroundColors.GREEN}Analyzing file: {BackgroundColors.CYAN}{path}{Style.RESET_ALL}")  # Output the verbose message
+    
+    try:  # Try to read the file
+        with open(path, "r", encoding="utf-8") as fh:  # Open file for reading with UTF-8 encoding
+            src = fh.read()  # Read the entire source code
+    except Exception:
+        return []  # Return empty list if file cannot be read
+    
+    try:  # Parse the source code into an AST tree
+        tree = ast.parse(src, filename=path)  # Parse the source code into an AST tree
+    except SyntaxError:
+        return []  # Return empty list if syntax error in file
+    
+    visitor = ImportPlacementVisitor()  # Create an instance of the visitor
+    visitor.visit(tree)  # Visit the AST tree to detect nested imports
+    
+    return visitor.nested_imports  # Return the list of nested imports found
+
+
 def calculate_execution_time(start_time, finish_time):
     """
     Calculates the execution time between start and finish times and formats it as hh:mm:ss.
