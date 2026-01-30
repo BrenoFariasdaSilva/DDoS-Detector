@@ -3104,7 +3104,7 @@ def main():
     runs = RUNS
     dataset_name = os.path.splitext(os.path.basename(csv_path))[0]
     
-    send_telegram_message(TELEGRAM_BOT, [f"Starting Genetic Algorithm feature selection for {dataset_name}"])  # Send start message
+    send_telegram_message(TELEGRAM_BOT, [f"Starting Genetic Algorithm Feature Selection for {dataset_name} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Send start message
 
     # --- SKIP_TRAIN_IF_MODEL_EXISTS logic ---
     loaded = None
