@@ -59,7 +59,6 @@ import os  # For running a command in the terminal
 import platform  # For getting the operating system name
 import sys  # For system-specific parameters and functions
 from colorama import Style  # For coloring the terminal
-from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from typing import Any, Dict, List  # For type hints
 
@@ -79,7 +78,11 @@ class BackgroundColors:  # Colors for the terminal
 VERBOSE = False  # Set to True to output verbose messages
 
 # Project paths and settings
-ROOT_DIR = str(Path(__file__).resolve().parent.parent)
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)  # Project root directory
+if PROJECT_ROOT not in sys.path:  # Ensure project root is in sys.path
+    sys.path.insert(0, PROJECT_ROOT)  # Insert at the beginning
+from Logger import Logger  # For logging output to both terminal and file
+
 OUTPUT_FILE = os.path.abspath(os.path.join(Path(__file__).resolve().parent, "imports_placement_report.json"))
 IGNORE_DIRS = {  # Directories to ignore
     ".assets",
@@ -385,14 +388,14 @@ def main():
 
     start_time = datetime.datetime.now()  # Get the start time of the program
 
-    files = collect_python_files(ROOT_DIR)  # Collect all Python files under the project root
+    files = collect_python_files(PROJECT_ROOT)  # Collect all Python files under the project root
     report: Dict[str, Any] = {}  # Initialize the report dictionary
     
     for current_file in files:  # Iterate over each Python file
         nested = analyze_file(current_file)  # Analyze the file for nested imports
         
         if nested:  # If nested imports were found
-            rel = os.path.relpath(current_file, ROOT_DIR).replace("\\", "/")  # Get relative path and normalize separators
+            rel = os.path.relpath(current_file, PROJECT_ROOT).replace("\\", "/")  # Get relative path and normalize separators
             report[rel] = nested  # Add to report
             verbose_output(true_string=f"Found {len(nested)} nested import(s) in: {rel}")
         
