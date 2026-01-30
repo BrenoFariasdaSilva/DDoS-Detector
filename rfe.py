@@ -51,7 +51,6 @@ import datetime  # For timestamping
 import glob  # For finding exported model files
 import json  # For saving lists and dicts as JSON strings
 import math  # For mathematical operations
-import matplotlib.pyplot as plt  # For plotting
 import numpy as np  # For numerical operations
 import os  # For file and directory operations
 import pandas as pd  # For data manipulation
