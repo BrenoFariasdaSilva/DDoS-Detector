@@ -144,20 +144,6 @@ class TelegramBot:
             return self.CHAT_ID  # Use the default chat ID
         return chat_id  # Return the provided chat_id
 
-    def verbose_output(self, true_string="", false_string=""):
-        """
-        Outputs a message if the VERBOSE constant is set to True.
-
-        :param true_string: The string to be outputted if the VERBOSE constant is set to True.
-        :param false_string: The string to be outputted if the VERBOSE constant is set to False.
-        :return: None
-        """
-
-        if VERBOSE and true_string != "":  # If the VERBOSE constant is set to True and the true_string is set
-            print(true_string)  # Output the true statement string
-        elif false_string != "":  # If the false_string is set
-            print(false_string)  # Output the false statement string
-
     async def send_message(self, text, chat_id=None):
         """
         Sends a message via Telegram bot.
@@ -173,7 +159,7 @@ class TelegramBot:
             print(f"{BackgroundColors.RED}Chat ID not set.{Style.RESET_ALL}")
             return  # Exit the function
 
-        self.verbose_output(
+        verbose_output(
             f"{BackgroundColors.GREEN}Sending message to chat ID {BackgroundColors.CYAN}{chat_id}{Style.RESET_ALL}"
         )  # Output the verbose message
 
@@ -198,7 +184,7 @@ class TelegramBot:
             print(f"{BackgroundColors.RED}Chat ID not set.{Style.RESET_ALL}")
             return  # Exit the function
 
-        self.verbose_output(
+        verbose_output(
             f"{BackgroundColors.GREEN}Sending long message to chat ID {BackgroundColors.CYAN}{chat_id}{Style.RESET_ALL}"
         )  # Output the verbose message
 
@@ -231,7 +217,7 @@ class TelegramBot:
             print(f"{BackgroundColors.RED}Chat ID not set.{Style.RESET_ALL}")
             return  # Exit the function
 
-        self.verbose_output(
+        verbose_output(
             f"{BackgroundColors.GREEN}Running Telegram bot to send messages to chat ID {BackgroundColors.CYAN}{chat_id}{Style.RESET_ALL}"
         )  # Output the verbose message
 
@@ -255,6 +241,21 @@ class TelegramBot:
             return  # Exit the function
 
         await self.run_bot(messages, chat_id)  # Run the bot to send messages
+
+
+def verbose_output(true_string="", false_string=""):
+    """
+    Outputs a message if the VERBOSE constant is set to True.
+
+    :param true_string: The string to be outputted if the VERBOSE constant is set to True.
+    :param false_string: The string to be outputted if the VERBOSE constant is set to False.
+    :return: None
+    """
+
+    if VERBOSE and true_string != "":  # If VERBOSE is True and a true_string was provided
+        print(true_string)
+    elif false_string != "":  # If a false_string was provided
+        print(false_string)
 
 
 def send_telegram_message(bot, messages, condition=True):
