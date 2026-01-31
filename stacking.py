@@ -2074,6 +2074,8 @@ def main():
     
     start_time = datetime.datetime.now()  # Get the start time of the program
     
+    setup_telegram_bot()  # Setup Telegram bot if configured
+    
     send_telegram_message(TELEGRAM_BOT, [f"Starting Classifiers Stacking at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Send Telegram message indicating start
 
     set_threads_limit_based_on_ram()  # Adjust THREADS_LIMIT based on system RAM
