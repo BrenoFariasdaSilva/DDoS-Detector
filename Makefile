@@ -173,6 +173,12 @@ comments_standardizer: dependencies
 	$(CLEAR_CMD)
 	$(call RUN_AND_LOG, ./Scripts/comments_standardizer.py $(ARGS))
 
+# Docstring documentation validator
+docstring_documentation_validator: dependencies
+	$(ENSURE_LOG_DIR)
+	$(CLEAR_CMD)
+	$(call RUN_AND_LOG, ./Scripts/docstring_documentation_validator.py $(ARGS))
+
 # Function order validator
 function_order_validator: dependencies
 	$(ENSURE_LOG_DIR)
