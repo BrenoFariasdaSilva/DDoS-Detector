@@ -1181,7 +1181,7 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
         # Send Telegram message with fold timing
         send_telegram_message(
             TELEGRAM_BOT,
-            f"RFE: Finished fold {fold_idx}/{n_splits} for dataset {Path(csv_path).stem} in {int(metrics_tuple[6])}s"
+            f"RFE: Finished fold {fold_idx}/{n_splits} for dataset {Path(csv_path).stem} in {int(metrics_tuple[6])}s with F1: {truncate_value(metrics_tuple[3])}"
         )
 
     # Aggregate metrics (mean across folds)
