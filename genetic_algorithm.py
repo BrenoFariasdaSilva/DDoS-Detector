@@ -3095,6 +3095,8 @@ def main():
     )
     start_time = datetime.datetime.now()
 
+    setup_telegram_bot()  # Setup Telegram bot if configured
+
     # Example GA params (could be extended to CLI)
     n_generations = 200
     min_pop = 20
