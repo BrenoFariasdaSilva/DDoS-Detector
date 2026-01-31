@@ -2099,6 +2099,8 @@ def main():
     )  # Output the welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
     
+    setup_telegram_bot()  # Setup Telegram bot if configured
+    
     send_telegram_message(
         TELEGRAM_BOT,[f"Starting Classifiers Hyperparameters Optimization at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"]
     )  # Send starting message
