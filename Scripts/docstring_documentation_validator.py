@@ -127,6 +127,160 @@ RUN_FUNCTIONS = {
 }
 
 
+# Classes Definitions:
+
+
+class DocstringValidatorVisitor(ast.NodeVisitor):
+    """
+    AST visitor that validates and fixes docstrings for functions.
+    """
+
+    def __init__(self):
+        """
+        Initialize the DocstringValidatorVisitor.
+
+        :param self: The instance of the class
+        :return: None
+        """
+        
+        self.missing: List[Dict[str, Any]] = []  # Initialize the list to store missing docstrings
+        self.fixed: List[Dict[str, Any]] = []  # Initialize the list to store fixed docstrings
+
+    def visit_FunctionDef(self, node: ast.FunctionDef):
+        """
+        Visit a function definition node.
+
+        :param self: The instance of the class
+        :param node: The FunctionDef AST node
+        :return: None
+        """
+        
+        self.verify_docstring(node, "function")  # Verify the docstring for the function
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+        """
+        Visit an async function definition node.
+
+        :param self: The instance of the class
+        :param node: The AsyncFunctionDef AST node
+        :return: None
+        """
+        
+        self.verify_docstring(node, "async_function")  # Verify the docstring for the async function
+
+    def visit_ClassDef(self, node: ast.ClassDef):
+        """
+        Visit a class definition node to verify methods inside the class.
+
+        :param self: The instance of the class
+        :param node: The ClassDef AST node
+        :return: None
+        """
+        
+        self.generic_visit(node)  # Visit all nodes inside the class
+
+    def handle_missing_docstring(self, node, func_type):
+        """
+        Handle the case where a docstring is missing.
+
+        :param self: The instance of the class
+        :param node: The function AST node
+        :param func_type: Type of function ("function" or "async_function")
+        :return: None
+        """
+        
+        self.missing.append({  # Append the missing docstring details to the list
+            "name": node.name,  # Add the name of the function
+            "lineno": node.lineno,  # Add the line number of the function
+            "type": func_type  # Add the type of the function
+        })
+
+    def ensure_single_line_delimiters(self, node, docstring, func_type):
+        """
+        Ensure that docstring delimiters are on a single line.
+
+        :param self: The instance of the class
+        :param node: The function AST node
+        :param docstring: The docstring to verify
+        :param func_type: Type of function ("function" or "async_function")
+        :return: None
+        """
+        
+        if "\n" in docstring or "\r" in docstring:  # Verify if the docstring contains newlines
+            docstring_lines = docstring.splitlines()  # Split the docstring into lines
+            fixed_docstring = f'"""{docstring_lines[0]}\n' + "\n".join(docstring_lines[1:]) + '"""'  # Fix the delimiters
+            self.fixed.append({  # Append the fixed docstring details to the list
+                "name": node.name,  # Add the name of the function
+                "lineno": node.lineno,  # Add the line number of the function
+                "type": func_type,  # Add the type of the function
+                "fixed_docstring": fixed_docstring  # Add the fixed docstring
+            })
+            node.body.insert(0, ast.Expr(value=ast.Str(s=fixed_docstring)))  # Insert the fixed docstring into the node
+
+    def ensure_empty_line_after_docstring(self, node):
+        """
+        Ensure that there is an empty line after the docstring.
+
+        :param self: The instance of the class
+        :param node: The function AST node
+        :return: None
+        """
+        
+        if not node.body or not isinstance(node.body[0], ast.Expr) or not isinstance(node.body[0].value, ast.Str):
+            return  # Return if the node body is empty or the first node is not a docstring
+
+        next_node = node.body[1] if len(node.body) > 1 else None  # Get the next node after the docstring
+        if next_node and not isinstance(next_node, ast.Expr):  # Verify if the next node is not an expression
+            node.body.insert(1, ast.Expr(value=ast.Str(s="")))  # Insert an empty line after the docstring
+
+    def fix_docstring_if_needed(self, node, parsed, func_type):
+        """
+        Fix the docstring if it does not match the expected format.
+
+        :param self: The instance of the class
+        :param node: The function AST node
+        :param parsed: The parsed docstring
+        :param func_type: Type of function ("function" or "async_function")
+        :return: None
+        """
+        
+        param_names = [arg.arg for arg in node.args.args]  # Get the parameter names from the function arguments
+        if parsed["param_names"] != param_names or parsed["add_empty"] or not parsed["return_line"]:  # Verify if the docstring needs fixing
+            fixed_docstring = fix_docstring(parsed, param_names)  # Fix the docstring
+            self.fixed.append({  # Append the fixed docstring details to the list
+                "name": node.name,  # Add the name of the function
+                "lineno": node.lineno,  # Add the line number of the function
+                "type": func_type,  # Add the type of the function
+                "fixed_docstring": fixed_docstring  # Add the fixed docstring
+            })
+            node.body.insert(0, ast.Expr(value=ast.Str(s=fixed_docstring)))  # Insert the fixed docstring into the node
+
+    def verify_docstring(self, node, func_type):
+        """
+        Verify and fix the docstring for a function node.
+
+        :param self: The instance of the class
+        :param node: The function AST node
+        :param func_type: Type of function ("function" or "async_function")
+        :return: None
+        """
+        
+        docstring = ast.get_docstring(node)  # Get the docstring of the function
+        if not docstring:  # Verify if the docstring is missing
+            self.handle_missing_docstring(node, func_type)  # Handle the missing docstring
+            return  # Return as there is no docstring to verify
+
+        self.ensure_single_line_delimiters(node, docstring, func_type)  # Ensure the docstring delimiters are on a single line
+        self.ensure_empty_line_after_docstring(node)  # Ensure there is an empty line after the docstring
+
+        parsed = parse_docstring(docstring)  # Parse the docstring
+        if not parsed:  # Verify if the docstring could not be parsed
+            self.handle_missing_docstring(node, func_type)  # Handle the missing docstring
+            return  # Return as the docstring could not be parsed
+
+        self.fix_docstring_if_needed(node, parsed, func_type)  # Fix the docstring if needed
+
+
 # Functions Definitions:
 
 
