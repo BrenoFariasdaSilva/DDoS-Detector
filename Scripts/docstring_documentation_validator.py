@@ -373,6 +373,32 @@ def extract_return_line(lines: List[str]) -> str | None:
     return None  # Return None if no return line is found
 
 
+def parse_docstring(docstring: str) -> (Dict[str, Any] | None):
+    """
+    Parse a docstring to extract description, params, and return.
+
+    :param docstring: The docstring to parse
+    :return: Parsed docstring dict or None if invalid
+    """
+    
+    lines = split_and_strip_lines(docstring)  # Split and strip lines from the docstring
+    if not is_valid_docstring(lines):  # Verify if the docstring is valid
+        return None  # Return None if invalid
+
+    description = extract_description(lines)  # Extract the description
+    add_empty = needs_empty_line_after_description(lines)  # Verify if an empty line is needed
+    param_lines, param_names = extract_parameters(lines)  # Extract parameter lines and names
+    return_line = extract_return_line(lines)  # Extract the return line
+
+    return {  # Return the parsed docstring as a dictionary
+        "description": description,
+        "add_empty": add_empty,
+        "param_names": param_names,
+        "param_lines": param_lines,
+        "return_line": return_line,
+    }
+
+
 def verbose_output(true_string="", false_string=""):
     """
     Outputs a message if the VERBOSE constant is set to True.
