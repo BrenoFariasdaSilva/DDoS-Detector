@@ -333,6 +333,31 @@ def needs_empty_line_after_description(lines: List[str]) -> bool:
     return i == 1  # Return True if the next line is not empty (i.e., no empty line after description)
 
 
+def extract_parameters(lines: List[str]):
+    """
+    Extract parameter lines and names from the docstring.
+
+    :param lines: List of lines from the docstring
+    :return: Tuple of parameter lines and parameter names
+    """
+    
+    param_lines = []  # List to store parameter lines
+    param_names = []  # List to store parameter names
+    i = 1  # Start checking from the second line
+    
+    while i < len(lines) and lines[i].strip().startswith(":param "):  # While the line starts with ":param "
+        line = lines[i].strip()  # Get the current line
+        param_lines.append(line)  # Add the line to the parameter lines list
+        parts = line.split(":param ", 1)  # Split the line to extract the parameter name
+        if len(parts) > 1:  # Verify if there is a parameter name
+            name_desc = parts[1].split(":", 1)  # Split to get the name and description
+            if name_desc:  # Verify if there is a name
+                param_names.append(name_desc[0].strip())  # Add the parameter name to the list
+        i += 1  # Move to the next line
+    
+    return param_lines, param_names  # Return the parameter lines and names
+
+
 def verbose_output(true_string="", false_string=""):
     """
     Outputs a message if the VERBOSE constant is set to True.
