@@ -50,6 +50,7 @@ import atexit  # For playing a sound when the program finishes
 import datetime  # For getting the current date and time
 import json  # For handling JSON strings
 import lightgbm as lgb  # For LightGBM model
+import math  # For mathematical operations
 import numpy as np  # For numerical operations
 import os  # For running a command in the terminal
 import pandas as pd  # For data manipulation
@@ -1393,6 +1394,24 @@ def compute_safe_n_jobs(X_train, y_train):
     return safe_n_jobs, available_memory_gb, data_size_gb  # Return computed values
 
 
+def truncate_value(value):
+    """
+    Format a numeric value to 4 decimal places, or return None if not possible.
+    
+    :param value: Numeric value
+    :return: Formatted string or None
+    """
+
+    try:  # Try to format the value
+        if value is None:  # If value is None
+            return None  # Return None
+        v = float(value)  # Convert to float
+        truncated = math.trunc(v * 10000) / 10000.0  # Truncate to 4 decimal places
+        return f"{truncated:.4f}"  # Return formatted string
+    except Exception:  # On failure
+        return None  # Return None
+
+
 def run_parallel_evaluation(
     model_name,
     model,
@@ -1476,10 +1495,10 @@ def run_parallel_evaluation(
             except Exception:
                 pass  # Ignore update errors
 
-        result_entry = OrderedDict([("params", json.dumps(current_params)), ("execution_time", round(float(elapsed), 2))])  # Build result entry with formatted time
+        result_entry = OrderedDict([("params", json.dumps(current_params)), ("execution_time", int(round(float(elapsed))))])  # Build result entry with formatted time
         if metrics is not None:
             # Format all metrics to 4 decimal places
-            formatted_metrics = {k: round(float(v), 4) if v is not None else None for k, v in metrics.items()}
+            formatted_metrics = {k: truncate_value(v) for k, v in metrics.items()}
             result_entry.update(formatted_metrics)  # Include formatted metrics
         all_results.append(result_entry)  # Append to list
 
@@ -1494,7 +1513,7 @@ def run_parallel_evaluation(
                 best_score = f1
                 best_params = current_params
                 best_elapsed = elapsed
-                verbose_output(f"{BackgroundColors.GREEN}New best F1 score: {BackgroundColors.CYAN}{best_score:.4f}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}")
+                verbose_output(f"{BackgroundColors.GREEN}New best F1 score: {BackgroundColors.CYAN}{truncate_value(best_score)}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}")
                 # Log new best
 
     return best_params, best_score, best_elapsed, all_results, global_counter  # Return updated results
@@ -1692,7 +1711,7 @@ def manual_grid_search(
         all_results,
     )  # Perform sequential evaluation (each model uses multiple cores internally)
 
-    verbose_output(f"{BackgroundColors.GREEN}Completed optimization for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Best score: {BackgroundColors.CYAN}{best_score:.4f}{Style.RESET_ALL}")  # Log completion
+    verbose_output(f"{BackgroundColors.GREEN}Completed optimization for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Best score: {BackgroundColors.CYAN}{truncate_value(best_score)}{Style.RESET_ALL}")  # Log completion
 
     return best_params, best_score, best_elapsed, all_results, global_counter  # Return final results
 
@@ -1746,11 +1765,11 @@ def build_result_entry_from_best(csv_path, model_name, best_params, best_score, 
         ("base_csv", os.path.basename(csv_path)),
         ("model", model_name),
         ("best_params", json.dumps(best_params)),
-        ("best_cv_f1_score", round(float(best_score), 4) if best_score is not None else None),
+        ("best_cv_f1_score", truncate_value(best_score)),
         ("n_features", X_train_ga.shape[1]),
         ("feature_selection_method", "Genetic Algorithm"),
         ("dataset", os.path.basename(csv_path)),
-        ("elapsed_time_s", round(float(elapsed_time), 2)),
+        ("elapsed_time_s", int(round(float(elapsed_time)))),
     ])
     if best_result:
         for metric_key in [
@@ -1758,7 +1777,7 @@ def build_result_entry_from_best(csv_path, model_name, best_params, best_score, 
             "true_positive_rate", "true_negative_rate", "matthews_corrcoef", "roc_auc_score", "cohen_kappa"
         ]:
             if metric_key in best_result:
-                result_dict[metric_key] = round(float(best_result[metric_key]), 4) if best_result[metric_key] is not None else None
+                result_dict[metric_key] = truncate_value(best_result[metric_key])
     # Export model and scaler if provided
     if best_estimator is not None and scaler is not None and dataset_name is not None and feature_names is not None:
         export_model_and_scaler(best_estimator, scaler, dataset_name, model_name, feature_names, best_params)
@@ -1923,7 +1942,7 @@ def process_single_csv_file(csv_path, dir_results_list):
             f"{BackgroundColors.GREEN}Best model: {BackgroundColors.CYAN}{best_model['model']}{Style.RESET_ALL}"
         )  # Output model name
         print(
-            f"{BackgroundColors.GREEN}Best CV F1 Score: {BackgroundColors.CYAN}{best_model['best_cv_f1_score']:.4f}{Style.RESET_ALL}"
+            f"{BackgroundColors.GREEN}Best CV F1 Score: {BackgroundColors.CYAN}{truncate_value(best_model['best_cv_f1_score'])}{Style.RESET_ALL}"
         )  # Output best score
 
 
