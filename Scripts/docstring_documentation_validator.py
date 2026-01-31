@@ -1,50 +1,68 @@
 """
 ================================================================================
-<PROJECT OR SCRIPT TITLE>
+Docstring Documentation Validator (docstring_documentation_validator.py)
 ================================================================================
-Author      : Breno Farias da Silva
-Created     : <YYYY-MM-DD>
+Author      : Breno Farias da Silva (adapted)
+Created     : 2026-01-30
 Description :
-    <Provide a concise and complete overview of what this script does.>
-    <Mention its purpose, scope, and relevance to the larger project.>
+    Scans Python files under the project tree and validates docstrings for
+    functions and methods. Verifies if functions and methods have docstrings in the specified format:
+    - First line: description
+    - Empty line
+    - :param lines in the order of function parameters
+    - :return: line
+
+    Automatically fixes:
+    - Adds empty line after description if missing
+    - Reorders :param lines to match parameter order
+    - Adds missing :param lines with placeholder descriptions
+    - Adds :return: None if missing
+
+    Reports missing docstrings.
 
     Key features include:
-        - <Feature 1 — e.g., automatic data loading and preprocessing>
-        - <Feature 2 — e.g., model training and evaluation>
-        - <Feature 3 — e.g., visualization or report generation>
-        - <Feature 4 — e.g., logging or notification system>
-        - <Feature 5 — e.g., integration with other modules or datasets>
+        - AST-based parsing for accurate function detection
+        - Recursive scanning of project directories
+        - Automatic fixing of docstring format issues
+        - JSON report generation with details on missing and fixed docstrings
+        - Exclusion of irrelevant directories (e.g., venv, __pycache__)
+        - Verbose output for debugging
 
 Usage:
-    1. <Explain any configuration steps before running, such as editing variables or paths.>
-    2. <Describe how to execute the script — typically via Makefile or Python.>
-            $ make <target>   or   $ python <script_name>.py
-    3. <List what outputs are expected or where results are saved.>
+    1. Ensure Python environment is set up.
+    2. Run the script via Python.
+            $ python Scripts/docstring_documentation_validator.py
+    3. Verify the output JSON report for missing and fixed docstrings.
 
 Outputs:
-    - <Output file or directory 1 — e.g., results.csv>
-    - <Output file or directory 2 — e.g., Feature_Analysis/plots/>
-    - <Output file or directory 3 — e.g., logs/output.txt>
+    - Scripts/docstring_documentation_report.json: JSON report mapping files to missing and fixed docstrings
 
 TODOs:
-    - <Add a task or improvement — e.g., implement CLI argument parsing.>
-    - <Add another improvement — e.g., extend support to Parquet files.>
-    - <Add optimization — e.g., parallelize evaluation loop.>
-    - <Add robustness — e.g., error handling or data validation.>
+    - Implement CLI argument parsing for custom root directories.
+    - Add support for ignoring specific files or patterns.
+    - Optimize for large codebases with parallel processing.
+    - Add error handling for malformed Python files.
 
 Dependencies:
-    - Python >= <version>
-    - <Library 1 — e.g., pandas>
-    - <Library 2 — e.g., numpy>
-    - <Library 3 — e.g., scikit-learn>
-    - <Library 4 — e.g., matplotlib, seaborn, tqdm, colorama>
+    - Python >= 3.8
+    - ast (built-in)
+    - astor
+    - json (built-in)
+    - os (built-in)
+    - sys (built-in)
+    - pathlib (built-in)
+    - typing (built-in)
+    - colorama
 
 Assumptions & Notes:
-    - <List any key assumptions — e.g., last column is the target variable.>
-    - <Mention data format — e.g., CSV files only.>
-    - <Mention platform or OS-specific notes — e.g., sound disabled on Windows.>
-    - <Note on output structure or reusability.>
+    - Scans all .py files under the project root, excluding ignored directories.
+    - Assumes UTF-8 encoding for Python files.
+    - Functions and methods are def and async def, including methods inside classes.
+    - Docstrings are triple-quoted strings as the first statement.
+    - Report is overwritten on each run.
+    - Sound notifications disabled on Windows.
 """
+
 
 import atexit  # For playing a sound when the program finishes
 import datetime  # For getting the current date and time
