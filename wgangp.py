@@ -1351,6 +1351,8 @@ def main():
     
     start_time = datetime.datetime.now()  # Get the start time of the program
     
+    setup_telegram_bot()  # Setup Telegram bot if configured
+    
     send_telegram_message(TELEGRAM_BOT, [f"Starting WGAN-GP Data Augmentation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Send Telegram notification
 
     args = parse_args()  # Parse command-line arguments
