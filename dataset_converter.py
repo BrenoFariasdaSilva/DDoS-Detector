@@ -986,6 +986,8 @@ def main():
     )  # Output the Welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
     
+    setup_telegram_bot()  # Setup Telegram bot if configured
+    
     args = parse_cli_arguments()  # Parse CLI arguments
 
     input_path, output_path = resolve_io_paths(args)  # Resolve and validate paths
