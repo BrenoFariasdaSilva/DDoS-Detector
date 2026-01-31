@@ -1502,17 +1502,29 @@ def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memo
 
 def calculate_execution_time(start_time, finish_time):
     """
-    Calculates the execution time between start and finish times and formats it as hh:mm:ss.
+    Calculates the execution time between start and finish times and formats it dynamically.
 
     :param start_time: The start datetime object
     :param finish_time: The finish datetime object
-    :return: String formatted as hh:mm:ss representing the execution time
+    :return: String formatted with appropriate units (s, m, h, d) representing the execution time
     """
 
     delta = finish_time - start_time  # Calculate the time difference
-    hours, remainder = divmod(delta.seconds, 3600)  # Calculate the hours, minutes and seconds
-    minutes, seconds = divmod(remainder, 60)  # Calculate the minutes and seconds
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"  # Format the execution time
+    total_seconds = delta.total_seconds()  # Get total seconds
+
+    days = int(total_seconds // 86400)  # Calculate days
+    hours = int((total_seconds % 86400) // 3600)  # Calculate hours
+    minutes = int((total_seconds % 3600) // 60)  # Calculate minutes
+    seconds = int(total_seconds % 60)  # Calculate seconds
+
+    if days > 0:  # If there are days
+        return f"{days}d {hours}h {minutes}m {seconds}s"  # Format with days, hours, minutes, seconds
+    elif hours > 0:  # If there are hours
+        return f"{hours}h {minutes}m {seconds}s"  # Format with hours, minutes, seconds
+    elif minutes > 0:  # If there are minutes
+        return f"{minutes}m {seconds}s"  # Format with minutes and seconds
+    else:  # Only seconds
+        return f"{seconds}s"  # Format with seconds
 
 
 def play_sound():
