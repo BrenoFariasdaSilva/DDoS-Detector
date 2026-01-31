@@ -588,7 +588,7 @@ def populate_hardware_column(df, column_name="Hardware"):
     return df  # Return DataFrame as-is if no repositioning needed
 
 
-def format_value(value):
+def truncate_value(value):
     """
     Format a numeric value to 4 decimal places, or return None if not possible.
     
