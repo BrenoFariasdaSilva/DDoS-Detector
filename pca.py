@@ -406,7 +406,7 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
     cv_f1_mean = np.mean(cv_f1s)  # Mean CV metrics
 
     total_elapsed = time.time() - start_total
-    send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} in {int(total_elapsed)}s with CV F1: {cv_f1_mean:.4f}")
+    send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} in {int(total_elapsed)}s with CV F1: {truncate_value(cv_f1_mean)}")
 
     cv_acc_mean = np.mean(cv_accs)  # Mean CV metrics
     cv_prec_mean = np.mean(cv_precs)  # Mean CV metrics
@@ -474,38 +474,38 @@ def print_pca_results(results):
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}PCA Results (n_components={results['n_components']}):{Style.RESET_ALL}"
     )
     print(
-        f"  {BackgroundColors.GREEN}Explained Variance Ratio: {BackgroundColors.CYAN}{results['explained_variance']:.4f} ({results['explained_variance']*100:.2f}%){Style.RESET_ALL}"
+        f"  {BackgroundColors.GREEN}Explained Variance Ratio: {BackgroundColors.CYAN}{truncate_value(results['explained_variance'])} ({truncate_value(results['explained_variance']*100)}%){Style.RESET_ALL}"
     )
     print(
         f"\n  {BackgroundColors.BOLD}{BackgroundColors.GREEN}10-Fold Cross-Validation Metrics (Training Set):{Style.RESET_ALL}"
     )
     print(
-        f"  {BackgroundColors.GREEN}CV Accuracy: {BackgroundColors.CYAN}{results['cv_accuracy']:.4f}{Style.RESET_ALL}"
+        f"  {BackgroundColors.GREEN}CV Accuracy: {BackgroundColors.CYAN}{truncate_value(results['cv_accuracy'])}{Style.RESET_ALL}"
     )
     print(
-        f"  {BackgroundColors.GREEN}CV Precision: {BackgroundColors.CYAN}{results['cv_precision']:.4f}{Style.RESET_ALL}"
+        f"  {BackgroundColors.GREEN}CV Precision: {BackgroundColors.CYAN}{truncate_value(results['cv_precision'])}{Style.RESET_ALL}"
     )
-    print(f"  {BackgroundColors.GREEN}CV Recall: {BackgroundColors.CYAN}{results['cv_recall']:.4f}{Style.RESET_ALL}")
+    print(f"  {BackgroundColors.GREEN}CV Recall: {BackgroundColors.CYAN}{truncate_value(results['cv_recall'])}{Style.RESET_ALL}")
     print(
-        f"  {BackgroundColors.GREEN}CV F1-Score: {BackgroundColors.CYAN}{results['cv_f1_score']:.4f}{Style.RESET_ALL}"
+        f"  {BackgroundColors.GREEN}CV F1-Score: {BackgroundColors.CYAN}{truncate_value(results['cv_f1_score'])}{Style.RESET_ALL}"
     )
     print(f"\n  {BackgroundColors.BOLD}{BackgroundColors.GREEN}Test Set Metrics:{Style.RESET_ALL}")
     print(
-        f"  {BackgroundColors.GREEN}Test Accuracy: {BackgroundColors.CYAN}{results['test_accuracy']:.4f}{Style.RESET_ALL}"
+        f"  {BackgroundColors.GREEN}Test Accuracy: {BackgroundColors.CYAN}{truncate_value(results['test_accuracy'])}{Style.RESET_ALL}"
     )
     print(
-        f"  {BackgroundColors.GREEN}Test Precision: {BackgroundColors.CYAN}{results['test_precision']:.4f}{Style.RESET_ALL}"
+        f"  {BackgroundColors.GREEN}Test Precision: {BackgroundColors.CYAN}{truncate_value(results['test_precision'])}{Style.RESET_ALL}"
     )
     print(
-        f"  {BackgroundColors.GREEN}Test Recall: {BackgroundColors.CYAN}{results['test_recall']:.4f}{Style.RESET_ALL}"
+        f"  {BackgroundColors.GREEN}Test Recall: {BackgroundColors.CYAN}{truncate_value(results['test_recall'])}{Style.RESET_ALL}"
     )
     print(
-        f"  {BackgroundColors.GREEN}Test F1-Score: {BackgroundColors.CYAN}{results['test_f1_score']:.4f}{Style.RESET_ALL}"
+        f"  {BackgroundColors.GREEN}Test F1-Score: {BackgroundColors.CYAN}{truncate_value(results['test_f1_score'])}{Style.RESET_ALL}"
     )
-    print(f"  {BackgroundColors.GREEN}Test FPR: {BackgroundColors.CYAN}{results['test_fpr']:.4f}{Style.RESET_ALL}")
-    print(f"  {BackgroundColors.GREEN}Test FNR: {BackgroundColors.CYAN}{results['test_fnr']:.4f}{Style.RESET_ALL}")
+    print(f"  {BackgroundColors.GREEN}Test FPR: {BackgroundColors.CYAN}{truncate_value(results['test_fpr'])}{Style.RESET_ALL}")
+    print(f"  {BackgroundColors.GREEN}Test FNR: {BackgroundColors.CYAN}{truncate_value(results['test_fnr'])}{Style.RESET_ALL}")
     print(
-        f"  {BackgroundColors.GREEN}Training Time: {BackgroundColors.CYAN}{results['training_time_s']:.2f}s  Testing Time: {BackgroundColors.CYAN}{results['testing_time_s']:.2f}s{Style.RESET_ALL}"
+        f"  {BackgroundColors.GREEN}Training Time: {BackgroundColors.CYAN}{int(round(results['training_time_s']))}s  Testing Time: {BackgroundColors.CYAN}{int(round(results['testing_time_s']))}s{Style.RESET_ALL}"
     )
 
 
@@ -650,19 +650,19 @@ def save_pca_results(csv_path, all_results):
             "train_test_split": train_test_split,
             "scaling": scaling,
             "n_components": int(results.get("n_components")) if results.get("n_components") is not None else None,
-            "explained_variance": format_value(results.get("explained_variance")),
-            "cv_accuracy": format_value(results.get("cv_accuracy")),
-            "cv_precision": format_value(results.get("cv_precision")),
-            "cv_recall": format_value(results.get("cv_recall")),
-            "cv_f1_score": format_value(results.get("cv_f1_score")),
-            "test_accuracy": format_value(results.get("test_accuracy")),
-            "test_precision": format_value(results.get("test_precision")),
-            "test_recall": format_value(results.get("test_recall")),
-            "test_f1_score": format_value(results.get("test_f1_score")),
-            "test_fpr": format_value(results.get("test_fpr")),
-            "test_fnr": format_value(results.get("test_fnr")),
-            "training_time_s": format_value(results.get("training_time_s")),
-            "testing_time_s": format_value(results.get("testing_time_s")),
+            "explained_variance": truncate_value(results.get("explained_variance")),
+            "cv_accuracy": truncate_value(results.get("cv_accuracy")),
+            "cv_precision": truncate_value(results.get("cv_precision")),
+            "cv_recall": truncate_value(results.get("cv_recall")),
+            "cv_f1_score": truncate_value(results.get("cv_f1_score")),
+            "test_accuracy": truncate_value(results.get("test_accuracy")),
+            "test_precision": truncate_value(results.get("test_precision")),
+            "test_recall": truncate_value(results.get("test_recall")),
+            "test_f1_score": truncate_value(results.get("test_f1_score")),
+            "test_fpr": truncate_value(results.get("test_fpr")),
+            "test_fnr": truncate_value(results.get("test_fnr")),
+            "training_time_s": int(round(results.get("training_time_s"))) if results.get("training_time_s") is not None else None,
+            "testing_time_s": int(round(results.get("testing_time_s"))) if results.get("testing_time_s") is not None else None,
         }
         rows.append(row)
 
@@ -895,10 +895,10 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
         f"  {BackgroundColors.GREEN}n_components = {BackgroundColors.CYAN}{best_result['n_components']}{Style.RESET_ALL}"
     )
     print(
-        f"  {BackgroundColors.GREEN}CV F1-Score = {BackgroundColors.CYAN}{best_result['cv_f1_score']:.4f}{Style.RESET_ALL}"
+        f"  {BackgroundColors.GREEN}CV F1-Score = {BackgroundColors.CYAN}{truncate_value(best_result['cv_f1_score'])}{Style.RESET_ALL}"
     )
     print(
-        f"  {BackgroundColors.GREEN}Explained Variance = {BackgroundColors.CYAN}{best_result['explained_variance']:.4f}{Style.RESET_ALL}"
+        f"  {BackgroundColors.GREEN}Explained Variance = {BackgroundColors.CYAN}{truncate_value(best_result['explained_variance'])}{Style.RESET_ALL}"
     )
 
 
