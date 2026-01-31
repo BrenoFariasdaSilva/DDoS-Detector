@@ -399,6 +399,33 @@ def parse_docstring(docstring: str) -> (Dict[str, Any] | None):
     }
 
 
+def fix_docstring(parsed: Dict[str, Any], param_names: List[str]) -> str:
+    """
+    Fix the docstring format.
+
+    :param parsed: Parsed docstring dict
+    :param param_names: List of parameter names in order
+    :return: Fixed docstring
+    """
+
+    description = parsed["description"]  # Extract the description from the parsed docstring
+    param_lines = parsed["param_lines"]  # Extract the parameter lines from the parsed docstring
+    return_line = parsed["return_line"] or ":return: None"  # Use the return line or a default value if missing
+
+    param_dict = dict(zip(parsed["param_names"], param_lines))  # Create a dictionary mapping parameter names to lines
+    new_param_lines = [
+        param_dict.get(name, f":param {name}: Description for {name}") for name in param_names
+    ]  # Generate new parameter lines, adding placeholders for missing parameters
+
+    new_lines = [description]  # Start the new docstring with the description
+    if parsed["add_empty"] or new_param_lines:  # Add an empty line if needed or if there are parameter lines
+        new_lines.append("")  # Add an empty line
+    new_lines.extend(new_param_lines)  # Add the parameter lines to the new docstring
+    new_lines.append(return_line)  # Add the return line to the new docstring
+
+    return "\n".join(new_lines)  # Join the lines with newline characters and return the fixed docstring
+
+
 def verbose_output(true_string="", false_string=""):
     """
     Outputs a message if the VERBOSE constant is set to True.
