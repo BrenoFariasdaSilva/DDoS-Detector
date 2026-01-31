@@ -315,6 +315,32 @@ def is_ignored(path: str) -> bool:
     return bool(parts.intersection(IGNORE_DIRS))  # Return True if any part is in IGNORE_DIRS
 
 
+def collect_python_files(root_dir: str) -> List[str]:
+    """
+    Recursively collects all Python (.py) files under a root directory, skipping ignored directories.
+
+    :param root_dir: Root directory to scan
+    :return: List of absolute paths to Python files found under root_dir
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Collecting Python files under root directory: {BackgroundColors.CYAN}{root_dir}{Style.RESET_ALL}"
+    )  # Output the verbose message
+    
+    py_files = []  # Initialize list to store Python files
+
+    for dirpath, dirnames, filenames in os.walk(root_dir):  # Walk through all directories and files under root_dir
+        dirnames[:] = [d for d in dirnames if d not in IGNORE_DIRS]  # Skip ignored directories
+
+        for filename in filenames:  # Iterate over files
+            if filename.endswith(".py"):  # Only consider Python files
+                full_path = os.path.join(dirpath, filename)  # Get absolute path
+                if os.path.isfile(full_path) and not is_ignored(full_path):  # Skip ignored paths
+                    py_files.append(full_path)  # Add to list
+
+    return py_files  # Return all Python files found
+
+
 def verify_filepath_exists(filepath):
     """
     Verify if a file or folder exists at the specified path.
