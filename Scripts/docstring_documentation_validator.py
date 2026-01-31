@@ -284,6 +284,17 @@ class DocstringValidatorVisitor(ast.NodeVisitor):
 # Functions Definitions:
 
 
+def split_and_strip_lines(docstring: str) -> List[str]:
+    """
+    Split the docstring into lines and strip trailing whitespace.
+
+    :param docstring: The docstring to process
+    :return: List of stripped lines
+    """
+    
+    return [line.rstrip() for line in docstring.split("\n")]  # Split and strip lines
+
+
 def verbose_output(true_string="", false_string=""):
     """
     Outputs a message if the VERBOSE constant is set to True.
