@@ -2001,7 +2001,7 @@ def evaluate_on_dataset(
                     "features_list": subset_feature_names,
                 }  # Prepare result entry
                 all_results[(name, model_name)] = result_entry  # Store result with key
-                send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} in {int(elapsed)}s with F1: {truncate_value(f1)}")
+                send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} in {calculate_execution_time(0, elapsed)} with F1: {truncate_value(f1)}")
                 print(
                     f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(metrics[0])}{Style.RESET_ALL}"
                 )  # Output accuracy
@@ -2053,7 +2053,7 @@ def evaluate_on_dataset(
             "features_list": subset_feature_names,
         }  # Prepare stacking result entry
         all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store result with key
-        send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier in {int(s_elapsed)}s with F1: {truncate_value(s_f1)}")
+        send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier in {calculate_execution_time(0, s_elapsed)} with F1: {truncate_value(s_f1)}")
         print(
             f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{truncate_value(stacking_metrics[0])}{Style.RESET_ALL}"
         )  # Output accuracy
