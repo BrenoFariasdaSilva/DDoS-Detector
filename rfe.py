@@ -1333,6 +1333,8 @@ def main():
         f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Recursive Feature Elimination (RFE){BackgroundColors.GREEN} program!{Style.RESET_ALL}"
     )  # Output the welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
+    
+    setup_telegram_bot()  # Setup Telegram bot if configured
 
     dataset_name = os.path.splitext(os.path.basename(CSV_FILE))[0]  # Get dataset name for messages
 
