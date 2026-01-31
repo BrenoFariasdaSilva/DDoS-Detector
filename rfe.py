@@ -746,13 +746,13 @@ def save_rfe_results(csv_path, run_results):
 
         training_time = r.get("training_time_s")
         try:
-            data["training_time_s"] = truncate_value(float(training_time)) if training_time is not None else None
+            data["training_time_s"] = int(float(training_time)) if training_time is not None else None
         except Exception:
             data["training_time_s"] = None
 
         testing_time = r.get("testing_time_s")
         try:
-            data["testing_time_s"] = truncate_value(float(testing_time)) if testing_time is not None else None
+            data["testing_time_s"] = int(float(testing_time)) if testing_time is not None else None
         except Exception:
             data["testing_time_s"] = None
 
@@ -1016,22 +1016,22 @@ def build_run_results(final_model, csv_path, hyperparameters, cv_method, cv_metr
 
     if cv_metrics is not None:
         result.update({
-            "cv_accuracy": float(truncate_value(cv_metrics[0]) or "0.0"),
-            "cv_precision": float(truncate_value(cv_metrics[1]) or "0.0"),
-            "cv_recall": float(truncate_value(cv_metrics[2]) or "0.0"),
-            "cv_f1_score": float(truncate_value(cv_metrics[3]) or "0.0"),
-            "cv_fpr": float(truncate_value(cv_metrics[4]) or "0.0"),
-            "cv_fnr": float(truncate_value(cv_metrics[5]) or "0.0"),
+            "cv_accuracy": truncate_value(cv_metrics[0]),
+            "cv_precision": truncate_value(cv_metrics[1]) or "0.0",
+            "cv_recall": truncate_value(cv_metrics[2]) or "0.0",
+            "cv_f1_score": truncate_value(cv_metrics[3]) or "0.0",
+            "cv_fpr": truncate_value(cv_metrics[4]) or "0.0",
+            "cv_fnr": truncate_value(cv_metrics[5]) or "0.0",
         })
 
     if test_metrics is not None:
         result.update({
-            "test_accuracy": float(truncate_value(test_metrics[0]) or "0.0"),
-            "test_precision": float(truncate_value(test_metrics[1]) or "0.0"),
-            "test_recall": float(truncate_value(test_metrics[2]) or "0.0"),
-            "test_f1_score": float(truncate_value(test_metrics[3]) or "0.0"),
-            "test_fpr": float(truncate_value(test_metrics[4]) or "0.0"),
-            "test_fnr": float(truncate_value(test_metrics[5]) or "0.0"),
+            "test_accuracy": truncate_value(test_metrics[0]) or "0.0",
+            "test_precision": truncate_value(test_metrics[1]) or "0.0",
+            "test_recall": truncate_value(test_metrics[2]) or "0.0",
+            "test_f1_score": truncate_value(test_metrics[3]) or "0.0",
+            "test_fpr": truncate_value(test_metrics[4]) or "0.0",
+            "test_fnr": truncate_value(test_metrics[5]) or "0.0",
             "testing_time_s": int(round(test_metrics[6])),
         })
 
