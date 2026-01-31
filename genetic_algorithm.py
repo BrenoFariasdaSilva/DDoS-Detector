@@ -1552,7 +1552,7 @@ def run_genetic_algorithm_loop(
                 break  # Stop the loop early
 
         send_telegram_message(TELEGRAM_BOT, [
-            f"Pop Size {pop_size}: Generation {gen}/{n_generations}, Best F1-Score: {best_fitness:.4f}"
+            f"Pop Size {pop_size}: Generation {gen}/{n_generations}, Best F1-Score: {truncate_value(best_fitness)}"
         ], show_progress and gen % max(1, n_generations // 100) == 0)  # Send periodic updates to Telegram telegram_bot
 
         gens_ran = gen  # Update gens_ran each generation
@@ -1900,7 +1900,7 @@ def aggregate_sweep_results(results, min_pop, max_pop, dataset_name):
             best_result = (pop_size, runs_list, common_features)  # Update best result
 
         print(
-            f"{BackgroundColors.GREEN}Pop {BackgroundColors.CYAN}{pop_size}{BackgroundColors.GREEN}: AVG F1 {BackgroundColors.GREEN}{f1_avg:.4f}{BackgroundColors.GREEN}, Common Features {BackgroundColors.CYAN}{len(common_features)}{Style.RESET_ALL}"
+            f"{BackgroundColors.GREEN}Pop {BackgroundColors.CYAN}{pop_size}{BackgroundColors.GREEN}: AVG F1 {BackgroundColors.GREEN}{truncate_value(f1_avg)}{BackgroundColors.GREEN}, Common Features {BackgroundColors.CYAN}{len(common_features)}{Style.RESET_ALL}"
         )  # Print summary
         for i, run_data in enumerate(runs_list):  # For each run
             unique = set(run_data["best_features"]) - common_features  # Unique features
@@ -1909,7 +1909,7 @@ def aggregate_sweep_results(results, min_pop, max_pop, dataset_name):
             )  # Print unique features count
 
         send_telegram_message(TELEGRAM_BOT, [
-            f"Completed {len(runs_list)} runs for population size {pop_size} on {dataset_name} -> AVG F1-Score: {f1_avg:.4f}"
+            f"Completed {len(runs_list)} runs for population size {pop_size} on {dataset_name} -> AVG F1-Score: {truncate_value(f1_avg)}"
         ])  # Send progress message
 
     return best_score, best_result, best_metrics, results  # Return aggregated results
@@ -1930,21 +1930,21 @@ def print_metrics(metrics):
     print(
         f"\n{BackgroundColors.GREEN}CV Performance Metrics for the Random Forest Classifier using the best feature subset:{Style.RESET_ALL}"
     )
-    print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{cv_acc:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{cv_prec:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{cv_rec:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{cv_f1:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{cv_fpr:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{cv_fnr:.4f}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{truncate_value(cv_acc)}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{truncate_value(cv_prec)}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{truncate_value(cv_rec)}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{truncate_value(cv_f1)}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{truncate_value(cv_fpr)}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{truncate_value(cv_fnr)}{Style.RESET_ALL}")
     print(
         f"\n{BackgroundColors.GREEN}Test Performance Metrics for the Random Forest Classifier using the best feature subset:{Style.RESET_ALL}"
     )
-    print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{test_acc:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{test_prec:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{test_rec:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{test_f1:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{test_fpr:.4f}{Style.RESET_ALL}")
-    print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{test_fnr:.4f}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{truncate_value(test_acc)}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{truncate_value(test_prec)}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{truncate_value(test_rec)}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{truncate_value(test_f1)}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{truncate_value(test_fpr)}{Style.RESET_ALL}")
+    print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{truncate_value(test_fnr)}{Style.RESET_ALL}")
 
 
 def extract_rfe_ranking(csv_path):
@@ -2640,18 +2640,18 @@ def build_and_write_run_results(
         "cv_method": cv_method_local,
         "train_test_split": f"{1-test_frac_local:.0%}/{test_frac_local:.0%}" if test_frac_local is not None else "80/20",
         "scaling": "StandardScaler",
-        "cv_accuracy": format_value(rf_metrics_local[0]) if rf_metrics_local and len(rf_metrics_local) > 0 else None,
-        "cv_precision": format_value(rf_metrics_local[1]) if rf_metrics_local and len(rf_metrics_local) > 1 else None,
-        "cv_recall": format_value(rf_metrics_local[2]) if rf_metrics_local and len(rf_metrics_local) > 2 else None,
-        "cv_f1_score": format_value(rf_metrics_local[3]) if rf_metrics_local and len(rf_metrics_local) > 3 else None,
-        "cv_fpr": format_value(rf_metrics_local[4]) if rf_metrics_local and len(rf_metrics_local) > 4 else None,
-        "cv_fnr": format_value(rf_metrics_local[5]) if rf_metrics_local and len(rf_metrics_local) > 5 else None,
-        "test_accuracy": format_value(rf_metrics_local[6]) if rf_metrics_local and len(rf_metrics_local) > 6 else None,
-        "test_precision": format_value(rf_metrics_local[7]) if rf_metrics_local and len(rf_metrics_local) > 7 else None,
-        "test_recall": format_value(rf_metrics_local[8]) if rf_metrics_local and len(rf_metrics_local) > 8 else None,
-        "test_f1_score": format_value(rf_metrics_local[9]) if rf_metrics_local and len(rf_metrics_local) > 9 else None,
-        "test_fpr": format_value(rf_metrics_local[10]) if rf_metrics_local and len(rf_metrics_local) > 10 else None,
-        "test_fnr": format_value(rf_metrics_local[11]) if rf_metrics_local and len(rf_metrics_local) > 11 else None,
+        "cv_accuracy": truncate_value(rf_metrics_local[0]) if rf_metrics_local and len(rf_metrics_local) > 0 else None,
+        "cv_precision": truncate_value(rf_metrics_local[1]) if rf_metrics_local and len(rf_metrics_local) > 1 else None,
+        "cv_recall": truncate_value(rf_metrics_local[2]) if rf_metrics_local and len(rf_metrics_local) > 2 else None,
+        "cv_f1_score": truncate_value(rf_metrics_local[3]) if rf_metrics_local and len(rf_metrics_local) > 3 else None,
+        "cv_fpr": truncate_value(rf_metrics_local[4]) if rf_metrics_local and len(rf_metrics_local) > 4 else None,
+        "cv_fnr": truncate_value(rf_metrics_local[5]) if rf_metrics_local and len(rf_metrics_local) > 5 else None,
+        "test_accuracy": truncate_value(rf_metrics_local[6]) if rf_metrics_local and len(rf_metrics_local) > 6 else None,
+        "test_precision": truncate_value(rf_metrics_local[7]) if rf_metrics_local and len(rf_metrics_local) > 7 else None,
+        "test_recall": truncate_value(rf_metrics_local[8]) if rf_metrics_local and len(rf_metrics_local) > 8 else None,
+        "test_f1_score": truncate_value(rf_metrics_local[9]) if rf_metrics_local and len(rf_metrics_local) > 9 else None,
+        "test_fpr": truncate_value(rf_metrics_local[10]) if rf_metrics_local and len(rf_metrics_local) > 10 else None,
+        "test_fnr": truncate_value(rf_metrics_local[11]) if rf_metrics_local and len(rf_metrics_local) > 11 else None,
         "training_time_s": int(round(training_time_local)) if training_time_local is not None else None,
         "testing_time_s": int(round(testing_time_local)) if testing_time_local is not None else None,
         "elapsed_run_time": int(round(elapsed_run_time)) if elapsed_run_time is not None else None,
