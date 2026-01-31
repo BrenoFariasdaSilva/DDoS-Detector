@@ -306,6 +306,17 @@ def is_valid_docstring(lines: List[str]) -> bool:
     return bool(lines and lines[0].strip())  # Verify if the docstring has at least one non-empty line
 
 
+def extract_description(lines: List[str]) -> str:
+    """
+    Extract the description from the first line of the docstring.
+
+    :param lines: List of lines from the docstring
+    :return: The description string
+    """
+    
+    return lines[0].strip()  # Return the first line as the description
+
+
 def verbose_output(true_string="", false_string=""):
     """
     Outputs a message if the VERBOSE constant is set to True.
