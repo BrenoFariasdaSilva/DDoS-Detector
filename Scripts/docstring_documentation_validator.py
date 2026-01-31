@@ -341,6 +341,47 @@ def collect_python_files(root_dir: str) -> List[str]:
     return py_files  # Return all Python files found
 
 
+def analyze_file(path: str) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Analyze a Python file for docstring issues using AST.
+
+    :param path: The path to the Python file
+    :return: Dict with "missing" and "fixed" lists
+    """
+
+    verbose_output(true_string=
+        f"{BackgroundColors.GREEN}Analyzing file: {BackgroundColors.CYAN}{path}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    try:
+        with open(path, "r", encoding="utf-8") as fh:  # Open the file for reading with UTF-8 encoding
+            src = fh.read()  # Read the file content
+    except Exception:  # Handle any exception that occurs while opening the file
+        return {"missing": [], "fixed": []}  # Return empty lists for missing and fixed
+
+    try:
+        tree = ast.parse(src, filename=path)  # Parse the source code into an AST
+    except SyntaxError:  # Handle syntax errors in the source code
+        return {"missing": [], "fixed": []}  # Return empty lists for missing and fixed
+
+    visitor = DocstringValidatorVisitor()  # Create an instance of the docstring validator visitor
+    visitor.visit(tree)  # Visit the AST nodes to validate docstrings
+
+    if visitor.fixed:  # If there are fixed docstrings
+        try:
+            new_src = astor.to_source(tree)  # Convert the modified AST back to source code
+            with open(path, "w", encoding="utf-8") as fh:  # Open the file for writing with UTF-8 encoding
+                fh.write(new_src)  # Write the modified source code back to the file
+        except Exception as e:  # Handle any exception that occurs while writing the file
+            verbose_output(true_string=
+                f"{BackgroundColors.RED}Failed to write fixed file {path}: {e}{Style.RESET_ALL}"
+            )  # Output the error message
+
+    return {"missing": visitor.missing, "fixed": visitor.fixed}  # Return the lists of missing and fixed docstrings
+
+
+
+
 def verify_filepath_exists(filepath):
     """
     Verify if a file or folder exists at the specified path.
