@@ -649,7 +649,7 @@ def export_final_model(X_numeric, feature_columns, top_features, y_array, csv_pa
     return final_model, scaler_full, top_features, model_path, scaler_path, features_path, model_params, params_path  # Return objects, paths and params
 
 
-def format_value(value):
+def truncate_value(value):
     """
     Format a numeric value to 4 decimal places, or return None if not possible.
     
@@ -740,19 +740,19 @@ def save_rfe_results(csv_path, run_results):
 
             if val is not None:
                 try:
-                    data[col] = format_value(float(val))
+                    data[col] = truncate_value(float(val))
                 except Exception:
                     data[col] = val
 
         training_time = r.get("training_time_s")
         try:
-            data["training_time_s"] = format_value(float(training_time)) if training_time is not None else None
+            data["training_time_s"] = truncate_value(float(training_time)) if training_time is not None else None
         except Exception:
             data["training_time_s"] = None
 
         testing_time = r.get("testing_time_s")
         try:
-            data["testing_time_s"] = format_value(float(testing_time)) if testing_time is not None else None
+            data["testing_time_s"] = truncate_value(float(testing_time)) if testing_time is not None else None
         except Exception:
             data["testing_time_s"] = None
 
