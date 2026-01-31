@@ -295,6 +295,17 @@ def split_and_strip_lines(docstring: str) -> List[str]:
     return [line.rstrip() for line in docstring.split("\n")]  # Split and strip lines
 
 
+def is_valid_docstring(lines: List[str]) -> bool:
+    """
+    Verify if the docstring is valid (non-empty and has a description).
+
+    :param lines: List of lines from the docstring
+    :return: True if valid, False otherwise
+    """
+    
+    return bool(lines and lines[0].strip())  # Verify if the docstring has at least one non-empty line
+
+
 def verbose_output(true_string="", false_string=""):
     """
     Outputs a message if the VERBOSE constant is set to True.
