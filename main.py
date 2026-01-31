@@ -67,6 +67,7 @@ import arff as liac_arff  # For loading ARFF files
 import atexit  # For registering a function to run at exit
 import datetime  # For timestamping
 import lightgbm as lgb  # For LightGBM model
+import math  # For mathematical operations
 import numpy as np  # For numerical operations
 import os  # For running a command in the terminal
 import pandas as pd  # For data manipulation and analysis
@@ -647,6 +648,24 @@ def train_model(model, X_train, y_train, index, model_name, dataset_name):
     return model, duration  # Return trained model and duration
 
 
+def truncate_value(value):
+    """
+    Format a numeric value to 4 decimal places, or return None if not possible.
+
+    :param value: Numeric value
+    :return: Formatted string or None
+    """
+
+    try:  # Try to format the value
+        if value is None:  # If value is None
+            return None  # Return None
+        v = float(value)  # Convert to float
+        truncated = math.trunc(v * 10000) / 10000.0  # Truncate to 4 decimal places
+        return f"{truncated:.4f}"  # Return formatted string
+    except Exception:  # On failure
+        return None  # Return None
+
+
 def build_extended_metrics(conf_matrix, labels, duration_str):
     """
     Builds extended metrics for each class.
@@ -670,12 +689,14 @@ def build_extended_metrics(conf_matrix, labels, duration_str):
         TN = np.sum(conf_matrix) - (TP + FP + FN)  # True Negatives for the class
 
         support = TP + FN  # Support for the class (number of true instances)
-        accuracy = round((TP + TN) / np.sum(conf_matrix), 2) if np.sum(conf_matrix) > 0 else 0  # Accuracy for the class
-        precision = round(TP / (TP + FP), 2) if (TP + FP) > 0 else 0  # Precision for the class
-        recall = round(TP / (TP + FN), 2) if (TP + FN) > 0 else 0  # Recall for the class
-        f1 = (
-            round(2 * precision * recall / (precision + recall), 2) if (precision + recall) > 0 else 0
-        )  # F1-Score for the class
+        acc_val = (TP + TN) / np.sum(conf_matrix) if np.sum(conf_matrix) > 0 else 0  # Accuracy value
+        prec_val = TP / (TP + FP) if (TP + FP) > 0 else 0  # Precision value
+        rec_val = TP / (TP + FN) if (TP + FN) > 0 else 0  # Recall value
+        f1_val = 2 * prec_val * rec_val / (prec_val + rec_val) if (prec_val + rec_val) > 0 else 0  # F1-Score value
+        accuracy = truncate_value(acc_val)  # Truncated accuracy
+        precision = truncate_value(prec_val)  # Truncated precision
+        recall = truncate_value(rec_val)  # Truncated recall
+        f1 = truncate_value(f1_val)  # Truncated F1-Score
 
         metrics_list.append(
             {  # Append the metrics for the class to the list
@@ -751,7 +772,7 @@ def save_results(report, metrics_df, results_dir, index, model_name, feat_extrac
     )
 
     pd.DataFrame(report).transpose().to_csv(
-        f"{filename_base}-Classification_report.csv", float_format="%.2f", index_label="Class"
+        f"{filename_base}-Classification_report.csv", float_format="%.4f", index_label="Class"
     )  # Save classification report
     metrics_df.to_csv(
         f"{filename_base}-Extended_metrics.csv", index=False, float_format="%.2f"
@@ -783,10 +804,10 @@ def extract_average_metrics(metrics_df, dataset_name, model_name):
         "False Positives (FP)": int(avg_row["False Positives (FP)"]),
         "True Negatives (TN)": int(avg_row["True Negatives (TN)"]),
         "Support": int(avg_row["Support"]),
-        "Accuracy (per class)": round(float(avg_row["Accuracy (per class)"]), 2),
-        "Precision": round(float(avg_row["Precision"]), 2),
-        "Recall": round(float(avg_row["Recall"]), 2),
-        "F1-Score": round(float(avg_row["F1-Score"]), 2),
+        "Accuracy (per class)": avg_row["Accuracy (per class)"],
+        "Precision": avg_row["Precision"],
+        "Recall": avg_row["Recall"],
+        "F1-Score": avg_row["F1-Score"],
     }
 
 
@@ -917,9 +938,9 @@ def generate_feature_selection_comparison(
                 {  # Append comparison data
                     "Dataset": dataset_name,  # Dataset name
                     "Model": model_name,  # Model name
-                    "F1-Score (Baseline)": round(baseline_f1, 4),  # Round baseline F1-Score
-                    "F1-Score (Feat. Selection)": round(feature_f1, 4),  # Round feature-selected F1-Score
-                    "Improvement (%)": round(improvement, 2),  # Round improvement percentage
+                    "F1-Score (Baseline)": truncate_value(baseline_f1),  # Truncated baseline F1-Score
+                    "F1-Score (Feat. Selection)": truncate_value(feature_f1),  # Truncated feature-selected F1-Score
+                    "Improvement (%)": truncate_value(improvement),  # Truncated improvement percentage
                     "Training Duration (Baseline)": baseline.get("Training Duration", ""),  # Baseline training duration
                     "Training Duration (Feat. Selection)": feature_selected.get(
                         "Training Duration", ""
@@ -1033,7 +1054,7 @@ def train_and_evaluate_models(
             mean_score, std_score = cross_validate_model(model, X_train, y_train)  # Perform cross-validation
             duration = [0, "CV"]  # CV is not timed here
             tqdm.write(
-                f"{BackgroundColors.GREEN}✓ {name} - F1: {mean_score:.2f} ± {std_score:.2f}{Style.RESET_ALL}"
+                f"{BackgroundColors.GREEN}✓ {name} - F1: {truncate_value(mean_score)} ± {truncate_value(std_score)}{Style.RESET_ALL}"
             )  # Output cross-validation results
         else:  # If not using cross-validation
             start_time = time.time()  # Start timer for training duration
@@ -1061,10 +1082,10 @@ def train_and_evaluate_models(
                 "False Positives (FP)": int(avg_row["False Positives (FP)"]),
                 "True Negatives (TN)": int(avg_row["True Negatives (TN)"]),
                 "Support": int(avg_row["Support"]),
-                "Accuracy (per class)": round(float(avg_row["Accuracy (per class)"]), 2),
-                "Precision": round(float(avg_row["Precision"]), 2),
-                "Recall": round(float(avg_row["Recall"]), 2),
-                "F1-Score": round(float(avg_row["F1-Score"]), 2),
+                "Accuracy (per class)": avg_row["Accuracy (per class)"],
+                "Precision": avg_row["Precision"],
+                "Recall": avg_row["Recall"],
+                "F1-Score": avg_row["F1-Score"],
                 "Features Count": len(selected_features) if selected_features is not None else "All",
             }
             model_metrics_list.append(metrics_dict)  # Append metrics dictionary to the list
