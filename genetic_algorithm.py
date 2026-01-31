@@ -2097,7 +2097,7 @@ def build_base_row(
     }
 
 
-def format_value(value):
+def truncate_value(value):
     """
     Format a numeric value to 4 decimal places, or return None if not possible.
     
