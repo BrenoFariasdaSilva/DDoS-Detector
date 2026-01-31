@@ -64,16 +64,22 @@ Assumptions & Notes:
 """
 
 
+import ast  # For parsing Python code
+import astor  # For generating Python code from AST
 import atexit  # For playing a sound when the program finishes
 import datetime  # For getting the current date and time
+import json  # For generating JSON reports
 import os  # For running a command in the terminal
 import platform  # For getting the operating system name
 import sys  # For system-specific parameters and functions
-import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 from colorama import Style  # For coloring the terminal
-from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
-from telegram_bot import TelegramBot, send_telegram_message  # For sending progress messages to Telegram
+from typing import Any, Dict, List  # For type hints
+
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)  # Project root directory
+if PROJECT_ROOT not in sys.path:  # Add project root to sys.path
+    sys.path.insert(0, PROJECT_ROOT)  # Insert at the beginning of sys.path
+from Logger import Logger  # For logging output to both terminal and file
 
 
 # Macros:
