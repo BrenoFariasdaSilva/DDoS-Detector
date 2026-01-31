@@ -827,8 +827,20 @@ def save_to_cache(csv_path, result_entry):
     os.makedirs(cache_dir, exist_ok=True)  # Ensure cache directory exists
     
     try:  # Try to save to cache
-        result_df = pd.DataFrame([result_entry])  # Create DataFrame from entry
-        
+        save_entry = dict(result_entry)  # Create a copy of the entry to modify
+        for k, v in list(save_entry.items()):  # Iterate over key-value pairs
+            if v is None:  # Skip None values
+                continue  # Continue to next item
+            key_l = k.lower()  # Lowercase key for checks
+            if "time" in key_l or "execution" in key_l or k in ("params", "hyperparameters", "hardware"):  # Skip time/execution/hardware/params fields
+                continue  # Continue to next item
+            try:  # Try to truncate value
+                save_entry[k] = truncate_value(v)  # Truncate value if necessary
+            except Exception:  # If truncation fails
+                pass  # Keep original value
+
+        result_df = pd.DataFrame([save_entry])  # Create DataFrame from entry
+
         if os.path.exists(cache_file):  # If cache file exists
             result_df.to_csv(cache_file, mode="a", header=False, index=False)  # Append without header
         else:  # If cache file doesn't exist
@@ -2032,6 +2044,15 @@ def save_optimization_results(csv_path, results_list):
 
         desired = [c for c in HYPERPARAMETERS_RESULTS_CSV_COLUMNS if c in df_results.columns]
         df_results = df_results[desired + [c for c in df_results.columns if c not in desired]]
+
+        for col in df_results.columns:  # Truncate long values for readability
+            col_l = col.lower()  # Lowercase column name
+            if "time" in col_l or "execution" in col_l or col in ("params", "hyperparameters", "hardware"):  # Skip time and params columns
+                continue  # Skip time and params columns
+            try:  # Try to truncate value
+                df_results[col] = df_results[col].apply(lambda v: truncate_value(v) if pd.notnull(v) else v)  # Truncate values
+            except Exception:  # If truncation fails
+                pass  # Keep original value
 
         df_results.to_csv(output_path, index=False, encoding="utf-8")  # Save to CSV
         print(f"{BackgroundColors.GREEN}Results saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Print success message
