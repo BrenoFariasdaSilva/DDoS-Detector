@@ -495,29 +495,29 @@ def print_metrics(metrics_tuple):
     """
 
     print(f"\n{BackgroundColors.BOLD}Average Metrics:{Style.RESET_ALL}")
-    print(f"  {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{metrics_tuple[0]:.4f}{Style.RESET_ALL}")
-    print(f"  {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{metrics_tuple[1]:.4f}{Style.RESET_ALL}")
-    print(f"  {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{metrics_tuple[2]:.4f}{Style.RESET_ALL}")
-    print(f"  {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{metrics_tuple[3]:.4f}{Style.RESET_ALL}")
+    print(f"  {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{truncate_value(metrics_tuple[0])}{Style.RESET_ALL}")
+    print(f"  {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{truncate_value(metrics_tuple[1])}{Style.RESET_ALL}")
+    print(f"  {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{truncate_value(metrics_tuple[2])}{Style.RESET_ALL}")
+    print(f"  {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{truncate_value(metrics_tuple[3])}{Style.RESET_ALL}")
     print(
-        f"  {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{metrics_tuple[4]:.4f}{Style.RESET_ALL}"
+        f"  {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{truncate_value(metrics_tuple[4])}{Style.RESET_ALL}"
     )
     print(
-        f"  {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{metrics_tuple[5]:.4f}{Style.RESET_ALL}"
+        f"  {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{truncate_value(metrics_tuple[5])}{Style.RESET_ALL}"
     )
-    print(f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{metrics_tuple[6]:.2f}s{Style.RESET_ALL}")
+    print(f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{int(round(metrics_tuple[6]))}s{Style.RESET_ALL}")
     
     send_telegram_message(
         TELEGRAM_BOT,
         [
             f"Average Metrics:\n"
-            f"  Accuracy: {metrics_tuple[0]:.4f}\n"
-            f"  Precision: {metrics_tuple[1]:.4f}\n"
-            f"  Recall: {metrics_tuple[2]:.4f}\n"
-            f"  F1-Score: {metrics_tuple[3]:.4f}\n"
-            f"  False Positive Rate (FPR): {metrics_tuple[4]:.4f}\n"
-            f"  False Negative Rate (FNR): {metrics_tuple[5]:.4f}\n"
-            f"  Elapsed Time: {metrics_tuple[6]:.2f}s"
+            f"  Accuracy: {truncate_value(metrics_tuple[0])}\n"
+            f"  Precision: {truncate_value(metrics_tuple[1])}\n"
+            f"  Recall: {truncate_value(metrics_tuple[2])}\n"
+            f"  F1-Score: {truncate_value(metrics_tuple[3])}\n"
+            f"  False Positive Rate (FPR): {truncate_value(metrics_tuple[4])}\n"
+            f"  False Negative Rate (FNR): {truncate_value(metrics_tuple[5])}\n"
+            f"  Elapsed Time: {int(round(metrics_tuple[6]))}s"
         ],
     )  # Send metrics to Telegram
 
@@ -834,9 +834,9 @@ def print_run_summary(run_results):
     print(f"  Model: {res.get('model')}")
     print(f"  CV Method: {res.get('cv_method')}")
     print(
-        f"  Accuracy: {res.get('test_accuracy', res.get('accuracy')):.4f}  Precision: {res.get('test_precision', res.get('precision')):.4f}  Recall: {res.get('test_recall', res.get('recall')):.4f}  F1: {res.get('test_f1_score', res.get('f1_score')):.4f}"
+        f"  Accuracy: {truncate_value(res.get('test_accuracy', res.get('accuracy')))}  Precision: {truncate_value(res.get('test_precision', res.get('precision')))}  Recall: {truncate_value(res.get('test_recall', res.get('recall')))}  F1: {truncate_value(res.get('test_f1_score', res.get('f1_score')))}"
     )
-    print(f"  FPR: {res.get('test_fpr', res.get('fpr')):.4f}  FNR: {res.get('test_fnr', res.get('fnr')):.4f}  Elapsed: {res.get('elapsed_time_s')}s")
+    print(f"  FPR: {truncate_value(res.get('test_fpr', res.get('fpr')))}  FNR: {truncate_value(res.get('test_fnr', res.get('fnr')))}  Elapsed: {res.get('elapsed_time_s')}s")
     print(f"  Top features: {res.get('top_features')}")
     if res.get("hyperparameters"):
         try:
@@ -1016,27 +1016,27 @@ def build_run_results(final_model, csv_path, hyperparameters, cv_method, cv_metr
 
     if cv_metrics is not None:
         result.update({
-            "cv_accuracy": round(cv_metrics[0], 4),
-            "cv_precision": round(cv_metrics[1], 4),
-            "cv_recall": round(cv_metrics[2], 4),
-            "cv_f1_score": round(cv_metrics[3], 4),
-            "cv_fpr": round(cv_metrics[4], 4),
-            "cv_fnr": round(cv_metrics[5], 4),
+            "cv_accuracy": float(truncate_value(cv_metrics[0]) or "0.0"),
+            "cv_precision": float(truncate_value(cv_metrics[1]) or "0.0"),
+            "cv_recall": float(truncate_value(cv_metrics[2]) or "0.0"),
+            "cv_f1_score": float(truncate_value(cv_metrics[3]) or "0.0"),
+            "cv_fpr": float(truncate_value(cv_metrics[4]) or "0.0"),
+            "cv_fnr": float(truncate_value(cv_metrics[5]) or "0.0"),
         })
 
     if test_metrics is not None:
         result.update({
-            "test_accuracy": round(test_metrics[0], 4),
-            "test_precision": round(test_metrics[1], 4),
-            "test_recall": round(test_metrics[2], 4),
-            "test_f1_score": round(test_metrics[3], 4),
-            "test_fpr": round(test_metrics[4], 4),
-            "test_fnr": round(test_metrics[5], 4),
-            "testing_time_s": float(test_metrics[6]),
+            "test_accuracy": float(truncate_value(test_metrics[0]) or "0.0"),
+            "test_precision": float(truncate_value(test_metrics[1]) or "0.0"),
+            "test_recall": float(truncate_value(test_metrics[2]) or "0.0"),
+            "test_f1_score": float(truncate_value(test_metrics[3]) or "0.0"),
+            "test_fpr": float(truncate_value(test_metrics[4]) or "0.0"),
+            "test_fnr": float(truncate_value(test_metrics[5]) or "0.0"),
+            "testing_time_s": int(round(test_metrics[6])),
         })
 
     if training_time is not None:
-        result["training_time_s"] = float(training_time)
+        result["training_time_s"] = int(round(training_time))
 
     return [result]
 
