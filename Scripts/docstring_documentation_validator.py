@@ -380,6 +380,21 @@ def analyze_file(path: str) -> Dict[str, List[Dict[str, Any]]]:
     return {"missing": visitor.missing, "fixed": visitor.fixed}  # Return the lists of missing and fixed docstrings
 
 
+def write_report(report: Dict[str, Any], out_path: str):
+    """
+    Write the report to a JSON file.
+
+    :param report: The report dictionary
+    :param out_path: The output file path
+    :return: None
+    """
+    
+    verbose_output(true_string=f"{BackgroundColors.GREEN}Writing report to: {BackgroundColors.CYAN}{out_path}{Style.RESET_ALL}")  # Output the verbose message
+    
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)  # Ensure the output directory exists
+    
+    with open(out_path, "w", encoding="utf-8") as fh:  # Open file for writing with UTF-8 encoding
+        json.dump(report, fh, indent=4)  # Write the report as formatted JSON
 
 
 def verify_filepath_exists(filepath):
