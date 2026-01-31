@@ -358,6 +358,21 @@ def extract_parameters(lines: List[str]):
     return param_lines, param_names  # Return the parameter lines and names
 
 
+def extract_return_line(lines: List[str]) -> str | None:
+    """
+    Extract the return line from the docstring.
+
+    :param lines: List of lines from the docstring
+    :return: The return line string or None if not present
+    """
+
+    for line in lines:  # Iterate over the lines
+        if line.strip().startswith(":return:"):  # If the line starts with ":return:"
+            return line.strip()  # Return the return line
+
+    return None  # Return None if no return line is found
+
+
 def verbose_output(true_string="", false_string=""):
     """
     Outputs a message if the VERBOSE constant is set to True.
