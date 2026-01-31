@@ -299,6 +299,21 @@ def verbose_output(true_string="", false_string=""):
         print(false_string)  # Output the false statement string
 
 
+def is_ignored(path: str) -> bool:
+    """
+    Determines whether a given path should be ignored based on the IGNORE_DIRS set.
+
+    :param path: Path to a file or directory
+    :return: True if any part of the path matches a directory in IGNORE_DIRS, False otherwise
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Verifying if the path should be ignored: {BackgroundColors.CYAN}{path}{Style.RESET_ALL}"
+    )  # Output the verbose message
+    
+    parts = set(Path(path).parts)  # Split the path into its components
+    return bool(parts.intersection(IGNORE_DIRS))  # Return True if any part is in IGNORE_DIRS
+
 
 def verify_filepath_exists(filepath):
     """
