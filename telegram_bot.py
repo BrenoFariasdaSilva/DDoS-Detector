@@ -326,7 +326,9 @@ def send_telegram_message(bot, messages, condition=True):
     :return: None
     """
 
-    if condition and bot.TELEGRAM_BOT_TOKEN and bot.CHAT_ID:  # If condition met and Telegram is configured
+    bot_token = getattr(bot, "TELEGRAM_BOT_TOKEN", None) if bot is not None else None  # Get bot token
+    chat_id_val = getattr(bot, "CHAT_ID", None) if bot is not None else None  # Get chat ID
+    if condition and bot is not None and bot_token and chat_id_val:  # If condition met and Telegram is configured
         try:  # Try to send message
             if isinstance(messages, str):  # If a single string is provided
                 messages = [messages]  # Convert it to a list
