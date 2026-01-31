@@ -397,7 +397,7 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
         f1_fold = f1_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
         cv_f1s.append(f1_fold)  # Calculate and store metrics
         fold_elapsed = time.time() - fold_start
-        send_telegram_message(TELEGRAM_BOT, f"Finished CV fold {fold_idx}/{cv_folds} for n_components={n_components} in {int(fold_elapsed)}s with F1: {truncate_value(f1_fold)}")
+        send_telegram_message(TELEGRAM_BOT, f"Finished CV fold {fold_idx}/{cv_folds} for n_components={n_components} in {calculate_execution_time(fold_start, time.time())} with F1: {truncate_value(f1_fold)}")
 
     cv_acc_mean = np.mean(cv_accs)  # Mean CV metrics
     cv_prec_mean = np.mean(cv_precs)  # Mean CV metrics
@@ -405,7 +405,7 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
     cv_f1_mean = np.mean(cv_f1s)  # Mean CV metrics
 
     total_elapsed = time.time() - start_total
-    send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} in {int(total_elapsed)}s with CV F1: {truncate_value(cv_f1_mean)}")
+    send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} in {calculate_execution_time(start_total, time.time())} with CV F1: {truncate_value(cv_f1_mean)}")
 
     cv_acc_mean = np.mean(cv_accs)  # Mean CV metrics
     cv_prec_mean = np.mean(cv_precs)  # Mean CV metrics
@@ -875,7 +875,7 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
                 X_train, y_train, X_test, y_test, n_components, workers=1
             )  # Apply PCA and evaluate (single worker)
             comp_elapsed = time.time() - comp_start
-            send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} in {comp_elapsed:.2f}s")
+            send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} in {calculate_execution_time(comp_start, time.time())} with CV F1: {truncate_value(results['cv_f1_score'])}")
             all_results.append(results)  # Append results to the list
             print_pca_results(results) if VERBOSE else None
 
