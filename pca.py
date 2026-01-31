@@ -394,11 +394,10 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
         cv_recs.append(
             recall_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
         )  # Calculate and store metrics
-        cv_f1s.append(
-            f1_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
-        )  # Calculate and store metrics
+        f1_fold = f1_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
+        cv_f1s.append(f1_fold)  # Calculate and store metrics
         fold_elapsed = time.time() - fold_start
-        send_telegram_message(TELEGRAM_BOT, f"Finished CV fold {fold_idx}/{cv_folds} for n_components={n_components} in {int(fold_elapsed)}s")
+        send_telegram_message(TELEGRAM_BOT, f"Finished CV fold {fold_idx}/{cv_folds} for n_components={n_components} in {int(fold_elapsed)}s with F1: {truncate_value(f1_fold)}")
 
     cv_acc_mean = np.mean(cv_accs)  # Mean CV metrics
     cv_prec_mean = np.mean(cv_precs)  # Mean CV metrics
