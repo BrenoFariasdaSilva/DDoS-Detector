@@ -1292,6 +1292,8 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
     )
     start_time = datetime.datetime.now()  # Get the start time of the program
     
+    setup_telegram_bot()  # Setup Telegram bot if configured
+    
     send_telegram_message(TELEGRAM_BOT, [f"{BackgroundColors.GREEN}DDoS Detector main.py execution started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}"])
 
     sorted_datasets = sorted(DATASETS.items())  # Sort datasets alphabetically by keys
