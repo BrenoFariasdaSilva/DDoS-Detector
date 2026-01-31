@@ -317,6 +317,22 @@ def extract_description(lines: List[str]) -> str:
     return lines[0].strip()  # Return the first line as the description
 
 
+def needs_empty_line_after_description(lines: List[str]) -> bool:
+    """
+    Determine if an empty line is needed after the description.
+
+    :param lines: List of lines from the docstring
+    :return: True if an empty line is needed, False otherwise
+    """
+    
+    i = 1  # Start checking from the second line
+    
+    while i < len(lines) and not lines[i].strip():  # Skip empty lines
+        i += 1  # Move to the next line
+    
+    return i == 1  # Return True if the next line is not empty (i.e., no empty line after description)
+
+
 def verbose_output(true_string="", false_string=""):
     """
     Outputs a message if the VERBOSE constant is set to True.
