@@ -58,6 +58,7 @@ import datetime  # For getting the current date and time
 import glob  # For file pattern matching
 import json  # Import json for handling JSON strings within the CSV
 import lightgbm as lgb  # For LightGBM model
+import math  # For mathematical operations
 import numpy as np  # Import numpy for numerical operations
 import os  # For running a command in the terminal
 import pandas as pd  # Import pandas for data manipulation
@@ -1288,6 +1289,24 @@ def get_feature_subset(X_scaled, features, feature_names):
         return np.empty((X_scaled.shape[0], 0)), []  # Return empty array and empty list
 
 
+def truncate_value(value):
+    """
+    Format a numeric value to 4 decimal places, or return None if not possible.
+    
+    :param value: Numeric value
+    :return: Formatted string or None
+    """
+
+    try:  # Try to format the value
+        if value is None:  # If value is None
+            return None  # Return None
+        v = float(value)  # Convert to float
+        truncated = math.trunc(v * 10000) / 10000.0  # Truncate to 4 decimal places
+        return f"{truncated:.4f}"  # Return formatted string
+    except Exception:  # On failure
+        return None  # Return None
+
+
 def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_names, best_params=None, feature_set=None, dataset_csv_path=None):
     """
     Export model, scaler and metadata for stacking evaluations.
@@ -1408,7 +1427,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         fnr = 0.0  # Placeholder
 
     verbose_output(
-        f"{BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{acc:.4f}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{elapsed_time:.2f}s{Style.RESET_ALL}"
+        f"{BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed_time))}s{Style.RESET_ALL}"
     )  # Output result
 
     # Export trained model and scaler if dataset info is available
@@ -1419,7 +1438,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
     except Exception:
         pass
 
-    return (acc, prec, rec, f1, fpr, fnr, elapsed_time)  # Return the metrics tuple
+    return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
 
 
 def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
@@ -1463,10 +1482,10 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
         )  # Warning about simplification
 
     verbose_output(
-        f"{BackgroundColors.GREEN}Evaluation complete. Accuracy: {BackgroundColors.CYAN}{acc:.4f}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{elapsed_time:.2f}s{Style.RESET_ALL}"
+        f"{BackgroundColors.GREEN}Evaluation complete. Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed_time))}s{Style.RESET_ALL}"
     )  # Output the final result summary
 
-    return (acc, prec, rec, f1, fpr, fnr, elapsed_time)  # Return the metrics tuple
+    return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
 
 
 def get_hardware_specifications():
@@ -1578,6 +1597,11 @@ def save_stacking_results(csv_path, results_list):
     flat_rows = []
     for res in results_list:
         row = dict(res)
+
+        # Truncate metrics to 4 decimal places
+        for metric in ["accuracy", "precision", "recall", "f1_score", "fpr", "fnr"]:
+            if metric in row and row[metric] is not None:
+                row[metric] = truncate_value(row[metric])
 
         # Serialize list-like fields into JSON strings for CSV stability
         if "features_list" in row and not isinstance(row["features_list"], str):
@@ -1951,13 +1975,13 @@ def evaluate_on_dataset(
                     "n_features": X_train_subset.shape[1],
                     "n_samples_train": len(y_train),
                     "n_samples_test": len(y_test),
-                    "accuracy": round(acc, 4),
-                    "precision": round(prec, 4),
-                    "recall": round(rec, 4),
-                    "f1_score": round(f1, 4),
-                    "fpr": round(fpr, 4),
-                    "fnr": round(fnr, 4),
-                    "elapsed_time_s": round(elapsed, 2),
+                    "accuracy": truncate_value(acc),
+                    "precision": truncate_value(prec),
+                    "recall": truncate_value(rec),
+                    "f1_score": truncate_value(f1),
+                    "fpr": truncate_value(fpr),
+                    "fnr": truncate_value(fnr),
+                    "elapsed_time_s": int(round(elapsed)),
                     "cv_method": f"StratifiedKFold(n_splits=10)",
                     "top_features": json.dumps(subset_feature_names),
                     "rfe_ranking": None,
@@ -1965,9 +1989,9 @@ def evaluate_on_dataset(
                     "features_list": subset_feature_names,
                 }  # Prepare result entry
                 all_results[(name, model_name)] = result_entry  # Store result with key
-                send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} in {int(elapsed)}s with F1: {f1:.4f}")
+                send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} in {int(elapsed)}s with F1: {truncate_value(f1)}")
                 print(
-                    f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{metrics[0]:.4f}{Style.RESET_ALL}"
+                    f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(metrics[0])}{Style.RESET_ALL}"
                 )  # Output accuracy
                 progress_bar.update(1)  # Update progress after each model
 
@@ -2003,13 +2027,13 @@ def evaluate_on_dataset(
             "n_features": X_train_subset.shape[1],
             "n_samples_train": len(y_train),
             "n_samples_test": len(y_test),
-            "accuracy": round(float(s_acc), 4),
-            "precision": round(float(s_prec), 4),
-            "recall": round(float(s_rec), 4),
-            "f1_score": round(float(s_f1), 4),
-            "fpr": round(float(s_fpr), 4),
-            "fnr": round(float(s_fnr), 4),
-            "elapsed_time_s": round(s_elapsed, 2),
+            "accuracy": truncate_value(s_acc),
+            "precision": truncate_value(s_prec),
+            "recall": truncate_value(s_rec),
+            "f1_score": truncate_value(s_f1),
+            "fpr": truncate_value(s_fpr),
+            "fnr": truncate_value(s_fnr),
+            "elapsed_time_s": int(round(s_elapsed)),
             "cv_method": f"StratifiedKFold(n_splits=10)",
             "top_features": json.dumps(subset_feature_names),
             "rfe_ranking": None,
@@ -2017,9 +2041,9 @@ def evaluate_on_dataset(
             "features_list": subset_feature_names,
         }  # Prepare stacking result entry
         all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store result with key
-        send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier in {int(s_elapsed)}s with F1: {s_f1:.4f}")
+        send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier in {int(s_elapsed)}s with F1: {truncate_value(s_f1)}")
         print(
-            f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{stacking_metrics[0]:.4f}{Style.RESET_ALL}"
+            f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{truncate_value(stacking_metrics[0])}{Style.RESET_ALL}"
         )  # Output accuracy
         progress_bar.update(1)  # Update progress after stacking
         current_combination += 1
@@ -2271,17 +2295,17 @@ def main():
                                         f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Feature Set: {BackgroundColors.CYAN}{feature_set}{BackgroundColors.GREEN} | Model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
                                     )
                                     print(f"  {BackgroundColors.YELLOW}Accuracy:{Style.RESET_ALL}")
-                                    print(f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[0]:.4f} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[0]:.4f} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[0]:.4f} | {BackgroundColors.CYAN}Improvement: {acc_improvement:+.2f}%{Style.RESET_ALL}")
+                                    print(f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[0])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[0])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[0])} | {BackgroundColors.CYAN}Improvement: {acc_improvement:+.2f}%{Style.RESET_ALL}")
                                     print(f"  {BackgroundColors.YELLOW}Precision:{Style.RESET_ALL}")
-                                    print(f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[1]:.4f} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[1]:.4f} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[1]:.4f} | {BackgroundColors.CYAN}Improvement: {prec_improvement:+.2f}%{Style.RESET_ALL}")
+                                    print(f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[1])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[1])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[1])} | {BackgroundColors.CYAN}Improvement: {prec_improvement:+.2f}%{Style.RESET_ALL}")
                                     print(f"  {BackgroundColors.YELLOW}Recall:{Style.RESET_ALL}")
-                                    print(f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[2]:.4f} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[2]:.4f} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[2]:.4f} | {BackgroundColors.CYAN}Improvement: {rec_improvement:+.2f}%{Style.RESET_ALL}")
+                                    print(f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[2])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[2])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[2])} | {BackgroundColors.CYAN}Improvement: {rec_improvement:+.2f}%{Style.RESET_ALL}")
                                     print(f"  {BackgroundColors.YELLOW}F1-Score:{Style.RESET_ALL}")
-                                    print(f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[3]:.4f} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[3]:.4f} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[3]:.4f} | {BackgroundColors.CYAN}Improvement: {f1_improvement:+.2f}%{Style.RESET_ALL}")
+                                    print(f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[3])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[3])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[3])} | {BackgroundColors.CYAN}Improvement: {f1_improvement:+.2f}%{Style.RESET_ALL}")
                                     print(f"  {BackgroundColors.YELLOW}FPR (lower is better):{Style.RESET_ALL}")
-                                    print(f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[4]:.4f} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[4]:.4f} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[4]:.4f} | {BackgroundColors.CYAN}Change: {fpr_improvement:+.2f}%{Style.RESET_ALL}")
+                                    print(f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[4])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[4])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[4])} | {BackgroundColors.CYAN}Change: {fpr_improvement:+.2f}%{Style.RESET_ALL}")
                                     print(f"  {BackgroundColors.YELLOW}FNR (lower is better):{Style.RESET_ALL}")
-                                    print(f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[5]:.4f} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[5]:.4f} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[5]:.4f} | {BackgroundColors.CYAN}Change: {fnr_improvement:+.2f}%{Style.RESET_ALL}")
+                                    print(f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[5])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[5])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[5])} | {BackgroundColors.CYAN}Change: {fnr_improvement:+.2f}%{Style.RESET_ALL}")
                                     print(f"  {BackgroundColors.YELLOW}Training Time (seconds, lower is better):{Style.RESET_ALL}")
                                     print(f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[6]:.2f}s | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[6]:.2f}s | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[6]:.2f}s | {BackgroundColors.CYAN}Change: {time_improvement:+.2f}%{Style.RESET_ALL}\n")
                                     
