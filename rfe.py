@@ -1281,31 +1281,74 @@ def run_rfe(csv_path):
         run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters)  # Run RFE with CV
 
 
-def calculate_execution_time(start_time, finish_time):
+def calculate_execution_time(start_time, finish_time=None):
     """
-    Calculates the execution time between start and finish times and formats it dynamically.
+    Calculates the execution time and returns a human-readable string.
 
-    :param start_time: The start datetime object
-    :param finish_time: The finish datetime object
-    :return: String formatted with appropriate units (s, m, h, d) representing the execution time
+    Accepts either:
+    - Two datetimes/timedeltas: `calculate_execution_time(start, finish)`
+    - A single timedelta or numeric seconds: `calculate_execution_time(delta)`
+    - Two numeric timestamps (seconds): `calculate_execution_time(start_s, finish_s)`
+
+    Returns a string like "1h 2m 3s".
     """
 
-    delta = finish_time - start_time  # Calculate the time difference
-    total_seconds = delta.total_seconds()  # Get total seconds
+    def _to_seconds(obj):  # Convert various time-like objects to seconds
+        if obj is None:  # None can't be converted
+            return None  # Signal failure to convert
+        if isinstance(obj, (int, float)):  # Already numeric (seconds or timestamp)
+            return float(obj)  # Return as float seconds
+        if hasattr(obj, "total_seconds"):  # Timedelta-like objects
+            try:  # Attempt to call total_seconds()
+                return float(obj.total_seconds())  # Use the total_seconds() method
+            except Exception:
+                pass  # Fallthrough on error
+        if hasattr(obj, "timestamp"):  # Datetime-like objects
+            try:  # Attempt to call timestamp()
+                return float(obj.timestamp())  # Use timestamp() to get seconds since epoch
+            except Exception:
+                pass  # Fallthrough on error
+        return None  # Couldn't convert
 
-    days = int(total_seconds // 86400)  # Calculate days
-    hours = int((total_seconds % 86400) // 3600)  # Calculate hours
-    minutes = int((total_seconds % 3600) // 60)  # Calculate minutes
-    seconds = int(total_seconds % 60)  # Calculate seconds
+    if finish_time is None:  # Single-argument mode: start_time already represents duration or seconds
+        total_seconds = _to_seconds(start_time)  # Try to convert provided value to seconds
+        if total_seconds is None:  # Conversion failed
+            try:  # Attempt numeric coercion
+                total_seconds = float(start_time)  # Attempt numeric coercion
+            except Exception:
+                total_seconds = 0.0  # Fallback to zero
+    else:  # Two-argument mode: Compute difference finish_time - start_time
+        st = _to_seconds(start_time)  # Convert start to seconds if possible
+        ft = _to_seconds(finish_time)  # Convert finish to seconds if possible
+        if st is not None and ft is not None:  # Both converted successfully
+            total_seconds = ft - st  # Direct numeric subtraction
+        else:  # Fallback to other methods
+            try:  # Attempt to subtract (works for datetimes/timedeltas)
+                delta = finish_time - start_time  # Try subtracting (works for datetimes/timedeltas)
+                total_seconds = float(delta.total_seconds())  # Get seconds from the resulting timedelta
+            except Exception:  # Subtraction failed
+                try:  # Final attempt: Numeric coercion
+                    total_seconds = float(finish_time) - float(start_time)  # Final numeric coercion attempt
+                except Exception:  # Numeric coercion failed
+                    total_seconds = 0.0  # Fallback to zero on failure
 
-    if days > 0:  # If there are days
-        return f"{days}d {hours}h {minutes}m {seconds}s"  # Format with days, hours, minutes, seconds
-    elif hours > 0:  # If there are hours
-        return f"{hours}h {minutes}m {seconds}s"  # Format with hours, minutes, seconds
-    elif minutes > 0:  # If there are minutes
-        return f"{minutes}m {seconds}s"  # Format with minutes and seconds
-    else:  # Only seconds
-        return f"{seconds}s"  # Format with seconds
+    if total_seconds is None:  # Ensure a numeric value
+        total_seconds = 0.0  # Default to zero
+    if total_seconds < 0:  # Normalize negative durations
+        total_seconds = abs(total_seconds)  # Use absolute value
+
+    days = int(total_seconds // 86400)  # Compute full days
+    hours = int((total_seconds % 86400) // 3600)  # Compute remaining hours
+    minutes = int((total_seconds % 3600) // 60)  # Compute remaining minutes
+    seconds = int(total_seconds % 60)  # Compute remaining seconds
+
+    if days > 0:  # Include days when present
+        return f"{days}d {hours}h {minutes}m {seconds}s"  # Return formatted days+hours+minutes+seconds
+    if hours > 0:  # Include hours when present
+        return f"{hours}h {minutes}m {seconds}s"  # Return formatted hours+minutes+seconds
+    if minutes > 0:  # Include minutes when present
+        return f"{minutes}m {seconds}s"  # Return formatted minutes+seconds
+    return f"{seconds}s"  # Fallback: only seconds
 
 
 def play_sound():
