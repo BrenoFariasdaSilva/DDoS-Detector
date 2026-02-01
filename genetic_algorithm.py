@@ -2349,11 +2349,10 @@ def write_consolidated_csv(rows, output_dir):
         for col in df_out.columns:  # Iterate over all columns
             col_l = col.lower()  # Lowercase column name for checks
             if "time" in col_l or "elapsed" in col_l or col in ("hardware", "timestamp"):  # Skip time-related and special columns
-                # convert to int
                 df_out[col] = df_out[col].apply(lambda v: int(v) if pd.notnull(v) and str(v).isdigit() else v)  # Convert time-related columns to int if possible
             try:  # Try to truncate values in the column
                 df_out[col] = df_out[col].apply(lambda v: truncate_value(v) if pd.notnull(v) else v)  # Truncate numeric values
-            except Exception: # On any error
+            except Exception:  # On any error
                 pass  # Ignore errors and continue
 
         df_out.to_csv(csv_out, index=False, encoding="utf-8")  # Persist the consolidated CSV to disk
