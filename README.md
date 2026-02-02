@@ -8,7 +8,7 @@
   
 ---
 
-A machine learning framework for Distributed Denial of Service (DDoS) attack detection achieving, so far, 100% F1-score in the `01-12/DrDoS_DNS.csv`. Features hyperparameter optimization across nine classifiers (Random Forest, SVM, XGBoost, Logistic Regression, KNN, Nearest Centroid, Gradient Boosting, LightGBM, and MLP), WGAN-GP for synthetic data generation, multi-method feature selection (Genetic Algorithms, RFE, PCA), and stacking ensemble evaluation. Validated on CICDDoS2019 <!--@UPDATE--> benchmark datasets with full reproducibility and cross-platform support. The framework can also send progress updates and completion notifications (logs or short summaries) to a configured Telegram chat during long-running experiments.
+A machine learning framework for Distributed Denial of Service (DDoS) attack detection achieving **100% F1-score and 0% False Negative Rate (FNR)** on the `01-12/DrDoS_DNS.csv` subset of the CICDDoS2019 dataset, and demonstrating **100% F1-score** (multiple classifiers) on the `01-12/UDPLag.csv` subset. Features hyperparameter optimization across nine classifiers (Random Forest, SVM, XGBoost, Logistic Regression, KNN, Nearest Centroid, Gradient Boosting, LightGBM, and MLP), WGAN-GP for synthetic data generation, multi-method feature selection (Genetic Algorithms, RFE, PCA), and stacking ensemble evaluation. Validated on CICDDoS2019 benchmark datasets with full reproducibility and cross-platform support. The framework can also send progress updates and completion notifications (logs or short summaries) to a configured Telegram chat during long-running experiments.
   
 ---
 
