@@ -60,6 +60,8 @@ A machine learning framework for Distributed Denial of Service (DDoS) attack det
     - [Dependencies/Requirements](#dependenciesrequirements)
     - [Datasets](#datasets)
   - [Results](#results)
+    - [Feature Selection Performance (`DrDoS_DNS`)](#feature-selection-performance-drdos_dns)
+    - [Hyperparameter Optimization (`UDPLag`)](#hyperparameter-optimization-udplag)
   - [How to Cite?](#how-to-cite)
   - [Contributing](#contributing)
   - [Collaborators](#collaborators)
@@ -320,17 +322,37 @@ This repository includes a shell script `download_datasets.sh` (at the repositor
 
 ## Results
 
-**📊 For detailed experimental results and performance benchmarks, please see [RESULTS.md](RESULTS.md).**
+The following results demonstrate the framework's performance on the **CICDDoS2019** dataset, specifically the `DrDoS_DNS` and `UDPLag` subsets (01-12 capture).
 
-The Results document contains comprehensive outputs from all modules including:
-- Dataset preparation and cross-dataset compatibility analysis
-- Feature engineering results (Genetic Algorithm, RFE, PCA) with actual performance metrics
-- Model optimization results across nine classifiers (Random Forest, SVM, XGBoost, Logistic Regression, KNN, Nearest Centroid, Gradient Boosting, LightGBM, MLP)
-- Stacking ensemble evaluation results
-- Benchmark performance summary with detailed comparison tables
-- Methodological notes on reproducibility and deterministic methods
+### Feature Selection Performance (`DrDoS_DNS`)
 
-*Note: The results section has been moved to a separate file as it contains extensive technical details and experimental data that may not be of interest to all readers.*
+The table below compares three feature selection strategies using a **Random Forest** classifier. The **Genetic Algorithm (GA)** identified a subset of 36 features that achieved optimal performance (0% FNR) significantly faster than PCA (which required 48 components) and with better minority-class detection than RFE (which missed 0.46% of attacks).
+
+| Metric                        | RFE (10 Features) | PCA (48 Components) | Genetic Algorithm (36 Features) |
+| :---------------------------- | :---------------: | :-----------------: | :-----------------------------: |
+| **Accuracy**                  |      100.00%      |       100.00%       |           **100.00%**           |
+| **Precision**                 |      100.00%      |       100.00%       |           **100.00%**           |
+| **Recall**                    |      100.00%      |       100.00%       |           **100.00%**           |
+| **F1-Score**                  |      100.00%      |       100.00%       |           **100.00%**           |
+| **False Negative Rate (FNR)** |       0.46%       |        0.00%        |            **0.00%**            |
+| **Execution Time**            |      53.89s       |      2849.85s       |           **30.63s**            |
+
+### Hyperparameter Optimization (`UDPLag`)
+
+The table below summarizes the best configurations and performance metrics for various classifiers on the `UDPLag` subset, using the 30 features selected by the Genetic Algorithm. Several models achieved perfect classification on this highly imbalanced multi-class subset.
+
+| Model                   |  F1-Score   |  Accuracy   | Execution Time | Best Parameters (Partial)                     |
+| :---------------------- | :---------: | :---------: | :------------: | :-------------------------------------------- |
+| **Random Forest**       | **100.00%** | **100.00%** |     1.27s      | `n_estimators=50`, `max_depth=30`             |
+| **XGBoost**             | **100.00%** | **100.00%** |     0.46s      | `n_estimators=50`, `max_depth=10`             |
+| **LightGBM**            | **100.00%** | **100.00%** |     0.90s      | `n_estimators=50`, `num_leaves=31`            |
+| **Gradient Boosting**   | **100.00%** | **100.00%** |     55.04s     | `n_estimators=200`, `max_depth=7`             |
+| **KNN**                 | **100.00%** | **100.00%** |     60.49s     | `n_neighbors=9`, `weights=distance`           |
+| **MLP**                 |   99.98%    |   99.98%    |     7.18s      | `hidden_layer_sizes=[100]`, `activation=relu` |
+| **Logistic Regression** |   99.88%    |   99.89%    |     4.22s      | `C=100`, `solver=lbfgs`                       |
+| **Nearest Centroid**    |   99.50%    |   99.43%    |     0.22s      | `metric=manhattan`                            |
+
+**📊 For detailed experimental results, performance benchmarks, and feature listings, please see [RESULTS.md](RESULTS.md).**
 
 ## How to Cite?
 
