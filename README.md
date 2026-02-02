@@ -8,7 +8,7 @@
   
 ---
 
-A machine learning framework for Distributed Denial of Service (DDoS) attack detection achieving, so far, 100% F1-score in the `01-12/DrDoS_DNS.csv`. Features hyperparameter optimization across nine classifiers (Random Forest, SVM, XGBoost, Logistic Regression, KNN, Nearest Centroid, Gradient Boosting, LightGBM, and MLP), WGAN-GP for synthetic data generation, multi-method feature selection (Genetic Algorithms, RFE, PCA), and stacking ensemble evaluation. Validated on CICDDoS2019 <!--@UPDATE--> benchmark datasets with full reproducibility and cross-platform support.
+A machine learning framework for Distributed Denial of Service (DDoS) attack detection achieving, so far, 100% F1-score in the `01-12/DrDoS_DNS.csv`. Features hyperparameter optimization across nine classifiers (Random Forest, SVM, XGBoost, Logistic Regression, KNN, Nearest Centroid, Gradient Boosting, LightGBM, and MLP), WGAN-GP for synthetic data generation, multi-method feature selection (Genetic Algorithms, RFE, PCA), and stacking ensemble evaluation. Validated on CICDDoS2019 <!--@UPDATE--> benchmark datasets with full reproducibility and cross-platform support. The framework can also send progress updates and completion notifications (logs or short summaries) to a configured Telegram chat during long-running experiments.
   
 ---
 
@@ -92,7 +92,7 @@ The system is organized into several interconnected modules, each addressing a c
 
 **5. Utilities and Infrastructure**
 - **Logger** (`Logger.py`): Dual-channel logger preserving ANSI color codes for terminal output while maintaining clean log files.
-- **Telegram Bot** (`telegram_bot.py`): Notification system for long-running experiments, supporting message splitting for Telegram's character limits.
+- **Telegram Bot** (`telegram_bot.py`): Notification system for long-running experiments, supporting message splitting for Telegram's character limits. It can send progress updates, status summaries and completion notifications (logs or short reports) to a configured Telegram chat during script execution.
 - **Makefile**: Automation for all pipeline stages with cross-platform support (Windows, Linux, macOS) and detached execution modes.
 
 ### Key Technical Features
