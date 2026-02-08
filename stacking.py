@@ -2291,6 +2291,35 @@ def evaluate_on_dataset(
     return all_results  # Return dictionary of results
 
 
+def process_files_in_path(input_path, dataset_name):
+    """
+    Processes all files in a given input path including file discovery and dataset combination.
+
+    :param input_path: Directory path containing files to process
+    :param dataset_name: Name of the dataset being processed
+    :return: None
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Processing files in path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    if not verify_filepath_exists(input_path):  # If the input path does not exist
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Skipping missing path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
+        )  # Output skip message
+        return  # Exit function early
+
+    files_to_process = determine_files_to_process(CSV_FILE, input_path)  # Determine which files to process
+
+    local_dataset_name = dataset_name or get_dataset_name(input_path)  # Use provided dataset name or infer from path
+
+    combined_df, combined_file_for_features, files_to_process = combine_dataset_if_needed(files_to_process)  # Combine dataset files if needed
+
+    for file in files_to_process:  # For each file to process
+        process_single_file_evaluation(file, combined_df, combined_file_for_features)  # Process the single file evaluation
+
+
 def process_dataset_paths(dataset_name, paths):
     """
     Processes all paths for a given dataset.
