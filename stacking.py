@@ -2291,6 +2291,33 @@ def evaluate_on_dataset(
     return all_results  # Return dictionary of results
 
 
+def determine_files_to_process(csv_file, input_path):
+    """
+    Determines which files to process based on CLI override or directory scan.
+
+    :param csv_file: Optional CSV file path from CLI argument
+    :param input_path: Directory path to search for CSV files
+    :return: List of file paths to process
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Determining files to process from path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    if csv_file:  # If a specific CSV file is provided via CLI
+        try:  # Attempt to validate CSV file path
+            abs_csv = os.path.abspath(csv_file)  # Get absolute path of CSV file
+            abs_input = os.path.abspath(input_path)  # Get absolute path of input directory
+            if abs_csv.startswith(abs_input):  # If CSV file belongs to this input path
+                return [csv_file]  # Return list with single CSV file
+            else:  # CSV override does not belong to this path
+                return []  # Return empty list to skip this path
+        except Exception:  # If validation fails
+            return []  # Return empty list on error
+    else:  # No CLI override, scan directory for CSV files
+        return get_files_to_process(input_path, file_extension=".csv")  # Get list of CSV files to process
+
+
 def combine_dataset_if_needed(files_to_process):
     """
     Combines multiple dataset files into one if PROCESS_ENTIRE_DATASET is enabled.
