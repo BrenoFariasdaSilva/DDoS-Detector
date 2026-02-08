@@ -2291,6 +2291,43 @@ def evaluate_on_dataset(
     return all_results  # Return dictionary of results
 
 
+def load_and_preprocess_dataset(file, combined_df):
+    """
+    Loads and preprocesses a dataset file or uses combined dataframe.
+
+    :param file: File path to load or "combined" keyword
+    :param combined_df: Pre-combined dataframe (used if file == "combined")
+    :return: Tuple (df_cleaned, feature_names) or (None, None) if loading/preprocessing fails
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Loading and preprocessing dataset: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    if file == "combined":  # If using combined dataset
+        df_original = combined_df  # Use the pre-combined dataframe
+    else:  # Otherwise load from file
+        df_original = load_dataset(file)  # Load the original dataset
+
+    if df_original is None:  # If the dataset failed to load
+        verbose_output(
+            f"{BackgroundColors.RED}Failed to load dataset from: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
+        )  # Output the failure message
+        return (None, None)  # Return None tuple
+
+    df_cleaned = preprocess_dataframe(df_original)  # Preprocess the DataFrame
+
+    if df_cleaned is None or df_cleaned.empty:  # If the DataFrame is None or empty after preprocessing
+        print(
+            f"{BackgroundColors.RED}Dataset {BackgroundColors.CYAN}{file}{BackgroundColors.RED} empty after preprocessing. Skipping.{Style.RESET_ALL}"
+        )  # Output error message
+        return (None, None)  # Return None tuple
+
+    feature_names = df_cleaned.select_dtypes(include=np.number).iloc[:, :-1].columns.tolist()  # Get numeric feature names excluding target
+
+    return (df_cleaned, feature_names)  # Return cleaned dataframe and feature names
+
+
 def prepare_models_with_hyperparameters(file_path):
     """
     Prepares base models and applies hyperparameter optimization results if available.
