@@ -21,13 +21,13 @@ Usage:
     1. Configure the constants in the CONFIG section (FILE_PATH, START_FUNCTION, END_FUNCTION, COMMIT_PREFIX).
     2. IMPORTANT: Make a backup or work on a test branch first.
     3. Execute the script via Makefile or Python:
-        $ make run   or   $ python function_committer.py
+        $ make run   or   $ python functions_committer.py
     4. The script will create one Git commit per function with descriptive messages.
 
 Outputs:
     - Modified Python file with reformatted function separators
     - Individual Git commits for each function between the markers
-    - Execution log in ./Logs/function_committer.log
+    - Execution log in ./Logs/functions_committer.log
 
 TODOs:
     - Add CLI argument parsing for dynamic configuration
