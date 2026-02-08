@@ -140,6 +140,33 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def extract_functions_between(text, start_name, end_name):
+    """
+    Extracts all top-level functions between two specified function names.
+
+    :param text: The full text content of the Python file
+    :param start_name: The name of the first function to include
+    :param end_name: The name of the last function to include
+    :return: Tuple of (prefix_text, suffix_text, list_of_functions)
+             Each function in the list is a tuple: (name, code, start_pos, end_pos)
+    """
+
+    verbose_output(f"{BackgroundColors.GREEN}Extracting functions between {BackgroundColors.CYAN}{start_name}{BackgroundColors.GREEN} and {BackgroundColors.CYAN}{end_name}{Style.RESET_ALL}")
+    
+    pattern = r"^def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(.*?\):.*?(?=^def\s|\Z)"  # Regex pattern for top-level defs
+    matches = list(re.finditer(pattern, text, flags=re.DOTALL | re.MULTILINE))  # Find all matches
+    funcs = [(m.group(1), m.group(0), m.start(), m.end()) for m in matches]  # Extract function details
+    start_idx = next(i for i, f in enumerate(funcs) if f[0] == start_name)  # Find start function index
+    end_idx = next(i for i, f in enumerate(funcs) if f[0] == end_name)  # Find end function index
+    selected = funcs[start_idx:end_idx + 1]  # Get all functions in range (inclusive)
+    prefix = text[:selected[0][2]]  # Text before the first selected function
+    suffix = text[selected[-1][3]:]  # Text after the last selected function
+    
+    verbose_output(f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{len(selected)}{BackgroundColors.GREEN} functions between markers{Style.RESET_ALL}")
+    
+    return prefix, suffix, selected  # Return the components
+
+
 def write_file(path, content):
     """
     Writes content to a file with UTF-8 encoding and ensures it ends with exactly one empty line.
