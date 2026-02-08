@@ -2291,6 +2291,52 @@ def evaluate_on_dataset(
     return all_results  # Return dictionary of results
 
 
+def process_single_file_evaluation(file, combined_df, combined_file_for_features):
+    """
+    Processes evaluation for a single file including feature loading, model preparation, and evaluation.
+
+    :param file: File path to process
+    :param combined_df: Combined dataframe (used if file == "combined")
+    :param combined_file_for_features: File to use for feature selection metadata
+    :return: None
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Starting single file evaluation for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    print_file_processing_header(file)  # Print formatted header
+
+    file_for_features = combined_file_for_features if file == "combined" else file  # Determine which file to use for feature selection metadata
+    ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
+        file_for_features
+    )  # Load feature selection results
+
+    df_original_cleaned, feature_names = load_and_preprocess_dataset(file, combined_df)  # Load and preprocess the dataset
+
+    if df_original_cleaned is None:  # If loading or preprocessing failed
+        return  # Exit function early
+
+    base_models, hp_params_map = prepare_models_with_hyperparameters(file)  # Prepare base models with hyperparameters
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[1/3] Evaluating on ORIGINAL data{Style.RESET_ALL}"
+    )  # Print progress message
+    results_original = evaluate_on_dataset(
+        file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
+        rfe_selected_features, base_models, data_source_label="Original", hyperparams_map=hp_params_map
+    )  # Evaluate on original data
+
+    original_results_list = list(results_original.values())  # Convert results dict to list
+    save_stacking_results(file, original_results_list)  # Save original results to CSV
+
+    if TEST_DATA_AUGMENTATION:  # If data augmentation testing is enabled
+        process_augmented_data_evaluation(
+            file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
+            rfe_selected_features, base_models, hp_params_map, results_original
+        )  # Process augmented data evaluation workflow
+
+
 def process_files_in_path(input_path, dataset_name):
     """
     Processes all files in a given input path including file discovery and dataset combination.
