@@ -84,6 +84,11 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
+FILE_PATH = Path("./README.md")  # Path to the target README file
+START_SECTION = ""  # Name of the first section to include
+END_SECTION = ""  # Name of the last section to include
+COMMIT_PREFIX = "DOCS: Adding the"  # Prefix for Git commit messages
+SECTION_SEPARATOR = "\n\n"  # Standardized separator between sections (2 newlines -> 1 empty line)
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
