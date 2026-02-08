@@ -366,6 +366,33 @@ def get_dataset_name(input_path):
     return dataset_name  # Return the dataset name
 
 
+def process_single_file(f):
+    """
+    Process a single dataset file: load, preprocess, and extract target and features.
+
+    :param f: Path to the dataset CSV file
+    :return: Tuple (df_clean, target_col, feat_cols) or None if invalid
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{f}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    df = load_dataset(f)  # Load the dataset from the file
+    if df is None:  # If loading failed
+        return None  # Return None
+    df_clean = preprocess_dataframe(df)  # Preprocess the dataframe
+    if df_clean is None or df_clean.empty:  # If preprocessing failed or dataframe is empty
+        return None  # Return None
+
+    target_col = df_clean.columns[-1]  # Get the last column as target
+    feat_cols = [c for c in df_clean.columns[:-1] if pd.api.types.is_numeric_dtype(df_clean[c])]  # Get numeric feature columns
+    if not feat_cols:  # If no numeric features
+        return None  # Return None
+
+    return (df_clean, target_col, feat_cols)  # Return the processed data
+
+
 def handle_target_column_consistency(target_col_name, this_target, f, df_clean):
     """
     Handle target column consistency by renaming if necessary.
