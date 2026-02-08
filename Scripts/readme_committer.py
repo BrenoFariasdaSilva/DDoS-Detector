@@ -141,6 +141,38 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def commit_whole_section(name, content, prefix, suffix, current_body, commit_count):
+    """
+    Commits an entire section as a single commit when it contains no subsections.
+
+    This function handles sections that do not have level 3 headers (###) by committing
+    the entire section content at once. This is the simpler case where no subsection
+    splitting is needed.
+
+    :param name: The name of the section being committed
+    :param content: The full content of the section including header and body
+    :param prefix: Text before all selected sections in the document
+    :param suffix: Text after all selected sections in the document
+    :param current_body: The current accumulated body content being built
+    :param commit_count: Current commit counter value
+    :return: Tuple of (updated_current_body, updated_commit_count)
+    """
+
+    content = content.rstrip("\n")  # Remove trailing blank lines from the section content
+
+    current_body = current_body + content + SECTION_SEPARATOR if current_body else content + SECTION_SEPARATOR  # Add the section to the document body
+
+    new_content = prefix + current_body + suffix  # Combine prefix, current body, and suffix
+    write_file(FILE_PATH, new_content)  # Write the updated content to the file
+
+    commit_count += 1  # Increment the commit counter
+    verbose_output(f"{BackgroundColors.BOLD}[{BackgroundColors.YELLOW}{commit_count}{BackgroundColors.BOLD}]{Style.RESET_ALL} {BackgroundColors.GREEN}Committing section: {BackgroundColors.CYAN}{name}{Style.RESET_ALL}")
+
+    run_git_commit(name)  # Commit the section
+
+    return current_body, commit_count  # Return the updated body and commit count
+
+
 def process_all_sections(sections, prefix, suffix):
     """
     Processes all sections and commits them incrementally with their subsections.
