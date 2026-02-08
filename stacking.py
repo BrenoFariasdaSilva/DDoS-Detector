@@ -2291,6 +2291,29 @@ def evaluate_on_dataset(
     return all_results  # Return dictionary of results
 
 
+def extract_metrics_from_result(result):
+    """
+    Extracts metrics from a result dictionary into a list.
+
+    :param result: Result dictionary containing metric keys
+    :return: List of [accuracy, precision, recall, f1_score, fpr, fnr, elapsed_time_s]
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Extracting metrics from result dictionary...{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    return [
+        result.get("accuracy", 0),  # Get accuracy or default to 0
+        result.get("precision", 0),  # Get precision or default to 0
+        result.get("recall", 0),  # Get recall or default to 0
+        result.get("f1_score", 0),  # Get F1 score or default to 0
+        result.get("fpr", 0),  # Get false positive rate or default to 0
+        result.get("fnr", 0),  # Get false negative rate or default to 0
+        result.get("elapsed_time_s", 0),  # Get elapsed time or default to 0
+    ]  # Return list of metric values
+
+
 def calculate_all_improvements(orig_metrics, merged_metrics):
     """
     Calculates improvement percentages for all metrics comparing original vs merged data.
