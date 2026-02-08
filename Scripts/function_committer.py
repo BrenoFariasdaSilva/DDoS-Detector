@@ -140,6 +140,46 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def validate_markers(start_name, end_name, text):
+    """
+    Validate that START_FUNCTION and END_FUNCTION are provided and exist in the file.
+
+    :param start_name: The name of the first function to include
+    :param end_name: The name of the last function to include
+    :param text: The full text content of the Python file
+    :return: True if validation passes, False otherwise
+    """
+    
+    verbose_output(f"{BackgroundColors.GREEN}Validating START_FUNCTION and END_FUNCTION markers...{Style.RESET_ALL}")
+
+    problems = []  # List to collect validation problems
+    if not start_name or not end_name:  # If either marker is not set
+        problems.append("Both START_FUNCTION and END_FUNCTION must be set to function names.")  # Add problem if markers are not set
+
+    pattern = r"^def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\("  # Regex pattern to find top-level function names
+    found_names = [m.group(1) for m in re.finditer(pattern, text, flags=re.MULTILINE)]  # Extract all top-level function names from the file
+
+    if start_name and start_name not in found_names:  # If START_FUNCTION is set but not found in the file
+        problems.append(f"START_FUNCTION '{start_name}' not found in {FILE_PATH.name}.")  # Add problem if START_FUNCTION is not found
+    if end_name and end_name not in found_names:  # If END_FUNCTION is set but not found in the file
+        problems.append(f"END_FUNCTION '{end_name}' not found in {FILE_PATH.name}.")  # Add problem if END_FUNCTION is not found
+
+    if problems:  # If there are any validation problems, print them and return False
+        print(f"{BackgroundColors.RED}Validation error with START/END function markers:{Style.RESET_ALL}")
+        for p in problems:  # Print each problem in the validation
+            print(f"{BackgroundColors.YELLOW}- {p}{Style.RESET_ALL}")
+
+        if found_names:  # If there are any top-level functions found, list them to help the user
+            print(f"{BackgroundColors.GREEN}Available top-level functions in the file:{BackgroundColors.CYAN} {', '.join(found_names)}{Style.RESET_ALL}")
+        else:  # If no top-level functions were found, inform the user
+            print(f"{BackgroundColors.YELLOW}No top-level functions were detected in {FILE_PATH.name}.{Style.RESET_ALL}")
+
+        print(f"{BackgroundColors.GREEN}Please set `START_FUNCTION` and `END_FUNCTION` to valid function names before running the script.{Style.RESET_ALL}")
+        return False  # Validation failed
+
+    return True  # Validation passed
+
+
 def run_git_commit(function_name: str):
     """
     Executes Git add and commit commands for the target file.
