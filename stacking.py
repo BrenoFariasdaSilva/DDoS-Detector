@@ -2291,6 +2291,76 @@ def evaluate_on_dataset(
     return all_results  # Return dictionary of results
 
 
+def generate_comparison_report(results_original, results_augmented, results_merged):
+    """
+    Generates and prints comparison report for data augmentation evaluation.
+
+    :param results_original: Dictionary of results from original data
+    :param results_augmented: Dictionary of results from augmented data
+    :param results_merged: Dictionary of results from merged (original+augmented) data
+    :return: List of comparison result entries for CSV export
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Generating data augmentation comparison report...{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
+    )  # Print separator line
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}DATA AUGMENTATION COMPARISON REPORT{Style.RESET_ALL}"
+    )  # Print report header
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
+    )  # Print separator line
+
+    comparison_results = []  # Initialize list for comparison results
+
+    for key in results_original.keys():  # Iterate through each result key
+        orig_result = results_original[key]  # Get original result
+        aug_result = results_augmented.get(key)  # Get augmented result (may be None)
+        merged_result = results_merged.get(key)  # Get merged result (may be None)
+
+        feature_set = orig_result["feature_set"]  # Extract feature set name
+        model_name = orig_result["model_name"]  # Extract model name
+        classifier_type = orig_result["classifier_type"]  # Extract classifier type
+
+        orig_metrics = extract_metrics_from_result(orig_result)  # Extract original metrics
+        aug_metrics = extract_metrics_from_result(aug_result) if aug_result else [0] * 7  # Extract augmented metrics or zeros
+        merged_metrics = extract_metrics_from_result(merged_result) if merged_result else [0] * 7  # Extract merged metrics or zeros
+
+        improvements = calculate_all_improvements(orig_metrics, merged_metrics)  # Calculate all improvements
+
+        print_model_comparison(feature_set, model_name, orig_metrics, aug_metrics, merged_metrics, improvements)  # Print detailed comparison
+
+        no_improvements = {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1_score": 0.0, "fpr": 0.0, "fnr": 0.0, "training_time": 0.0}  # Zero improvements for original and augmented entries
+
+        comparison_results.append(
+            build_comparison_result_entry(orig_result, feature_set, classifier_type, model_name, "Original", orig_metrics, no_improvements)
+        )  # Add original result entry
+
+        comparison_results.append(
+            build_comparison_result_entry(
+                orig_result, feature_set, classifier_type, model_name, "Augmented", aug_metrics, no_improvements,
+                n_features_override=aug_result["n_features"] if aug_result else 0,
+                n_samples_train_override=aug_result["n_samples_train"] if aug_result else 0,
+                n_samples_test_override=aug_result["n_samples_test"] if aug_result else 0
+            )
+        )  # Add augmented result entry
+
+        comparison_results.append(
+            build_comparison_result_entry(
+                orig_result, feature_set, classifier_type, model_name, "Original+Augmented", merged_metrics, improvements,
+                n_features_override=merged_result["n_features"] if merged_result else 0,
+                n_samples_train_override=merged_result["n_samples_train"] if merged_result else 0,
+                n_samples_test_override=merged_result["n_samples_test"] if merged_result else 0
+            )
+        )  # Add merged result entry with improvements
+
+    return comparison_results  # Return list of comparison results
+
+
 def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, results_original):
     """
     Handles complete augmented data evaluation workflow including loading, evaluating, and comparing results.
