@@ -141,6 +141,25 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def build_section_with_subsections(base_content, subsections, end_index):
+    """
+    Builds section content with subsections up to the specified index.
+
+    :param base_content: The base section content (header + intro)
+    :param subsections: List of tuples containing (subsection_name, subsection_content)
+    :param end_index: The index up to which subsections should be included (inclusive)
+    :return: String containing the section with all subsections up to end_index
+    """
+
+    section_content = base_content  # Start with the base section content
+    
+    for i in range(end_index):  # Iterate through subsections up to the specified index
+        sub_content = subsections[i][1].rstrip("\n")  # Get subsection content and remove trailing blank lines
+        section_content += "\n\n" + sub_content  # Add the subsection with proper spacing
+    
+    return section_content  # Return the constructed section content
+
+
 def execute_git_commit_for_subsection(subsection_name):
     """
     Executes Git add and commit commands for a subsection.
