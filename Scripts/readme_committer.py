@@ -141,6 +141,28 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def validate_markers(start_name, end_name, text):
+    """
+    Validate that START_SECTION and END_SECTION are provided and exist in the file.
+
+    :param start_name: The name of the first section to include
+    :param end_name: The name of the last section to include
+    :param text: The full text content of the README file
+    :return: True if validation passes, False otherwise
+    """
+    
+    verbose_output(f"{BackgroundColors.GREEN}Validating START_SECTION and END_SECTION markers...{Style.RESET_ALL}")
+
+    found_names = extract_section_names(text)  # Extract all level-2 section names from the file
+    problems = verify_markers_exist(start_name, end_name, found_names)  # Verify if the markers exist in the found names
+
+    if problems:  # If there are any validation problems, display them and return False
+        display_validation_errors(problems, found_names)  # Display validation errors and available sections
+        return False  # Validation failed
+
+    return True  # Validation passed
+
+
 def run_git_commit(section_name: str):
     """
     Executes Git add and commit commands for the target file.
