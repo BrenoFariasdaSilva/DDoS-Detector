@@ -141,6 +141,23 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def build_base_section_content(section_header, section_intro):
+    """
+    Builds the base section content including header and introductory text.
+
+    :param section_header: The section header (e.g., "## Section Name")
+    :param section_intro: The introductory text before subsections
+    :return: String containing the base section content
+    """
+
+    base_content = section_header  # Start with the section header
+    
+    if section_intro:  # If there is introductory text
+        base_content += "\n\n" + section_intro  # Add the intro with proper spacing
+    
+    return base_content  # Return the constructed base content
+
+
 def build_section_with_subsections(base_content, subsections, end_index):
     """
     Builds section content with subsections up to the specified index.
