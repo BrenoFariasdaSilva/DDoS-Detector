@@ -366,6 +366,30 @@ def get_dataset_name(input_path):
     return dataset_name  # Return the dataset name
 
 
+def handle_target_column_consistency(target_col_name, this_target, f, df_clean):
+    """
+    Handle target column consistency by renaming if necessary.
+
+    :param target_col_name: Current target column name (or None)
+    :param this_target: Target column name in this file
+    :param f: File path for warning message
+    :param df_clean: DataFrame to rename if needed
+    :return: Tuple (updated_target_col_name, updated_df_clean)
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Checking target column consistency for: {BackgroundColors.CYAN}{f}{Style.RESET_ALL} (target: {BackgroundColors.CYAN}{this_target}{Style.RESET_ALL})...{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    if target_col_name is None:  # If target column not set yet
+        target_col_name = this_target  # Set it to this target
+    elif this_target != target_col_name:  # If target column name differs
+        print(f"{BackgroundColors.YELLOW}Warning: target column name mismatch: {f} uses {this_target} while others use {target_col_name}. Trying to proceed by renaming.{Style.RESET_ALL}")  # Print warning
+        df_clean = df_clean.rename(columns={this_target: target_col_name})  # Rename the column
+
+    return (target_col_name, df_clean)  # Return updated values
+
+
 def intersect_features(common_features, feat_cols):
     """
     Intersect features with common features set.
