@@ -366,6 +366,28 @@ def get_dataset_name(input_path):
     return dataset_name  # Return the dataset name
 
 
+def combine_and_clean_dataframes(reduced_dfs):
+    """
+    Combine reduced dataframes, clean, and validate.
+
+    :param reduced_dfs: List of reduced dataframes
+    :return: Combined dataframe or None if empty
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Combining reduced dataframes and cleaning...{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    combined = pd.concat(reduced_dfs, ignore_index=True)  # Concatenate all reduced dataframes
+    combined = combined.replace([np.inf, -np.inf], np.nan).dropna()  # Replace inf with nan and drop na
+
+    if combined.empty:  # If combined dataframe is empty
+        print(f"{BackgroundColors.RED}Combined dataset is empty after alignment and NaN removal.{Style.RESET_ALL}")  # Print error
+        return None  # Return None
+
+    return combined  # Return the combined dataframe
+
+
 def combine_dataset_files(files_list):
     """
     Load, preprocess and combine multiple dataset CSVs into a single DataFrame.
