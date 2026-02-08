@@ -1,49 +1,57 @@
 """
 ================================================================================
-<PROJECT OR SCRIPT TITLE>
+Auto-Committer for Python Functions
 ================================================================================
 Author      : Breno Farias da Silva
-Created     : <YYYY-MM-DD>
+Created     : 2026-02-07
 Description :
-    <Provide a concise and complete overview of what this script does.>
-    <Mention its purpose, scope, and relevance to the larger project.>
+    Automates staged commits for functions between two markers inside a Python file.
+    This script reads a target Python file, extracts all functions between specified
+    start and end function names, removes them temporarily, and then re-adds them
+    one-by-one in reverse order (bottom to top), creating a Git commit for each.
 
     Key features include:
-        - <Feature 1 — e.g., automatic data loading and preprocessing>
-        - <Feature 2 — e.g., model training and evaluation>
-        - <Feature 3 — e.g., visualization or report generation>
-        - <Feature 4 — e.g., logging or notification system>
-        - <Feature 5 — e.g., integration with other modules or datasets>
+        - Reads and parses Python files to extract top-level function definitions
+        - Identifies functions between configurable start and end markers
+        - Removes all target functions and re-adds them incrementally
+        - Automates Git add, commit, and optionally push operations per function
+        - Standardizes function separators for consistent code formatting
 
 Usage:
-    1. <Explain any configuration steps before running, such as editing variables or paths.>
-    2. <Describe how to execute the script — typically via Makefile or Python.>
-            $ make <target>   or   $ python <script_name>.py
-    3. <List what outputs are expected or where results are saved.>
+    1. Configure the constants in the CONFIG section (FILE_PATH, START_FUNCTION, END_FUNCTION, COMMIT_PREFIX).
+    2. IMPORTANT: Make a backup or work on a test branch first.
+    3. Execute the script via Makefile or Python:
+        $ make run   or   $ python function_committer.py
+    4. The script will create one Git commit per function with descriptive messages.
 
 Outputs:
-    - <Output file or directory 1 — e.g., results.csv>
-    - <Output file or directory 2 — e.g., Feature_Analysis/plots/>
-    - <Output file or directory 3 — e.g., logs/output.txt>
+    - Modified Python file with reformatted function separators
+    - Individual Git commits for each function between the markers
+    - Execution log in ./Logs/function_committer.log
 
 TODOs:
-    - <Add a task or improvement — e.g., implement CLI argument parsing.>
-    - <Add another improvement — e.g., extend support to Parquet files.>
-    - <Add optimization — e.g., parallelize evaluation loop.>
-    - <Add robustness — e.g., error handling or data validation.>
+    - Add CLI argument parsing for dynamic configuration
+    - Implement support for nested function definitions
+    - Add dry-run mode to preview changes without committing
+    - Extend to support multiple file processing in batch
 
 Dependencies:
-    - Python >= <version>
-    - <Library 1 — e.g., pandas>
-    - <Library 2 — e.g., numpy>
-    - <Library 3 — e.g., scikit-learn>
-    - <Library 4 — e.g., matplotlib, seaborn, tqdm, colorama>
+    - Python >= 3.7
+    - re (built-in)
+    - subprocess (built-in)
+    - pathlib (built-in)
+    - colorama
+    - datetime (built-in)
+    - os (built-in)
+    - platform (built-in)
+    - sys (built-in)
 
 Assumptions & Notes:
-    - <List any key assumptions — e.g., last column is the target variable.>
-    - <Mention data format — e.g., CSV files only.>
-    - <Mention platform or OS-specific notes — e.g., sound disabled on Windows.>
-    - <Note on output structure or reusability.>
+    - Assumes functions are top-level definitions (no nested defs)
+    - Requires a working Git repository with proper configuration
+    - Functions are identified using regex pattern matching
+    - Separator between functions is standardized to 3 newlines (2 empty lines)
+    - Sound notification disabled on Windows platform
 """
 
 import atexit  # For playing a sound when the program finishes
@@ -245,8 +253,7 @@ def main():
         f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
     )  # Output the start and finish times
     print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.GR
-        EEN}Program finished.{Style.RESET_ALL}"
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
     )  # Output the end of the program message
     (
         atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
