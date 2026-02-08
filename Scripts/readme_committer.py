@@ -141,6 +141,46 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def commit_section_with_subsections(name, section_header, section_body, subsections, prefix, suffix, current_body, commit_count):
+    """
+    Commits a section that contains subsections by committing each subsection separately.
+
+    This function processes sections with level 3 headers (###) by committing each subsection
+    individually in order (top to bottom). The section header and any introductory text
+    before the first subsection are preserved with each subsection commit.
+
+    :param name: The name of the parent section
+    :param section_header: The reconstructed section header (e.g., "## Section Name")
+    :param section_body: The body content of the section without the header
+    :param subsections: List of tuples containing (subsection_name, subsection_content)
+    :param prefix: Text before all selected sections in the document
+    :param suffix: Text after all selected sections in the document
+    :param current_body: The current accumulated body content being built
+    :param commit_count: Current commit counter value
+    :return: Tuple of (updated_current_body, updated_commit_count)
+    """
+
+    print(f"{BackgroundColors.YELLOW}Section '{BackgroundColors.CYAN}{name}{BackgroundColors.YELLOW}' contains {BackgroundColors.CYAN}{len(subsections)}{BackgroundColors.YELLOW} subsections. Committing each separately...{Style.RESET_ALL}")
+
+    section_intro = extract_section_intro(section_body)  # Extract introductory text before the first subsection
+    base_section_content = build_base_section_content(section_header, section_intro)  # Build the base section content with header and intro
+    previous_sections_body = current_body  # Store the body content of all previously committed sections
+
+    for subsection_index, (subsection_name, subsection_content) in enumerate(subsections, start=1):  # Process each subsection in order (top to bottom)
+        current_section_content = build_section_with_subsections(base_section_content, subsections, subsection_index)  # Build section with all subsections up to current index
+        current_body = previous_sections_body + current_section_content + SECTION_SEPARATOR if previous_sections_body else current_section_content + SECTION_SEPARATOR  # Combine previous sections with current section
+        
+        new_content = prefix + current_body + suffix  # Combine prefix, current body, and suffix
+        write_file(FILE_PATH, new_content)  # Write the updated content to the file
+
+        commit_count += 1  # Increment the commit counter
+        verbose_output(f"{BackgroundColors.BOLD}[{BackgroundColors.YELLOW}{commit_count}{BackgroundColors.BOLD}]{Style.RESET_ALL} {BackgroundColors.GREEN}Committing subsection: {BackgroundColors.CYAN}{subsection_name}{BackgroundColors.GREEN} (from section {BackgroundColors.CYAN}{name}{BackgroundColors.GREEN}){Style.RESET_ALL}")
+
+        execute_git_commit_for_subsection(subsection_name)  # Execute Git add and commit for this subsection
+
+    return current_body, commit_count  # Return the updated body and commit count
+
+
 def commit_whole_section(name, content, prefix, suffix, current_body, commit_count):
     """
     Commits an entire section as a single commit when it contains no subsections.
