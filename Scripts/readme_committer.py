@@ -141,6 +141,28 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def execute_git_commit_for_subsection(subsection_name):
+    """
+    Executes Git add and commit commands for a subsection.
+
+    :param subsection_name: The name of the subsection being committed
+    :return: None
+    """
+
+    commit_msg = f"{COMMIT_PREFIX} {subsection_name} subsection to {FILE_PATH.name}"  # Create the commit message
+    
+    verbose_output(f"{BackgroundColors.GREEN}Running Git add for: {BackgroundColors.CYAN}{FILE_PATH}{Style.RESET_ALL}")
+    
+    absolute_file_path = FILE_PATH.resolve()  # Resolve FILE_PATH to an absolute path
+    git_dir = absolute_file_path.parent  # Get the directory containing the file
+    
+    subprocess.run(["git", "-C", str(git_dir), "add", str(FILE_PATH)], check=True)  # Stage the file
+    
+    verbose_output(f"{BackgroundColors.GREEN}Running Git commit with message: {BackgroundColors.CYAN}{commit_msg}{Style.RESET_ALL}")
+    
+    subprocess.run(["git", "-C", str(git_dir), "commit", "-m", commit_msg], check=True)  # Commit the changes
+
+
 def commit_section_with_subsections(name, section_header, section_body, subsections, prefix, suffix, current_body, commit_count):
     """
     Commits a section that contains subsections by committing each subsection separately.
