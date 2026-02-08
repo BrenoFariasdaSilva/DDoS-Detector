@@ -366,6 +366,30 @@ def get_dataset_name(input_path):
     return dataset_name  # Return the dataset name
 
 
+def create_reduced_dataframes(dfs, common_features, target_col_name):
+    """
+    Create reduced dataframes with only common features and target.
+
+    :param dfs: List of (f, df_clean)
+    :param common_features: List of common feature names
+    :param target_col_name: Name of the target column
+    :return: List of reduced dataframes
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Creating reduced dataframes with common features and target...{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    reduced_dfs = []  # Initialize list for reduced dataframes
+    for f, df_clean in dfs:  # Iterate over valid dataframes
+        cols_to_keep = [c for c in common_features if c in df_clean.columns]  # Get common features present in this df
+        cols_to_keep.append(target_col_name)  # Add the target column
+        reduced = df_clean.loc[:, cols_to_keep].copy()  # Create reduced dataframe
+        reduced_dfs.append(reduced)  # Add to list
+
+    return reduced_dfs  # Return the reduced dataframes
+
+
 def combine_and_clean_dataframes(reduced_dfs):
     """
     Combine reduced dataframes, clean, and validate.
