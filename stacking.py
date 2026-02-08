@@ -2291,6 +2291,54 @@ def evaluate_on_dataset(
     return all_results  # Return dictionary of results
 
 
+def build_comparison_result_entry(orig_result, feature_set, classifier_type, model_name, data_source, metrics, improvements, n_features_override=None, n_samples_train_override=None, n_samples_test_override=None):
+    """
+    Builds a single comparison result entry for CSV export.
+
+    :param orig_result: Original result dictionary for base metadata
+    :param feature_set: Name of the feature set
+    :param classifier_type: Type of classifier (e.g., 'Individual' or 'Stacking')
+    :param model_name: Name of the model
+    :param data_source: Data source label (e.g., 'Original', 'Augmented', 'Original+Augmented')
+    :param metrics: List of metrics [accuracy, precision, recall, f1, fpr, fnr, time]
+    :param improvements: Dictionary of improvement percentages
+    :param n_features_override: Override for n_features (optional)
+    :param n_samples_train_override: Override for n_samples_train (optional)
+    :param n_samples_test_override: Override for n_samples_test (optional)
+    :return: Dictionary containing comparison result entry
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Building comparison result entry for: {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}, data source: {BackgroundColors.CYAN}{data_source}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    return {
+        "dataset": orig_result["dataset"],  # Dataset name from original result
+        "feature_set": feature_set,  # Feature set name
+        "classifier_type": classifier_type,  # Classifier type
+        "model_name": model_name,  # Model name
+        "data_source": data_source,  # Data source label
+        "n_features": n_features_override if n_features_override is not None else orig_result["n_features"],  # Number of features
+        "n_samples_train": n_samples_train_override if n_samples_train_override is not None else orig_result["n_samples_train"],  # Training samples count
+        "n_samples_test": n_samples_test_override if n_samples_test_override is not None else orig_result["n_samples_test"],  # Test samples count
+        "accuracy": metrics[0],  # Accuracy metric
+        "precision": metrics[1],  # Precision metric
+        "recall": metrics[2],  # Recall metric
+        "f1_score": metrics[3],  # F1 score metric
+        "fpr": metrics[4],  # False positive rate
+        "fnr": metrics[5],  # False negative rate
+        "training_time": metrics[6],  # Training time in seconds
+        "accuracy_improvement": improvements.get("accuracy", 0.0),  # Accuracy improvement percentage
+        "precision_improvement": improvements.get("precision", 0.0),  # Precision improvement percentage
+        "recall_improvement": improvements.get("recall", 0.0),  # Recall improvement percentage
+        "f1_score_improvement": improvements.get("f1_score", 0.0),  # F1 score improvement percentage
+        "fpr_improvement": improvements.get("fpr", 0.0),  # FPR improvement percentage
+        "fnr_improvement": improvements.get("fnr", 0.0),  # FNR improvement percentage
+        "training_time_improvement": improvements.get("training_time", 0.0),  # Training time improvement percentage
+        "features_list": orig_result["features_list"],  # List of feature names used
+    }  # Return comparison result entry dictionary
+
+
 def generate_comparison_report(results_original, results_augmented, results_merged):
     """
     Generates and prints comparison report for data augmentation evaluation.
