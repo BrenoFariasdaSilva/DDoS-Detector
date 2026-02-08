@@ -2291,6 +2291,79 @@ def evaluate_on_dataset(
     return all_results  # Return dictionary of results
 
 
+def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, results_original):
+    """
+    Handles complete augmented data evaluation workflow including loading, evaluating, and comparing results.
+
+    :param file: Original file path
+    :param df_original_cleaned: Cleaned original dataframe
+    :param feature_names: List of feature names
+    :param ga_selected_features: Features selected by genetic algorithm
+    :param pca_n_components: Number of PCA components
+    :param rfe_selected_features: Features selected by RFE
+    :param base_models: Dictionary of base models
+    :param hp_params_map: Hyperparameters mapping
+    :param results_original: Results from original data evaluation
+    :return: None
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Processing augmented data evaluation for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    augmented_file = find_data_augmentation_file(file)  # Look for augmented data file
+
+    if augmented_file is None:  # If no augmented file found
+        print(
+            f"\n{BackgroundColors.YELLOW}No augmented data found for this file. Skipping augmentation comparison.{Style.RESET_ALL}"
+        )  # Print warning message
+        return  # Exit function early
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[2/3] Evaluating on AUGMENTED data{Style.RESET_ALL}"
+    )  # Print progress message
+
+    df_augmented = load_dataset(augmented_file)  # Load the augmented dataset
+
+    if df_augmented is None:  # If augmented dataset failed to load
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Failed to load augmented dataset. Skipping augmentation comparison.{Style.RESET_ALL}"
+        )  # Print warning message
+        return  # Exit function early
+
+    df_augmented_cleaned = preprocess_dataframe(df_augmented)  # Preprocess the augmented dataframe
+
+    if df_augmented_cleaned is None or df_augmented_cleaned.empty:  # If augmented dataframe is empty after preprocessing
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Augmented dataset empty after preprocessing. Skipping augmentation comparison.{Style.RESET_ALL}"
+        )  # Print warning message
+        return  # Exit function early
+
+    results_augmented = evaluate_on_dataset(
+        file, df_augmented_cleaned, feature_names, ga_selected_features, pca_n_components,
+        rfe_selected_features, base_models, data_source_label="Augmented", hyperparams_map=hp_params_map
+    )  # Evaluate on augmented data only
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[3/3] Evaluating on ORIGINAL + AUGMENTED data{Style.RESET_ALL}"
+    )  # Print progress message
+
+    df_merged = merge_original_and_augmented(df_original_cleaned, df_augmented_cleaned)  # Merge original and augmented dataframes
+
+    results_merged = evaluate_on_dataset(
+        file, df_merged, feature_names, ga_selected_features, pca_n_components,
+        rfe_selected_features, base_models, data_source_label="Original+Augmented", hyperparams_map=hp_params_map
+    )  # Evaluate on merged data
+
+    comparison_results = generate_comparison_report(results_original, results_augmented, results_merged)  # Generate and print comparison report
+
+    save_augmentation_comparison_results(file, comparison_results)  # Save comparison results to CSV
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Data augmentation comparison complete!{Style.RESET_ALL}"
+    )  # Print success message
+
+
 def print_file_processing_header(file):
     """
     Prints formatted header for file processing section.
