@@ -2291,6 +2291,35 @@ def evaluate_on_dataset(
     return all_results  # Return dictionary of results
 
 
+def prepare_models_with_hyperparameters(file_path):
+    """
+    Prepares base models and applies hyperparameter optimization results if available.
+
+    :param file_path: Path to the dataset file for loading hyperparameters
+    :return: Tuple (base_models, hp_params_map)
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Preparing models with hyperparameters for: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    base_models = get_models()  # Get the base models with default parameters
+
+    hp_params_map = {}  # Initialize empty hyperparameters mapping
+    hp_results_raw = extract_hyperparameter_optimization_results(file_path)  # Extract hyperparameter optimization results
+
+    if hp_results_raw:  # If results were found, extract the params mapping and apply
+        hp_params_map = {
+            k: (v.get("best_params") if isinstance(v, dict) else v) for k, v in hp_results_raw.items()
+        }  # Extract only the best_params mapping
+        base_models = apply_hyperparameters_to_models(hp_params_map, base_models)  # Apply hyperparameters to base models
+        verbose_output(
+            f"{BackgroundColors.GREEN}Applied hyperparameters from optimization results{Style.RESET_ALL}"
+        )  # Output the verbose message
+
+    return (base_models, hp_params_map)  # Return models and hyperparameters mapping
+
+
 def extract_metrics_from_result(result):
     """
     Extracts metrics from a result dictionary into a list.
