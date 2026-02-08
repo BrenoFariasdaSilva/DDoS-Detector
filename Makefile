@@ -191,6 +191,12 @@ imports_placement: dependencies
 	$(CLEAR_CMD)
 	$(call RUN_AND_LOG, ./Scripts/imports_placement.py $(ARGS))
 
+# README Committer
+readme_committer: dependencies
+	$(ENSURE_LOG_DIR)
+	$(CLEAR_CMD)
+	$(call RUN_AND_LOG, ./Scripts/readme_committer.py $(ARGS))
+
 # Find unused functions in the codebase
 unused_functions_finder: dependencies
 	$(ENSURE_LOG_DIR)
@@ -203,4 +209,4 @@ clean:
 	find . -type f -name '*.pyc' -delete || del /S /Q *.pyc 2>nul
 	find . -type d -name '__pycache__' -delete || rmdir /S /Q __pycache__ 2>nul
 
-.PHONY: all check-build clean comments_standardizer dataset_converter dataset_descriptor dependencies download_datasets fix-style function_order_validator function_committer generate_requirements genetic_algorithm hyperparameters_optimization imports_placement main pca rfe stacking telegram_bot unused_functions_finder wgangp
+.PHONY: all check-build clean comments_standardizer dataset_converter dataset_descriptor dependencies download_datasets fix-style function_order_validator function_committer generate_requirements genetic_algorithm hyperparameters_optimization imports_placement main pca rfe stacking telegram_bot readme_committer unused_functions_finder wgangp
