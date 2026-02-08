@@ -22,7 +22,7 @@ Usage:
     1. Configure the constants in the Configuration Constants section (FILE_PATH, START_SECTION, END_SECTION, COMMIT_PREFIX).
     2. IMPORTANT: Make a backup or work on a test branch first.
     3. Execute the script via Makefile or Python:
-            $ make run   or   $ python readme_committer.py
+            $ make run   or   $ python readme_sections_committer
     4. The script will create one Git commit per section with descriptive messages.
 
 Outputs:

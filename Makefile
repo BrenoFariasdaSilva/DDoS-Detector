@@ -195,7 +195,7 @@ imports_placement: dependencies
 readme_committer: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(call RUN_AND_LOG, ./Scripts/readme_committer.py $(ARGS))
+	$(call RUN_AND_LOG, ./Scripts/readme_sections_committer $(ARGS))
 
 # Find unused functions in the codebase
 unused_functions_finder: dependencies
