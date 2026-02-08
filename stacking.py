@@ -154,6 +154,7 @@ CACHE_PREFIX = "Cache_"  # Prefix for cache filenames
 MODEL_EXPORT_BASE = "Feature_Analysis/Stacking/Models/"
 SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, load exported models instead of retraining when available
 CSV_FILE = None  # Optional CSV override from CLI
+PROCESS_ENTIRE_DATASET = False  # Set to True to process all files in the dataset, False to only process the specified CSV_FILE
 
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
@@ -363,6 +364,40 @@ def get_dataset_name(input_path):
         dataset_name = os.path.basename(input_path)  # Fallback to basename if "Datasets" not in path
 
     return dataset_name  # Return the dataset name
+
+
+def combine_dataset_files(files_list):
+    """
+    Load, preprocess and combine multiple dataset CSVs into a single DataFrame.
+
+    :param files_list: List of dataset CSV file paths to combine
+    :return: Combined DataFrame with aligned features and target, or None if no compatible files found
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Combining dataset files: {BackgroundColors.CYAN}{files_list}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    processed_files = []  # Initialize list for processed file data
+    for f in files_list:  # Iterate over each file in the list
+        result = process_single_file(f)  # Process the single file
+        if result is not None:  # If processing succeeded
+            df_clean, target_col, feat_cols = result  # Unpack the result
+            processed_files.append((f, df_clean, target_col, feat_cols))  # Add to processed list
+
+    if not processed_files:  # If no files were processed successfully
+        print(f"{BackgroundColors.RED}No compatible files found to combine for dataset: {files_list}.{Style.RESET_ALL}")  # Print error
+        return None  # Return None
+
+    common_features, target_col_name, dfs = find_common_features_and_target(processed_files)  # Find common features and target
+    if common_features is None:  # If finding common features failed
+        print(f"{BackgroundColors.RED}No valid target column found.{Style.RESET_ALL}")  # Print error
+        return None  # Return None
+
+    reduced_dfs = create_reduced_dataframes(dfs, common_features, target_col_name)  # Create reduced dataframes
+    combined = combine_and_clean_dataframes(reduced_dfs)  # Combine and clean the dataframes
+
+    return combined, target_col_name  # Return the combined dataframe and target column name
 
 
 def find_data_augmentation_file(original_file_path):
@@ -2167,6 +2202,18 @@ def main():
                 input_path
             )  # Use provided dataset name or infer from path
 
+            combined_df = None
+            combined_file_for_features = None
+
+            if PROCESS_ENTIRE_DATASET and len(files_to_process) > 1:
+                result = combine_dataset_files(files_to_process)
+                if result is not None:
+                    combined_df, combined_target_col = result
+                    combined_file_for_features = files_to_process[0]
+                    files_to_process = ["combined"]
+                else:
+                    print(f"{BackgroundColors.YELLOW}Warning: Could not combine dataset files. Processing individually.{Style.RESET_ALL}")
+                    # files_to_process remains as is
             for file in files_to_process:  # For each file to process
                 print(
                     f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
@@ -2179,12 +2226,16 @@ def main():
                 )
 
                 # Load feature selection results (same for all runs)
+                file_for_features = combined_file_for_features if file == "combined" else file
                 ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
-                    file
+                    file_for_features
                 )  # Load feature selection results
 
                 # Load original dataset
-                df_original = load_dataset(file)  # Load the original dataset
+                if file == "combined":
+                    df_original = combined_df
+                else:
+                    df_original = load_dataset(file)  # Load the original dataset
 
                 if df_original is None:  # If the dataset failed to load
                     verbose_output(
