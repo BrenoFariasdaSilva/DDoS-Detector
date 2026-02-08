@@ -141,6 +141,22 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def extract_section_intro(section_body):
+    """
+    Extracts the introductory text from a section body before the first subsection.
+
+    :param section_body: The body content of the section without the header
+    :return: The introductory text, or empty string if no intro found
+    """
+
+    first_subsection_pos = section_body.find("###")  # Find the position of the first subsection marker
+    
+    if first_subsection_pos > 0:  # If there is content before the first subsection
+        return section_body[:first_subsection_pos].rstrip("\n")  # Extract and return the introductory text with trailing newlines removed
+    
+    return ""  # Return empty string if no introductory text exists
+
+
 def build_base_section_content(section_header, section_intro):
     """
     Builds the base section content including header and introductory text.
