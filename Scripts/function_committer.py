@@ -83,6 +83,11 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
+FILE_PATH = Path("./main.py")  # Path to the target Python file
+START_FUNCTION = ""  # Name of the first function to include
+END_FUNCTION = ""  # Name of the last function to include
+COMMIT_PREFIX = "FEAT: Adding the"  # Prefix for Git commit messages
+FUNCTION_SEPARATOR = "\n\n\n"  # Standardized separator between top-level functions (3 newlines -> 2 empty lines)
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
