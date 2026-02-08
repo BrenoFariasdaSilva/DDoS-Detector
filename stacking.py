@@ -2291,6 +2291,29 @@ def evaluate_on_dataset(
     return all_results  # Return dictionary of results
 
 
+def print_file_processing_header(file):
+    """
+    Prints formatted header for file processing section.
+
+    :param file: File path being processed
+    :return: None
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Printing file processing header for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+    )  # Print separator line
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
+    )  # Print file being processed
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+    )  # Print separator line
+
+
 def process_single_file_evaluation(file, combined_df, combined_file_for_features):
     """
     Processes evaluation for a single file including feature loading, model preparation, and evaluation.
