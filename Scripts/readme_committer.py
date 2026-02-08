@@ -141,6 +141,43 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def process_all_sections(sections, prefix, suffix):
+    """
+    Processes all sections and commits them incrementally with their subsections.
+
+    :param sections: List of section tuples (name, content, start_pos, end_pos)
+    :param prefix: Text before all selected sections in the document
+    :param suffix: Text after all selected sections in the document
+    :return: Total number of commits made
+    """
+
+    current_body = ""  # Initialize the current body content
+    total_sections = len(sections)  # Get the total number of sections
+    commit_count = 0  # Initialize commit counter
+
+    verbose_output(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{total_sections}{BackgroundColors.GREEN} sections...{Style.RESET_ALL}")
+    
+    for section_index, (name, content, *_) in enumerate(sections, start=1):  # Process each section in order (top to bottom)
+        section_header = f"## {name}"  # Construct the section header
+        section_body = content[len(section_header):].strip("\n")  # Extract the section body by removing the header
+
+        subsections = extract_subsections(section_body)  # Verify if the section contains level 3 subsections (###)
+
+        if subsections:  # If subsections are present, commit each subsection separately
+            current_body, commit_count = commit_section_with_subsections(
+                name, section_header, section_body, subsections,
+                prefix, suffix, current_body, commit_count
+            )
+        else:  # If no subsections are present, commit the entire section as one unit
+            current_body, commit_count = commit_whole_section(
+                name, content, prefix, suffix, current_body, commit_count
+            )
+            
+        time.sleep(3)  # Sleep for a short time between commits to ensure proper Git history
+    
+    return commit_count  # Return the total number of commits made
+
+
 def to_seconds(obj):
     """
     Converts various time-like objects to seconds.
