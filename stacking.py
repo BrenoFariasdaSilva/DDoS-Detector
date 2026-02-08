@@ -366,6 +366,27 @@ def get_dataset_name(input_path):
     return dataset_name  # Return the dataset name
 
 
+def intersect_features(common_features, feat_cols):
+    """
+    Intersect features with common features set.
+
+    :param common_features: Current common features set (or None)
+    :param feat_cols: Feature columns in this file
+    :return: Updated common features set
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Intersecting features for current file...{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    if common_features is None:  # If common features not set yet
+        common_features = set(feat_cols)  # Initialize with this file's features
+    else:  # Otherwise, intersect with existing common features
+        common_features &= set(feat_cols)  # Update common features
+
+    return common_features  # Return updated common features
+
+
 def find_common_features_and_target(processed_files):
     """
     Find common features and consistent target column from processed files.
