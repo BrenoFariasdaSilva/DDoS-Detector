@@ -141,6 +141,30 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def verify_markers_exist(start_name, end_name, found_names):
+    """
+    Verifies if start and end markers exist in the list of found section names.
+
+    :param start_name: The name of the first section to include
+    :param end_name: The name of the last section to include
+    :param found_names: List of section names found in the file
+    :return: List of validation problems, empty if no problems found
+    """
+
+    problems = []  # List to collect validation problems
+    
+    if not start_name or not end_name:  # If either marker is not set
+        problems.append("Both START_SECTION and END_SECTION must be set to section names.")  # Add problem if markers are not set
+
+    if start_name and start_name not in found_names:  # If START_SECTION is set but not found in the file
+        problems.append(f"START_SECTION '{start_name}' not found in {FILE_PATH.name}.")  # Add problem if START_SECTION is not found
+    
+    if end_name and end_name not in found_names:  # If END_SECTION is set but not found in the file
+        problems.append(f"END_SECTION '{end_name}' not found in {FILE_PATH.name}.")  # Add problem if END_SECTION is not found
+    
+    return problems  # Return the list of problems
+
+
 def display_validation_errors(problems, found_names):
     """
     Displays validation errors and available sections to help the user.
