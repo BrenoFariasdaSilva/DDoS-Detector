@@ -1,49 +1,58 @@
 """
 ================================================================================
-<PROJECT OR SCRIPT TITLE>
+Auto-Committer for README Sections
 ================================================================================
 Author      : Breno Farias da Silva
-Created     : <YYYY-MM-DD>
+Created     : 2026-02-07
 Description :
-    <Provide a concise and complete overview of what this script does.>
-    <Mention its purpose, scope, and relevance to the larger project.>
+    Automates staged commits for sections between two markers inside a README file.
+    This script reads a target README file, extracts all sections between specified
+    start and end section names (marked with level 2 headers), removes them temporarily,
+    and then re-adds them one-by-one in reverse order (bottom to top), creating a Git
+    commit for each section.
 
     Key features include:
-        - <Feature 1 — e.g., automatic data loading and preprocessing>
-        - <Feature 2 — e.g., model training and evaluation>
-        - <Feature 3 — e.g., visualization or report generation>
-        - <Feature 4 — e.g., logging or notification system>
-        - <Feature 5 — e.g., integration with other modules or datasets>
+        - Reads and parses README files to extract level 2 header sections (## Section Name)
+        - Identifies sections between configurable start and end markers
+        - Removes all target sections and re-adds them incrementally
+        - Automates Git add, commit, and optionally push operations per section
+        - Standardizes section separators for consistent documentation formatting
 
 Usage:
-    1. <Explain any configuration steps before running, such as editing variables or paths.>
-    2. <Describe how to execute the script — typically via Makefile or Python.>
-            $ make <target>   or   $ python <script_name>.py
-    3. <List what outputs are expected or where results are saved.>
+    1. Configure the constants in the Configuration Constants section (FILE_PATH, START_SECTION, END_SECTION, COMMIT_PREFIX).
+    2. IMPORTANT: Make a backup or work on a test branch first.
+    3. Execute the script via Makefile or Python:
+            $ make run   or   $ python readme_committer.py
+    4. The script will create one Git commit per section with descriptive messages.
 
 Outputs:
-    - <Output file or directory 1 — e.g., results.csv>
-    - <Output file or directory 2 — e.g., Feature_Analysis/plots/>
-    - <Output file or directory 3 — e.g., logs/output.txt>
+    - Modified README file with reformatted section separators
+    - Individual Git commits for each section between the markers
+    - Execution log in ./Logs/readme_committer.log
 
 TODOs:
-    - <Add a task or improvement — e.g., implement CLI argument parsing.>
-    - <Add another improvement — e.g., extend support to Parquet files.>
-    - <Add optimization — e.g., parallelize evaluation loop.>
-    - <Add robustness — e.g., error handling or data validation.>
+    - Add CLI argument parsing for dynamic configuration
+    - Implement support for different header levels (###, ####, etc.)
+    - Add dry-run mode to preview changes without committing
+    - Extend to support multiple file processing in batch
 
 Dependencies:
-    - Python >= <version>
-    - <Library 1 — e.g., pandas>
-    - <Library 2 — e.g., numpy>
-    - <Library 3 — e.g., scikit-learn>
-    - <Library 4 — e.g., matplotlib, seaborn, tqdm, colorama>
+    - Python >= 3.7
+    - re (built-in)
+    - subprocess (built-in)
+    - pathlib (built-in)
+    - colorama
+    - datetime (built-in)
+    - os (built-in)
+    - platform (built-in)
+    - sys (built-in)
 
 Assumptions & Notes:
-    - <List any key assumptions — e.g., last column is the target variable.>
-    - <Mention data format — e.g., CSV files only.>
-    - <Mention platform or OS-specific notes — e.g., sound disabled on Windows.>
-    - <Note on output structure or reusability.>
+    - Assumes sections are marked with ## (level 2 headers)
+    - Requires a working Git repository with proper configuration
+    - Sections are identified using regex pattern matching
+    - Separator between sections is standardized to 2 newlines (1 empty line)
+    - Sound notification disabled on Windows platform
 """
 
 import atexit  # For playing a sound when the program finishes
