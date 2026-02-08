@@ -2291,6 +2291,27 @@ def evaluate_on_dataset(
     return all_results  # Return dictionary of results
 
 
+def process_dataset_paths(dataset_name, paths):
+    """
+    Processes all paths for a given dataset.
+
+    :param dataset_name: Name of the dataset
+    :param paths: List of paths to process for this dataset
+    :return: None
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
+    )  # Print dataset name
+
+    for input_path in paths:  # For each path in the dataset's paths list
+        process_files_in_path(input_path, dataset_name)  # Process all files in this path
+
+
 def main():
     """
     Main function.
