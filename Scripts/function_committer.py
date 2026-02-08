@@ -140,6 +140,28 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def run_git_commit(function_name: str):
+    """
+    Executes Git add and commit commands for the target file.
+
+    :param function_name: The name of the function being committed
+    :return: None
+    """
+
+    commit_msg = f"{COMMIT_PREFIX} {function_name} function to {FILE_PATH.name}"  # Create the commit message
+
+    verbose_output(f"{BackgroundColors.GREEN}Running Git add for: {BackgroundColors.CYAN}{FILE_PATH}{Style.RESET_ALL}")
+
+    absolute_file_path = FILE_PATH.resolve()  # Resolve FILE_PATH to an absolute path
+    git_dir = absolute_file_path.parent  # Get the directory containing the file
+
+    subprocess.run(["git", "-C", str(git_dir), "add", str(absolute_file_path)], check=True)  # Stage the file
+
+    verbose_output(f"{BackgroundColors.GREEN}Running Git commit with message: {BackgroundColors.CYAN}{commit_msg}{Style.RESET_ALL}")
+
+    subprocess.run(["git", "-C", str(git_dir), "commit", "-m", commit_msg], check=True)  # Commit the changes
+
+
 def extract_functions_between(text, start_name, end_name):
     """
     Extracts all top-level functions between two specified function names.
