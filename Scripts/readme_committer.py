@@ -141,6 +141,33 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def extract_sections_between(text, start_name, end_name):
+    """
+    Extracts all level 2 header sections between two specified section names.
+
+    :param text: The full text content of the README file
+    :param start_name: The name of the first section to include
+    :param end_name: The name of the last section to include
+    :return: Tuple of (prefix_text, suffix_text, list_of_sections)
+             Each section in the list is a tuple: (name, content, start_pos, end_pos)
+    """
+
+    verbose_output(f"{BackgroundColors.GREEN}Extracting sections between {BackgroundColors.CYAN}{start_name}{BackgroundColors.GREEN} and {BackgroundColors.CYAN}{end_name}{Style.RESET_ALL}")
+    
+    pattern = r"^##\s+([^\n]+).*?(?=^##\s|\Z)"  # Regex pattern for level 2 headers
+    matches = list(re.finditer(pattern, text, flags=re.DOTALL | re.MULTILINE))  # Find all matches
+    sections = [(m.group(1).strip(), m.group(0), m.start(), m.end()) for m in matches]  # Extract section details
+    start_idx = next(i for i, s in enumerate(sections) if s[0] == start_name)  # Find start section index
+    end_idx = next(i for i, s in enumerate(sections) if s[0] == end_name)  # Find end section index
+    selected = sections[start_idx:end_idx + 1]  # Get all sections in range (inclusive)
+    prefix = text[:selected[0][2]]  # Text before the first selected section
+    suffix = text[selected[-1][3]:]  # Text after the last selected section
+    
+    verbose_output(f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{len(selected)}{BackgroundColors.GREEN} sections between markers{Style.RESET_ALL}")
+    
+    return prefix, suffix, selected  # Return the components
+
+
 def write_file(path, content):
     """
     Writes content to a file with UTF-8 encoding and ensures it ends with exactly one empty line.
