@@ -2291,6 +2291,36 @@ def evaluate_on_dataset(
     return all_results  # Return dictionary of results
 
 
+def combine_dataset_if_needed(files_to_process):
+    """
+    Combines multiple dataset files into one if PROCESS_ENTIRE_DATASET is enabled.
+
+    :param files_to_process: List of file paths to process
+    :return: Tuple (combined_df, combined_file_for_features, updated_files_list) or (None, None, files_to_process)
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Checking if dataset combination is needed...{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    if PROCESS_ENTIRE_DATASET and len(files_to_process) > 1:  # If combining is enabled and multiple files exist
+        verbose_output(
+            f"{BackgroundColors.GREEN}Attempting to combine {BackgroundColors.CYAN}{len(files_to_process)}{BackgroundColors.GREEN} dataset files...{Style.RESET_ALL}"
+        )  # Output the verbose message
+        result = combine_dataset_files(files_to_process)  # Attempt to combine all files
+        if result is not None:  # If combination was successful
+            combined_df, combined_target_col = result  # Unpack the combined dataframe and target column
+            combined_file_for_features = files_to_process[0]  # Use first file for feature selection metadata
+            files_to_process = ["combined"]  # Replace file list with single "combined" entry
+            return (combined_df, combined_file_for_features, files_to_process)  # Return combined data and updated file list
+        else:  # If combination failed
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Could not combine dataset files. Processing individually.{Style.RESET_ALL}"
+            )  # Output warning message
+
+    return (None, None, files_to_process)  # Return original file list unchanged
+
+
 def load_and_preprocess_dataset(file, combined_df):
     """
     Loads and preprocesses a dataset file or uses combined dataframe.
