@@ -141,6 +141,22 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def write_file(path, content):
+    """
+    Writes content to a file with UTF-8 encoding and ensures it ends with exactly one empty line.
+
+    :param path: Path object pointing to the target file
+    :param content: String content to write to the file
+    :return: None
+    """
+
+    verbose_output(f"{BackgroundColors.GREEN}Writing content to file: {BackgroundColors.CYAN}{path}{Style.RESET_ALL}")
+    
+    content = content.rstrip() + "\n"  # Remove trailing whitespace and add exactly one newline
+    
+    path.write_text(content, encoding="utf-8")  # Write the content to the file
+
+
 def extract_subsections(section_content):
     """
     Extracts all level 3 subsections (###) from a section's content.
