@@ -141,6 +141,20 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def extract_section_names(text):
+    """
+    Extracts all level 2 section names from the README text.
+
+    :param text: The full text content of the README file
+    :return: List of section names found in the file
+    """
+
+    pattern = r"^##\s+([^\n]+)"  # Regex pattern to match level 2 headers
+    found_names = [m.group(1).strip() for m in re.finditer(pattern, text, flags=re.MULTILINE)]  # Extract all section names
+    
+    return found_names  # Return the list of section names
+
+
 def verify_markers_exist(start_name, end_name, found_names):
     """
     Verifies if start and end markers exist in the list of found section names.
