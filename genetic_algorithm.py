@@ -3200,22 +3200,10 @@ def main():
     
     send_telegram_message(TELEGRAM_BOT, [f"Starting Genetic Algorithm Feature Selection for {dataset_name} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Send start message
 
-    # --- SKIP_TRAIN_IF_MODEL_EXISTS logic ---
-    loaded = None
-    if SKIP_TRAIN_IF_MODEL_EXISTS:
-        loaded = load_exported_artifacts(csv_path)
-        if loaded is not None:
-            model, scaler, features, params = loaded
-            print(f"{BackgroundColors.GREEN}Loaded exported model and scaler for {BackgroundColors.CYAN}{Path(csv_path).stem}{Style.RESET_ALL}")
-            finish_time = datetime.datetime.now()
-            print(
-                f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
-            )
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
-            )
-            atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
-            return
+    if SKIP_TRAIN_IF_MODEL_EXISTS:  # Verify if model loading is enabled
+        should_return = handle_skip_train_if_model_exists(csv_path)  # Execute model loading workflow
+        if should_return:  # Verify if artifacts were loaded successfully
+            return  # Exit early to skip GA training
 
     # Run the GA pipeline as usual
     sweep_results = run_population_sweep(
