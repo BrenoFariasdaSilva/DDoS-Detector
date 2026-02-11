@@ -2528,13 +2528,10 @@ def determine_best_features_and_ranking(best_ind, feature_names, csv_path):
              feature names and `ranking` is the RFE ranking dictionary (may be empty).
     """
 
-    # Build list of features selected by the binary mask
-    best_feats = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1]
-    # Try to extract an existing RFE ranking for additional metadata
-    ranking = extract_rfe_ranking(csv_path)
-    # Verbose output for user
-    print(f"\n{BackgroundColors.GREEN}Best features subset found: {BackgroundColors.CYAN}{best_feats}{Style.RESET_ALL}")
-    return best_feats, ranking
+    best_feats = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1]  # Build list of features selected by the binary mask
+    ranking = extract_rfe_ranking(csv_path)  # Try to extract an existing RFE ranking for additional metadata
+    print(f"\n{BackgroundColors.GREEN}Best features subset found: {BackgroundColors.CYAN}{best_feats}{Style.RESET_ALL}")  # Verbose output for user
+    return best_feats, ranking  # Return selected features list and ranking dictionary
 
 
 def determine_rf_metrics(metrics_in):
