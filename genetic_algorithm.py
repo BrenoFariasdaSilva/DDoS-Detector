@@ -1854,11 +1854,12 @@ def cleanup_state_for_id(output_dir, state_id):
     try:  # Attempt to clean up state files
         gen_path, run_path = state_file_paths(output_dir, state_id)  # Get paths for generation and run state files
         for p in (gen_path, run_path):  # Iterate over the file paths
-            try:  # Try to remove each file
-                if os.path.exists(p):  # Verify if the file exists
-                    os.remove(p)  # Remove the file
-            except Exception:  # If removal fails
-                pass  # Do nothing
+            try:  # Safe delete without exists() verify to avoid TOCTOU
+                os.remove(p)  # Try to remove the file directly
+            except FileNotFoundError:  # File already gone
+                pass  # Success - file doesn't exist
+            except Exception:  # Any other error
+                pass  # Best-effort, ignore
     except Exception:  # If any error occurs during cleanup
         pass  # Do nothing
 
