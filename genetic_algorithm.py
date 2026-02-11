@@ -1491,7 +1491,7 @@ def evaluate_individual_with_test(individual, X_train, y_train, X_test, y_test, 
     if sum(individual) == 0:  # If no features are selected
         return 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1  # Return worst possible scores
 
-    cv_result = evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_cls)  # Get CV metrics from the standard evaluation function
+    cv_result = evaluate_individual(individual, X_train, y_train, estimator_cls)  # Get CV metrics from the standard evaluation function (only 4 params)
     cv_acc, cv_prec, cv_rec, cv_f1, cv_fpr, cv_fnr = cv_result[:6]  # Extract CV metrics
 
     mask = np.array(individual, dtype=bool)  # Create boolean mask
