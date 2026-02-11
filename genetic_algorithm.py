@@ -681,6 +681,30 @@ def load_dataset(csv_path):
     return df  # Return the loaded DataFrame
 
 
+def handle_skip_train_if_model_exists(csv_path):
+    """
+    Search for existing exported model artifacts and handle loading and evaluation if they exist.
+
+    :param csv_path: Path to the CSV dataset file
+    :return: True if artifacts loaded and caller should return, False otherwise
+    """
+
+    loaded = load_exported_artifacts(csv_path)  # Attempt to load exported model artifacts
+    if loaded is None:  # Verify if artifacts were not found or loading failed
+        return False  # Signal that normal GA training should proceed
+
+    model, scaler, features, params = loaded  # Unpack loaded artifacts
+    
+    print_loaded_artifacts_info(csv_path, features, params)  # Display loaded model information
+    
+    test_data = prepare_test_data_for_loaded_model(csv_path, features)  # Execute dataset pipeline and select features
+    if test_data is not None:  # Verify if dataset preparation succeeded
+        X_test_sel, y_test = test_data  # Unpack test data
+        evaluate_and_display_loaded_model(model, X_test_sel, y_test)  # Evaluate and display metrics
+    
+    return True  # Signal that artifacts were loaded and caller should return early
+
+
 def sanitize_feature_names(columns):
     r"""
     Sanitize column names by removing special JSON characters that LightGBM doesn't support.
