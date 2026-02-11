@@ -244,7 +244,7 @@ def load_exported_artifacts(csv_path):
     :return: (model, scaler, features, params) or None if not found
     """
     
-    models_dir = os.path.join(os.path.dirname(csv_path), "Feature_Analysis", "GA", "Models")
+    models_dir = os.path.join(os.path.dirname(csv_path), "Feature_Analysis", "Genetic_Algorithm", "Models")
     if not os.path.isdir(models_dir):
         return None
     base_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', os.path.splitext(os.path.basename(csv_path))[0])
