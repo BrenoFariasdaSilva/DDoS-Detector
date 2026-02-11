@@ -723,14 +723,14 @@ def print_loaded_artifacts_info(csv_path, features, params):
     """
 
     dataset_stem = Path(csv_path).stem  # Extract dataset name from path
-    verbose_output(f"{BackgroundColors.GREEN}Loaded exported model and scaler for {BackgroundColors.CYAN}{dataset_stem}{Style.RESET_ALL}")  # Notify successful load
+    print(f"{BackgroundColors.GREEN}Loaded exported model and scaler for {BackgroundColors.CYAN}{dataset_stem}{Style.RESET_ALL}")  # Notify successful load
     
     feature_count = len(features)  # Count number of features
-    verbose_output(f"{BackgroundColors.GREEN}Selected features ({feature_count}): {BackgroundColors.CYAN}{features}{Style.RESET_ALL}")  # Display feature list
+    print(f"{BackgroundColors.GREEN}Selected features ({feature_count}): {BackgroundColors.CYAN}{features}{Style.RESET_ALL}")  # Display feature list
     
     if params is not None:  # Verify if parameters were loaded
         params_json = json.dumps(params, default=str)  # Serialize parameters to JSON string
-        verbose_output(f"{BackgroundColors.GREEN}Model parameters: {BackgroundColors.CYAN}{params_json}{Style.RESET_ALL}")  # Display model configuration
+        print(f"{BackgroundColors.GREEN}Model parameters: {BackgroundColors.CYAN}{params_json}{Style.RESET_ALL}")  # Display model configuration
 
 
 def prepare_test_data_for_loaded_model(csv_path, features):
