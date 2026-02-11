@@ -1794,24 +1794,24 @@ def plot_ga_convergence(
         if not dataset_name
         else safe_filename(dataset_name)
     )  # Base name of the dataset
-    gens_part = f"gens{int(n_generations)}" if n_generations is not None else "gensNA"
-    cx_part = f"cx{int(cxpb*100)}"
-    mut_part = f"mut{int(mutpb*100)}"
+    gens_part = f"gens{int(n_generations)}" if n_generations is not None else "gensNA"  # Format generations part for filename
+    cx_part = f"cx{int(cxpb*100)}"  # Format crossover probability as percentage for filename
+    mut_part = f"mut{int(mutpb*100)}"  # Format mutation probability as percentage for filename
     fig_path = os.path.join(
         output_dir, f"{base_dataset_name}_run{run}_pop{pop_size}_{gens_part}_{cx_part}_{mut_part}_convergence.png"
     )  # Path to save the figure
 
     try:  # Try to plot and save the figure
-        plt.figure(figsize=(8, 4))  # Create a matplotlib figure
-        gens = list(range(1, len(fitness_history) + 1))  # Generation numbers
-        plt.plot(gens, fitness_history, marker="o", linestyle="-", color="#1f77b4")  # Plot the fitness history
-        plt.xlabel("Generation")  # X-axis label
-        plt.ylabel("Best F1-Score")  # Y-axis label
-        plt.title(f"GA Convergence - {base_dataset_name} (run={run}, pop={pop_size}, cx={cxpb}, mut={mutpb})")  # Title
-        plt.grid(True, linestyle="--", alpha=0.5)  # Grid
-        plt.tight_layout()  # Adjust layout
-        plt.savefig(fig_path, dpi=150)  # Save the figure
-        plt.close()  # Close the plot to free memory
+        plt.figure(figsize=(8, 4))  # Create a matplotlib figure with 8x4 dimensions
+        gens = list(range(1, len(fitness_history) + 1))  # Generate list of generation numbers starting from 1
+        plt.plot(gens, fitness_history, marker="o", linestyle="-", color="#1f77b4")  # Plot fitness history with blue line and circle markers
+        plt.xlabel("Generation")  # Set X-axis label
+        plt.ylabel("Best F1-Score")  # Set Y-axis label
+        plt.title(f"GA Convergence - {base_dataset_name} (run={run}, pop={pop_size}, cx={cxpb}, mut={mutpb})")  # Set plot title with run parameters
+        plt.grid(True, linestyle="--", alpha=0.5)  # Add dashed grid with 50% transparency
+        plt.tight_layout()  # Adjust subplot parameters for tight layout
+        plt.savefig(fig_path, dpi=150)  # Save figure to file with 150 DPI resolution
+        plt.close()  # Close plot to free memory resources
         verbose_output(
             f"{BackgroundColors.GREEN}Saved GA convergence plot to {BackgroundColors.CYAN}{fig_path}{Style.RESET_ALL}"
         )  # Notify user
