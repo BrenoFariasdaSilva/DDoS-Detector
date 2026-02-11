@@ -2664,24 +2664,24 @@ def train_and_save_final_model(best_feats_local, X, y, feature_names, X_test, mo
     :return: Tuple `(model_local, model_params_local, training_time_local, X_test_selected_local)`.
     """
 
-    df_features_local = prepare_feature_dataframe(X, feature_names)
-    scaler_local = StandardScaler()
-    X_scaled_local = scaler_local.fit_transform(df_features_local.values)
-    sel_indices_local = [i for i, f in enumerate(feature_names) if f in best_feats_local]
-    X_final_local = X_scaled_local[:, sel_indices_local] if sel_indices_local else X_scaled_local
-    X_test_selected_local = X_test[:, sel_indices_local] if sel_indices_local and X_test is not None else X_test
-    model_local = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)
-    start_train_local = time.time()
-    model_local.fit(X_final_local, y)
-    training_time_local = time.time() - start_train_local
+    df_features_local = prepare_feature_dataframe(X, feature_names)  # Convert feature matrix to DataFrame with column names
+    scaler_local = StandardScaler()  # Initialize standard scaler for feature normalization
+    X_scaled_local = scaler_local.fit_transform(df_features_local.values)  # Fit scaler on features and transform to normalized values
+    sel_indices_local = [i for i, f in enumerate(feature_names) if f in best_feats_local]  # Get indices of selected features
+    X_final_local = X_scaled_local[:, sel_indices_local] if sel_indices_local else X_scaled_local  # Select only chosen feature columns from scaled data
+    X_test_selected_local = X_test[:, sel_indices_local] if sel_indices_local and X_test is not None else X_test  # Select same feature columns from test data
+    model_local = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)  # Instantiate Random Forest classifier with 100 trees
+    start_train_local = time.time()  # Record training start time
+    model_local.fit(X_final_local, y)  # Train model on selected features
+    training_time_local = time.time() - start_train_local  # Calculate training duration
 
-    dump(model_local, model_path_local)
-    dump(scaler_local, scaler_path_local)
-    with open(features_path_local, "w", encoding="utf-8") as fh:
-        json.dump(best_feats_local, fh)
-    model_params_local = model_local.get_params()
-    with open(params_path_local, "w", encoding="utf-8") as ph:
-        json.dump(model_params_local, ph, default=str)
+    dump(model_local, model_path_local)  # Serialize and save trained model to disk
+    dump(scaler_local, scaler_path_local)  # Serialize and save fitted scaler to disk
+    with open(features_path_local, "w", encoding="utf-8") as fh:  # Open features file for writing
+        json.dump(best_feats_local, fh)  # Write selected features list as JSON
+    model_params_local = model_local.get_params()  # Extract model hyperparameters
+    with open(params_path_local, "w", encoding="utf-8") as ph:  # Open params file for writing
+        json.dump(model_params_local, ph, default=str)  # Write model parameters as JSON with string fallback
 
     print(f"{BackgroundColors.GREEN}Saved final model to {BackgroundColors.CYAN}{model_path_local}{Style.RESET_ALL}")
     print(f"{BackgroundColors.GREEN}Saved scaler to {BackgroundColors.CYAN}{scaler_path_local}{Style.RESET_ALL}")
