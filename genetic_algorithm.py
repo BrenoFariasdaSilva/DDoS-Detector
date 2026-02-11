@@ -1767,8 +1767,19 @@ def safe_filename(name):
     :param name: The string to be sanitized.
     :return: A sanitized string safe for use as a filename.
     """
-
-    return re.sub(r'[\\/*?:"<>|]', "_", name)  # Replace invalid filename characters with underscores
+    
+    if not name:  # Handle empty/None input
+        return "unnamed"  # Return a default name for empty input
+    
+    sanitized = re.sub(r'[\\/*?:"<>|]', "_", str(name))  # Replace invalid filename characters with underscores
+    
+    max_len = 200  # Conservative limit leaving room for extensions
+    if len(sanitized) > max_len:  # Truncate if too long to avoid filesystem issues
+        sanitized = sanitized[:max_len]  # Truncate to max_len characters
+    
+    sanitized = sanitized.strip(". ")  # Remove leading/trailing dots and spaces which can cause issues on some filesystems
+    
+    return sanitized if sanitized else "unnamed"  # Ensure we don't return an empty string
 
 
 def plot_ga_convergence(
