@@ -3268,48 +3268,47 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run Genetic Algorithm feature selection and optionally load existing exported models."
     )
-    parser.add_argument(
-        "--skip-train-if-model-exists",
-        dest="skip_train",
-        action="store_true",
-        help="If set, do not retrain; load existing exported artifacts and evaluate.",
+    parser.add_argument(  # Add command-line argument for skipping training
+        "--skip-train-if-model-exists",  # Argument name
+        dest="skip_train",  # Destination variable name
+        action="store_true",  # Set to True if flag present
+        help="If set, do not retrain; load existing exported artifacts and evaluate.",  # Help text
     )
-    parser.add_argument(
-        "--verbose",
-        dest="verbose",
-        action="store_true",
-        help="Enable verbose output during the run.",
+    parser.add_argument(  # Add command-line argument for verbose mode
+        "--verbose",  # Argument name
+        dest="verbose",  # Destination variable name
+        action="store_true",  # Set to True if flag present
+        help="Enable verbose output during the run.",  # Help text
     )
-    parser.add_argument(
-        "--csv",
-        dest="csv",
-        type=str,
-        default=None,
-        help="Optional: path to dataset CSV to analyze. If omitted, uses the default in main().",
+    parser.add_argument(  # Add command-line argument for CSV path
+        "--csv",  # Argument name
+        dest="csv",  # Destination variable name
+        type=str,  # String type
+        default=None,  # Default value if not provided
+        help="Optional: path to dataset CSV to analyze. If omitted, uses the default in main().",  # Help text
     )
-    args = parser.parse_args()
+    args = parser.parse_args()  # Parse command-line arguments
 
-    global SKIP_TRAIN_IF_MODEL_EXISTS, VERBOSE
-    SKIP_TRAIN_IF_MODEL_EXISTS = bool(args.skip_train)
-    VERBOSE = bool(args.verbose)
-    csv_path = args.csv if args.csv else "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"
+    global SKIP_TRAIN_IF_MODEL_EXISTS, VERBOSE  # Declare global variables for configuration
+    SKIP_TRAIN_IF_MODEL_EXISTS = bool(args.skip_train)  # Set skip training flag from parsed arguments
+    VERBOSE = bool(args.verbose)  # Set verbose flag from parsed arguments
+    csv_path = args.csv if args.csv else "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Set CSV path from args or use default
 
     print(
         f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Genetic Algorithm Feature Selection{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
         end="\n\n",
     )
-    start_time = datetime.datetime.now()
+    start_time = datetime.datetime.now()  # Record program start time
 
     setup_telegram_bot()  # Setup Telegram bot if configured
 
-    # Example GA params (could be extended to CLI)
-    n_generations = 200
-    min_pop = 20
-    max_pop = 20
-    cxpb = 0.5
-    mutpb = 0.01
-    runs = RUNS
-    dataset_name = os.path.splitext(os.path.basename(csv_path))[0]
+    n_generations = 200  # Example GA params (could be extended to CLI)
+    min_pop = 20  # Minimum population size for sweep
+    max_pop = 20  # Maximum population size for sweep
+    cxpb = 0.5  # Crossover probability
+    mutpb = 0.01  # Mutation probability
+    runs = RUNS  # Number of runs per population size
+    dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Extract dataset name from file path
     
     send_telegram_message(TELEGRAM_BOT, [f"Starting Genetic Algorithm Feature Selection for {dataset_name} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Send start message
 
@@ -3331,16 +3330,16 @@ def main():
         progress_bar=None,
     )
 
-    if VERBOSE and sweep_results:
-        print(
+    if VERBOSE and sweep_results:  # Check if verbose mode is enabled and results exist
+        print(  # Print detailed results header
             f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}"
         )
-        for pop_size, features in sweep_results.items():
-            print(
+        for pop_size, features in sweep_results.items():  # Iterate over each population size result
+            print(  # Print population size and its features
                 f"  Pop {pop_size}: {len(features)} features -> {features}"
             )
 
-    finish_time = datetime.datetime.now()
+    finish_time = datetime.datetime.now()  # Record program finish time
     print(
         f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
     )
