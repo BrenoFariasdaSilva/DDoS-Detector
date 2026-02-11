@@ -1299,6 +1299,54 @@ def ga_fitness(ind, fitness_func):
     return (fitness_func(ind)[3],)  # Return only the F1-score for GA optimization
 
 
+def evaluate_individual_with_test(individual, X_train, y_train, X_test, y_test, estimator_cls=None):
+    """
+    Evaluate an individual with FULL test-set metrics. Use this only for the
+    final best individual re-evaluation (not during GA evolution loop).
+
+    This computes 10-fold CV metrics AND trains a model on full training
+    data to produce test-set metrics — unlike evaluate_individual() which
+    defers test evaluation to avoid waste during the GA loop.
+
+    :param individual: Binary mask (list) for feature selection.
+    :param X_train: Training feature set (numpy array).
+    :param y_train: Training target variable (numpy array).
+    :param X_test: Testing feature set (numpy array).
+    :param y_test: Testing target variable (numpy array).
+    :param estimator_cls: Classifier class to use (default: RandomForestClassifier).
+    :return: 12-element tuple: (cv_acc, cv_prec, cv_rec, cv_f1, cv_fpr, cv_fnr,
+             test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr)
+    """
+
+    if sum(individual) == 0:  # If no features are selected
+        return 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1  # Return worst possible scores
+
+    cv_result = evaluate_individual(individual, X_train, y_train, X_test, y_test, estimator_cls)  # Get CV metrics from the standard evaluation function
+    cv_acc, cv_prec, cv_rec, cv_f1, cv_fpr, cv_fnr = cv_result[:6]  # Extract CV metrics
+
+    mask = np.array(individual, dtype=bool)  # Create boolean mask
+    X_train_sel = X_train[:, mask]  # Select training features
+    X_test_sel = X_test[:, mask]  # Select test features
+
+    model = instantiate_estimator(estimator_cls)  # Instantiate model
+    model.fit(X_train_sel, y_train)  # Train on full training set
+    y_pred_test = model.predict(X_test_sel)  # Predict on test set
+
+    test_acc = accuracy_score(y_test, y_pred_test)  # Calculate test accuracy
+    test_prec = precision_score(y_test, y_pred_test, average="weighted", zero_division=0)  # Calculate test precision
+    test_rec = recall_score(y_test, y_pred_test, average="weighted", zero_division=0)  # Calculate test recall
+    test_f1 = f1_score(y_test, y_pred_test, average="weighted", zero_division=0)  # Calculate test F1-score
+    cm = confusion_matrix(y_test, y_pred_test, labels=np.unique(y_test))  # Confusion matrix for test set
+    tn = cm[0, 0] if cm.shape == (2, 2) else 0  # True negatives
+    fp = cm[0, 1] if cm.shape == (2, 2) else 0  # False positives
+    fn = cm[1, 0] if cm.shape == (2, 2) else 0  # False negatives
+    tp = cm[1, 1] if cm.shape == (2, 2) else 0  # True positives
+    test_fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # Calculate test false positive rate
+    test_fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # Calculate test false negative rate
+
+    return cv_acc, cv_prec, cv_rec, cv_f1, cv_fpr, cv_fnr, test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr  # Return combined CV and test metrics
+
+
 def load_generation_state(output_dir, state_id):
     """
     Load generation state if present, returning the payload or None.
