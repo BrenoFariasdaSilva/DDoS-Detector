@@ -255,35 +255,39 @@ def load_exported_artifacts(csv_path):
     :return: (model, scaler, features, params) or None if not found
     """
     
-    models_dir = os.path.join(os.path.dirname(csv_path), "Feature_Analysis", "Genetic_Algorithm", "Models")
-    if not os.path.isdir(models_dir):
-        return None
-    base_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', os.path.splitext(os.path.basename(csv_path))[0])
-    pattern = os.path.join(models_dir, f"GA-{base_name}-*-model.joblib")
-    candidates = glob.glob(pattern)
-    if not candidates:
-        return None
-    latest_model = max(candidates, key=os.path.getmtime)
-    scaler_path = latest_model.replace("-model.joblib", "-scaler.joblib")
-    features_path = latest_model.replace("-model.joblib", "-features.json")
-    params_path = latest_model.replace("-model.joblib", "-params.json")
-    if not (os.path.exists(scaler_path) and os.path.exists(features_path)):
-        return None
-    try:
-        model = load(latest_model)
-        scaler = load(scaler_path)
-        with open(features_path, "r", encoding="utf-8") as fh:
-            features = json.load(fh)
-        params = None
-        if os.path.exists(params_path):
-            try:
-                with open(params_path, "r", encoding="utf-8") as ph:
-                    params = json.load(ph)
-            except Exception:
-                params = None
-        return model, scaler, features, params
-    except Exception:
-        return None
+    verbose_output(
+        f"{BackgroundColors.GREEN}Attempting to load exported model artifacts for dataset: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}"
+    )  # Output the verbose message
+    
+    models_dir = os.path.join(os.path.dirname(csv_path), "Feature_Analysis", "Genetic_Algorithm", "Models")  # Construct path to models directory
+    if not os.path.isdir(models_dir):  # Verify if models directory exists
+        return None  # Return None if directory doesn't exist
+    base_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', os.path.splitext(os.path.basename(csv_path))[0])  # Sanitize dataset basename for filename
+    pattern = os.path.join(models_dir, f"GA-{base_name}-*-model.joblib")  # Build glob pattern to find model files
+    candidates = glob.glob(pattern)  # Search for matching model files
+    if not candidates:  # Verify if any models were found
+        return None  # Return None if no models found
+    latest_model = max(candidates, key=os.path.getmtime)  # Select most recently modified model file
+    scaler_path = latest_model.replace("-model.joblib", "-scaler.joblib")  # Derive scaler file path from model path
+    features_path = latest_model.replace("-model.joblib", "-features.json")  # Derive features file path from model path
+    params_path = latest_model.replace("-model.joblib", "-params.json")  # Derive params file path from model path
+    if not (os.path.exists(scaler_path) and os.path.exists(features_path)):  # Verify both scaler and features files exist
+        return None  # Return None if required files are missing
+    try:  # Attempt to load all model artifacts
+        model = load(latest_model)  # Load trained model from joblib file
+        scaler = load(scaler_path)  # Load fitted scaler from joblib file
+        with open(features_path, "r", encoding="utf-8") as fh:  # Open features JSON file
+            features = json.load(fh)  # Parse selected features list from JSON
+        params = None  # Initialize params as None
+        if os.path.exists(params_path):  # Check if params file exists
+            try:  # Attempt to load params
+                with open(params_path, "r", encoding="utf-8") as ph:  # Open params JSON file
+                    params = json.load(ph)  # Parse model parameters from JSON
+            except Exception:  # Ignore params loading errors
+                params = None  # Keep params as None on error
+        return model, scaler, features, params  # Return all loaded artifacts as tuple
+    except Exception:  # Catch any loading errors
+        return None  # Return None if artifact loading fails
 
 
 def get_files_to_process(directory_path, file_extension=".csv"):
