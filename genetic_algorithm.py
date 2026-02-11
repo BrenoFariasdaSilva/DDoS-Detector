@@ -681,6 +681,38 @@ def load_dataset(csv_path):
     return df  # Return the loaded DataFrame
 
 
+def prepare_test_data_for_loaded_model(csv_path, features):
+    """
+    Execute the full dataset pipeline and select features for evaluation.
+
+    :param csv_path: Path to the CSV dataset file
+    :param features: List of feature names to select from the dataset
+    :return: Tuple of (X_test_selected, y_test) or None on any failure
+    """
+
+    df = load_dataset(csv_path)  # Load raw dataset from CSV
+    if df is None:  # Verify if loading failed
+        return None  # Exit early on load failure
+
+    cleaned_df = preprocess_dataframe(df)  # Clean and preprocess the dataframe
+    if cleaned_df is None or cleaned_df.empty:  # Verify if preprocessing failed or resulted in empty data
+        return None  # Exit early on preprocessing failure
+
+    split_data = split_dataset(cleaned_df, csv_path)  # Split into train/test sets
+    if split_data is None or split_data[0] is None:  # Verify if splitting failed
+        return None  # Exit early on split failure
+
+    X_train, X_test, y_train, y_test, feature_names = split_data  # Unpack split results
+    
+    sel_indices = [i for i, f in enumerate(feature_names) if f in features]  # Map loaded feature names to column indices
+    if not sel_indices:  # Verify if no matching features were found
+        return None  # Exit early if feature mapping failed
+
+    X_test_sel = X_test[:, sel_indices]  # Select only the relevant feature columns from test data
+    
+    return (X_test_sel, y_test)  # Return selected test data and labels
+
+
 def evaluate_and_display_loaded_model(model, X_test_sel, y_test):
     """
     Evaluate a loaded model on test data and display formatted metrics.
