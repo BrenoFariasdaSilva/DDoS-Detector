@@ -1213,22 +1213,22 @@ def setup_genetic_algorithm(n_features, population_size=None, pool=None):
     )  # Output the verbose message
 
     FitnessMax = getattr(creator, "FitnessMax", None)  # Get or create FitnessMax
-    if FitnessMax is None:
-        FitnessMax = creator.create("FitnessMax", base.Fitness, weights=(1.0,))
+    if FitnessMax is None:  # If FitnessMax class doesn't exist
+        FitnessMax = creator.create("FitnessMax", base.Fitness, weights=(1.0,))  # Create FitnessMax with positive weight for maximization
 
     Individual = getattr(creator, "Individual", None)  # Get or create Individual
-    if Individual is None:
-        Individual = creator.create("Individual", list, fitness=FitnessMax)
+    if Individual is None:  # If Individual class doesn't exist
+        Individual = creator.create("Individual", list, fitness=FitnessMax)  # Create Individual as list with FitnessMax attribute
 
     toolbox: Any = base.Toolbox()  # Toolbox (typed Any to avoid analyzer confusion)
 
     def _attr_bool() -> int:  # Binary attribute generator
-        return random.randint(0, 1)
+        return random.randint(0, 1)  # Return random 0 or 1 for binary gene
 
-    toolbox.register("attr_bool", random.randint, 0, 1)
+    toolbox.register("attr_bool", random.randint, 0, 1)  # Register binary attribute generator in toolbox
 
     individual_factory: Callable[[], Any] = partial(tools.initRepeat, Individual, _attr_bool, n_features)  # Individual factory and registration
-    toolbox.register("individual", individual_factory)
+    toolbox.register("individual", individual_factory)  # Register individual factory in toolbox
 
     toolbox.register("population", tools.initRepeat, list, individual_factory)  # Population factory and registration
 
