@@ -279,7 +279,7 @@ def load_exported_artifacts(csv_path):
         with open(features_path, "r", encoding="utf-8") as fh:  # Open features JSON file
             features = json.load(fh)  # Parse selected features list from JSON
         params = None  # Initialize params as None
-        if os.path.exists(params_path):  # Check if params file exists
+        if os.path.exists(params_path):  # Verify if params file exists
             try:  # Attempt to load params
                 with open(params_path, "r", encoding="utf-8") as ph:  # Open params JSON file
                     params = json.load(ph)  # Parse model parameters from JSON
@@ -506,7 +506,7 @@ def monitor(
                 continue  # Skip computing suggestions until new file
 
             if gens_completed < int(min_gens_before_update):  # If not enough generations yet
-                time.sleep(1)  # Sleep briefly and re-check later
+                time.sleep(1)  # Sleep briefly and re-verify later
                 continue  # Skip computing suggestions until threshold met
 
         except Exception:  # If flags or generation counters are unavailable
@@ -2793,7 +2793,7 @@ def evaluate_final_on_test(model_local, X_test_selected_local, y_test):
         prec_local = precision_score(y_test, y_pred_local, average="weighted", zero_division=0)  # Calculate weighted precision metric
         rec_local = recall_score(y_test, y_pred_local, average="weighted", zero_division=0)  # Calculate weighted recall metric
         f1_local = f1_score(y_test, y_pred_local, average="weighted", zero_division=0)  # Calculate weighted F1 score
-        if len(np.unique(y_test)) == 2:  # Check if binary classification problem
+        if len(np.unique(y_test)) == 2:  # Verify if binary classification problem
             cm_local = confusion_matrix(y_test, y_pred_local)  # Generate confusion matrix for binary classification
             if cm_local.shape == (2, 2):  # Verify if standard 2x2 binary confusion matrix
                 tn_local, fp_local, fn_local, tp_local = cm_local.ravel()  # Extract true negatives, false positives, false negatives, true positives
@@ -3433,7 +3433,7 @@ def main():
         progress_bar=None,
     )
 
-    if VERBOSE and sweep_results:  # Check if verbose mode is enabled and results exist
+    if VERBOSE and sweep_results:  # Verify if verbose mode is enabled and results exist
         print(  # Print detailed results header
             f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}"
         )
