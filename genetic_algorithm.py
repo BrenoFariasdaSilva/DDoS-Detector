@@ -244,7 +244,7 @@ def load_exported_artifacts(csv_path):
     :return: (model, scaler, features, params) or None if not found
     """
     
-    models_dir = os.path.join(os.path.dirname(csv_path), "Feature_Analysis", "GA", "Models")
+    models_dir = os.path.join(os.path.dirname(csv_path), "Feature_Analysis", "Genetic_Algorithm", "Models")
     if not os.path.isdir(models_dir):
         return None
     base_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', os.path.splitext(os.path.basename(csv_path))[0])
@@ -1863,20 +1863,21 @@ def run_single_ga_iteration(
         verbose_output(
             f"{BackgroundColors.YELLOW}Failed to generate GA convergence plot: {e}{Style.RESET_ALL}"
         )  # Log warning
-        result = {
-            "best_ind": best_ind,
-            "metrics": metrics_with_iteration_time,
-            "best_features": best_features,
-        }  # Build result dict
 
-        try:  # Try to save run result
-            if RESUME_PROGRESS and state_id is not None:  # If resume is enabled and state_id exists
-                save_run_result(output_dir, state_id, result)  # Save the run result
-                cleanup_state_for_id(output_dir, state_id)  # Cleanup state files
-        except Exception:  # On any saving error
-            pass  # Do nothing
+    result = {
+        "best_ind": best_ind,
+        "metrics": metrics_with_iteration_time,
+        "best_features": best_features,
+    }  # Build result dict
 
-        return result  # Return results
+    try:  # Try to save run result
+        if RESUME_PROGRESS and state_id is not None:  # If resume is enabled and state_id exists
+            save_run_result(output_dir, state_id, result)  # Save the run result
+            cleanup_state_for_id(output_dir, state_id)  # Cleanup state files
+    except Exception:  # On any saving error
+        pass  # Do nothing
+
+    return result  # Return results
 
 
 def aggregate_sweep_results(results, min_pop, max_pop, dataset_name):
@@ -3042,6 +3043,31 @@ def run_population_sweep(
     return results  # Return the results dictionary
 
 
+def to_seconds(obj):
+    """
+    Converts various time-like objects to seconds.
+    
+    :param obj: The object to convert (can be int, float, timedelta, datetime, etc.)
+    :return: The equivalent time in seconds as a float, or None if conversion fails
+    """
+    
+    if obj is None:  # None can't be converted
+        return None  # Signal failure to convert
+    if isinstance(obj, (int, float)):  # Already numeric (seconds or timestamp)
+        return float(obj)  # Return as float seconds
+    if hasattr(obj, "total_seconds"):  # Timedelta-like objects
+        try:  # Attempt to call total_seconds()
+            return float(obj.total_seconds())  # Use the total_seconds() method
+        except Exception:
+            pass  # Fallthrough on error
+    if hasattr(obj, "timestamp"):  # Datetime-like objects
+        try:  # Attempt to call timestamp()
+            return float(obj.timestamp())  # Use timestamp() to get seconds since epoch
+        except Exception:
+            pass  # Fallthrough on error
+    return None  # Couldn't convert
+
+
 def calculate_execution_time(start_time, finish_time=None):
     """
     Calculates the execution time and returns a human-readable string.
@@ -3054,33 +3080,16 @@ def calculate_execution_time(start_time, finish_time=None):
     Returns a string like "1h 2m 3s".
     """
 
-    def _to_seconds(obj):  # Convert various time-like objects to seconds
-        if obj is None:  # None can't be converted
-            return None  # Signal failure to convert
-        if isinstance(obj, (int, float)):  # Already numeric (seconds or timestamp)
-            return float(obj)  # Return as float seconds
-        if hasattr(obj, "total_seconds"):  # Timedelta-like objects
-            try:  # Attempt to call total_seconds()
-                return float(obj.total_seconds())  # Use the total_seconds() method
-            except Exception:
-                pass  # Fallthrough on error
-        if hasattr(obj, "timestamp"):  # Datetime-like objects
-            try:  # Attempt to call timestamp()
-                return float(obj.timestamp())  # Use timestamp() to get seconds since epoch
-            except Exception:
-                pass  # Fallthrough on error
-        return None  # Couldn't convert
-
     if finish_time is None:  # Single-argument mode: start_time already represents duration or seconds
-        total_seconds = _to_seconds(start_time)  # Try to convert provided value to seconds
+        total_seconds = to_seconds(start_time)  # Try to convert provided value to seconds
         if total_seconds is None:  # Conversion failed
             try:  # Attempt numeric coercion
                 total_seconds = float(start_time)  # Attempt numeric coercion
             except Exception:
                 total_seconds = 0.0  # Fallback to zero
     else:  # Two-argument mode: Compute difference finish_time - start_time
-        st = _to_seconds(start_time)  # Convert start to seconds if possible
-        ft = _to_seconds(finish_time)  # Convert finish to seconds if possible
+        st = to_seconds(start_time)  # Convert start to seconds if possible
+        ft = to_seconds(finish_time)  # Convert finish to seconds if possible
         if st is not None and ft is not None:  # Both converted successfully
             total_seconds = ft - st  # Direct numeric subtraction
         else:  # Fallback to other methods
@@ -3198,6 +3207,34 @@ def main():
         if loaded is not None:
             model, scaler, features, params = loaded
             print(f"{BackgroundColors.GREEN}Loaded exported model and scaler for {BackgroundColors.CYAN}{Path(csv_path).stem}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.GREEN}Selected features ({len(features)}): {BackgroundColors.CYAN}{features}{Style.RESET_ALL}")
+            if params is not None:
+                print(f"{BackgroundColors.GREEN}Model parameters: {BackgroundColors.CYAN}{json.dumps(params, default=str)}{Style.RESET_ALL}")
+
+            # Evaluate the loaded model on the dataset to produce test metrics
+            try:
+                df = load_dataset(csv_path)  # Load dataset
+                if df is not None:
+                    cleaned_df = preprocess_dataframe(df)  # Preprocess dataset
+                    if cleaned_df is not None and not cleaned_df.empty:
+                        split_data = split_dataset(cleaned_df, csv_path)  # Split dataset
+                        if split_data is not None and split_data[0] is not None:
+                            X_train, X_test, y_train, y_test, feature_names = split_data  # Unpack
+                            sel_indices = [i for i, f in enumerate(feature_names) if f in features]  # Feature indices
+                            if sel_indices:
+                                X_test_sel = X_test[:, sel_indices]  # Select test features
+                                eval_m, testing_time = evaluate_final_on_test(model, X_test_sel, y_test)  # Evaluate
+                                if eval_m and eval_m[0] is not None:
+                                    print(f"\n{BackgroundColors.GREEN}Test Metrics (loaded model):{Style.RESET_ALL}")
+                                    print(f"   {BackgroundColors.GREEN}Accuracy:  {BackgroundColors.CYAN}{truncate_value(eval_m[0])}{Style.RESET_ALL}")
+                                    print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{truncate_value(eval_m[1])}{Style.RESET_ALL}")
+                                    print(f"   {BackgroundColors.GREEN}Recall:    {BackgroundColors.CYAN}{truncate_value(eval_m[2])}{Style.RESET_ALL}")
+                                    print(f"   {BackgroundColors.GREEN}F1-Score:  {BackgroundColors.CYAN}{truncate_value(eval_m[3])}{Style.RESET_ALL}")
+                                    print(f"   {BackgroundColors.GREEN}FPR:       {BackgroundColors.CYAN}{truncate_value(eval_m[4])}{Style.RESET_ALL}")
+                                    print(f"   {BackgroundColors.GREEN}FNR:       {BackgroundColors.CYAN}{truncate_value(eval_m[5])}{Style.RESET_ALL}")
+            except Exception as e:
+                print(f"{BackgroundColors.YELLOW}Could not evaluate loaded model: {e}{Style.RESET_ALL}")
+
             finish_time = datetime.datetime.now()
             print(
                 f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
@@ -3205,6 +3242,7 @@ def main():
             print(
                 f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
             )
+            send_telegram_message(TELEGRAM_BOT, [f"Loaded existing model for {dataset_name}. Skipped GA retraining."])  # Notify via Telegram
             atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
             return
 
