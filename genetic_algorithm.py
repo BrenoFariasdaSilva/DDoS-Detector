@@ -469,6 +469,67 @@ def compute_optimal_processes(reserve_cpu_frac=0.15, reserve_mem_frac=0.15, min_
     return candidate  # Return final computed candidate number of worker processes
 
 
+def monitor(
+    interval_seconds,
+    reserve_cpu_frac,
+    reserve_mem_frac,
+    min_procs,
+    max_procs,
+    min_gens_before_update,
+):
+    """
+    Periodically monitor system resources and update CPU_PROCESSES when appropriate.
+
+    :param interval_seconds: Interval between monitoring cycles in seconds.
+    :param reserve_cpu_frac: Fraction of CPU reserved from worker allocation.
+    :param reserve_mem_frac: Fraction of memory reserved from worker allocation.
+    :param min_procs: Minimum number of processes allowed.
+    :param max_procs: Maximum number of processes allowed.
+    :param min_gens_before_update: Minimum GA generations before updating workers.
+    :return: None
+    """
+
+    global CPU_PROCESSES, RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE, RESOURCE_MONITOR_LAST_FILE
+
+    while True:  # Infinite monitoring loop
+        try:  # Verify if update conditions are met
+            with global_state_lock:  # Thread-safe access to global flags
+                already_updated = RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE  # Whether update already occurred
+                gens_completed = GA_GENERATIONS_COMPLETED  # Number of completed GA generations
+
+            if already_updated:  # Only one update per file
+                time.sleep(1)  # Sleep briefly until new file arrives
+                continue  # Skip computing suggestions until new file
+
+            if gens_completed < int(min_gens_before_update):  # If not enough generations yet
+                time.sleep(1)  # Sleep briefly and re-check later
+                continue  # Skip computing suggestions until threshold met
+
+        except Exception:  # If flags or generation counters are unavailable
+            pass  # Proceed with best-effort execution
+
+        try:  # Attempt to compute suggested worker count
+            suggested = compute_optimal_processes(
+                reserve_cpu_frac=reserve_cpu_frac,
+                reserve_mem_frac=reserve_mem_frac,
+                min_procs=min_procs,
+                max_procs=max_procs,
+            )  # Compute optimal process count
+
+            if suggested and suggested != CPU_PROCESSES:  # If suggestion differs from current
+                with global_state_lock:  # Thread-safe update
+                    CPU_PROCESSES = suggested  # Update global worker count
+                    RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = True  # Mark update applied
+
+        except Exception:  # Ignore computation failures
+            pass  # Retry on next monitoring cycle
+
+        try:  # Sleep before next monitoring iteration
+            time.sleep(max(1, int(interval_seconds)))  # Ensure minimum sleep of 1 second
+        except Exception:  # Handle invalid or interrupted sleep
+            time.sleep(5)  # Fallback sleep duration
+
+
 def start_resource_monitor(
     interval_seconds=30,
     reserve_cpu_frac=0.15,
@@ -479,45 +540,33 @@ def start_resource_monitor(
     daemon=True,
 ):
     """
-    Spawn a daemon thread that updates global `CPU_PROCESSES` periodically.
+Start the resource monitoring thread with the specified configuration.
 
-    The thread computes a safe worker count using `compute_optimal_processes`
-    and assigns it to the module-level `CPU_PROCESSES`. The thread swallows
-    exceptions and retries after `interval_seconds`.
+    :param interval_seconds: Interval between monitoring cycles in seconds.
+    :param reserve_cpu_frac: Fraction of CPU reserved from worker allocation.
+    :param reserve_mem_frac: Fraction of memory reserved from worker allocation.
+    :param min_procs: Minimum number of processes allowed.
+    :param max_procs: Maximum number of processes allowed.
+    :param min_gens_before_update: Minimum GA generations before updating workers.
+    :param daemon: Whether the monitoring thread runs as daemon.
+    :return: Thread object
     """
 
-    def monitor():  # Monitoring thread function
-        global CPU_PROCESSES, RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE, RESOURCE_MONITOR_LAST_FILE
-        while True:  # Infinite loop
-            try:  # If we've already updated for the current file, wait for a new file
-                if RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE:  # Only one update per file
-                    time.sleep(1)  # Sleep briefly until new file arrives
-                    continue  # Skip computing suggestions until new file
-                if GA_GENERATIONS_COMPLETED < int(min_gens_before_update):  # If not enough generations yet
-                    time.sleep(1)  # Sleep briefly and re-verify
-                    continue  # Skip computing suggestions until threshold met
-            except Exception:  # If GA_GENERATIONS_COMPLETED or flags are missing or invalid
-                pass  # Proceed to compute (best-effort)
+    t = threading.Thread(
+        target=monitor,
+        args=(
+            interval_seconds,
+            reserve_cpu_frac,
+            reserve_mem_frac,
+            min_procs,
+            max_procs,
+            min_gens_before_update,
+        ),  # Pass monitoring configuration parameters
+        daemon=daemon,
+        name="ga-resource-monitor",
+    )  # Create the monitoring thread
 
-            try:  # Try to compute a suggested worker count
-                suggested = compute_optimal_processes(
-                    reserve_cpu_frac=reserve_cpu_frac,
-                    reserve_mem_frac=reserve_mem_frac,
-                    min_procs=min_procs,
-                    max_procs=max_procs,
-                )  # Compute candidate
-                if suggested and suggested != CPU_PROCESSES:  # If suggestion differs from current
-                    CPU_PROCESSES = suggested  # Update module-level worker count
-                RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = True  # Mark that we've updated for this file
-            except Exception:  # On any computation or assignment error
-                pass  # Ignore and retry on next loop
-            try:  # Sleep for configured interval before next verify
-                time.sleep(max(1, int(interval_seconds)))  # Sleep at least 1 second
-            except Exception:  # If sleep is interrupted or invalid
-                time.sleep(5)  # Fallback sleep
-
-    t = threading.Thread(target=monitor, daemon=daemon, name="ga-resource-monitor")  # Create the monitoring thread
-    t.start()  # Start the thread
+    t.start()  # Start the monitoring thread
 
     return t  # Return the Thread object
 
