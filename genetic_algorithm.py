@@ -651,6 +651,26 @@ def update_progress_bar(
         pass  # Do nothing
 
 
+def clear_fitness_cache():
+    """
+    Clear the fitness cache to prevent memory leaks and cross-dataset contamination.
+
+    :return: None
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Clearing fitness cache...{Style.RESET_ALL}"
+    )
+
+    global fitness_cache  # Use the global fitness_cache variable
+    
+    with fitness_cache_lock:  # Thread-safe cache clearing
+        fitness_cache.clear()  # Clear the fitness cache
+        verbose_output(
+            f"{BackgroundColors.GREEN}Fitness cache cleared ({BackgroundColors.CYAN}memory leak prevention{BackgroundColors.GREEN}).{Style.RESET_ALL}"
+        )
+
+
 def normalize_feature_name(name):
     """
     Normalize feature name by stripping whitespace, replacing double spaces with single spaces, and lowercasing.
@@ -3049,6 +3069,8 @@ def run_population_sweep(
     verbose_output(
         f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {min_pop} to {max_pop}, running {n_generations} generations and {runs} runs each.{Style.RESET_ALL}"
     )
+         
+    clear_fitness_cache()  # Clear any existing fitness cache to ensure fresh evaluations for the sweep
 
     send_telegram_message(TELEGRAM_BOT, [
         f"Starting population sweep for dataset {dataset_name} from size {min_pop} to {max_pop}"
