@@ -2703,49 +2703,49 @@ def evaluate_final_on_test(model_local, X_test_selected_local, y_test):
              `(acc, prec, rec, f1, fpr, fnr, testing_time)` or a tuple of Nones on error.
     """
 
-    eval_m = None
-    testing_time_local = None
-    try:
-        start_test_local = time.time()
-        y_pred_local = model_local.predict(X_test_selected_local)
-        acc_local = accuracy_score(y_test, y_pred_local)
-        prec_local = precision_score(y_test, y_pred_local, average="weighted", zero_division=0)
-        rec_local = recall_score(y_test, y_pred_local, average="weighted", zero_division=0)
-        f1_local = f1_score(y_test, y_pred_local, average="weighted", zero_division=0)
-        if len(np.unique(y_test)) == 2:
-            cm_local = confusion_matrix(y_test, y_pred_local)
-            if cm_local.shape == (2, 2):
-                tn_local, fp_local, fn_local, tp_local = cm_local.ravel()
-                fpr_local = fp_local / (fp_local + tn_local) if (fp_local + tn_local) > 0 else 0
-                fnr_local = fn_local / (fn_local + tp_local) if (fn_local + tp_local) > 0 else 0
-            else:
-                total_local = cm_local.sum() if cm_local.size > 0 else 1
-                fpr_local = float(cm_local.sum() - np.trace(cm_local)) / float(total_local) if total_local > 0 else 0
-                fnr_local = fpr_local
-        else:
-            cm_local = confusion_matrix(y_test, y_pred_local)
-            supports_local = cm_local.sum(axis=1)
-            fprs_local = []
-            fnrs_local = []
-            for i_local in range(cm_local.shape[0]):
-                tp_l = cm_local[i_local, i_local]
-                fn_l = cm_local[i_local, :].sum() - tp_l
-                fp_l = cm_local[:, i_local].sum() - tp_l
-                tn_l = cm_local.sum() - (tp_l + fp_l + fn_l)
-                denom_fnr_l = (tp_l + fn_l) if (tp_l + fn_l) > 0 else 1
-                denom_fpr_l = (fp_l + tn_l) if (fp_l + tn_l) > 0 else 1
-                fnr_i_l = fn_l / denom_fnr_l
-                fpr_i_l = fp_l / denom_fpr_l
-                fprs_local.append((fpr_i_l, supports_local[i_local]))
-                fnrs_local.append((fnr_i_l, supports_local[i_local]))
-            total_support_local = float(supports_local.sum()) if supports_local.sum() > 0 else 1.0
-            fpr_local = float(sum(v * s for v, s in fprs_local) / total_support_local)
-            fnr_local = float(sum(v * s for v, s in fnrs_local) / total_support_local)
-        testing_time_local = time.time() - start_test_local
-        eval_m = (acc_local, prec_local, rec_local, f1_local, fpr_local, fnr_local, testing_time_local)
-    except Exception:
-        eval_m = (None, None, None, None, None, None, None)
-    return eval_m, testing_time_local
+    eval_m = None  # Initialize evaluation metrics as None
+    testing_time_local = None  # Initialize testing time as None
+    try:  # Attempt to evaluate model on test set
+        start_test_local = time.time()  # Record testing start time
+        y_pred_local = model_local.predict(X_test_selected_local)  # Generate predictions on test set
+        acc_local = accuracy_score(y_test, y_pred_local)  # Calculate accuracy metric
+        prec_local = precision_score(y_test, y_pred_local, average="weighted", zero_division=0)  # Calculate weighted precision metric
+        rec_local = recall_score(y_test, y_pred_local, average="weighted", zero_division=0)  # Calculate weighted recall metric
+        f1_local = f1_score(y_test, y_pred_local, average="weighted", zero_division=0)  # Calculate weighted F1 score
+        if len(np.unique(y_test)) == 2:  # Check if binary classification problem
+            cm_local = confusion_matrix(y_test, y_pred_local)  # Generate confusion matrix for binary classification
+            if cm_local.shape == (2, 2):  # Verify if standard 2x2 binary confusion matrix
+                tn_local, fp_local, fn_local, tp_local = cm_local.ravel()  # Extract true negatives, false positives, false negatives, true positives
+                fpr_local = fp_local / (fp_local + tn_local) if (fp_local + tn_local) > 0 else 0  # Calculate false positive rate
+                fnr_local = fn_local / (fn_local + tp_local) if (fn_local + tp_local) > 0 else 0  # Calculate false negative rate
+            else:  # Handle non-standard confusion matrix shape
+                total_local = cm_local.sum() if cm_local.size > 0 else 1  # Calculate total predictions
+                fpr_local = float(cm_local.sum() - np.trace(cm_local)) / float(total_local) if total_local > 0 else 0  # Estimate FPR from matrix
+                fnr_local = fpr_local  # Use FPR as FNR estimate
+        else:  # Handle multi-class classification
+            cm_local = confusion_matrix(y_test, y_pred_local)  # Generate confusion matrix for multi-class
+            supports_local = cm_local.sum(axis=1)  # Calculate support (samples per class)
+            fprs_local = []  # Initialize list for per-class false positive rates
+            fnrs_local = []  # Initialize list for per-class false negative rates
+            for i_local in range(cm_local.shape[0]):  # Iterate over each class
+                tp_l = cm_local[i_local, i_local]  # Extract true positives for class i
+                fn_l = cm_local[i_local, :].sum() - tp_l  # Calculate false negatives for class i
+                fp_l = cm_local[:, i_local].sum() - tp_l  # Calculate false positives for class i
+                tn_l = cm_local.sum() - (tp_l + fp_l + fn_l)  # Calculate true negatives for class i
+                denom_fnr_l = (tp_l + fn_l) if (tp_l + fn_l) > 0 else 1  # Calculate FNR denominator with zero protection
+                denom_fpr_l = (fp_l + tn_l) if (fp_l + tn_l) > 0 else 1  # Calculate FPR denominator with zero protection
+                fnr_i_l = fn_l / denom_fnr_l  # Calculate false negative rate for class i
+                fpr_i_l = fp_l / denom_fpr_l  # Calculate false positive rate for class i
+                fprs_local.append((fpr_i_l, supports_local[i_local]))  # Store FPR with class support
+                fnrs_local.append((fnr_i_l, supports_local[i_local]))  # Store FNR with class support
+            total_support_local = float(supports_local.sum()) if supports_local.sum() > 0 else 1.0  # Calculate total support across all classes
+            fpr_local = float(sum(v * s for v, s in fprs_local) / total_support_local)  # Calculate weighted average FPR
+            fnr_local = float(sum(v * s for v, s in fnrs_local) / total_support_local)  # Calculate weighted average FNR
+        testing_time_local = time.time() - start_test_local  # Calculate testing duration
+        eval_m = (acc_local, prec_local, rec_local, f1_local, fpr_local, fnr_local, testing_time_local)  # Package all metrics into tuple
+    except Exception:  # Catch any evaluation errors
+        eval_m = (None, None, None, None, None, None, None)  # Return tuple of None values on error
+    return eval_m, testing_time_local  # Return metrics tuple and testing time
 
 
 def build_and_write_run_results(
