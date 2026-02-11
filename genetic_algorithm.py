@@ -1197,10 +1197,12 @@ def evaluate_individual(
     mask = np.array(individual, dtype=bool)  # Create boolean mask from individual
     X_train_sel = X_train[:, mask]  # Select features based on the mask
 
-    metrics = np.empty((0, 6), dtype=float)  # Will hold metrics for each fold: [acc, prec, rec, f1, fpr, fnr]
+    n_cv_folds = 10  # Number of CV folds
+    metrics = np.empty((n_cv_folds, 6), dtype=float)  # Pre-allocate metrics array for each fold: [acc, prec, rec, f1, fpr, fnr]
+    fold_count = 0  # Track how many folds actually ran
 
     try:  # Try to create StratifiedKFold splits
-        skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)  # 10-fold Stratified CV
+        skf = StratifiedKFold(n_splits=n_cv_folds, shuffle=True, random_state=42)  # 10-fold Stratified CV
         splits = list(skf.split(X_train_sel, y_train))  # Generate splits
     except Exception:  # If StratifiedKFold fails (e.g., too few samples per class)
         print(
@@ -1251,9 +1253,8 @@ def evaluate_individual(
         fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # False positive rate
         fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # False negative rate
 
-        metrics = np.vstack(
-            (metrics, np.array([acc, prec, rec, f1, fpr, fnr], dtype=float))
-        )  # Append metrics using NumPy
+        metrics[fold_count] = [acc, prec, rec, f1, fpr, fnr]  # Write metrics directly to pre-allocated array
+        fold_count += 1  # Increment fold counter
 
         if (
             fold_idx < EARLY_STOP_FOLDS and acc < EARLY_STOP_ACC_THRESHOLD
@@ -1261,25 +1262,10 @@ def evaluate_individual(
             early_stop_triggered = True  # Set flag
             break  # Stop evaluating further folds for this individual
 
-    means = np.mean(metrics, axis=0) if metrics.shape[0] > 0 else np.zeros(6)  # Calculate means for each metric
+    means = np.mean(metrics[:fold_count], axis=0) if fold_count > 0 else np.zeros(6)  # Calculate means for completed folds only
     acc, prec, rec, f1, fpr, fnr = means  # Unpack mean metrics
 
-    # Compute test metrics
-    X_test_sel = X_test[:, mask]
-    model = instantiate_estimator(estimator_cls)
-    model.fit(X_train_sel, y_train)
-    y_pred_test = model.predict(X_test_sel)
-    test_acc = accuracy_score(y_test, y_pred_test)
-    test_prec = precision_score(y_test, y_pred_test, average="weighted", zero_division=0)
-    test_rec = recall_score(y_test, y_pred_test, average="weighted", zero_division=0)
-    test_f1 = f1_score(y_test, y_pred_test, average="weighted", zero_division=0)
-    cm = confusion_matrix(y_test, y_pred_test, labels=np.unique(y_test))
-    tn = cm[0, 0] if cm.shape == (2, 2) else 0
-    fp = cm[0, 1] if cm.shape == (2, 2) else 0
-    fn = cm[1, 0] if cm.shape == (2, 2) else 0
-    tp = cm[1, 1] if cm.shape == (2, 2) else 0
-    test_fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
-    test_fnr = fn / (fn + tp) if (fn + tp) > 0 else 0
+    test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr = 0, 0, 0, 0, 0, 0  # Placeholder test metrics
 
     result = acc, prec, rec, f1, fpr, fnr, test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr  # Prepare result tuple
     fitness_cache[mask_tuple] = result  # Cache the result
