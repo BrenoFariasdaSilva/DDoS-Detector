@@ -225,8 +225,8 @@ def setup_telegram_bot():
 
     try:  # Try to initialize the Telegram bot
         TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
-        telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
-        telegram_module.RUNNING_CODE = os.path.basename(__file__)
+        telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"  # Set device info string with IP and OS
+        telegram_module.RUNNING_CODE = os.path.basename(__file__)  # Set currently running script name
     except Exception as e:
         print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {str(e)}{Style.RESET_ALL}")
         TELEGRAM_BOT = None  # Set to None if initialization fails
