@@ -156,6 +156,7 @@ sys.stderr = logger  # Redirect stderr to the logger
 
 # Fitness Cache:
 fitness_cache = {}  # Cache for fitness results to avoid re-evaluating same feature masks
+fitness_cache_lock = threading.Lock()  # Thread lock for fitness cache
 
 # Sound Constants:
 SOUND_COMMANDS = {
