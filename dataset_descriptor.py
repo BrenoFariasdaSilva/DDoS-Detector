@@ -113,12 +113,22 @@ RUN_FUNCTIONS = {
 }
 
 DATASETS = {  # Dictionary containing dataset paths and feature files
-    "CICDDoS2019-Dataset": [  # List of paths to the CICDDoS2019 dataset
+    "CICDDoS2019": [  # List of paths to the CICDDoS2019 dataset
         "./Datasets/CICDDoS2019/01-12/",
         "./Datasets/CICDDoS2019/03-11/",
     ],
-    "CICIDS2017-Dataset": [  # List of paths to the CICIDS2017 dataset
+    "CICIDS2017": [  # List of paths to the CICIDS2017 dataset
         "./Datasets/CIC-IDS2017/TrafficLabelling/Converted/",
+    ],
+    "KDD-Dataset": [  # List of paths to the KDD dataset
+        "./Datasets/KDD-Dataset/KDDTrain+.csv",
+        "./Datasets/KDD-Dataset /KDDTest+.csv",
+    ],
+    "LATAM DDoS IoT": [  # List of paths to the LATAM DDoS IoT dataset
+        "./Datasets/LATAM DDoS IoT/",
+    ],
+    "UNSW-NB15": [  # List of paths to the UNSW-NB15 dataset
+        "./Datasets/UNSW-NB15/UNSW_NB15_features.csv",
     ],
 }
 
