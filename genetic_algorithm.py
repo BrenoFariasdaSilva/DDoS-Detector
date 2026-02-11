@@ -2944,6 +2944,8 @@ def run_population_sweep(
     for p in range(min_pop, max_pop + 1):  # For each population size
         results[p] = {"runs": [], "avg_metrics": None, "common_features": set()}  # Initialize results entry
 
+    shared_pool = multiprocessing.Pool(processes=CPU_PROCESSES if CPU_PROCESSES else None)  # Create a shared multiprocessing pool for parallel GA runs
+
     start_run_time = time.time()  # Start timing the entire run process
     for run in range(runs):  # For each run
         for pop_size in range(min_pop, max_pop + 1):  # For each population size
@@ -2969,6 +2971,7 @@ def run_population_sweep(
                 progress_bar,
                 progress_state,
                 folds,
+                shared_pool=shared_pool,
             )  # Run GA iteration
             elapsed_pop_time = time.time() - start_pop_time  # Calculate elapsed time for this population size
             if result:  # If result is valid
@@ -2979,6 +2982,12 @@ def run_population_sweep(
                 TELEGRAM_BOT,
                 f"Completed run {run + 1}/{runs} - population size {pop_size}/{max_pop} in {int(elapsed_pop_time)}s"
             )
+
+    try:  # Close the shared pool after all GA iterations are complete
+        shared_pool.close()  # Signal no more work will be submitted
+        shared_pool.join()  # Wait for all workers to finish
+    except Exception:  # If closing the pool fails (e.g., if it was already closed or if an error occurred)
+        pass  # Best-effort cleanup
 
     best_score, best_result, best_metrics, results = aggregate_sweep_results(
         results, min_pop, max_pop, dataset_name
