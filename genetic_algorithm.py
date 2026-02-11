@@ -1145,16 +1145,6 @@ def evaluate_individual(
     X_test,
     y_test,
     estimator_cls=None,
-    progress_bar=None,
-    dataset_name=None,
-    csv_path=None,
-    pop_size=None,
-    max_pop=None,
-    gen=None,
-    n_generations=None,
-    run=None,
-    runs=None,
-    progress_state=None,
 ):
     """
     Evaluate the fitness of an individual solution using 10-fold Stratified Cross-Validation
@@ -1166,16 +1156,6 @@ def evaluate_individual(
     :param X_test: Testing feature set (unused during CV, but kept for compatibility).
     :param y_test: Testing target variable (unused during CV, but kept for compatibility).
     :param estimator_cls: Classifier class to use (default: RandomForestClassifier).
-    :param progress_bar: Optional tqdm progress bar instance.
-    :param dataset_name: Optional dataset name for progress display.
-    :param csv_path: Optional CSV path for progress display.
-    :param pop_size: Optional population size for progress display.
-    :param max_pop: Optional maximum population size for progress display.
-    :param gen: Optional current generation for progress display.
-    :param n_generations: Optional total generations for progress display.
-    :param run: Optional current run for progress display.
-    :param runs: Optional total runs for progress display.
-    :param progress_state: Optional progress state dict for tracking iterations.
     :return: Tuple containing CV accuracy, precision, recall, F1-score, FPR, FNR, test accuracy, precision, recall, F1-score, FPR, FNR
     """
 
