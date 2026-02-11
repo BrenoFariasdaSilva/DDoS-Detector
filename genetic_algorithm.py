@@ -248,7 +248,8 @@ def verify_filepath_exists(filepath):
 
 
 def load_exported_artifacts(csv_path):
-    """Attempt to locate and load latest exported model, scaler and features for csv_path.
+    """
+    Attempt to locate and load latest exported model, scaler and features for csv_path.
 
     :param csv_path: original dataset path used to name exported artifacts
     :return: (model, scaler, features, params) or None if not found
