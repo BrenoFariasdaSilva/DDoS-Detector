@@ -56,7 +56,7 @@ import platform  # For getting the operating system name
 import random  # For random number generation
 import re  # For sanitizing filenames
 import seaborn as sns  # For enhanced plotting
-import shutil  # For checking disk usage
+import shutil  # For verifying disk usage
 import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
@@ -103,7 +103,7 @@ VERBOSE = False  # Set to True to output verbose messages
 SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, try loading exported models instead of retraining
 RUNS = 5  # Number of runs for Genetic Algorithm analysis
 EARLY_STOP_ACC_THRESHOLD = 0.75  # Minimum acceptable accuracy for an individual
-EARLY_STOP_FOLDS = 3  # Number of folds to check before early stopping
+EARLY_STOP_FOLDS = 3  # Number of folds to verify before early stopping
 N_JOBS = -1  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
 CPU_PROCESSES = 1  # Initial number of worker processes; can be updated by monitor
 FILES_TO_IGNORE = [""]  # List of files to ignore during processing
@@ -483,7 +483,7 @@ def start_resource_monitor(
                     time.sleep(1)  # Sleep briefly until new file arrives
                     continue  # Skip computing suggestions until new file
                 if GA_GENERATIONS_COMPLETED < int(min_gens_before_update):  # If not enough generations yet
-                    time.sleep(1)  # Sleep briefly and re-check
+                    time.sleep(1)  # Sleep briefly and re-verify
                     continue  # Skip computing suggestions until threshold met
             except Exception:  # If GA_GENERATIONS_COMPLETED or flags are missing or invalid
                 pass  # Proceed to compute (best-effort)
@@ -500,7 +500,7 @@ def start_resource_monitor(
                 RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = True  # Mark that we've updated for this file
             except Exception:  # On any computation or assignment error
                 pass  # Ignore and retry on next loop
-            try:  # Sleep for configured interval before next check
+            try:  # Sleep for configured interval before next verify
                 time.sleep(max(1, int(interval_seconds)))  # Sleep at least 1 second
             except Exception:  # If sleep is interrupted or invalid
                 time.sleep(5)  # Fallback sleep
@@ -746,7 +746,7 @@ def preprocess_dataframe(df, remove_zero_variance=True):
 
 def cache_preprocessed_data(result, cache_file, csv_path):
     """
-    Cache the preprocessed data to a pickle file, checking disk space first.
+    Cache the preprocessed data to a pickle file, verifying disk space first.
     Also, compare and display size reduction compared to the original CSV.
 
     :param result: The tuple to cache (X_train_scaled, X_test_scaled, y_train_np, y_test_np, X.columns)
@@ -1008,7 +1008,7 @@ def load_run_result(output_dir, state_id):
 
     try:  # Attempt to load the run result
         _, run_path = state_file_paths(output_dir, state_id)  # Get the path for the run state file
-        if not os.path.exists(run_path):  # Check if the file exists
+        if not os.path.exists(run_path):  # Verify if the file exists
             return None  # Return None if file does not exist
         with open(run_path, "rb") as f:  # Open the file for reading in binary mode
             return pickle.load(f)  # Deserialize and return the result
@@ -1020,7 +1020,7 @@ def load_cached_run_if_any(
     output_dir, csv_path, pop_size, n_generations, cxpb, mutpb, run, folds, y_train=None, y_test=None
 ):
     """
-    Check for and load a previously saved run result for the given parameters.
+    Verify for and load a previously saved run result for the given parameters.
 
     :param output_dir: base Feature_Analysis output directory
     :param csv_path: dataset CSV path
@@ -1035,7 +1035,7 @@ def load_cached_run_if_any(
     :return: tuple (result or None, state_id or None)
     """
 
-    try:  # Attempt to check for cached run result
+    try:  # Attempt to verify for cached run result
         n_train = len(y_train) if y_train is not None else 0  # Get number of training samples
         n_test = len(y_test) if y_test is not None else 0  # Get number of test samples
         test_frac = (
@@ -1054,7 +1054,7 @@ def load_cached_run_if_any(
                 except Exception:  # If logging fails
                     pass  # Do nothing
                 return prev, state_id  # Return the cached result and state_id
-    except Exception:  # If any error occurs during checking
+    except Exception:  # If any error occurs during verifying
         pass  # Do nothing
 
     return None, None  # Return None for both result and state_id
@@ -1320,7 +1320,7 @@ def load_generation_state(output_dir, state_id):
 
     try:  # Attempt to load the generation state
         gen_path, _ = state_file_paths(output_dir, state_id)  # Get the path for the generation state file
-        if not os.path.exists(gen_path):  # Check if the file exists
+        if not os.path.exists(gen_path):  # Verify if the file exists
             return None  # Return None if file does not exist
         with open(gen_path, "rb") as f:  # Open the file for reading in binary mode
             return pickle.load(f)  # Deserialize and return the payload
@@ -1367,7 +1367,7 @@ def load_and_apply_generation_state(toolbox, population, output_dir, state_id, r
 
     start_gen = 1  # Initialize starting generation to 1
     fitness_history = []  # Initialize fitness history as empty list
-    if RESUME_PROGRESS and state_id is not None:  # Check if resume is enabled and state_id is provided
+    if RESUME_PROGRESS and state_id is not None:  # Verify if resume is enabled and state_id is provided
         try:  # Attempt to load and apply the state
             payload = load_generation_state(output_dir, state_id)  # Load the generation state payload
             if payload:  # If payload exists
@@ -1721,7 +1721,7 @@ def cleanup_state_for_id(output_dir, state_id):
         gen_path, run_path = state_file_paths(output_dir, state_id)  # Get paths for generation and run state files
         for p in (gen_path, run_path):  # Iterate over the file paths
             try:  # Try to remove each file
-                if os.path.exists(p):  # Check if the file exists
+                if os.path.exists(p):  # Verify if the file exists
                     os.remove(p)  # Remove the file
             except Exception:  # If removal fails
                 pass  # Do nothing
@@ -2364,7 +2364,7 @@ def write_consolidated_csv(rows, output_dir):
         df_out = df_out[GA_RESULTS_CSV_COLUMNS]  # Reorder columns into the canonical order
 
         for col in df_out.columns:  # Iterate over all columns
-            col_l = col.lower()  # Lowercase column name for checks
+            col_l = col.lower()  # Lowercase column name for case-insensitive verification
             if "time" in col_l or "elapsed" in col_l or col in ("hardware", "timestamp"):  # Skip time-related and special columns
                 df_out[col] = df_out[col].apply(lambda v: int(v) if pd.notnull(v) and str(v).isdigit() else v)  # Convert time-related columns to int if possible
             try:  # Try to truncate values in the column
