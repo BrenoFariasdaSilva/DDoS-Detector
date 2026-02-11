@@ -552,9 +552,10 @@ def signal_new_file(file_path):
 
     global RESOURCE_MONITOR_LAST_FILE, RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE, GA_GENERATIONS_COMPLETED  # Use global variables
     try:  # Try to signal the new file
-        RESOURCE_MONITOR_LAST_FILE = file_path  # Update the last file being processed
-        RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = False  # Reset the per-file update flag
-        GA_GENERATIONS_COMPLETED = 0  # Reset generations completed for the new file
+        with global_state_lock:  # Thread-safe global variable updates
+            RESOURCE_MONITOR_LAST_FILE = file_path  # Update the last file being processed
+            RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = False  # Reset the per-file update flag
+            GA_GENERATIONS_COMPLETED = 0  # Reset generations completed for the new file
     except Exception:  # Ignore any errors during signaling
         pass  # Do nothing
 
