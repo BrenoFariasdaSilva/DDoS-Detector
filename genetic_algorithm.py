@@ -2785,14 +2785,14 @@ def build_and_write_run_results(
     :return: None
     """
 
-    cv_method_local = "StratifiedKFold(n_splits=10)" if n_generations is not None or best_pop_size is not None else "train_test_split"
+    cv_method_local = "StratifiedKFold(n_splits=10)" if n_generations is not None or best_pop_size is not None else "train_test_split"  # Determine CV method used based on GA execution
 
-    run_row = {
-        "timestamp": ts,
-        "tool": "Genetic Algorithm",
-        "run_index": "best",
-        "model": model_local.__class__.__name__,
-        "dataset": os.path.relpath(csv_path),
+    run_row = {  # Build consolidated run row dictionary
+        "timestamp": ts,  # Timestamp of model training
+        "tool": "Genetic Algorithm",  # Tool name identifier
+        "run_index": "best",  # Run index indicating best result
+        "model": model_local.__class__.__name__,  # Model class name
+        "dataset": os.path.relpath(csv_path),  # Relative path to dataset
         "hyperparameters": json.dumps(model_params_local, default=str) if model_params_local is not None else None,
         "cv_method": cv_method_local,
         "train_test_split": f"{1-test_frac_local:.0%}/{test_frac_local:.0%}" if test_frac_local is not None else "80/20",
