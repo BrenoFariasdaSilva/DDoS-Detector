@@ -1060,13 +1060,14 @@ def load_cached_run_if_any(
     return None, None  # Return None for both result and state_id
 
 
-def setup_genetic_algorithm(n_features, population_size=None):
+def setup_genetic_algorithm(n_features, population_size=None, pool=None):
     """
     Setup DEAP Genetic Algorithm: creator, toolbox, population, and Hall of Fame.
     DEAP is a library for evolutionary algorithms in Python.
 
     :param n_features: Number of features in dataset
     :param population_size: Size of the population (default: n_features // 4, minimum 10)
+    :param pool: Optional existing multiprocessing.Pool to reuse (avoids creating a new one)
     :return: toolbox, population, hall_of_fame
     """
 
@@ -1077,42 +1078,37 @@ def setup_genetic_algorithm(n_features, population_size=None):
         f"{BackgroundColors.GREEN}Setting up Genetic Algorithm with {n_features} features and population size {population_size}.{Style.RESET_ALL}"
     )  # Output the verbose message
 
-    # Get or create FitnessMax
-    FitnessMax = getattr(creator, "FitnessMax", None)
+    FitnessMax = getattr(creator, "FitnessMax", None)  # Get or create FitnessMax
     if FitnessMax is None:
         FitnessMax = creator.create("FitnessMax", base.Fitness, weights=(1.0,))
 
-    # Get or create Individual
-    Individual = getattr(creator, "Individual", None)
+    Individual = getattr(creator, "Individual", None)  # Get or create Individual
     if Individual is None:
         Individual = creator.create("Individual", list, fitness=FitnessMax)
 
-    # Toolbox (typed Any to avoid analyzer confusion)
-    toolbox: Any = base.Toolbox()
+    toolbox: Any = base.Toolbox()  # Toolbox (typed Any to avoid analyzer confusion)
 
-    # Binary attribute generator
-    def _attr_bool() -> int:
+    def _attr_bool() -> int:  # Binary attribute generator
         return random.randint(0, 1)
 
     toolbox.register("attr_bool", random.randint, 0, 1)
 
-    # Individual factory and registration
-    individual_factory: Callable[[], Any] = partial(tools.initRepeat, Individual, _attr_bool, n_features)
+    individual_factory: Callable[[], Any] = partial(tools.initRepeat, Individual, _attr_bool, n_features)  # Individual factory and registration
     toolbox.register("individual", individual_factory)
 
-    # Population factory and registration
-    toolbox.register("population", tools.initRepeat, list, individual_factory)
+    toolbox.register("population", tools.initRepeat, list, individual_factory)  # Population factory and registration
 
     toolbox.register("mate", tools.cxTwoPoint)  # Crossover operator
     toolbox.register("mutate", tools.mutFlipBit, indpb=0.05)  # Mutation operator
     toolbox.register("select", tools.selTournament, tournsize=3)  # Selection operator
 
-    if CPU_PROCESSES is None:  # If CPU_PROCESSES is not set
-        pool = multiprocessing.Pool()  # Create a multiprocessing pool with all available CPUs
-    else:  # If CPU_PROCESSES is set
-        pool = multiprocessing.Pool(
-            processes=CPU_PROCESSES
-        )  # Create a multiprocessing pool with specified number of CPUs
+    if pool is None:  # If no external pool was provided, create one
+        if CPU_PROCESSES is None:  # If CPU_PROCESSES is not set
+            pool = multiprocessing.Pool()  # Create a multiprocessing pool with all available CPUs
+        else:  # If CPU_PROCESSES is set
+            pool = multiprocessing.Pool(
+                processes=CPU_PROCESSES
+            )  # Create a multiprocessing pool with specified number of CPUs
     toolbox.register("map", pool.map)  # Register parallel map for fitness evaluation
 
     population = toolbox.population(n=population_size)  # Create the initial population
