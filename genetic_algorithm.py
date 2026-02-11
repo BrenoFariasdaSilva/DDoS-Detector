@@ -2624,8 +2624,6 @@ def build_and_write_run_results(
     elapsed_run_time,
     n_generations,
     best_pop_size,
-    cxpb,
-    mutpb,
     best_features,
     rfe_ranking,
     output_dir,
@@ -2645,8 +2643,6 @@ def build_and_write_run_results(
     :param elapsed_run_time: Total GA elapsed time in seconds (or None).
     :param n_generations: Number of generations used (or None).
     :param best_pop_size: Population size used for best run (or None).
-    :param cxpb: Crossover probability used (included for metadata).
-    :param mutpb: Mutation probability used (included for metadata).
     :param best_features: List of selected feature names.
     :param rfe_ranking: RFE ranking dictionary.
     :param output_dir: Directory where consolidated CSV is stored.
@@ -2778,8 +2774,6 @@ def save_results(
         elapsed_run_time,
         n_generations,
         best_pop_size,
-        cxpb,
-        mutpb,
         best_features,
         rfe_ranking,
         output_dir,
