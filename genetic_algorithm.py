@@ -2548,10 +2548,9 @@ def determine_rf_metrics(metrics_in):
     :return: Sliced metrics (first 12 elements) or None.
     """
 
-    if metrics_in is not None:
-        # Only keep first 12 values if available (cv metrics + test metrics)
-        return metrics_in[:12] if len(metrics_in) >= 12 else None
-    return None
+    if metrics_in is not None:  # Verify if metrics are provided
+        return metrics_in[:12] if len(metrics_in) >= 12 else None  # Only keep first 12 values if available (cv metrics + test metrics)
+    return None  # Return None if no metrics provided
 
 
 def maybe_evaluate_on_test(rf_m, best_ind_local, X, y, X_test, y_test):
