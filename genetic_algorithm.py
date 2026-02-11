@@ -158,6 +158,10 @@ sys.stderr = logger  # Redirect stderr to the logger
 fitness_cache = {}  # Cache for fitness results to avoid re-evaluating same feature masks
 fitness_cache_lock = threading.Lock()  # Thread lock for fitness cache
 
+# Thread Locks for Global Variables:
+global_state_lock = threading.Lock()  # Lock for CPU_PROCESSES, GA_GENERATIONS_COMPLETED, etc.
+csv_write_lock = threading.Lock()  # Lock for CSV write operations to prevent race conditions
+
 # Sound Constants:
 SOUND_COMMANDS = {
     "Darwin": "afplay",
