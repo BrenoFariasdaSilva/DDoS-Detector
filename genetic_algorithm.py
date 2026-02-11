@@ -3252,7 +3252,6 @@ def main():
     Main function.
 
     :return: None
-    :return: None
     """
 
     parser = argparse.ArgumentParser(
