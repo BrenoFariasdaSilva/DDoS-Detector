@@ -1742,13 +1742,13 @@ def adjust_progress_for_early_stop(progress_state, n_generations, pop_size, gens
     if not (progress_state and isinstance(progress_state, dict)):  # Validate progress_state
         return  # Nothing to do if invalid
 
-    try:  # Try to compute planned vs actual evaluations
-        planned = int(n_generations) * int(pop_size) + 1  # Planned evaluations: generations * pop_size + 1 re-eval
-        actual = int(gens_ran) * int(pop_size) + 1  # Actual evaluations: generations run * pop_size + 1 re-eval
-        delta = max(0, planned - actual)  # Number of generation-evaluations saved by early stopping
-        progress_state["total_it"] = (
-            int(progress_state.get("total_it", 0)) - delta * folds
-        )  # Reduce total iterations by saved evaluations
+    try:  # Each generation evaluates pop_size individuals
+        planned_evals = int(n_generations) * int(pop_size)  # Planned evaluations: generations * pop_size
+        actual_evals = int(gens_ran) * int(pop_size)  # Actual evaluations: generations run * pop_size
+        saved_evals = max(0, planned_evals - actual_evals)  # Number of individual evaluations saved by early stopping
+        progress_state["total_it"] = max(
+            0, int(progress_state.get("total_it", 0)) - saved_evals * folds
+        )  # Reduce total iterations by saved evaluations * folds
     except Exception:  # Silently ignore failures during adjustment
         pass  # Do nothing on error
 
