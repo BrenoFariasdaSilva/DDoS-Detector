@@ -1732,6 +1732,7 @@ def run_single_ga_iteration(
     progress_bar,
     progress_state,
     folds,
+    shared_pool=None,
 ):
     """
     Execute one GA run for a specific population size.
@@ -1785,7 +1786,7 @@ def run_single_ga_iteration(
     if cached:  # If cached result found
         return cached  # Return cached result immediately
 
-    toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size)  # Setup GA components
+    toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size, pool=shared_pool)  # Setup GA components, reusing shared pool
     best_ind, gens_ran, fitness_history = run_genetic_algorithm_loop(
         toolbox,
         population,
@@ -1811,7 +1812,7 @@ def run_single_ga_iteration(
     if best_ind is None:  # If GA failed
         return None  # Exit early
 
-    metrics = evaluate_individual(best_ind, X_train, y_train, X_test, y_test)  # Evaluate best individual
+    metrics = evaluate_individual_with_test(best_ind, X_train, y_train, X_test, y_test)  # Evaluate best individual with full test metrics
 
     adjust_progress_for_early_stop(
         progress_state, n_generations, pop_size, gens_ran, folds
