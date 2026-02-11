@@ -1498,11 +1498,16 @@ def run_genetic_algorithm_loop(
         )  # Update progress bar if provided
 
         offspring = algorithms.varAnd(population, toolbox, cxpb=cxpb, mutpb=mutpb)  # Apply crossover and mutation
-        fits = list(toolbox.map(toolbox.evaluate, offspring))  # Evaluate the offspring in parallel
+
+        invalid_ind = [ind for ind in offspring if not ind.fitness.valid]  # Filter to only invalid individuals
+        if invalid_ind:  # If there are individuals to evaluate
+            invalid_fits = list(toolbox.map(toolbox.evaluate, invalid_ind))  # Evaluate only invalid offspring
+            for ind, fit in zip(invalid_ind, invalid_fits):  # Assign fitness to evaluated individuals
+                ind.fitness.values = fit  # Set the fitness value
 
         if progress_state and isinstance(progress_state, dict):  # Update progress state if provided
             try:  # Try to update progress state
-                progress_state["current_it"] = int(progress_state.get("current_it", 0)) + len(offspring) * folds
+                progress_state["current_it"] = int(progress_state.get("current_it", 0)) + len(invalid_ind) * folds
                 (
                     update_progress_bar(
                         progress_bar,
@@ -1522,11 +1527,12 @@ def run_genetic_algorithm_loop(
             except Exception:  # Silently ignore progress update errors
                 pass  # Do nothing
 
-        for ind, fit in zip(offspring, fits):  # Assign fitness values
-            ind.fitness.values = fit  # Set the fitness value
-
         population[:] = toolbox.select(offspring, k=len(population))  # Select the next generation population
         hof.update(population)  # Update the Hall of Fame
+
+        if hof and len(hof) > 0:  # If hall of fame has a best individual
+            if hof[0] not in population:  # If the best individual is not in the new population
+                population[-1] = hof[0]  # Replace the worst individual with the hall-of-fame best
 
         current_best_fitness = (
             hof[0].fitness.values[0] if hof and hof[0].fitness.values else None
@@ -1559,8 +1565,8 @@ def run_genetic_algorithm_loop(
         GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
         gens_ran = gen if gens_ran == 0 else gens_ran  # Ensure gens_ran is set correctly if no early stopping occurred
 
-        try:  # Persist per-generation progress so runs can be resumed
-            if RESUME_PROGRESS and state_id is not None:  # If resume progress is enabled and state id is available
+        try:  # Persist per-generation progress so runs can be resumed (every 10 gens to reduce I/O)
+            if RESUME_PROGRESS and state_id is not None and (gen % 10 == 0 or gen == n_generations):  # Save every 10 generations or at the end
                 save_generation_state(
                     output_dir, state_id, gen, population, hof[0] if hof and len(hof) > 0 else None, fitness_history
                 )
@@ -1568,8 +1574,7 @@ def run_genetic_algorithm_loop(
             pass  # Do nothing
 
     if hasattr(toolbox, "map") and hasattr(toolbox.map, "close"):  # If using multiprocessing pool
-        toolbox.map.close()  # Close the pool
-        toolbox.map.join()  # Join the pool
+        pass  # Pool lifecycle is now managed by the caller (run_population_sweep) to allow reuse
 
     return hof[0], gens_ran, fitness_history  # Return the best individual, gens ran and fitness history
 
