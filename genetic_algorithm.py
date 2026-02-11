@@ -1272,13 +1272,13 @@ def setup_genetic_algorithm(n_features, population_size=None, pool=None):
         f"{BackgroundColors.GREEN}Setting up Genetic Algorithm with {n_features} features and population size {population_size}.{Style.RESET_ALL}"
     )  # Output the verbose message
 
-    FitnessMax = getattr(creator, "FitnessMax", None)  # Get or create FitnessMax
-    if FitnessMax is None:  # If FitnessMax class doesn't exist
-        FitnessMax = creator.create("FitnessMax", base.Fitness, weights=(1.0,))  # Create FitnessMax with positive weight for maximization
+    if not hasattr(creator, "FitnessMax"):  # If FitnessMax class doesn't exist in creator
+        creator.create("FitnessMax", base.Fitness, weights=(1.0,))  # Create FitnessMax with positive weight for maximization
+    FitnessMax = creator.FitnessMax  # Get FitnessMax from creator namespace
 
-    Individual = getattr(creator, "Individual", None)  # Get or create Individual
-    if Individual is None:  # If Individual class doesn't exist
-        Individual = creator.create("Individual", list, fitness=FitnessMax)  # Create Individual as list with FitnessMax attribute
+    if not hasattr(creator, "Individual"):  # If Individual class doesn't exist in creator
+        creator.create("Individual", list, fitness=creator.FitnessMax)  # Create Individual as list with FitnessMax attribute
+    Individual = creator.Individual  # Get Individual from creator namespace
 
     toolbox: Any = base.Toolbox()  # Toolbox (typed Any to avoid analyzer confusion)
 
@@ -1297,11 +1297,13 @@ def setup_genetic_algorithm(n_features, population_size=None, pool=None):
     toolbox.register("select", tools.selTournament, tournsize=3)  # Selection operator
 
     if pool is None:  # If no external pool was provided, create one
-        if CPU_PROCESSES is None:  # If CPU_PROCESSES is not set
+        with global_state_lock:  # Thread-safe read of CPU_PROCESSES
+            cpu_procs = CPU_PROCESSES  # Read CPU_PROCESSES value
+        if cpu_procs is None:  # If CPU_PROCESSES is not set
             pool = multiprocessing.Pool()  # Create a multiprocessing pool with all available CPUs
         else:  # If CPU_PROCESSES is set
             pool = multiprocessing.Pool(
-                processes=CPU_PROCESSES
+                processes=cpu_procs
             )  # Create a multiprocessing pool with specified number of CPUs
     toolbox.register("map", pool.map)  # Register parallel map for fitness evaluation
 
