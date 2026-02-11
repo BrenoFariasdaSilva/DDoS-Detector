@@ -1863,20 +1863,21 @@ def run_single_ga_iteration(
         verbose_output(
             f"{BackgroundColors.YELLOW}Failed to generate GA convergence plot: {e}{Style.RESET_ALL}"
         )  # Log warning
-        result = {
-            "best_ind": best_ind,
-            "metrics": metrics_with_iteration_time,
-            "best_features": best_features,
-        }  # Build result dict
 
-        try:  # Try to save run result
-            if RESUME_PROGRESS and state_id is not None:  # If resume is enabled and state_id exists
-                save_run_result(output_dir, state_id, result)  # Save the run result
-                cleanup_state_for_id(output_dir, state_id)  # Cleanup state files
-        except Exception:  # On any saving error
-            pass  # Do nothing
+    result = {
+        "best_ind": best_ind,
+        "metrics": metrics_with_iteration_time,
+        "best_features": best_features,
+    }  # Build result dict
 
-        return result  # Return results
+    try:  # Try to save run result
+        if RESUME_PROGRESS and state_id is not None:  # If resume is enabled and state_id exists
+            save_run_result(output_dir, state_id, result)  # Save the run result
+            cleanup_state_for_id(output_dir, state_id)  # Cleanup state files
+    except Exception:  # On any saving error
+        pass  # Do nothing
+
+    return result  # Return results
 
 
 def aggregate_sweep_results(results, min_pop, max_pop, dataset_name):
