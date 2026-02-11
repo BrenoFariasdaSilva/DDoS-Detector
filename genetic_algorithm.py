@@ -3172,7 +3172,9 @@ def run_population_sweep(
     for p in range(min_pop, max_pop + 1):  # For each population size
         results[p] = {"runs": [], "avg_metrics": None, "common_features": set()}  # Initialize results entry
 
-    shared_pool = multiprocessing.Pool(processes=CPU_PROCESSES if CPU_PROCESSES else None)  # Create a shared multiprocessing pool for parallel GA runs
+    with global_state_lock:  # Thread-safe read of CPU_PROCESSES
+        cpu_procs = CPU_PROCESSES  # Read CPU_PROCESSES value
+    shared_pool = multiprocessing.Pool(processes=cpu_procs if cpu_procs else None)  # Create a shared multiprocessing pool for parallel GA runs
 
     start_run_time = time.time()  # Start timing the entire run process
     for run in range(runs):  # For each run
