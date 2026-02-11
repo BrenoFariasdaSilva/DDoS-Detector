@@ -681,6 +681,32 @@ def load_dataset(csv_path):
     return df  # Return the loaded DataFrame
 
 
+def evaluate_and_display_loaded_model(model, X_test_sel, y_test):
+    """
+    Evaluate a loaded model on test data and display formatted metrics.
+
+    :param model: The loaded machine learning model
+    :param X_test_sel: Test features (with selected columns only)
+    :param y_test: Test labels
+    :return: None
+    """
+
+    try:  # Wrap evaluation in exception handler
+        eval_m, testing_time = evaluate_final_on_test(model, X_test_sel, y_test)  # Compute test metrics
+        
+        if eval_m and eval_m[0] is not None:  # Verify if evaluation returned valid metrics
+            print(f"\n{BackgroundColors.GREEN}Test Metrics (loaded model):{Style.RESET_ALL}")  # Print metrics header
+            print(f"   {BackgroundColors.GREEN}Accuracy:  {BackgroundColors.CYAN}{truncate_value(eval_m[0])}{Style.RESET_ALL}")  # Display accuracy
+            print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{truncate_value(eval_m[1])}{Style.RESET_ALL}")  # Display precision
+            print(f"   {BackgroundColors.GREEN}Recall:    {BackgroundColors.CYAN}{truncate_value(eval_m[2])}{Style.RESET_ALL}")  # Display recall
+            print(f"   {BackgroundColors.GREEN}F1-Score:  {BackgroundColors.CYAN}{truncate_value(eval_m[3])}{Style.RESET_ALL}")  # Display F1 score
+            print(f"   {BackgroundColors.GREEN}FPR:       {BackgroundColors.CYAN}{truncate_value(eval_m[4])}{Style.RESET_ALL}")  # Display false positive rate
+            print(f"   {BackgroundColors.GREEN}FNR:       {BackgroundColors.CYAN}{truncate_value(eval_m[5])}{Style.RESET_ALL}")  # Display false negative rate
+    
+    except Exception as e:  # Catch any evaluation errors
+        print(f"{BackgroundColors.YELLOW}Could not evaluate loaded model: {e}{Style.RESET_ALL}")  # Display error message
+
+
 def handle_skip_train_if_model_exists(csv_path):
     """
     Search for existing exported model artifacts and handle loading and evaluation if they exist.
