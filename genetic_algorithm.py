@@ -104,6 +104,7 @@ SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, try loading exported models inste
 RUNS = 5  # Number of runs for Genetic Algorithm analysis
 EARLY_STOP_ACC_THRESHOLD = 0.75  # Minimum acceptable accuracy for an individual
 EARLY_STOP_FOLDS = 3  # Number of folds to verify before early stopping
+EARLY_STOP_GENERATIONS = 10  # Number of generations without improvement before early stop
 N_JOBS = -1  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
 CPU_PROCESSES = 1  # Initial number of worker processes; can be updated by monitor
 FILES_TO_IGNORE = [""]  # List of files to ignore during processing
@@ -113,6 +114,10 @@ RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = False  # Whether monitor already app
 RESUME_PROGRESS = True  # When True, attempt to resume progress from saved state files
 PROGRESS_STATE_DIR_NAME = "ga_progress"  # Subfolder under Feature_Analysis to store progress files
 PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL  # Pickle protocol to use when saving state
+N_CV_FOLDS = 10  # Number of cross-validation folds (configurable constant)
+MIN_TEST_FRACTION = 0.05  # Minimum acceptable test fraction
+MAX_TEST_FRACTION = 0.50  # Maximum acceptable test fraction
+PROGRESS_SAVE_INTERVAL = 10  # Save progress every N generations
 GA_RESULTS_CSV_COLUMNS = [  # Columns for the results CSV
     "timestamp",
     "tool",
