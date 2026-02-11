@@ -228,7 +228,7 @@ def setup_telegram_bot():
         telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
         telegram_module.RUNNING_CODE = os.path.basename(__file__)
     except Exception as e:
-        print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {str(e)}{Style.RESET_ALL}")
         TELEGRAM_BOT = None  # Set to None if initialization fails
 
 
