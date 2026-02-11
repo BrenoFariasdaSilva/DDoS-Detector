@@ -2598,17 +2598,14 @@ def prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generat
               features_path, params_path)
     """
 
-    # Compute counts and test fraction
-    n_train_local = len(y) if y is not None else None
-    n_test_local = len(y_test) if y_test is not None else None
-    test_frac_local = None
-    if n_train_local is not None and n_test_local is not None and (n_train_local + n_test_local) > 0:
-        test_frac_local = float(n_test_local) / float(n_train_local + n_test_local)
+    n_train_local = len(y) if y is not None else None  # Compute counts and test fraction
+    n_test_local = len(y_test) if y_test is not None else None  # Compute test sample count
+    test_frac_local = None  # Initialize test fraction as None
+    if n_train_local is not None and n_test_local is not None and (n_train_local + n_test_local) > 0:  # Verify both counts are valid
+        test_frac_local = float(n_test_local) / float(n_train_local + n_test_local)  # Calculate test set fraction
 
-    # Extract elapsed seconds from RF metrics (if present)
-    elapsed_base = extract_elapsed_from_metrics(rf_metrics)
-    # Build the canonical base row used by consolidated CSV
-    base_row_local = build_base_row(
+    elapsed_base = extract_elapsed_from_metrics(rf_metrics)  # Extract elapsed seconds from RF metrics (if present)
+    base_row_local = build_base_row(  # Build the canonical base row used by consolidated CSV
         csv_path,
         best_pop_size,
         n_generations,
@@ -2621,15 +2618,14 @@ def prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generat
         mutpb=mutpb,
     )
 
-    # Prepare model artifact directory and filenames
-    models_dir_local = f"{os.path.dirname(csv_path)}/Feature_Analysis/Genetic_Algorithm/Models/"
-    os.makedirs(models_dir_local, exist_ok=True)
-    ts = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
-    base_name_local = re.sub(r'[^A-Za-z0-9_.-]+', '_', os.path.splitext(os.path.basename(csv_path))[0])
-    model_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-model.joblib")
-    scaler_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-scaler.joblib")
-    features_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-features.json")
-    params_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-params.json")
+    models_dir_local = f"{os.path.dirname(csv_path)}/Feature_Analysis/Genetic_Algorithm/Models/"  # Prepare model artifact directory and filenames
+    os.makedirs(models_dir_local, exist_ok=True)  # Create models directory if it doesn't exist
+    ts = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")  # Generate timestamp string for filenames
+    base_name_local = re.sub(r'[^A-Za-z0-9_.-]+', '_', os.path.splitext(os.path.basename(csv_path))[0])  # Sanitize dataset name for use in filename
+    model_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-model.joblib")  # Construct full path for model file
+    scaler_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-scaler.joblib")  # Construct full path for scaler file
+    features_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-features.json")  # Construct full path for features file
+    params_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-params.json")  # Construct full path for params file
 
     return (
         n_train_local,
