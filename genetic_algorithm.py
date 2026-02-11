@@ -2568,10 +2568,9 @@ def maybe_evaluate_on_test(rf_m, best_ind_local, X, y, X_test, y_test):
     :return: RF metrics tuple (possibly produced by `evaluate_individual`) or the original `rf_m`.
     """
 
-    # Only perform evaluation if metrics are missing and a test set is available
-    if rf_m is None and X_test is not None and y_test is not None:
-        return evaluate_individual(best_ind_local, X, y, X_test, y_test)
-    return rf_m
+    if rf_m is None and X_test is not None and y_test is not None:  # Only perform evaluation if metrics are missing and a test set is available
+        return evaluate_individual(best_ind_local, X, y, X_test, y_test)  # Evaluate individual on test set to generate metrics
+    return rf_m  # Return existing metrics if already available
 
 
 def prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generations, rfe_ranking, y, y_test, cxpb, mutpb):
