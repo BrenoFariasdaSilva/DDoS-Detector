@@ -2462,58 +2462,62 @@ def write_consolidated_csv(rows, output_dir):
         f"{BackgroundColors.GREEN}Writing consolidated Genetic Algorithm results CSV.{Style.RESET_ALL}"
     )  # Output the verbose message
 
-    try:  # Try to write the consolidated CSV
-        os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+    with csv_write_lock:  # Thread-safe CSV write operation
+        try:  # Try to write the consolidated CSV
+            os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
-        df_new = pd.DataFrame(rows)  # Create DataFrame from provided rows
+            df_new = pd.DataFrame(rows)  # Create DataFrame from provided rows
 
-        df_new = normalize_elapsed_column_df(df_new)  # Normalize legacy elapsed_time to elapsed_time_s in new rows
+            df_new = normalize_elapsed_column_df(df_new)  # Normalize legacy elapsed_time to elapsed_time_s in new rows
 
-        csv_out = os.path.join(output_dir, "Genetic_Algorithm_Results.csv")  # Build path for consolidated CSV
+            csv_out = os.path.join(output_dir, "Genetic_Algorithm_Results.csv")  # Build path for consolidated CSV
 
-        if os.path.exists(csv_out):
-            df_existing = pd.read_csv(csv_out, dtype=str)
-            if "timestamp" not in df_existing.columns:
-                mtime = os.path.getmtime(csv_out)
-                back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")
-                df_existing["timestamp"] = back_ts
-            for c in GA_RESULTS_CSV_COLUMNS:
-                if c not in df_existing.columns:
-                    df_existing[c] = None
-            df_combined = pd.concat([df_existing[GA_RESULTS_CSV_COLUMNS], df_new], ignore_index=True, sort=False)
-            try:
-                df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")
-                df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)
-                df_combined = df_combined.drop(columns=["timestamp_dt"])
-            except Exception:
-                df_combined = df_combined.sort_values(by="timestamp", ascending=False)
-            df_out = df_combined.reset_index(drop=True)
-        else:
-            df_out = df_new
+            if os.path.exists(csv_out):  # If the consolidated CSV already exists, we need to merge with existing data
+                df_existing = pd.read_csv(csv_out, dtype=str)  # Read existing CSV as strings to avoid type issues
+                if "timestamp" not in df_existing.columns:  # If the existing CSV is missing the 'timestamp' column, add it with a default value based on file modification time
+                    print(
+                        f"{BackgroundColors.YELLOW}Warning: Existing CSV missing 'timestamp' column. Adding default timestamps.{Style.RESET_ALL}"
+                    )
+                    mtime = os.path.getmtime(csv_out)  # Get file modification time
+                    back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")  # Format timestamp based on file modification time
+                    df_existing["timestamp"] = back_ts  # Add the timestamp column with the default value
+                for c in GA_RESULTS_CSV_COLUMNS:  # Ensure all expected columns are present in the existing DataFrame, adding any missing ones with None values
+                    if c not in df_existing.columns:  # If an expected column is missing
+                        df_existing[c] = None  # Add the missing column with None values
+                df_combined = pd.concat([df_existing[GA_RESULTS_CSV_COLUMNS], df_new], ignore_index=True, sort=False)  # Combine existing and new DataFrames, ensuring column order
+                try:  # Try to sort by timestamp if the column exists and is properly formatted
+                    df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")  # Parse timestamp into datetime, coercing errors to NaT
+                    df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)  # Sort by the parsed datetime column in descending order (newest first)
+                    df_combined = df_combined.drop(columns=["timestamp_dt"])  # Remove the temporary datetime column after sorting
+                except Exception:  # If sorting by timestamp fails (e.g., due to parsing issues), fall back to sorting by dataset and run_index
+                    df_combined = df_combined.sort_values(by="timestamp", ascending=False)  # Sort by timestamp as a string (may not be perfectly chronological if formatting is inconsistent)
+                df_out = df_combined.reset_index(drop=True)  # Reset index after sorting
+            else:  # No existing CSV, so we can just use the new DataFrame as is
+                df_out = df_new  # Use the new DataFrame directly
 
-        df_out = populate_hardware_column(df_out, column_name="hardware")  # Populate hardware column using system specs
+            df_out = populate_hardware_column(df_out, column_name="hardware")  # Populate hardware column using system specs
 
-        df_out = ensure_expected_columns(df_out, GA_RESULTS_CSV_COLUMNS)  # Add any missing expected columns with None values
+            df_out = ensure_expected_columns(df_out, GA_RESULTS_CSV_COLUMNS)  # Add any missing expected columns with None values
 
-        df_out = df_out[GA_RESULTS_CSV_COLUMNS]  # Reorder columns into the canonical order
+            df_out = df_out[GA_RESULTS_CSV_COLUMNS]  # Reorder columns into the canonical order
 
-        for col in df_out.columns:  # Iterate over all columns
-            col_l = col.lower()  # Lowercase column name for case-insensitive verification
-            if "time" in col_l or "elapsed" in col_l or col in ("hardware", "timestamp"):  # Skip time-related and special columns
-                df_out[col] = df_out[col].apply(lambda v: int(v) if pd.notnull(v) and str(v).isdigit() else v)  # Convert time-related columns to int if possible
-            try:  # Try to truncate values in the column
-                df_out[col] = df_out[col].apply(lambda v: truncate_value(v) if pd.notnull(v) else v)  # Truncate numeric values
-            except Exception:  # On any error
-                pass  # Ignore errors and continue
+            for col in df_out.columns:  # Iterate over all columns
+                col_l = col.lower()  # Lowercase column name for case-insensitive verification
+                if "time" in col_l or "elapsed" in col_l or col in ("hardware", "timestamp"):  # Skip time-related and special columns
+                    df_out[col] = df_out[col].apply(lambda v: int(v) if pd.notnull(v) and str(v).isdigit() else v)  # Convert time-related columns to int if possible
+                try:  # Try to truncate values in the column
+                    df_out[col] = df_out[col].apply(lambda v: truncate_value(v) if pd.notnull(v) else v)  # Truncate numeric values
+                except Exception:  # On any error
+                    pass  # Ignore errors and continue
 
-        df_out.to_csv(csv_out, index=False, encoding="utf-8")  # Persist the consolidated CSV to disk
-        print(
-            f"\n{BackgroundColors.GREEN}Genetic Algorithm consolidated results saved to {BackgroundColors.CYAN}{csv_out}{Style.RESET_ALL}"
-        )  # Notify user of success
-    except Exception as e:
-        print(
-            f"{BackgroundColors.RED}Failed to write consolidated GA CSV: {str(e)}{Style.RESET_ALL}"
-        )  # Print failure message with exception
+            df_out.to_csv(csv_out, index=False, encoding="utf-8")  # Persist the consolidated CSV to disk
+            print(
+                f"\n{BackgroundColors.GREEN}Genetic Algorithm consolidated results saved to {BackgroundColors.CYAN}{csv_out}{Style.RESET_ALL}"
+            )  # Notify user of success
+        except Exception as e:  # On any error during the write process
+            print(
+                f"{BackgroundColors.RED}Failed to write consolidated GA CSV: {str(e)}{Style.RESET_ALL}"
+            )  # Print failure message with exception
 
 
 def determine_best_features_and_ranking(best_ind, feature_names, csv_path):
