@@ -1601,9 +1601,9 @@ def run_genetic_algorithm_loop(
     global GA_GENERATIONS_COMPLETED  # To track completed generations
     best_fitness = None  # Track the best fitness value
     gens_without_improvement = 0  # Counter for generations with no improvement
-    early_stop_gens = 10  # Number of generations to wait for improvement before stopping
+    early_stop_gens = EARLY_STOP_GENERATIONS  # Use configured constant
 
-    folds = 10  # Number of folds used in cross-validation
+    folds = N_CV_FOLDS  # Use configured constant for CV folds
 
     output_dir = (
         f"{os.path.dirname(csv_path)}/Feature_Analysis" if csv_path else os.path.join(".", "Feature_Analysis")
@@ -1698,27 +1698,27 @@ def run_genetic_algorithm_loop(
                     f"{BackgroundColors.YELLOW}Early stopping: No improvement in best fitness for {early_stop_gens} generations. Stopping at generation {gen}.{Style.RESET_ALL}"
                 )  # Print early stopping message
                 gens_ran = gen  # Record how many generations were executed before early stopping
-                GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
+                with global_state_lock:  # Thread-safe update
+                    GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
                 break  # Stop the loop early
 
+        should_send = show_progress and (gen % max(1, n_generations // 100) == 0)  # Send updates to Telegram at configured intervals (every 1% of generations)
         send_telegram_message(TELEGRAM_BOT, [
             f"Pop Size {pop_size}: Generation {gen}/{n_generations}, Best F1-Score: {truncate_value(best_fitness)}"
-        ], show_progress and gen % max(1, n_generations // 100) == 0)  # Send periodic updates to Telegram telegram_bot
+        ], should_send)  # Send periodic updates to Telegram telegram_bot
 
         gens_ran = gen  # Update gens_ran each generation
-        GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
+        with global_state_lock:  # Thread-safe update to GA_GENERATIONS_COMPLETED
+            GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
         gens_ran = gen if gens_ran == 0 else gens_ran  # Ensure gens_ran is set correctly if no early stopping occurred
 
-        try:  # Persist per-generation progress so runs can be resumed (every 10 gens to reduce I/O)
-            if RESUME_PROGRESS and state_id is not None and (gen % 10 == 0 or gen == n_generations):  # Save every 10 generations or at the end
+        try:  # Persist per-generation progress so runs can be resumed (every N gens to reduce I/O)
+            if RESUME_PROGRESS and state_id is not None and (gen % PROGRESS_SAVE_INTERVAL == 0 or gen == n_generations):  # Use configured interval
                 save_generation_state(
                     output_dir, state_id, gen, population, hof[0] if hof and len(hof) > 0 else None, fitness_history
                 )
         except Exception:  # If saving fails
             pass  # Do nothing
-
-    if hasattr(toolbox, "map") and hasattr(toolbox.map, "close"):  # If using multiprocessing pool
-        pass  # Pool lifecycle is now managed by the caller (run_population_sweep) to allow reuse
 
     return hof[0], gens_ran, fitness_history  # Return the best individual, gens ran and fitness history
 
