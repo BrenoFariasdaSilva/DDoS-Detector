@@ -934,6 +934,12 @@ def split_dataset(df, csv_path, test_size=0.2):
     :return: X_train, X_test, y_train, y_test
     """
 
+    if not (MIN_TEST_FRACTION <= test_size <= MAX_TEST_FRACTION):  # Validate test_size and clamp if out of bounds
+        print(
+            f"{BackgroundColors.YELLOW}Warning: test_size={test_size} outside valid range [{MIN_TEST_FRACTION}, {MAX_TEST_FRACTION}]. Clamping to valid range.{Style.RESET_ALL}"
+        )
+        test_size = max(MIN_TEST_FRACTION, min(MAX_TEST_FRACTION, test_size))  # Clamp test_size to valid range
+
     verbose_output(
         f"{BackgroundColors.GREEN}Splitting dataset into training and testing sets with test size = {test_size}.{Style.RESET_ALL}"
     )  # Output the verbose message
