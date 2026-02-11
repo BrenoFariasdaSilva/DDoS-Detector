@@ -1276,19 +1276,15 @@ def evaluate_individual(
     individual,
     X_train,
     y_train,
-    X_test,
-    y_test,
     estimator_cls=None,
 ):
     """
-    Evaluate the fitness of an individual solution using 10-fold Stratified Cross-Validation
+    Evaluate the fitness of an individual solution using N_CV_FOLDS-fold Stratified Cross-Validation
     on the training set only (não combina train+test para evitar data leakage).
 
     :param individual: A list representing the individual solution (binary mask for feature selection).
     :param X_train: Training feature set.
     :param y_train: Training target variable.
-    :param X_test: Testing feature set (unused during CV, but kept for compatibility).
-    :param y_test: Testing target variable (unused during CV, but kept for compatibility).
     :param estimator_cls: Classifier class to use (default: RandomForestClassifier).
     :return: Tuple containing CV accuracy, precision, recall, F1-score, FPR, FNR, test accuracy, precision, recall, F1-score, FPR, FNR
     """
@@ -1301,34 +1297,41 @@ def evaluate_individual(
         return 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1  # Return worst possible scores for CV and test
 
     mask_tuple = tuple(individual)  # Convert individual to tuple for hashing
-    if mask_tuple in fitness_cache:  # Verify if already evaluated
-        return fitness_cache[mask_tuple]  # Return cached result
+    
+    with fitness_cache_lock:  # Thread-safe cache access
+        if mask_tuple in fitness_cache:  # Verify if already evaluated
+            return fitness_cache[mask_tuple]  # Return cached result
 
     mask = np.array(individual, dtype=bool)  # Create boolean mask from individual
     X_train_sel = X_train[:, mask]  # Select features based on the mask
 
-    n_cv_folds = 10  # Number of CV folds
+    n_cv_folds = N_CV_FOLDS  # Use configurable constant
     metrics = np.empty((n_cv_folds, 6), dtype=float)  # Pre-allocate metrics array for each fold: [acc, prec, rec, f1, fpr, fnr]
     fold_count = 0  # Track how many folds actually ran
 
     try:  # Try to create StratifiedKFold splits
-        skf = StratifiedKFold(n_splits=n_cv_folds, shuffle=True, random_state=42)  # 10-fold Stratified CV
+        skf = StratifiedKFold(n_splits=n_cv_folds, shuffle=True, random_state=42)  # N_CV_FOLDS-fold Stratified CV
         splits = list(skf.split(X_train_sel, y_train))  # Generate splits
-    except Exception:  # If StratifiedKFold fails (e.g., too few samples per class)
+    except Exception as e:  # If StratifiedKFold fails (e.g., too few samples per class)
         print(
-            f"{BackgroundColors.YELLOW}Warning: StratifiedKFold failed, falling back to simple train/test split for evaluation due to {str(Exception)}{Style.RESET_ALL}"
+            f"{BackgroundColors.YELLOW}Warning: StratifiedKFold failed ({type(e).__name__}: {str(e)}), using simple holdout validation on training data only.{Style.RESET_ALL}"
         )  # Output warning message
-        X_test_sel = X_test[:, mask]  # Select features from test set
+        
+        from sklearn.model_selection import train_test_split as holdout_split  # Import holdout split function
+        
+        X_train_fold, X_val_fold, y_train_fold, y_val_fold = holdout_split(
+            X_train_sel, y_train, test_size=0.2, random_state=42, stratify=y_train
+        )  # Split training data into train/validation
         model = instantiate_estimator(estimator_cls)  # Instantiate the model
-        model.fit(X_train_sel, y_train)  # Fit the model on the training set
-        y_pred = model.predict(X_test_sel)  # Predict on the test set
+        model.fit(X_train_fold, y_train_fold)  # Fit on train fold
+        y_pred = model.predict(X_val_fold)  # Predict on validation fold (NOT test set)
 
-        acc = accuracy_score(y_test, y_pred)  # Calculate accuracy
-        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate precision
-        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate recall
-        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate F1-score
+        acc = accuracy_score(y_val_fold, y_pred)  # Calculate accuracy on validation fold
+        prec = precision_score(y_val_fold, y_pred, average="weighted", zero_division=0)  # Calculate precision
+        rec = recall_score(y_val_fold, y_pred, average="weighted", zero_division=0)  # Calculate recall
+        f1 = f1_score(y_val_fold, y_pred, average="weighted", zero_division=0)  # Calculate F1-score
 
-        cm = confusion_matrix(y_test, y_pred, labels=np.unique(y_test))  # Confusion matrix
+        cm = confusion_matrix(y_val_fold, y_pred, labels=np.unique(y_val_fold))  # Confusion matrix on validation
         tn = cm[0, 0] if cm.shape == (2, 2) else 0  # True negatives
         fp = cm[0, 1] if cm.shape == (2, 2) else 0  # False positives
         fn = cm[1, 0] if cm.shape == (2, 2) else 0  # False negatives
@@ -1337,7 +1340,10 @@ def evaluate_individual(
         fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # False positive rate
         fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # False negative rate
 
-        return acc, prec, rec, f1, fpr, fnr, acc, prec, rec, f1, fpr, fnr  # Return metrics for both CV and test
+        result = acc, prec, rec, f1, fpr, fnr, 0, 0, 0, 0, 0, 0  # Return validation metrics as CV, placeholder for test
+        with fitness_cache_lock:  # Thread-safe cache write
+            fitness_cache[mask_tuple] = result  # Cache the result for this mask
+        return result  # Return the result for holdout validation
 
     y_train_np = np.array(y_train)  # Convert y_train to numpy array for fast indexing
     early_stop_triggered = False  # Flag for early stopping
@@ -1372,13 +1378,21 @@ def evaluate_individual(
             early_stop_triggered = True  # Set flag
             break  # Stop evaluating further folds for this individual
 
+    if early_stop_triggered:  # When early stopping triggers, return worst-case fitness
+        result = 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1  # Worst possible scores
+        with fitness_cache_lock:  # Thread-safe cache write
+            fitness_cache[mask_tuple] = result  # Cache the worst-case result for this mask
+        return result  # Return the worst-case result due to early stopping
+
     means = np.mean(metrics[:fold_count], axis=0) if fold_count > 0 else np.zeros(6)  # Calculate means for completed folds only
     acc, prec, rec, f1, fpr, fnr = means  # Unpack mean metrics
 
     test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr = 0, 0, 0, 0, 0, 0  # Placeholder test metrics
 
     result = acc, prec, rec, f1, fpr, fnr, test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr  # Prepare result tuple
-    fitness_cache[mask_tuple] = result  # Cache the result
+    
+    with fitness_cache_lock:  # Thread-safe cache write
+        fitness_cache[mask_tuple] = result  # Cache the result
     
     return result  # Return vectorized average metrics
 
