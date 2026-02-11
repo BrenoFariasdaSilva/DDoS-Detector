@@ -681,6 +681,27 @@ def load_dataset(csv_path):
     return df  # Return the loaded DataFrame
 
 
+def print_loaded_artifacts_info(csv_path, features, params):
+    """
+    Display information about loaded model artifacts to the console.
+
+    :param csv_path: Path to the CSV dataset file
+    :param features: List of selected feature names
+    :param params: Dictionary of model parameters (can be None)
+    :return: None
+    """
+
+    dataset_stem = Path(csv_path).stem  # Extract dataset name from path
+    verbose_output(f"{BackgroundColors.GREEN}Loaded exported model and scaler for {BackgroundColors.CYAN}{dataset_stem}{Style.RESET_ALL}")  # Notify successful load
+    
+    feature_count = len(features)  # Count number of features
+    verbose_output(f"{BackgroundColors.GREEN}Selected features ({feature_count}): {BackgroundColors.CYAN}{features}{Style.RESET_ALL}")  # Display feature list
+    
+    if params is not None:  # Verify if parameters were loaded
+        params_json = json.dumps(params, default=str)  # Serialize parameters to JSON string
+        verbose_output(f"{BackgroundColors.GREEN}Model parameters: {BackgroundColors.CYAN}{params_json}{Style.RESET_ALL}")  # Display model configuration
+
+
 def prepare_test_data_for_loaded_model(csv_path, features):
     """
     Execute the full dataset pipeline and select features for evaluation.
