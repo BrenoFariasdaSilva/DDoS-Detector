@@ -445,20 +445,21 @@ class Discriminator(nn.Module):
     :param feature_dim: dimensionality of input feature vectors
     """
 
-    def __init__(  # Constructor for critic network
+    def __init__(
         self,
-        feature_dim: int,  # Dimensionality of feature vectors
-        n_classes: int,  # Number of class labels
-        hidden_dims: Optional[List[int]] = None,  # Optional critic architecture
-        embed_dim: int = 32,  # Embedding dimension for labels
-    ):  # End signature
+        feature_dim: int,
+        n_classes: int,
+        hidden_dims: Optional[List[int]] = None,
+        embed_dim: int = 32,
+    ):
         """
-        Conditional critic/discriminator network that scores (x, y).
+        Initialize conditional critic/discriminator network that scores (x, y).
 
-        :param feature_dim: dimensionality of input feature vector
-        :param n_classes: number of classes for conditioning
-        :param hidden_dims: list of hidden layer sizes
-        :param embed_dim: dimensionality of label embedding
+        :param feature_dim: Dimensionality of input feature vector
+        :param n_classes: Number of classes for conditioning
+        :param hidden_dims: List of hidden layer sizes (default: [512, 256, 128])
+        :param embed_dim: Dimensionality of label embedding (default: 32)
+        :return: None
         """
 
         super().__init__()  # Initialize discriminator internals
