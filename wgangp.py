@@ -202,6 +202,7 @@ def get_default_config():
         "plotting": {  # Visualization configuration
             "enabled": True,  # Enable plot generation
             "filename": "training_metrics.png",  # Plot filename
+            "subdir": "plots",  # Subdirectory under data augmentation outputs for plots
             "figsize": [18, 10],  # Figure size [width, height]
             "dpi": 300,  # Image resolution
             "subplot_rows": 2,  # Number of subplot rows
