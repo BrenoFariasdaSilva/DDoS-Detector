@@ -79,10 +79,10 @@ from tqdm import tqdm  # For progress bar visualization
 from typing import Any, Dict, List, Optional, Union, cast  # For Any type hint and cast
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
-try:
-    from torch.amp.autocast_mode import autocast as _torch_autocast
-except Exception:
-    _torch_autocast = None
+try:  # Attempt to import torch.amp.autocast for mixed precision support
+    from torch.amp.autocast_mode import autocast as _torch_autocast  # Import autocast for mixed precision
+except Exception:  # If import fails (e.g., CUDA not available), define a fallback
+    _torch_autocast = None  # Set to None to indicate autocast is unavailable
 
 
 def autocast(device_type: str, enabled: bool = True):
