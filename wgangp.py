@@ -376,24 +376,25 @@ class Generator(nn.Module):
     :param latent_dim: dimensionality of input noise vector
     """
 
-    def __init__(  # Constructor defining generator architecture
+    def __init__(
         self,
-        latent_dim: int,  # Dimensionality of latent noise vector
-        feature_dim: int,  # Dimensionality of generated features
-        n_classes: int,  # Number of label classes
-        hidden_dims: Optional[List[int]] = None,  # Optional hidden layer configuration
-        embed_dim: int = 32,  # Size of label embedding
-        n_resblocks: int = 3,  # Number of residual blocks to apply
-    ):  # End constructor signature
+        latent_dim: int,
+        feature_dim: int,
+        n_classes: int,
+        hidden_dims: Optional[List[int]] = None,
+        embed_dim: int = 32,
+        n_resblocks: int = 3,
+    ):
         """
-        Conditional generator that maps (z, y) -> feature vector.
+        Initialize conditional generator that maps (z, y) -> feature vector.
 
-        :param latent_dim: dimensionality of noise vector z
-        :param feature_dim: dimensionality of output feature vector
-        :param n_classes: number of conditioning classes
-        :param hidden_dims: list of hidden layer sizes for initial MLP
-        :param embed_dim: size of label embedding
-        :param n_resblocks: number of residual blocks to apply
+        :param latent_dim: Dimensionality of noise vector z
+        :param feature_dim: Dimensionality of output feature vector
+        :param n_classes: Number of conditioning classes
+        :param hidden_dims: List of hidden layer sizes for initial MLP (default: [256, 512])
+        :param embed_dim: Size of label embedding (default: 32)
+        :param n_resblocks: Number of residual blocks to apply (default: 3)
+        :return: None
         """
 
         super().__init__()  # Initialize module internals
