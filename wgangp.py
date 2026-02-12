@@ -85,15 +85,20 @@ except Exception:
 
 
 def autocast(device_type: str, enabled: bool = True):
-    """Return an autocast context manager when enabled on CUDA, else a nullcontext.
+    """
+    Return an autocast context manager when enabled on CUDA, else a nullcontext.
 
     This avoids referencing `torch.amp.autocast` directly (Pylance warning) and
     supports environments without CUDA.
+
+    :param device_type: The device type ('cuda' or 'cpu') to create autocast context for
+    :param enabled: Whether to enable autocast context (default: True)
+    :return: Autocast context manager if enabled on CUDA, otherwise nullcontext
     """
 
-    if enabled and device_type == "cuda" and _torch_autocast is not None:
-        return _torch_autocast(device_type)
-    return nullcontext()
+    if enabled and device_type == "cuda" and _torch_autocast is not None:  # If enabled and CUDA available and autocast exists
+        return _torch_autocast(device_type)  # Return CUDA autocast context
+    return nullcontext()  # Return null context for CPU or when disabled
 
 
 # Macros:
