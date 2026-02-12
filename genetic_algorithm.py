@@ -17,25 +17,38 @@ Highlights:
     - Fitness returns multi-metrics: accuracy, precision, recall, F1, FPR, FNR
     - Exports consolidated results to Feature_Analysis/ and saves plots
     - Optional Telegram progress notifications and background resource monitor
+    - Fully externally configurable via config files, CLI args, or programmatic calls
+
+Configuration:
+    ALL execution parameters are externally configurable through:
+    1. Configuration file (config.yaml or .env) - PRIMARY method
+    2. Command-line arguments - Override config file values
+    3. Programmatic execution - Pass config dictionary to run_genetic_algorithm()
+    
+    Configuration priority: CLI args > config file > defaults
+    See config.yaml.example and CONFIGURATION_GUIDE.md for details.
 
 Usage:
-    - Configure the CSV path in `main()` or call the functions programmatically.
-    - The script assumes CSV format where the last column is the target and
-        only numeric features are used by the GA pipeline.
+    CLI with configuration file:
+        python genetic_algorithm.py --config config.yaml --csv-path ./data.csv
+    
+    CLI with arguments only:
+        python genetic_algorithm.py --runs 10 --n-generations 300 --verbose
+    
+    Programmatic execution:
+        from genetic_algorithm import run_genetic_algorithm, get_default_config
+        config = get_default_config()
+        config["execution"]["runs"] = 10
+        results = run_genetic_algorithm(config=config, csv_path="./data.csv")
 
 Outputs:
     - Feature_Analysis/Genetic_Algorithm_Results.csv (consolidated results)
     - Per-dataset feature summaries and boxplots in Feature_Analysis/
-
-Notes & TODOs:
-    - Add argparse/CLI for run-time configuration (sample paths, generations,
-        population sizes, runs). Currently `main()` contains the defaults.
-    - Improve reproducibility (seed propagation), CV strategy, and parallelism.
-    - Add more robust categorical handling, imputation, and unit tests.
+    - Optional convergence plots and model artifacts
 
 Dependencies:
     Python >= 3.9 and: pandas, numpy, scikit-learn, deap, tqdm, matplotlib,
-    seaborn, colorama. Optional: psutil, python-telegram-bot.
+    seaborn, colorama, pyyaml. Optional: psutil, python-telegram-bot, python-dotenv.
 """
 
 import argparse  # For command-line argument parsing
