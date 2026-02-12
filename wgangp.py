@@ -126,6 +126,75 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def get_files_to_process(directory_path, file_extension=".csv", config: Optional[Dict] = None):
+    """
+    Collect all files with a given extension inside a directory (non-recursive).
+
+    Performs validation, respects ignore_files configuration, and optionally filters by
+    match_filenames_to_process when defined.
+
+    :param directory_path: Path to the directory to scan
+    :param file_extension: File extension to include (default: ".csv")
+    :param config: Optional configuration dictionary containing execution settings
+    :return: Sorted list of matching file paths
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG or get_default_config()  # Use global or default config
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Getting all {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files in: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}",
+        config=config
+    )  # Verbose: starting file collection
+    verify_filepath_exists(directory_path)  # Validate directory path exists
+
+    if not os.path.isdir(directory_path):  # Check if path is a valid directory
+        verbose_output(
+            f"{BackgroundColors.RED}Not a directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}",
+            config=config
+        )  # Verbose: invalid directory
+        return []  # Return empty list for invalid paths
+
+    # Get ignore and match settings from config
+    ignore_files = config.get("execution", {}).get("ignore_files", [])  # Get ignore files list from config
+    match_filenames = config.get("execution", {}).get("match_filenames_to_process", [""])  # Get match filenames list from config
+    
+    match_names = (
+        set(match_filenames) if match_filenames not in ([], [""], [" "]) else None
+    )  # Load match list or None
+    if match_names:  # If filtering is to be applied
+        verbose_output(
+            f"{BackgroundColors.GREEN}Filtering to filenames: {BackgroundColors.CYAN}{match_names}{Style.RESET_ALL}",
+            config=config
+        )  # Verbose: applying filename filter
+
+    files = []  # Accumulator for valid files
+
+    for item in os.listdir(directory_path):  # Iterate directory entries
+        item_path = os.path.join(directory_path, item)  # Absolute path
+        filename = os.path.basename(item_path)  # Extract just the filename
+
+        if any(ignore == filename or ignore == item_path for ignore in ignore_files):  # Check if file is in ignore list
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Ignoring {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} (listed in ignore_files){Style.RESET_ALL}",
+                config=config
+            )  # Verbose: ignoring file
+            continue  # Skip ignored file
+
+        if os.path.isfile(item_path) and item.lower().endswith(file_extension):  # File matches extension requirement
+            if (
+                match_names is not None and filename not in match_names
+            ):  # Filename not included in match_filenames_to_process
+                verbose_output(
+                    f"{BackgroundColors.YELLOW}Skipping {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} (not in match_filenames_to_process){Style.RESET_ALL}",
+                    config=config
+                )  # Verbose: skipping non-matching file
+                continue  # Skip this file
+            files.append(item_path)  # Add file to result list
+
+    return sorted(files)  # Return sorted list for deterministic output
+
+
 def gradient_penalty(critic, real_samples, fake_samples, labels, device, config: Optional[Dict] = None):
     """
     Compute the WGAN-GP gradient penalty.
