@@ -126,6 +126,27 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def deep_merge(base: Dict, override: Dict) -> Dict:
+    """
+    Deep merge two dictionaries, with override taking precedence.
+
+    Recursively merges nested dictionaries. Non-dict values from override
+    completely replace corresponding values in base.
+
+    :param base: Base dictionary (lower priority)
+    :param override: Override dictionary (higher priority)
+    :return: Merged dictionary
+    """
+
+    result = base.copy()  # Create copy of base dictionary
+    for key, value in override.items():  # Iterate override keys
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):  # If both are dicts
+            result[key] = deep_merge(result[key], value)  # Recursively merge
+        else:  # Direct replacement
+            result[key] = value  # Override value
+    return result  # Return merged dictionary
+
+
 def initialize_logger(config: Dict):
     """
     Initialize the logger for output redirection.
