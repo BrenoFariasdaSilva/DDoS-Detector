@@ -3378,66 +3378,70 @@ def play_sound():
         )
 
 
-def main():
+def run_genetic_algorithm(config=None, csv_path=None):
     """
-    Main function.
+    Execute genetic algorithm feature selection with provided configuration.
+    This function is the main orchestration entry point for programmatic execution.
 
-    :return: None
+    :param config: Configuration dictionary (uses defaults if None)
+    :param csv_path: Path to CSV dataset (uses config/default if None)
+    :return: Dictionary with sweep results
     """
 
-    parser = argparse.ArgumentParser(
-        description="Run Genetic Algorithm feature selection and optionally load existing exported models."
-    )
-    parser.add_argument(  # Add command-line argument for skipping training
-        "--skip-train-if-model-exists",  # Argument name
-        dest="skip_train",  # Destination variable name
-        action="store_true",  # Set to True if flag present
-        help="If set, do not retrain; load existing exported artifacts and evaluate.",  # Help text
-    )
-    parser.add_argument(  # Add command-line argument for verbose mode
-        "--verbose",  # Argument name
-        dest="verbose",  # Destination variable name
-        action="store_true",  # Set to True if flag present
-        help="Enable verbose output during the run.",  # Help text
-    )
-    parser.add_argument(  # Add command-line argument for CSV path
-        "--csv",  # Argument name
-        dest="csv",  # Destination variable name
-        type=str,  # String type
-        default=None,  # Default value if not provided
-        help="Optional: path to dataset CSV to analyze. If omitted, uses the default in main().",  # Help text
-    )
-    args = parser.parse_args()  # Parse command-line arguments
+    global CONFIG, CPU_PROCESSES  # Use global configuration and CPU_PROCESSES
 
-    global SKIP_TRAIN_IF_MODEL_EXISTS, VERBOSE  # Declare global variables for configuration
-    SKIP_TRAIN_IF_MODEL_EXISTS = bool(args.skip_train)  # Set skip training flag from parsed arguments
-    VERBOSE = bool(args.verbose)  # Set verbose flag from parsed arguments
-    csv_path = args.csv if args.csv else "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Set CSV path from args or use default
+    if config is not None:  # If configuration provided
+        CONFIG = config  # Use provided configuration
+    elif CONFIG is None:  # If no configuration set
+        CONFIG = get_default_config()  # Use defaults
+
+    with global_state_lock:  # Thread-safe initialization
+        if CPU_PROCESSES is None or CPU_PROCESSES == 1:  # If not initialized or default
+            CPU_PROCESSES = CONFIG["multiprocessing"]["cpu_processes"]  # Set from config
+
+    if csv_path is None:  # If no path provided
+        csv_path = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Use default
+
+    n_generations = CONFIG["genetic_algorithm"]["n_generations"]  # Get generations from config
+    min_pop = CONFIG["genetic_algorithm"]["min_pop"]  # Get min population from config
+    max_pop = CONFIG["genetic_algorithm"]["max_pop"]  # Get max population from config
+    cxpb = CONFIG["genetic_algorithm"]["cxpb"]  # Get crossover probability from config
+    mutpb = CONFIG["genetic_algorithm"]["mutpb"]  # Get mutation probability from config
+    runs = CONFIG["execution"]["runs"]  # Get number of runs from config
+    skip_train = CONFIG["execution"]["skip_train_if_model_exists"]  # Get skip train flag from config
+
+    dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Extract dataset name
 
     print(
         f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Genetic Algorithm Feature Selection{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
         end="\n\n",
-    )
-    start_time = datetime.datetime.now()  # Record program start time
+    )  # Print welcome message
 
-    setup_telegram_bot()  # Setup Telegram bot if configured
+    start_time = datetime.datetime.now()  # Record start time
 
-    n_generations = 200  # Example GA params (could be extended to CLI)
-    min_pop = 20  # Minimum population size for sweep
-    max_pop = 20  # Maximum population size for sweep
-    cxpb = 0.5  # Crossover probability
-    mutpb = 0.01  # Mutation probability
-    runs = RUNS  # Number of runs per population size
-    dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Extract dataset name from file path
-    
-    send_telegram_message(TELEGRAM_BOT, [f"Starting Genetic Algorithm Feature Selection for {dataset_name} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Send start message
+    setup_telegram_bot()  # Setup Telegram bot
 
-    if SKIP_TRAIN_IF_MODEL_EXISTS:  # Verify if model loading is enabled
-        should_return = handle_skip_train_if_model_exists(csv_path)  # Execute model loading workflow
-        if should_return:  # Verify if artifacts were loaded successfully
-            return  # Exit early to skip GA training
+    send_telegram_message(
+        TELEGRAM_BOT,
+        [f"Starting Genetic Algorithm Feature Selection for {dataset_name} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"]
+    )  # Send start message
 
-    # Run the GA pipeline as usual
+    if skip_train:  # If skip training enabled
+        should_return = handle_skip_train_if_model_exists(csv_path)  # Try loading existing model
+        if should_return:  # If model loaded successfully
+            return {}  # Exit early
+
+    if CONFIG["resource_monitor"]["enabled"]:  # If resource monitor enabled
+        start_resource_monitor_safe(
+            interval_seconds=CONFIG["resource_monitor"]["interval_seconds"],
+            reserve_cpu_frac=CONFIG["resource_monitor"]["reserve_cpu_frac"],
+            reserve_mem_frac=CONFIG["resource_monitor"]["reserve_mem_frac"],
+            min_procs=CONFIG["resource_monitor"]["min_procs"],
+            max_procs=CONFIG["resource_monitor"]["max_procs"],
+            min_gens_before_update=CONFIG["resource_monitor"]["min_gens_before_update"],
+            daemon=CONFIG["resource_monitor"]["daemon"],
+        )  # Start resource monitor thread
+
     sweep_results = run_population_sweep(
         dataset_name,
         csv_path,
@@ -3448,28 +3452,53 @@ def main():
         mutpb=mutpb,
         runs=runs,
         progress_bar=None,
-    )
+    )  # Execute population sweep
 
-    if VERBOSE and sweep_results:  # Verify if verbose mode is enabled and results exist
-        print(  # Print detailed results header
-            f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}"
-        )
-        for pop_size, features in sweep_results.items():  # Iterate over each population size result
-            print(  # Print population size and its features
-                f"  Pop {pop_size}: {len(features)} features -> {features}"
-            )
+    verbose = CONFIG["execution"]["verbose"]  # Get verbose flag
+    if verbose and sweep_results:  # If verbose and results exist
+        print(f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}")  # Print header
+        for pop_size, features in sweep_results.items():  # Iterate results
+            print(f"  Pop {pop_size}: {len(features)} features -> {features}")  # Print details
 
-    finish_time = datetime.datetime.now()  # Record program finish time
+    finish_time = datetime.datetime.now()  # Record finish time
     print(
         f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
-    )
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
-    )
-    
-    send_telegram_message(TELEGRAM_BOT, [f"Genetic Algorithm feature selection completed for {dataset_name}. Execution time: {calculate_execution_time(start_time, finish_time)}"])  # Send completion message
-    
-    atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
+    )  # Print timing info
+    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}")  # Print completion
+
+    send_telegram_message(
+        TELEGRAM_BOT,
+        [f"Genetic Algorithm feature selection completed for {dataset_name}. Execution time: {calculate_execution_time(start_time, finish_time)}"]
+    )  # Send completion message
+
+    if CONFIG["execution"]["play_sound"]:  # If sound enabled
+        atexit.register(play_sound)  # Register sound callback
+
+    return sweep_results  # Return results
+
+
+def main():
+    """
+    Main function for CLI execution. Initializes configuration and executes GA.
+
+    :return: None
+    """
+
+    global CONFIG, logger  # Declare global variables
+
+    cli_args = parse_cli_args()  # Parse command-line arguments
+
+    CONFIG = initialize_config(config_path=cli_args.config if hasattr(cli_args, 'config') else None, cli_args=cli_args)  # Initialize merged configuration
+
+    logger = initialize_logger(CONFIG)  # Initialize logger with configuration
+
+    global CPU_PROCESSES  # Declare global CPU_PROCESSES
+    with global_state_lock:  # Thread-safe initialization
+        CPU_PROCESSES = CONFIG["multiprocessing"]["cpu_processes"]  # Set initial CPU processes from config
+
+    csv_path = cli_args.csv_path if cli_args.csv_path else "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Get CSV path from CLI or use default
+
+    run_genetic_algorithm(config=CONFIG, csv_path=csv_path)  # Run genetic algorithm with configuration
 
 
 if __name__ == "__main__":
