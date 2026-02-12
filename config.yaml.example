@@ -1,24 +1,116 @@
 # ================================================================================
-# Genetic Algorithm Feature Selection - Configuration File
+# DDoS-Detector — Unified Configuration File
 # ================================================================================
-# This is an example configuration file for genetic_algorithm.py
-# Copy this file to config.yaml and modify as needed.
-# CLI arguments will override values specified here.
+# Central configuration for ALL project scripts:
+#   - genetic_algorithm.py  (Genetic Algorithm Feature Selection)
+#   - wgangp.py             (WGAN-GP Data Augmentation)
+#
+# Configuration priority (highest → lowest):
+#   1. CLI arguments
+#   2. This config.yaml
+#   3. Hard-coded defaults in each script's get_default_config()
+#
+# Sections:
+#   [Shared]       execution, dataset, paths, sound, logging, telegram, plotting
+#   [GA-specific]  genetic_algorithm, early_stop, cross_validation,
+#                  multiprocessing, resource_monitor, model, caching,
+#                  progress, export
+#   [WGAN-GP]      wgangp, training, generator, discriminator,
+#                  gradient_penalty, generation, dataloader
+# ================================================================================
 
+
+# ==============================================================================
+# SHARED SECTIONS — Used by multiple scripts
+# ==============================================================================
+
+# --- Execution Control (shared + per-script keys) ---
 execution:
   verbose: false                      # Enable verbose output messages
+  play_sound: true                    # Play sound notification when complete
+  # genetic_algorithm.py specific:
   skip_train_if_model_exists: false   # Skip training if model artifacts exist
   runs: 5                             # Number of GA runs per population size
   resume_progress: true               # Resume from saved state files
   progress_save_interval: 10          # Save progress every N generations
-  play_sound: true                    # Play sound notification when complete
+  # wgangp.py specific:
+  results_suffix: "_data_augmented"   # Suffix to add to generated filenames
+  match_filenames_to_process: [""]    # List of specific filenames to match
+  ignore_files: ["_data_augmented"]   # List of filename substrings to ignore
+  ignore_dirs:                        # List of directory names to ignore
+    - "Classifiers"
+    - "Classifiers_Hyperparameters"
+    - "Dataset_Description"
+    - "Data_Separability"
+    - "Feature_Analysis"
 
+# --- Dataset Configuration (shared + per-script keys) ---
 dataset:
+  remove_zero_variance: true          # Remove zero-variance features during preprocessing
+  # genetic_algorithm.py specific:
   files_to_ignore: []                 # List of files to ignore during processing
   test_size: 0.2                      # Test set size for train-test split
   min_test_fraction: 0.05             # Minimum acceptable test fraction
   max_test_fraction: 0.50             # Maximum acceptable test fraction
-  remove_zero_variance: true          # Remove zero-variance features during preprocessing
+  # wgangp.py specific:
+  label_candidates:                   # Common label column names for auto-detection
+    - "label"
+    - "class"
+    - "target"
+  datasets:                           # Dictionary containing dataset paths
+    CICDDoS2019-Dataset:
+      - "./Datasets/CICDDoS2019/01-12/"
+      - "./Datasets/CICDDoS2019/03-11/"
+
+# --- File Paths (shared + per-script keys) ---
+paths:
+  logs_dir: "./Logs"                  # Directory for log files (shared)
+  # genetic_algorithm.py specific:
+  datasets_dir: null                  # Directory containing datasets (null for auto-detect)
+  output_dir: "Feature_Analysis"      # Output directory for GA results
+  csv_path: null                      # Default dataset CSV path (null for auto-detect)
+  # wgangp.py specific:
+  out_dir: "outputs"                  # Output directory for WGAN-GP models/logs
+  checkpoint_subdir: "Checkpoints"    # Checkpoints subdirectory name
+  data_augmentation_subdir: "Data_Augmentation"  # Data augmentation subdirectory name
+
+# --- Sound Notifications ---
+sound:
+  enabled: true                       # Enable sound notifications
+  commands:                           # Commands to play sound for each operating system
+    Darwin: "afplay"
+    Linux: "aplay"
+    Windows: "start"
+  file: "./.assets/Sounds/NotificationSound.wav"  # Path to the sound file
+
+# --- Logging ---
+logging:
+  enabled: true                       # Enable file logging
+  clean: true                         # Clear log file on start
+  tqdm_bar_format: "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"  # Progress bar format
+
+# --- Telegram Notifications ---
+telegram:
+  enabled: true                       # Enable Telegram notifications
+  verify_env: true                    # Verify .env file existence
+
+# --- Plotting / Visualization ---
+plotting:
+  enabled: true                       # Enable plot generation
+  filename: "training_metrics.png"    # Plot filename
+  subdir: "plots"                     # Subdirectory under data augmentation outputs for plots
+  figsize: [18, 10]                   # Figure size [width, height]
+  dpi: 300                            # Image resolution
+  subplot_rows: 2                     # Number of subplot rows
+  subplot_cols: 3                     # Number of subplot columns
+  linewidth: 1.5                      # Line width for plots
+  alpha: 0.7                          # Transparency for plot lines
+  grid_alpha: 0.3                     # Grid transparency
+
+
+# ==============================================================================
+# GENETIC ALGORITHM SECTIONS — Used by genetic_algorithm.py
+# ==============================================================================
 
 genetic_algorithm:
   n_generations: 200                  # Number of generations for GA
@@ -88,15 +180,61 @@ export:
     - best_features
     - rfe_ranking
 
-sound:
-  commands:                           # Commands to play sound for each operating system
-    Darwin: "afplay"
-    Linux: "aplay"
-    Windows: "start"
-  file: "./.assets/Sounds/NotificationSound.wav"  # Path to the sound file
 
-paths:
-  datasets_dir: null                  # Directory containing datasets (null for auto-detect)
-  output_dir: "Feature_Analysis"      # Output directory for results
-  logs_dir: "./Logs"                  # Directory for log files
-  csv_path: null                       # Default dataset CSV path (null to require CLI or auto-detect)
+# ==============================================================================
+# WGAN-GP SECTIONS — Used by wgangp.py
+# ==============================================================================
+
+wgangp:
+  mode: "both"                        # Mode: train, gen, or both
+  csv_path: null                      # Path to CSV training data (null for batch mode)
+  label_col: "Label"                  # Column name for class label
+  feature_cols: null                  # List of feature column names (null = use all)
+  seed: 42                            # Random seed for reproducibility
+  force_cpu: false                    # Force CPU usage even if CUDA available
+  from_scratch: false                 # Force training from scratch, ignore checkpoints
+
+training:
+  epochs: 60                          # Number of training epochs
+  batch_size: 64                      # Training batch size
+  critic_steps: 5                     # Number of discriminator updates per generator update
+  lr: 0.0001                          # Learning rate for both networks
+  beta1: 0.5                          # Adam optimizer beta1 parameter
+  beta2: 0.9                          # Adam optimizer beta2 parameter
+  lambda_gp: 10.0                     # Gradient penalty coefficient
+  save_every: 5                       # Save checkpoints every N epochs
+  log_interval: 50                    # Log metrics every N steps
+  sample_batch: 16                    # Number of samples for fixed noise generation
+  use_amp: false                      # Use automatic mixed precision
+  compile: false                      # Use torch.compile() for faster execution
+
+generator:
+  latent_dim: 100                     # Dimensionality of noise vector
+  hidden_dims: [256, 512]             # Hidden layer sizes
+  embed_dim: 32                       # Label embedding dimension
+  n_resblocks: 3                      # Number of residual blocks
+  leaky_relu_alpha: 0.2               # LeakyReLU negative slope
+
+discriminator:
+  hidden_dims: [512, 256, 128]        # Hidden layer sizes
+  embed_dim: 32                       # Label embedding dimension
+  leaky_relu_alpha: 0.2               # LeakyReLU negative slope
+
+gradient_penalty:
+  epsilon: 1e-12                      # Small constant for numerical stability
+
+generation:
+  checkpoint: null                    # Path to generator checkpoint
+  n_samples: 1.0                      # Number/percentage of samples to generate (1.0 = 100%)
+  label: null                         # Specific class ID to generate (null = all classes)
+  out_file: "generated.csv"           # Output CSV filename
+  gen_batch_size: 256                 # Generation batch size
+  feature_dim: null                   # Feature dimensionality (null = auto-detect)
+  small_class_threshold: 100          # Threshold for small class detection
+  small_class_min_samples: 10         # Minimum samples for small classes
+
+dataloader:
+  num_workers: 8                      # Number of workers for data loading
+  pin_memory: true                    # Use pinned memory for faster GPU transfer
+  persistent_workers: true            # Keep workers alive between epochs
+  prefetch_factor: 2                  # Number of batches to prefetch
