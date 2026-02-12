@@ -138,6 +138,59 @@ csv_write_lock = threading.Lock()  # Lock for CSV write operations to prevent ra
 # Functions Definition
 
 
+def parse_cli_args():
+    """
+    Parse command-line arguments for genetic algorithm configuration.
+
+    :return: Namespace object containing parsed arguments
+    """
+
+    parser = argparse.ArgumentParser(
+        description="Genetic Algorithm for Feature Selection",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )  # Create argument parser
+
+    # Dataset arguments:
+    parser.add_argument("--csv-path", type=str, help="Path to CSV dataset file or directory")  # CSV path argument
+    parser.add_argument("--files-to-ignore", type=str, nargs="*", help="List of files to ignore")  # Files to ignore
+    parser.add_argument("--test-size", type=float, help="Test set size (0.0-1.0)")  # Test size argument
+
+    # Execution arguments:
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")  # Verbose flag
+    parser.add_argument("--runs", type=int, help="Number of GA runs")  # Number of runs
+    parser.add_argument("--skip-train", action="store_true", help="Skip training if model exists")  # Skip training flag
+    parser.add_argument("--no-resume", action="store_true", help="Disable progress resumption")  # Disable resume flag
+    parser.add_argument("--no-sound", action="store_true", help="Disable sound notification")  # Disable sound flag
+
+    # GA hyperparameters:
+    parser.add_argument("--n-generations", type=int, help="Number of GA generations")  # Generations argument
+    parser.add_argument("--min-pop", type=int, help="Minimum population size")  # Minimum population
+    parser.add_argument("--max-pop", type=int, help="Maximum population size")  # Maximum population
+    parser.add_argument("--cxpb", type=float, help="Crossover probability")  # Crossover probability
+    parser.add_argument("--mutpb", type=float, help="Mutation probability")  # Mutation probability
+
+    # Cross-validation arguments:
+    parser.add_argument("--cv-folds", type=int, help="Number of cross-validation folds")  # CV folds argument
+
+    # Early stopping arguments:
+    parser.add_argument("--early-stop-acc", type=float, help="Early stop accuracy threshold")  # Early stop threshold
+    parser.add_argument("--early-stop-folds", type=int, help="Early stop folds")  # Early stop folds
+    parser.add_argument("--early-stop-gens", type=int, help="Early stop generations")  # Early stop generations
+
+    # Multiprocessing arguments:
+    parser.add_argument("--n-jobs", type=int, help="Number of parallel jobs (-1 for all)")  # N jobs argument
+    parser.add_argument("--cpu-processes", type=int, help="Initial CPU processes")  # CPU processes argument
+
+    # Resource monitor arguments:
+    parser.add_argument("--no-monitor", action="store_true", help="Disable resource monitoring")  # Disable monitor
+    parser.add_argument("--monitor-interval", type=int, help="Monitor interval in seconds")  # Monitor interval
+
+    # Config file argument:
+    parser.add_argument("--config", type=str, help="Path to configuration file (YAML or .env)")  # Config file path
+
+    return parser.parse_args()  # Parse and return arguments
+
+
 def get_default_config():
     """
     Returns the default configuration dictionary for the genetic algorithm.
