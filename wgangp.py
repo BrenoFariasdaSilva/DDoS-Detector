@@ -592,9 +592,9 @@ def parse_args():
     p.add_argument(
         "--n_samples",
         type=float,
-        default=0.1,
-        help="Number of samples to generate. If >= 1, absolute count. If < 1, percentage of training data per class (default: 0.1 = 10%%)"
-    )  # Add number of samples argument (supports both int and percentage)
+        default=1.0,
+        help="Number of samples to generate. If > 1, absolute count. If <= 1, percentage of training data per class (1.0 = 100%%, default: 1.0)"
+    )  # Add number of samples argument (supports both absolute and percentage modes)
     p.add_argument(
         "--label", type=int, default=None, help="If set, generate samples for this class id only"
     )  # Add label argument for generation
@@ -1187,7 +1187,7 @@ def generate(args):
     feature_cols = ckpt.get("feature_cols", None)  # Try to get feature column names from checkpoint
     class_distribution = ckpt.get("class_distribution", None)  # Try to get class distribution from checkpoint
 
-    if scaler is None or label_encoder is None or feature_cols is None or (args.n_samples < 1.0 and class_distribution is None):  # If critical data missing
+    if scaler is None or label_encoder is None or feature_cols is None or (args.n_samples <= 1.0 and class_distribution is None):  # If critical data missing
         if args.csv_path is None:  # Verify if CSV path is provided
             raise RuntimeError(
                 "Checkpoint missing scaler/label_encoder/feature_cols/class_distribution. Provide --csv_path to reconstruct them."
@@ -1233,7 +1233,7 @@ def generate(args):
     G.eval()  # Set generator to evaluation mode
 
     # Determine number of samples to generate (supports both absolute count and percentage)
-    if args.n_samples < 1.0:  # Percentage mode: generate percentage of training data per class
+    if args.n_samples <= 1.0:  # Percentage mode: generate percentage of training data per class (1.0 == 100%)
         if class_distribution is None:  # If class distribution not available
             raise RuntimeError(
                 "Percentage-based generation requires class_distribution in checkpoint or --csv_path to calculate it."
