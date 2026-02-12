@@ -3442,9 +3442,9 @@ def run_population_sweep(
     """
 
     verbose_output(
-        f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {min_pop} to {max_pop}, running {n_generations} generations and {runs} runs each.{Style.RESET_ALL}"
+        f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {BackgroundColors.CYAN}{min_pop}{BackgroundColors.GREEN} to {BackgroundColors.CYAN}{max_pop}{BackgroundColors.GREEN}, running {BackgroundColors.CYAN}{n_generations}{BackgroundColors.GREEN} generations and {BackgroundColors.CYAN}{runs}{BackgroundColors.GREEN} runs each.{Style.RESET_ALL}"
     )
-    
+
     clear_fitness_cache()  # Clear any existing fitness cache to ensure fresh evaluations for the sweep
 
     send_telegram_message(TELEGRAM_BOT, [
