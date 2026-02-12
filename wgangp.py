@@ -352,6 +352,40 @@ def detect_label_column(columns, config: Optional[Dict] = None):
     return None  # Return None if no label column is found
 
 
+def play_sound(config: Optional[Dict] = None):
+    """
+    Plays a sound when the program finishes and skips if the operating system is Windows.
+
+    :param config: Optional configuration dictionary containing sound settings
+    :return: None
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG or get_default_config()  # Use global or default config
+    
+    if not config.get("sound", {}).get("enabled", True):  # If sound disabled
+        return  # Exit early
+    
+    current_os = platform.system()  # Get the current operating system
+    if current_os == "Windows":  # If the current operating system is Windows
+        return  # Do nothing
+
+    sound_file = config.get("sound", {}).get("file", "./.assets/Sounds/NotificationSound.wav")  # Get sound file path
+    sound_commands = config.get("sound", {}).get("commands", {})  # Get sound commands dictionary
+    
+    if verify_filepath_exists(sound_file):  # If the sound file exists
+        if current_os in sound_commands:  # If the platform.system() is in the sound_commands dictionary
+            os.system(f"{sound_commands[current_os]} {sound_file}")  # Play the sound
+        else:  # If the platform.system() is not in the sound_commands dictionary
+            print(
+                f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not in the {BackgroundColors.CYAN}sound_commands dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}"
+            )
+    else:  # If the sound file does not exist
+        print(
+            f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{sound_file}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}"
+        )
+
+
 def run_wgangp(config: Optional[Union [Dict, str]] = None, **kwargs):
     """
     Programmatic entry point for WGAN-GP execution from external orchestrators.
