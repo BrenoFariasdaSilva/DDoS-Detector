@@ -472,7 +472,11 @@ def verbose_output(true_string="", false_string=""):
     :return: None
     """
 
-    if VERBOSE and true_string != "":  # If VERBOSE is True and a true_string was provided
+    global CONFIG  # Access global configuration
+
+    verbose = CONFIG["execution"]["verbose"] if CONFIG else False  # Get verbose setting from config
+
+    if verbose and true_string != "":  # If verbose is True and a true_string was provided
         print(true_string)  # Output the true statement string
     elif false_string != "":  # If a false_string was provided
         print(false_string)  # Output the false statement string
@@ -603,7 +607,7 @@ def get_files_to_process(directory_path, file_extension=".csv"):
         filename = os.path.basename(item_path)  # Get the filename
 
         if any(
-            ignore and (ignore == filename or ignore == item_path) for ignore in FILES_TO_IGNORE
+            ignore and (ignore == filename or ignore == item_path) for ignore in CONFIG["dataset"]["files_to_ignore"]
         ):  # If the file is in the FILES_TO_IGNORE list
             verbose_output(
                 f"{BackgroundColors.YELLOW}Ignoring file {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} listed in FILES_TO_IGNORE{Style.RESET_ALL}"
@@ -1085,11 +1089,11 @@ def prepare_test_data_for_loaded_model(csv_path, features):
     if df is None:  # Verify if loading failed
         return None  # Exit early on load failure
 
-    cleaned_df = preprocess_dataframe(df)  # Clean and preprocess the dataframe
+    cleaned_df = preprocess_dataframe(df, remove_zero_variance=CONFIG["dataset"]["remove_zero_variance"])  # Clean and preprocess the dataframe
     if cleaned_df is None or cleaned_df.empty:  # Verify if preprocessing failed or resulted in empty data
         return None  # Exit early on preprocessing failure
 
-    split_data = split_dataset(cleaned_df, csv_path)  # Split into train/test sets
+    split_data = split_dataset(cleaned_df, csv_path, test_size=CONFIG["dataset"]["test_size"])  # Split into train/test sets
     if split_data is None or split_data[0] is None:  # Verify if splitting failed
         return None  # Exit early on split failure
 
@@ -1273,11 +1277,14 @@ def split_dataset(df, csv_path, test_size=0.2):
     :return: X_train, X_test, y_train, y_test
     """
 
-    if not (MIN_TEST_FRACTION <= test_size <= MAX_TEST_FRACTION):  # Validate test_size and clamp if out of bounds
+    min_test_frac = CONFIG["dataset"]["min_test_fraction"]  # Get min test fraction from config
+    max_test_frac = CONFIG["dataset"]["max_test_fraction"]  # Get max test fraction from config
+    
+    if not (min_test_frac <= test_size <= max_test_frac):  # Validate test_size and clamp if out of bounds
         print(
-            f"{BackgroundColors.YELLOW}Warning: test_size={test_size} outside valid range [{MIN_TEST_FRACTION}, {MAX_TEST_FRACTION}]. Clamping to valid range.{Style.RESET_ALL}"
+            f"{BackgroundColors.YELLOW}Warning: test_size={test_size} outside valid range [{min_test_frac}, {max_test_frac}]. Clamping to valid range.{Style.RESET_ALL}"
         )
-        test_size = max(MIN_TEST_FRACTION, min(MAX_TEST_FRACTION, test_size))  # Clamp test_size to valid range
+        test_size = max(min_test_frac, min(max_test_frac, test_size))  # Clamp test_size to valid range
 
     verbose_output(
         f"{BackgroundColors.GREEN}Splitting dataset into training and testing sets with test size = {test_size}.{Style.RESET_ALL}"
@@ -1346,7 +1353,7 @@ def print_ga_parameters(min_pop, max_pop, n_generations, feature_count):
         f"  {BackgroundColors.GREEN}Fitness evaluation: {BackgroundColors.CYAN}10-fold Stratified CV on training set{Style.RESET_ALL}"
     )
     print(
-        f"  {BackgroundColors.GREEN}Base estimator: {BackgroundColors.CYAN}RandomForestClassifier (n_estimators=100, n_jobs={N_JOBS}){Style.RESET_ALL}"
+        f"  {BackgroundColors.GREEN}Base estimator: {BackgroundColors.CYAN}RandomForestClassifier (n_estimators=100, n_jobs={CONFIG['multiprocessing']['n_jobs']}){Style.RESET_ALL}"
     )
     print(f"  {BackgroundColors.GREEN}Optimization goal: {BackgroundColors.CYAN}Maximize F1-Score{Style.RESET_ALL}")
     print("")  # Empty line for spacing
@@ -1372,19 +1379,19 @@ def prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations):
     if df is None:  # If loading failed
         return None  # Exit early
 
-    cleaned_df = preprocess_dataframe(df)  # Preprocess dataset
+    cleaned_df = preprocess_dataframe(df, remove_zero_variance=CONFIG["dataset"]["remove_zero_variance"])  # Preprocess dataset
 
     if cleaned_df is None or cleaned_df.empty:  # If preprocessing failed or dataset is empty
         print(f"{BackgroundColors.RED}Dataset empty after preprocessing. Exiting.{Style.RESET_ALL}")
         return None  # Exit early
 
-    X_train, X_test, y_train, y_test, feature_names = split_dataset(cleaned_df, csv_path)  # Split dataset
+    X_train, X_test, y_train, y_test, feature_names = split_dataset(cleaned_df, csv_path, test_size=CONFIG["dataset"]["test_size"])  # Split dataset
     if X_train is None:  # If splitting failed
         return None  # Exit early
 
     (
         print_ga_parameters(min_pop, max_pop, n_generations, len(feature_names) if feature_names is not None else 0)
-        if VERBOSE
+        if CONFIG["execution"]["verbose"]
         else None
     )  # Print GA parameters if verbose
 
@@ -1466,7 +1473,7 @@ def state_file_paths(output_dir, state_id):
     :return: tuple(gen_path, run_path)
     """
 
-    state_dir = os.path.join(output_dir, PROGRESS_STATE_DIR_NAME)  # Construct the state directory path
+    state_dir = os.path.join(output_dir, CONFIG["progress"]["state_dir_name"])  # Construct the state directory path
     try:  # Try to create the state directory if it doesn't exist
         os.makedirs(state_dir, exist_ok=True)  # Create the directory, ignoring if it already exists
     except Exception:  # If directory creation fails
@@ -1523,7 +1530,7 @@ def load_cached_run_if_any(
         state_id = compute_state_id(
             csv_path or "", pop_size, n_generations, cxpb, mutpb, run, folds, test_frac=test_frac
         )  # Compute state id for the run
-        if RESUME_PROGRESS and state_id is not None:  # If resume is enabled and state_id exists
+        if CONFIG["execution"]["resume_progress"] and state_id is not None:  # If resume is enabled and state_id exists
             prev = load_run_result(output_dir, state_id)  # Load previous run result
             if prev:  # If previous result exists
                 try:  # Try to log the cached result message
@@ -1608,14 +1615,14 @@ def instantiate_estimator(estimator_cls=None):
 
     if estimator_cls is None:  # If no estimator class is provided
         return RandomForestClassifier(
-            n_estimators=100, random_state=42, n_jobs=N_JOBS
+            n_estimators=100, random_state=42, n_jobs=CONFIG["multiprocessing"]["n_jobs"]
         )  # Return a default RandomForestClassifier
 
     try:  # Try to instantiate the provided estimator class
         return estimator_cls()  # Instantiate with default parameters
     except Exception:  # If instantiation fails
         return RandomForestClassifier(
-            n_estimators=100, random_state=42, n_jobs=N_JOBS
+            n_estimators=100, random_state=42, n_jobs=CONFIG["multiprocessing"]["n_jobs"]
         )  # Fallback to default RandomForestClassifier
 
 
@@ -1652,12 +1659,12 @@ def evaluate_individual(
     mask = np.array(individual, dtype=bool)  # Create boolean mask from individual
     X_train_sel = X_train[:, mask]  # Select features based on the mask
 
-    n_cv_folds = N_CV_FOLDS  # Use configurable constant
+    n_cv_folds = CONFIG["cross_validation"]["n_folds"]  # Use configurable constant
     metrics = np.empty((n_cv_folds, 6), dtype=float)  # Pre-allocate metrics array for each fold: [acc, prec, rec, f1, fpr, fnr]
     fold_count = 0  # Track how many folds actually ran
 
     try:  # Try to create StratifiedKFold splits
-        skf = StratifiedKFold(n_splits=n_cv_folds, shuffle=True, random_state=42)  # N_CV_FOLDS-fold Stratified CV
+        skf = StratifiedKFold(n_splits=n_cv_folds, shuffle=True, random_state=42)  # n_cv_folds-fold Stratified CV
         splits = list(skf.split(X_train_sel, y_train))  # Generate splits
     except Exception as e:  # If StratifiedKFold fails (e.g., too few samples per class)
         print(
@@ -1720,7 +1727,7 @@ def evaluate_individual(
         fold_count += 1  # Increment fold counter
 
         if (
-            fold_idx < EARLY_STOP_FOLDS and acc < EARLY_STOP_ACC_THRESHOLD
+            fold_idx < CONFIG["early_stop"]["folds"] and acc < CONFIG["early_stop"]["acc_threshold"]
         ):  # Early stopping: If accuracy is below threshold in first few folds, break
             early_stop_triggered = True  # Set flag
             break  # Stop evaluating further folds for this individual
@@ -1862,7 +1869,7 @@ def load_and_apply_generation_state(toolbox, population, output_dir, state_id, r
 
     start_gen = 1  # Initialize starting generation to 1
     fitness_history = []  # Initialize fitness history as empty list
-    if RESUME_PROGRESS and state_id is not None:  # Verify if resume is enabled and state_id is provided
+    if CONFIG["execution"]["resume_progress"] and state_id is not None:  # Verify if resume is enabled and state_id is provided
         try:  # Attempt to load and apply the state
             payload = load_generation_state(output_dir, state_id)  # Load the generation state payload
             if payload:  # If payload exists
@@ -1910,7 +1917,7 @@ def save_generation_state(output_dir, state_id, gen, population, hof_best, fitne
             ),  # History of fitness values
         }  # End of payload dictionary
         with open(gen_path, "wb") as f:  # Open the file for writing in binary mode
-            pickle.dump(payload, f, protocol=PICKLE_PROTOCOL)  # Serialize and save the payload
+            pickle.dump(payload, f, protocol=CONFIG["caching"]["pickle_protocol"])  # Serialize and save the payload
     except Exception:  # If any error occurs during saving
         pass  # Do nothing
 
@@ -1962,9 +1969,9 @@ def run_genetic_algorithm_loop(
     global GA_GENERATIONS_COMPLETED  # To track completed generations
     best_fitness = None  # Track the best fitness value
     gens_without_improvement = 0  # Counter for generations with no improvement
-    early_stop_gens = EARLY_STOP_GENERATIONS  # Use configured constant
+    early_stop_gens = CONFIG["early_stop"]["generations"]  # Use configured constant
 
-    folds = N_CV_FOLDS  # Use configured constant for CV folds
+    folds = CONFIG["cross_validation"]["n_folds"]  # Use configured constant for CV folds
 
     output_dir = (
         f"{os.path.dirname(csv_path)}/Feature_Analysis" if csv_path else os.path.join(".", "Feature_Analysis")
@@ -2074,7 +2081,7 @@ def run_genetic_algorithm_loop(
         gens_ran = gen if gens_ran == 0 else gens_ran  # Ensure gens_ran is set correctly if no early stopping occurred
 
         try:  # Persist per-generation progress so runs can be resumed (every N gens to reduce I/O)
-            if RESUME_PROGRESS and state_id is not None and (gen % PROGRESS_SAVE_INTERVAL == 0 or gen == n_generations):  # Use configured interval
+            if CONFIG["execution"]["resume_progress"] and state_id is not None and (gen % CONFIG["execution"]["progress_save_interval"] == 0 or gen == n_generations):  # Use configured interval
                 save_generation_state(
                     output_dir, state_id, gen, population, hof[0] if hof and len(hof) > 0 else None, fitness_history
                 )
@@ -2209,7 +2216,7 @@ def save_run_result(output_dir, state_id, result):
     try:  # Attempt to save the run result
         _, run_path = state_file_paths(output_dir, state_id)  # Get the path for the run state file
         with open(run_path, "wb") as f:  # Open the file for writing in binary mode
-            pickle.dump(result, f, protocol=PICKLE_PROTOCOL)  # Serialize and save the result
+            pickle.dump(result, f, protocol=CONFIG["caching"]["pickle_protocol"])  # Serialize and save the result
     except Exception:  # If any error occurs during saving
         pass  # Do nothing
 
@@ -2378,7 +2385,7 @@ def run_single_ga_iteration(
     }  # Build result dict
 
     try:  # Try to save run result
-        if RESUME_PROGRESS and state_id is not None:  # If resume is enabled and state_id exists
+        if CONFIG["execution"]["resume_progress"] and state_id is not None:  # If resume is enabled and state_id exists
             save_run_result(output_dir, state_id, result)  # Save the run result
             cleanup_state_for_id(output_dir, state_id)  # Cleanup state files
     except Exception:  # On any saving error
@@ -2854,10 +2861,10 @@ def write_consolidated_csv(rows, output_dir):
                     mtime = os.path.getmtime(csv_out)  # Get file modification time
                     back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")  # Format timestamp based on file modification time
                     df_existing["timestamp"] = back_ts  # Add the timestamp column with the default value
-                for c in GA_RESULTS_CSV_COLUMNS:  # Ensure all expected columns are present in the existing DataFrame, adding any missing ones with None values
+                for c in CONFIG["export"]["results_csv_columns"]:  # Ensure all expected columns are present in the existing DataFrame, adding any missing ones with None values
                     if c not in df_existing.columns:  # If an expected column is missing
                         df_existing[c] = None  # Add the missing column with None values
-                df_combined = pd.concat([df_existing[GA_RESULTS_CSV_COLUMNS], df_new], ignore_index=True, sort=False)  # Combine existing and new DataFrames, ensuring column order
+                df_combined = pd.concat([df_existing[CONFIG["export"]["results_csv_columns"]], df_new], ignore_index=True, sort=False)  # Combine existing and new DataFrames, ensuring column order
                 try:  # Try to sort by timestamp if the column exists and is properly formatted
                     df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")  # Parse timestamp into datetime, coercing errors to NaT
                     df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)  # Sort by the parsed datetime column in descending order (newest first)
@@ -2870,9 +2877,9 @@ def write_consolidated_csv(rows, output_dir):
 
             df_out = populate_hardware_column(df_out, column_name="hardware")  # Populate hardware column using system specs
 
-            df_out = ensure_expected_columns(df_out, GA_RESULTS_CSV_COLUMNS)  # Add any missing expected columns with None values
+            df_out = ensure_expected_columns(df_out, CONFIG["export"]["results_csv_columns"])  # Add any missing expected columns with None values
 
-            df_out = df_out[GA_RESULTS_CSV_COLUMNS]  # Reorder columns into the canonical order
+            df_out = df_out[CONFIG["export"]["results_csv_columns"]]  # Reorder columns into the canonical order
 
             for col in df_out.columns:  # Iterate over all columns
                 col_l = col.lower()  # Lowercase column name for case-insensitive verification
@@ -3038,7 +3045,7 @@ def train_and_save_final_model(best_feats_local, X, y, feature_names, X_test, mo
     sel_indices_local = [i for i, f in enumerate(feature_names) if f in best_feats_local]  # Get indices of selected features
     X_final_local = X_scaled_local[:, sel_indices_local] if sel_indices_local else X_scaled_local  # Select only chosen feature columns from scaled data
     X_test_selected_local = X_test[:, sel_indices_local] if sel_indices_local and X_test is not None else X_test  # Select same feature columns from test data
-    model_local = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)  # Instantiate Random Forest classifier with 100 trees
+    model_local = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=CONFIG["multiprocessing"]["n_jobs"])  # Instantiate Random Forest classifier with 100 trees
     start_train_local = time.time()  # Record training start time
     model_local.fit(X_final_local, y)  # Train model on selected features
     training_time_local = time.time() - start_train_local  # Calculate training duration
@@ -3411,7 +3418,7 @@ def run_population_sweep(
     max_pop=20,
     cxpb=0.5,
     mutpb=0.01,
-    runs=RUNS,
+    runs=CONFIG["execution"]["runs"],
     progress_bar=None,
 ):
     """
@@ -3450,7 +3457,7 @@ def run_population_sweep(
 
     X_train, X_test, y_train, y_test, feature_names = data  # Unpack prepared data
 
-    folds = N_CV_FOLDS  # Use configured constant for CV folds
+    folds = CONFIG["cross_validation"]["n_folds"]  # Use configured constant for CV folds
     progress_state = compute_progress_state(
         min_pop, max_pop, n_generations, runs, progress_bar, folds=folds
     )  # Compute progress state for tracking
@@ -3520,7 +3527,7 @@ def run_population_sweep(
         print(
             f"{BackgroundColors.GREEN}Common features across runs: {BackgroundColors.CYAN}{len(common_features)}{Style.RESET_ALL}"
         )
-        print_metrics(best_metrics) if VERBOSE else None  # Print metrics if VERBOSE is enabled
+        print_metrics(best_metrics) if CONFIG["execution"]["verbose"] else None  # Print metrics if VERBOSE is enabled
         best_run = max(runs_list, key=lambda r: r["metrics"][3])  # Select the run with the best F1-Score
         best_ind = best_run["best_ind"]  # Get the best individual from the best run
         best_metrics = best_run["metrics"]  # Get the metrics from the best run
@@ -3637,16 +3644,17 @@ def play_sound():
     if current_os == "Windows":  # If the current operating system is Windows
         return  # Do nothing
 
-    if verify_filepath_exists(SOUND_FILE):  # If the sound file exists
-        if current_os in SOUND_COMMANDS:  # If the platform.system() is in the SOUND_COMMANDS dictionary
-            os.system(f"{SOUND_COMMANDS[current_os]} {SOUND_FILE}")  # Play the sound
-        else:  # If the platform.system() is not in the SOUND_COMMANDS dictionary
+    sound_file = CONFIG["sound"]["file"]  # Get sound file from config
+    if verify_filepath_exists(sound_file):  # If the sound file exists
+        if current_os in CONFIG["sound"]["commands"]:  # If the platform.system() is in the sound commands dictionary
+            os.system(f"{CONFIG['sound']['commands'][current_os]} {sound_file}")  # Play the sound
+        else:  # If the platform.system() is not in the sound commands dictionary
             print(
-                f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not in the {BackgroundColors.CYAN}SOUND_COMMANDS dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}"
+                f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not in the {BackgroundColors.CYAN}sound commands dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}"
             )
     else:  # If the sound file does not exist
         print(
-            f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{SOUND_FILE}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}"
+            f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{sound_file}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}"
         )
 
 
