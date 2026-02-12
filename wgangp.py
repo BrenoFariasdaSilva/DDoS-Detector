@@ -126,6 +126,31 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def detect_label_column(columns, config: Optional[Dict] = None):
+    """
+    Try to guess the label column based on common naming conventions.
+
+    :param columns: List of column names
+    :param config: Optional configuration dictionary containing label candidates
+    :return: The name of the label column if found, else None
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG or get_default_config()  # Use global or default config
+    
+    candidates = config.get("dataset", {}).get("label_candidates", ["label", "class", "target"])  # Get label column candidates from config
+
+    for col in columns:  # First search for exact matches
+        if col.lower() in candidates:  # Verify if the column name matches any candidate exactly
+            return col  # Return the column name if found
+
+    for col in columns:  # Second search for partial matches
+        if "target" in col.lower() or "label" in col.lower():  # Verify if the column name contains any candidate
+            return col  # Return the column name if found
+
+    return None  # Return None if no label column is found
+
+
 def preprocess_dataframe(df, label_col, remove_zero_variance=None, config: Optional[Dict] = None):
     """
     Preprocess a DataFrame by:
