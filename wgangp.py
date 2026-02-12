@@ -481,6 +481,14 @@ class Discriminator(nn.Module):
         self.net = nn.Sequential(*layers)  # Create critic network
 
     def forward(self, x, y):  # Compute critic score
+        """
+        Compute critic score for input features conditioned on labels.
+
+        :param x: Feature tensor of shape (batch_size, feature_dim)
+        :param y: Label tensor of shape (batch_size,) containing class indices
+        :return: Scalar critic score tensor of shape (batch_size,)
+        """
+
         y_e = self.embed(y)  # Convert label to embedding
         inp = torch.cat([x, y_e], dim=1)  # Join features with embedding
         return self.net(inp).squeeze(1)  # Produce scalar score
