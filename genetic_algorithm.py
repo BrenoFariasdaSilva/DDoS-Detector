@@ -310,7 +310,7 @@ def load_config_file(config_path=None):
     if config_path is None:  # If no path provided, try default locations
         possible_paths = ["config.yaml", "config.yml", ".env"]  # List of possible config file paths
         for path in possible_paths:  # Iterate through possible paths
-            if os.path.exists(path):  # Check if file exists
+            if os.path.exists(path):  # Verify if file exists
                 config_path = path  # Use this path
                 break  # Stop searching
 
@@ -551,7 +551,7 @@ def load_exported_artifacts(csv_path):
     models_dir = os.path.join(os.path.dirname(csv_path), "Feature_Analysis", "Genetic_Algorithm", "Models")  # Construct path to models directory
     if not os.path.isdir(models_dir):  # Verify if models directory exists
         return None  # Return None if directory doesn't exist
-    base_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', os.path.splitext(os.path.basename(csv_path))[0])  # Sanitize dataset basename for filename
+    base_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", os.path.splitext(os.path.basename(csv_path))[0])  # Sanitize dataset basename for filename
     pattern = os.path.join(models_dir, f"GA-{base_name}-*-model.joblib")  # Build glob pattern to find model files
     candidates = glob.glob(pattern)  # Search for matching model files
     if not candidates:  # Verify if any models were found
@@ -718,7 +718,7 @@ def compute_optimal_processes(reserve_cpu_frac=0.15, reserve_mem_frac=0.15, min_
     Compute a conservative number of worker processes based on current CPU and
     memory availability.
 
-    Returns an integer number of workers >= min_procs. Uses `psutil` when
+    Returns an integer number of workers >= min_procs. Uses "psutil" when
     available; falls back to CPU-count heuristics otherwise.
     """
 
@@ -867,9 +867,9 @@ Start the resource monitoring thread with the specified configuration.
 def start_resource_monitor_safe(*args, **kwargs):
     """
     Safe wrapper to start the resource monitor: swallow any exceptions so
-    callers (e.g., `main`) don't need to handle psutil or threading issues.
+    callers (e.g., "main") don't need to handle psutil or threading issues.
 
-    Usage: `start_resource_monitor_safe()` (calls `start_resource_monitor` with defaults).
+    Usage: "start_resource_monitor_safe()" (calls "start_resource_monitor" with defaults).
     Returns the Thread object when started, or None on failure.
     """
 
@@ -884,8 +884,8 @@ def signal_new_file(file_path):
     Notify the resource monitor that processing of a new file has started.
 
     This resets the per-file monitor flag so the monitor will perform one
-    sizing update (after `min_gens_before_update` generations) for the
-    newly-started file. It also resets `GA_GENERATIONS_COMPLETED` to 0 so
+    sizing update (after "min_gens_before_update" generations) for the
+    newly-started file. It also resets "GA_GENERATIONS_COMPLETED" to 0 so
     the monitor waits again for the configured number of generations.
 
     :param file_path: path of the file that will be processed
@@ -915,7 +915,7 @@ def update_progress_bar(
     progress_state=None,
 ):
     """
-    Update a tqdm `progress_bar` description and postfix consistently.
+    Update a tqdm "progress_bar" description and postfix consistently.
 
     :param progress_bar: tqdm progress bar instance (or None)
     :param dataset_name: Name of the dataset
@@ -1412,7 +1412,7 @@ def compute_progress_state(min_pop, max_pop, n_generations, runs, progress_bar, 
       - current_it: starting at 0
       - total_it: estimated total number of classifier instantiations
 
-    The estimation assumes each individual evaluation runs `folds` classifier
+    The estimation assumes each individual evaluation runs "folds" classifier
     instantiations (10-fold CV by default) and includes one re-evaluation of
     the best individual per run.
 
@@ -1834,7 +1834,7 @@ def recreate_population_from_lists(toolbox, pop_lists):
     """
     Create DEAP individual objects from plain lists using registered toolbox.individual.
 
-    :param toolbox: DEAP toolbox with `individual` registered
+    :param toolbox: DEAP toolbox with "individual" registered
     :param pop_lists: iterable of bit-lists
     :return: list of individuals or empty list on error
     """
@@ -2093,18 +2093,18 @@ def run_genetic_algorithm_loop(
 
 def adjust_progress_for_early_stop(progress_state, n_generations, pop_size, gens_ran, folds):
     """
-    Adjust `progress_state` when a GA run finishes early.
+    Adjust "progress_state" when a GA run finishes early.
 
     This subtracts planned-but-not-executed classifier instantiations from
-    `progress_state['total_it']` and increments `current_it` for the final
+    "progress_state["total_it"]" and increments "current_it" for the final
     re-evaluation (which is always performed once per run).
 
-    :param progress_state: dict with keys `current_it` and `total_it`.
+    :param progress_state: dict with keys "current_it" and "total_it".
     :param n_generations: configured total generations for the run.
     :param pop_size: population size used for the run.
     :param gens_ran: number of generations actually executed.
     :param folds: number of CV folds (classifier instantiations per evaluation).
-    :return: None (mutates `progress_state` in-place)
+    :return: None (mutates "progress_state" in-place)
     """
 
     if not (progress_state and isinstance(progress_state, dict)):  # Validate progress_state
@@ -2648,11 +2648,11 @@ def truncate_value(value):
 
 def normalize_elapsed_column_df(df):
     """
-    Normalize elapsed time column name to `elapsed_time_s` if the legacy
-    `elapsed_time` column is present.
+    Normalize elapsed time column name to "elapsed_time_s" if the legacy
+    "elapsed_time" column is present.
 
     :param df: pandas DataFrame
-    :return: DataFrame with `elapsed_time_s` column
+    :return: DataFrame with "elapsed_time_s" column
     """
 
     if (
@@ -2684,9 +2684,9 @@ def load_existing_results(csv_out):
 
 def merge_replace_existing(df_existing, df_new):
     """
-    Merge `df_new` into `df_existing` using replace-by-`dataset_path`
-    semantics: any existing rows whose `dataset_path` appears in `df_new`
-    are removed before appending `df_new`.
+    Merge "df_new" into "df_existing" using replace-by-"dataset_path"
+    semantics: any existing rows whose "dataset_path" appears in "df_new"
+    are removed before appending "df_new".
 
     :param df_existing: existing DataFrame (may be empty)
     :param df_new: incoming DataFrame with new rows
@@ -2757,8 +2757,8 @@ def get_hardware_specifications():
 
 def populate_hardware_column(df, column_name="hardware"):
     """
-    Populate `df[column_name]` with a readable hardware description built from
-    `get_hardware_specifications()`. On failure the column will be set to None.
+    Populate "df[column_name]" with a readable hardware description built from
+    "get_hardware_specifications()". On failure the column will be set to None.
 
     :param df: pandas.DataFrame to modify in-place
     :param column_name: Name of the column to set (default: "hardware")
@@ -2805,8 +2805,8 @@ def run_index_sort(val):
 
     try:  # Try to normalize and parse the run index
         s = str(val).strip()  # Convert the value to string and strip whitespace
-        if s.lower() == "best":  # If value is the literal 'best'
-            return -1  # Force 'best' to sort before numeric indices
+        if s.lower() == "best":  # If value is the literal "best"
+            return -1  # Force "best" to sort before numeric indices
         return int(float(s))  # Convert numeric-like strings to integer for sorting
     except Exception:  # On any parsing error
         return 10**9  # Use a very large number to push malformed values to the end
@@ -2814,7 +2814,7 @@ def run_index_sort(val):
 
 def sort_run_index_first(df_combined):
     """
-    Sort by `dataset`, `dataset_path` and a numeric-coded `run_index`
+    Sort by "dataset", "dataset_path" and a numeric-coded "run_index"
     where the string "best" is forced to come before numeric runs.
 
     :param df_combined: pandas.DataFrame
@@ -2831,10 +2831,10 @@ def sort_run_index_first(df_combined):
 
 def write_consolidated_csv(rows, output_dir):
     """
-    Write the consolidated GA results rows to a CSV file inside `output_dir`.
+    Write the consolidated GA results rows to a CSV file inside "output_dir".
 
     :param rows: List of dictionaries representing rows.
-    :param output_dir: Directory where `Genetic_Algorithm_Results.csv` will be saved.
+    :param output_dir: Directory where "Genetic_Algorithm_Results.csv" will be saved.
     :return: None
     """
 
@@ -2854,7 +2854,7 @@ def write_consolidated_csv(rows, output_dir):
 
             if os.path.exists(csv_out):  # If the consolidated CSV already exists, we need to merge with existing data
                 df_existing = pd.read_csv(csv_out, dtype=str)  # Read existing CSV as strings to avoid type issues
-                if "timestamp" not in df_existing.columns:  # If the existing CSV is missing the 'timestamp' column, add it with a default value based on file modification time
+                if "timestamp" not in df_existing.columns:  # If the existing CSV is missing the "timestamp" column, add it with a default value based on file modification time
                     print(
                         f"{BackgroundColors.YELLOW}Warning: Existing CSV missing 'timestamp' column. Adding default timestamps.{Style.RESET_ALL}"
                     )
@@ -2906,10 +2906,10 @@ def determine_best_features_and_ranking(best_ind, feature_names, csv_path):
     extract RFE rankings from existing results.
 
     :param best_ind: Sequence (list/array) representing the GA individual (0/1 mask).
-    :param feature_names: List of feature names aligned with `best_ind`.
+    :param feature_names: List of feature names aligned with "best_ind".
     :param csv_path: Path to the dataset CSV (used to locate RFE summary files).
-    :return: Tuple `(best_feats, ranking)` where `best_feats` is a list of selected
-             feature names and `ranking` is the RFE ranking dictionary (may be empty).
+    :return: Tuple "(best_feats, ranking)" where "best_feats" is a list of selected
+             feature names and "ranking" is the RFE ranking dictionary (may be empty).
     """
 
     best_feats = [f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1]  # Build list of features selected by the binary mask
@@ -2921,9 +2921,9 @@ def determine_best_features_and_ranking(best_ind, feature_names, csv_path):
 def determine_rf_metrics(metrics_in):
     """
     Normalize a metrics tuple/sequence to the expected RF-metrics slice used
-    downstream by `save_results`. The consolidated CSV expects up to 12
+    downstream by "save_results". The consolidated CSV expects up to 12
     metric values (cv + test metrics); this helper ensures the returned
-    value is either a 12-element-like slice or `None` when not available.
+    value is either a 12-element-like slice or "None" when not available.
 
     :param metrics_in: Metrics sequence or None.
     :return: Sliced metrics (first 12 elements) or None.
@@ -2945,7 +2945,7 @@ def maybe_evaluate_on_test(rf_m, best_ind_local, X, y, X_test, y_test):
     :param y: Training labels.
     :param X_test: Optional test feature matrix.
     :param y_test: Optional test labels.
-    :return: RF metrics tuple (possibly produced by `evaluate_individual`) or the original `rf_m`.
+    :return: RF metrics tuple (possibly produced by "evaluate_individual") or the original "rf_m".
     """
 
     if rf_m is None and X_test is not None and y_test is not None:  # Only perform evaluation if metrics are missing and a test set is available
@@ -2967,8 +2967,8 @@ def prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generat
     :param best_pop_size: Population size that produced the best result.
     :param n_generations: Number of generations used by GA (for metadata).
     :param rfe_ranking: RFE ranking dictionary to include in base row.
-    :param y: Training labels (used to compute `n_train`).
-    :param y_test: Optional test labels (used to compute `n_test`).
+    :param y: Training labels (used to compute "n_train").
+    :param y_test: Optional test labels (used to compute "n_test").
     :param cxpb: Crossover probability used (included in base row).
     :param mutpb: Mutation probability used (included in base row).
     :return: Tuple containing computed values and prepared paths:
@@ -3000,7 +3000,7 @@ def prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generat
     models_dir_local = f"{os.path.dirname(csv_path)}/Feature_Analysis/Genetic_Algorithm/Models/"  # Prepare model artifact directory and filenames
     os.makedirs(models_dir_local, exist_ok=True)  # Create models directory if it doesn't exist
     ts = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")  # Generate timestamp string for filenames
-    base_name_local = re.sub(r'[^A-Za-z0-9_.-]+', '_', os.path.splitext(os.path.basename(csv_path))[0])  # Sanitize dataset name for use in filename
+    base_name_local = re.sub(r"[^A-Za-z0-9_.-]+", "_", os.path.splitext(os.path.basename(csv_path))[0])  # Sanitize dataset name for use in filename
     model_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-model.joblib")  # Construct full path for model file
     scaler_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-scaler.joblib")  # Construct full path for scaler file
     features_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-features.json")  # Construct full path for features file
@@ -3030,13 +3030,13 @@ def train_and_save_final_model(best_feats_local, X, y, feature_names, X_test, mo
     :param best_feats_local: List of selected feature names.
     :param X: Full feature matrix (DataFrame or ndarray).
     :param y: Training labels.
-    :param feature_names: List of all feature names corresponding to columns in `X`.
+    :param feature_names: List of all feature names corresponding to columns in "X".
     :param X_test: Optional test feature matrix (used to select test columns consistently).
-    :param model_path_local: Path where the trained model `.joblib` will be saved.
-    :param scaler_path_local: Path where the fitted scaler `.joblib` will be saved.
-    :param features_path_local: Path where the JSON file with `best_feats_local` will be saved.
-    :param params_path_local: Path where the model `get_params()` JSON will be saved.
-    :return: Tuple `(model_local, model_params_local, training_time_local, X_test_selected_local)`.
+    :param model_path_local: Path where the trained model ".joblib" will be saved.
+    :param scaler_path_local: Path where the fitted scaler ".joblib" will be saved.
+    :param features_path_local: Path where the JSON file with "best_feats_local" will be saved.
+    :param params_path_local: Path where the model "get_params()" JSON will be saved.
+    :return: Tuple "(model_local, model_params_local, training_time_local, X_test_selected_local)".
     """
 
     df_features_local = prepare_feature_dataframe(X, feature_names)  # Convert feature matrix to DataFrame with column names
@@ -3071,11 +3071,11 @@ def evaluate_final_on_test(model_local, X_test_selected_local, y_test):
     standard set of metrics (accuracy, precision, recall, f1, fpr, fnr,
     testing_time_seconds).
 
-    :param model_local: Trained classifier with a `predict` method.
+    :param model_local: Trained classifier with a "predict" method.
     :param X_test_selected_local: Test features selected to match training subset.
     :param y_test: True test labels.
-    :return: Tuple `(metrics_tuple, testing_time_seconds)` where `metrics_tuple` is
-             `(acc, prec, rec, f1, fpr, fnr, testing_time)` or a tuple of Nones on error.
+    :return: Tuple "(metrics_tuple, testing_time_seconds)" where "metrics_tuple" is
+             "(acc, prec, rec, f1, fpr, fnr, testing_time)" or a tuple of Nones on error.
     """
 
     eval_m = None  # Initialize evaluation metrics as None
@@ -3141,11 +3141,11 @@ def build_and_write_run_results(
 ):
     """
     Build the consolidated run row dictionary for the best GA individual and
-    write it to the consolidated CSV via `write_consolidated_csv`.
+    write it to the consolidated CSV via "write_consolidated_csv".
 
     :param ts: Timestamp string used for this run artifacts.
     :param model_local: Trained model instance.
-    :param model_params_local: Dictionary of model hyperparameters (`get_params()`).
+    :param model_params_local: Dictionary of model hyperparameters ("get_params()").
     :param training_time_local: Training duration in seconds.
     :param testing_time_local: Testing duration in seconds (or None).
     :param rf_metrics_local: RF metrics tuple (cv/test metrics slice) or None.
@@ -3214,21 +3214,21 @@ def save_results(
     Persist the GA best-result information to disk (consolidated CSV and auxiliary files).
 
     This function performs the saving responsibilities previously embedded inside
-    `save_and_analyze_results`: it determines the selected features, extracts RFE
+    "save_and_analyze_results": it determines the selected features, extracts RFE
     rankings, optionally re-evaluates the best individual on a provided test set,
     builds the consolidated CSV rows and writes them to disk.
 
     :param best_ind: Best individual from the Genetic Algorithm (binary mask/list).
-    :param feature_names: List of feature names corresponding to bits in `best_ind`.
+    :param feature_names: List of feature names corresponding to bits in "best_ind".
     :param X: Feature set (DataFrame or numpy array) used during GA/training.
     :param y: Target variable (Series or array) used during GA/training.
     :param csv_path: Path to the original CSV file for saving outputs.
     :param metrics: Optional precomputed metrics tuple for the best individual.
-    :param X_test: Optional test features to evaluate the best individual if `metrics` is None.
-    :param y_test: Optional test labels to evaluate the best individual if `metrics` is None.
+    :param X_test: Optional test features to evaluate the best individual if "metrics" is None.
+    :param y_test: Optional test labels to evaluate the best individual if "metrics" is None.
     :param n_generations: Number of GA generations used (for metadata only).
     :param best_pop_size: Population size that yielded the best result (for metadata only).
-    :param runs_list: Optional list of per-run results (each a dict with keys 'metrics','best_features' or 'best_ind').
+    :param runs_list: Optional list of per-run results (each a dict with keys "metrics","best_features" or "best_ind").
     :param cxpb: Crossover probability used in the GA (for metadata only).
     :param mutpb: Mutation probability used in the GA (for metadata only).
     :param elapsed_run_time: Optional total elapsed time for the GA run (for metadata only
@@ -3375,9 +3375,9 @@ def analyze_top_features(df, y, top_features, csv_path="."):
 
 def analyze_results(saved_info, X, y, feature_names, csv_path):
     """
-    Analyze and visualize results that were previously saved by `save_results`.
+    Analyze and visualize results that were previously saved by "save_results".
 
-    :param saved_info: Dictionary returned from `save_results` (must contain key "best_features").
+    :param saved_info: Dictionary returned from "save_results" (must contain key "best_features").
     :param X: Feature set (DataFrame or numpy array) used during GA/training.
     :param y: Target variable (Series or array) used during GA/training.
     :param feature_names: List of original feature names used to construct the DataFrame.
@@ -3586,9 +3586,9 @@ def calculate_execution_time(start_time, finish_time=None):
     Calculates the execution time and returns a human-readable string.
 
     Accepts either:
-    - Two datetimes/timedeltas: `calculate_execution_time(start, finish)`
-    - A single timedelta or numeric seconds: `calculate_execution_time(delta)`
-    - Two numeric timestamps (seconds): `calculate_execution_time(start_s, finish_s)`
+    - Two datetimes/timedeltas: "calculate_execution_time(start, finish)"
+    - A single timedelta or numeric seconds: "calculate_execution_time(delta)"
+    - Two numeric timestamps (seconds): "calculate_execution_time(start_s, finish_s)"
 
     Returns a string like "1h 2m 3s".
     """
@@ -3768,7 +3768,7 @@ def main():
 
     cli_args = parse_cli_args()  # Parse command-line arguments
 
-    CONFIG = initialize_config(config_path=cli_args.config if hasattr(cli_args, 'config') else None, cli_args=cli_args)  # Initialize merged configuration
+    CONFIG = initialize_config(config_path=cli_args.config if hasattr(cli_args, "config") else None, cli_args=cli_args)  # Initialize merged configuration
 
     logger = initialize_logger(CONFIG)  # Initialize logger with configuration
 
