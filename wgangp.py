@@ -109,9 +109,9 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
-RESULTS_FILENAME = "generated.csv"  # Filename for generated samples
+RESULTS_SUFFIX = "_data_augmented"  # Suffix to add to generated filenames
 MATCH_FILENAMES_TO_PROCESS = [""]  # List of specific filenames to search for a match (set to None to process all files)
-IGNORE_FILES = [RESULTS_FILENAME]  # List of filenames to ignore when searching for datasets
+IGNORE_FILES = [RESULTS_SUFFIX]  # List of filename substrings to ignore when searching for datasets
 IGNORE_DIRS = [
     "Classifiers",
     "Classifiers_Hyperparameters",
@@ -1426,7 +1426,7 @@ def main():
             csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
             data_aug_dir = csv_path_obj.parent / "Data_Augmentation"  # Create Data_Augmentation subdirectory path
             os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists
-            output_filename = csv_path_obj.name  # Use same filename as input
+            output_filename = f"{csv_path_obj.stem}{RESULTS_SUFFIX}{csv_path_obj.suffix}"  # Use input name with _data_augmented suffix
             args.out_file = str(data_aug_dir / output_filename)  # Set output file path to Data_Augmentation subdirectory
         
         if args.mode == "train":
@@ -1492,7 +1492,7 @@ def main():
                     csv_path_obj = Path(file)
                     data_aug_dir = csv_path_obj.parent / "Data_Augmentation"  # Create Data_Augmentation subdirectory path
                     os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists
-                    output_filename = csv_path_obj.name  # Use same filename as input
+                    output_filename = f"{csv_path_obj.stem}{RESULTS_SUFFIX}{csv_path_obj.suffix}"  # Use input name with RESULTS_SUFFIX
                     args.out_file = str(data_aug_dir / output_filename)  # Set output file path to Data_Augmentation subdirectory
                     args.csv_path = file  # Set CSV path to current file
                     
