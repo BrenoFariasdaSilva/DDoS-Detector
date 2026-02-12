@@ -138,6 +138,82 @@ csv_write_lock = threading.Lock()  # Lock for CSV write operations to prevent ra
 # Functions Definition
 
 
+def merge_configs(defaults, file_config, cli_args):
+    """
+    Merge configuration from defaults, config file, and CLI arguments.
+    Priority: CLI args > config file > defaults.
+
+    :param defaults: Default configuration dictionary
+    :param file_config: Configuration loaded from file
+    :param cli_args: Parsed command-line arguments
+    :return: Merged configuration dictionary
+    """
+
+    config = deep_merge_dicts(defaults, file_config)  # Start with defaults, merge file config
+
+    if cli_args.verbose:  # If verbose flag set
+        config["execution"]["verbose"] = True  # Enable verbose mode
+
+    if cli_args.runs is not None:  # If runs specified
+        config["execution"]["runs"] = cli_args.runs  # Override runs
+
+    if cli_args.skip_train:  # If skip train flag set
+        config["execution"]["skip_train_if_model_exists"] = True  # Enable skip training
+
+    if cli_args.no_resume:  # If no resume flag set
+        config["execution"]["resume_progress"] = False  # Disable resume
+
+    if cli_args.no_sound:  # If no sound flag set
+        config["execution"]["play_sound"] = False  # Disable sound
+
+    if cli_args.files_to_ignore is not None:  # If files to ignore specified
+        config["dataset"]["files_to_ignore"] = cli_args.files_to_ignore  # Override files to ignore
+
+    if cli_args.test_size is not None:  # If test size specified
+        config["dataset"]["test_size"] = cli_args.test_size  # Override test size
+
+    if cli_args.n_generations is not None:  # If generations specified
+        config["genetic_algorithm"]["n_generations"] = cli_args.n_generations  # Override generations
+
+    if cli_args.min_pop is not None:  # If min population specified
+        config["genetic_algorithm"]["min_pop"] = cli_args.min_pop  # Override min population
+
+    if cli_args.max_pop is not None:  # If max population specified
+        config["genetic_algorithm"]["max_pop"] = cli_args.max_pop  # Override max population
+
+    if cli_args.cxpb is not None:  # If crossover probability specified
+        config["genetic_algorithm"]["cxpb"] = cli_args.cxpb  # Override crossover probability
+
+    if cli_args.mutpb is not None:  # If mutation probability specified
+        config["genetic_algorithm"]["mutpb"] = cli_args.mutpb  # Override mutation probability
+
+    if cli_args.cv_folds is not None:  # If CV folds specified
+        config["cross_validation"]["n_folds"] = cli_args.cv_folds  # Override CV folds
+
+    if cli_args.early_stop_acc is not None:  # If early stop accuracy specified
+        config["early_stop"]["acc_threshold"] = cli_args.early_stop_acc  # Override early stop threshold
+
+    if cli_args.early_stop_folds is not None:  # If early stop folds specified
+        config["early_stop"]["folds"] = cli_args.early_stop_folds  # Override early stop folds
+
+    if cli_args.early_stop_gens is not None:  # If early stop generations specified
+        config["early_stop"]["generations"] = cli_args.early_stop_gens  # Override early stop generations
+
+    if cli_args.n_jobs is not None:  # If n jobs specified
+        config["multiprocessing"]["n_jobs"] = cli_args.n_jobs  # Override n jobs
+
+    if cli_args.cpu_processes is not None:  # If CPU processes specified
+        config["multiprocessing"]["cpu_processes"] = cli_args.cpu_processes  # Override CPU processes
+
+    if cli_args.no_monitor:  # If no monitor flag set
+        config["resource_monitor"]["enabled"] = False  # Disable resource monitor
+
+    if cli_args.monitor_interval is not None:  # If monitor interval specified
+        config["resource_monitor"]["interval_seconds"] = cli_args.monitor_interval  # Override monitor interval
+
+    return config  # Return merged configuration
+
+
 def initialize_config(config_path=None, cli_args=None):
     """
     Initialize global configuration from defaults, file, and CLI arguments.
