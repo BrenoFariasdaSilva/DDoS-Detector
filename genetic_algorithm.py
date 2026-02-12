@@ -138,6 +138,24 @@ csv_write_lock = threading.Lock()  # Lock for CSV write operations to prevent ra
 # Functions Definition
 
 
+def deep_merge_dicts(base, override):
+    """
+    Recursively merge override dictionary into base dictionary.
+
+    :param base: Base dictionary
+    :param override: Override dictionary
+    :return: Merged dictionary
+    """
+
+    result = base.copy()  # Create copy of base dictionary
+    for key, value in override.items():  # Iterate through override items
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):  # If both are dicts
+            result[key] = deep_merge_dicts(result[key], value)  # Recursively merge
+        else:  # Otherwise
+            result[key] = value  # Override the value
+    return result  # Return merged dictionary
+
+
 def merge_configs(defaults, file_config, cli_args):
     """
     Merge configuration from defaults, config file, and CLI arguments.
