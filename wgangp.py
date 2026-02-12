@@ -126,6 +126,21 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def verify_filepath_exists(filepath):
+    """
+    Verify if a file or folder exists at the specified path.
+
+    :param filepath: Path to the file or folder
+    :return: True if the file or folder exists, False otherwise
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
+
+
 def get_files_to_process(directory_path, file_extension=".csv", config: Optional[Dict] = None):
     """
     Collect all files with a given extension inside a directory (non-recursive).
