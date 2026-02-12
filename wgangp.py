@@ -1074,7 +1074,7 @@ def gradient_penalty(critic, real_samples, fake_samples, labels, device, config:
     if config is None:  # If no config provided
         config = CONFIG or get_default_config()  # Use global or default config
     
-    epsilon = config.get("gradient_penalty", {}).get("epsilon", 1e-12)  # Get epsilon from config
+    epsilon = float(config.get("gradient_penalty", {}).get("epsilon", 1e-12))  # Get epsilon from config and cast to float
     
     batch_size = real_samples.size(0)  # Get batch size from real samples
     alpha = torch.rand(batch_size, 1, device=device)  # Sample random interpolation factors
@@ -1121,12 +1121,12 @@ def plot_training_metrics(metrics_history, out_dir, filename=None, config: Optio
         filename = config.get("plotting", {}).get("filename", "training_metrics.png")  # Get filename from config
     
     figsize = config.get("plotting", {}).get("figsize", [18, 10])  # Get figure size
-    dpi = config.get("plotting", {}).get("dpi", 300)  # Get DPI
-    subplot_rows = config.get("plotting", {}).get("subplot_rows", 2)  # Get subplot rows
-    subplot_cols = config.get("plotting", {}).get("subplot_cols", 3)  # Get subplot columns
-    linewidth = config.get("plotting", {}).get("linewidth", 1.5)  # Get line width
-    alpha = config.get("plotting", {}).get("alpha", 0.7)  # Get alpha
-    grid_alpha = config.get("plotting", {}).get("grid_alpha", 0.3)  # Get grid alpha
+    dpi = int(config.get("plotting", {}).get("dpi", 300))  # Get DPI and cast to int
+    subplot_rows = int(config.get("plotting", {}).get("subplot_rows", 2))  # Get subplot rows and cast to int
+    subplot_cols = int(config.get("plotting", {}).get("subplot_cols", 3))  # Get subplot columns and cast to int
+    linewidth = float(config.get("plotting", {}).get("linewidth", 1.5))  # Get line width and cast to float
+    alpha = float(config.get("plotting", {}).get("alpha", 0.7))  # Get alpha and cast to float
+    grid_alpha = float(config.get("plotting", {}).get("grid_alpha", 0.3))  # Get grid alpha and cast to float
     
     fig, axes = plt.subplots(subplot_rows, subplot_cols, figsize=figsize)  # Create subplot grid
     fig.suptitle("WGAN-GP Training Metrics", fontsize=16, fontweight="bold")  # Add main title
@@ -1218,6 +1218,24 @@ def train(args, config: Optional[Dict] = None):
     if config is None:  # If no config provided
         config = CONFIG or get_default_config()  # Use global or default config
     
+    args.lr = float(args.lr)  # Ensure learning rate is float
+    args.beta1 = float(args.beta1)  # Ensure beta1 is float
+    args.beta2 = float(args.beta2)  # Ensure beta2 is float
+    args.lambda_gp = float(args.lambda_gp)  # Ensure lambda_gp is float
+    args.n_samples = float(args.n_samples)  # Ensure n_samples is float
+    args.seed = int(args.seed)  # Ensure seed is int
+    args.epochs = int(args.epochs)  # Ensure epochs is int
+    args.batch_size = int(args.batch_size)  # Ensure batch_size is int
+    args.critic_steps = int(args.critic_steps)  # Ensure critic_steps is int
+    args.save_every = int(args.save_every)  # Ensure save_every is int
+    args.log_interval = int(args.log_interval)  # Ensure log_interval is int
+    args.sample_batch = int(args.sample_batch)  # Ensure sample_batch is int
+    args.latent_dim = int(args.latent_dim)  # Ensure latent_dim is int
+    args.embed_dim = int(args.embed_dim)  # Ensure embed_dim is int
+    args.n_resblocks = int(args.n_resblocks)  # Ensure n_resblocks is int
+    args.gen_batch_size = int(args.gen_batch_size)  # Ensure gen_batch_size is int
+    args.num_workers = int(args.num_workers)  # Ensure num_workers is int
+    
     device = torch.device(
         "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
     )  # Select device for training
@@ -1235,10 +1253,10 @@ def train(args, config: Optional[Dict] = None):
         args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols
     )  # Load dataset from CSV
     
-    num_workers = config.get("dataloader", {}).get("num_workers", 8)  # Get num_workers from config
+    num_workers = int(config.get("dataloader", {}).get("num_workers", 8))  # Get num_workers from config and cast to int
     pin_memory = config.get("dataloader", {}).get("pin_memory", True) if device.type == "cuda" else False  # Get pin_memory from config
     persistent_workers = config.get("dataloader", {}).get("persistent_workers", True) if num_workers > 0 else False  # Get persistent_workers from config
-    prefetch_factor = config.get("dataloader", {}).get("prefetch_factor", 2) if num_workers > 0 else None  # Get prefetch_factor from config
+    prefetch_factor = int(config.get("dataloader", {}).get("prefetch_factor", 2)) if num_workers > 0 else None  # Get prefetch_factor from config and cast to int
     
     dataloader = DataLoader(
         dataset,  # Dataset object to load data from
@@ -1254,8 +1272,8 @@ def train(args, config: Optional[Dict] = None):
     feature_dim = dataset.feature_dim  # Get feature dimensionality from dataset
     n_classes = dataset.n_classes  # Get number of label classes from dataset
 
-    g_leaky_relu_alpha = config.get("generator", {}).get("leaky_relu_alpha", 0.2)  # Get generator LeakyReLU alpha
-    d_leaky_relu_alpha = config.get("discriminator", {}).get("leaky_relu_alpha", 0.2)  # Get discriminator LeakyReLU alpha
+    g_leaky_relu_alpha = float(config.get("generator", {}).get("leaky_relu_alpha", 0.2))  # Get generator LeakyReLU alpha and cast to float
+    d_leaky_relu_alpha = float(config.get("discriminator", {}).get("leaky_relu_alpha", 0.2))  # Get discriminator LeakyReLU alpha and cast to float
     
     G = Generator(
         latent_dim=args.latent_dim,  # Noise vector dimensionality for generator input
@@ -1561,6 +1579,17 @@ def generate(args, config: Optional[Dict] = None):
     if config is None:  # If no config provided
         config = CONFIG or get_default_config()  # Use global or default config
     
+    args.latent_dim = int(args.latent_dim)  # Ensure latent_dim is int
+    args.embed_dim = int(args.embed_dim)  # Ensure embed_dim is int
+    args.n_resblocks = int(args.n_resblocks)  # Ensure n_resblocks is int
+    args.gen_batch_size = int(args.gen_batch_size)  # Ensure gen_batch_size is int
+    if args.feature_dim is not None:  # If feature_dim provided
+        args.feature_dim = int(args.feature_dim)  # Ensure feature_dim is int
+    if args.n_samples is not None:  # If n_samples provided
+        args.n_samples = float(args.n_samples)  # Ensure n_samples is float
+    if args.label is not None:  # If label provided
+        args.label = int(args.label)  # Ensure label is int
+    
     device = torch.device(
         "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
     )  # Select device for generation
@@ -1605,7 +1634,7 @@ def generate(args, config: Optional[Dict] = None):
             )  # Raise error if not available
     n_classes = len(label_encoder.classes_)  # Get number of classes from label encoder
 
-    g_leaky_relu_alpha = config.get("generator", {}).get("leaky_relu_alpha", 0.2)  # Get generator LeakyReLU alpha
+    g_leaky_relu_alpha = float(config.get("generator", {}).get("leaky_relu_alpha", 0.2))  # Get generator LeakyReLU alpha and cast to float
     
     G = Generator(
         latent_dim=args.latent_dim,  # Noise vector dimensionality for generator input
@@ -1621,8 +1650,8 @@ def generate(args, config: Optional[Dict] = None):
     G.load_state_dict(ckpt["state_dict"] if "state_dict" in ckpt else ckpt)  # Load generator weights from checkpoint
     G.eval()  # Set generator to evaluation mode
 
-    small_class_threshold = config.get("generation", {}).get("small_class_threshold", 100)  # Get small class threshold
-    small_class_min_samples = config.get("generation", {}).get("small_class_min_samples", 10)  # Get min samples for small classes
+    small_class_threshold = int(config.get("generation", {}).get("small_class_threshold", 100))  # Get small class threshold and cast to int
+    small_class_min_samples = int(config.get("generation", {}).get("small_class_min_samples", 10))  # Get min samples for small classes and cast to int
     
     if args.n_samples <= 1.0:  # Percentage mode: generate percentage of training data per class (1.0 == 100%)
         if class_distribution is None:  # If class distribution not available
@@ -1893,34 +1922,38 @@ def run_wgangp(config: Optional[Union [Dict, str]] = None, **kwargs):
             self.csv_path = config_dict.get("wgangp", {}).get("csv_path")
             self.label_col = config_dict.get("wgangp", {}).get("label_col", "Label")
             self.feature_cols = config_dict.get("wgangp", {}).get("feature_cols")
-            self.seed = config_dict.get("wgangp", {}).get("seed", 42)
+            self.seed = int(config_dict.get("wgangp", {}).get("seed", 42))  # Cast to int
             self.force_cpu = config_dict.get("wgangp", {}).get("force_cpu", False)
             self.from_scratch = config_dict.get("wgangp", {}).get("from_scratch", False)
             self.out_dir = config_dict.get("paths", {}).get("out_dir", "outputs")
-            self.epochs = config_dict.get("training", {}).get("epochs", 60)
-            self.batch_size = config_dict.get("training", {}).get("batch_size", 64)
-            self.critic_steps = config_dict.get("training", {}).get("critic_steps", 5)
-            self.lr = config_dict.get("training", {}).get("lr", 1e-4)
-            self.beta1 = config_dict.get("training", {}).get("beta1", 0.5)
-            self.beta2 = config_dict.get("training", {}).get("beta2", 0.9)
-            self.lambda_gp = config_dict.get("training", {}).get("lambda_gp", 10.0)
-            self.save_every = config_dict.get("training", {}).get("save_every", 5)
-            self.log_interval = config_dict.get("training", {}).get("log_interval", 50)
-            self.sample_batch = config_dict.get("training", {}).get("sample_batch", 16)
+            self.epochs = int(config_dict.get("training", {}).get("epochs", 60))  # Cast to int
+            self.batch_size = int(config_dict.get("training", {}).get("batch_size", 64))  # Cast to int
+            self.critic_steps = int(config_dict.get("training", {}).get("critic_steps", 5))  # Cast to int
+            self.lr = float(config_dict.get("training", {}).get("lr", 1e-4))  # Cast to float
+            self.beta1 = float(config_dict.get("training", {}).get("beta1", 0.5))  # Cast to float
+            self.beta2 = float(config_dict.get("training", {}).get("beta2", 0.9))  # Cast to float
+            self.lambda_gp = float(config_dict.get("training", {}).get("lambda_gp", 10.0))  # Cast to float
+            self.save_every = int(config_dict.get("training", {}).get("save_every", 5))  # Cast to int
+            self.log_interval = int(config_dict.get("training", {}).get("log_interval", 50))  # Cast to int
+            self.sample_batch = int(config_dict.get("training", {}).get("sample_batch", 16))  # Cast to int
             self.use_amp = config_dict.get("training", {}).get("use_amp", False)
             self.compile = config_dict.get("training", {}).get("compile", False)
-            self.latent_dim = config_dict.get("generator", {}).get("latent_dim", 100)
+            self.latent_dim = int(config_dict.get("generator", {}).get("latent_dim", 100))  # Cast to int
             self.g_hidden = config_dict.get("generator", {}).get("hidden_dims", [256, 512])
-            self.embed_dim = config_dict.get("generator", {}).get("embed_dim", 32)
-            self.n_resblocks = config_dict.get("generator", {}).get("n_resblocks", 3)
+            self.embed_dim = int(config_dict.get("generator", {}).get("embed_dim", 32))  # Cast to int
+            self.n_resblocks = int(config_dict.get("generator", {}).get("n_resblocks", 3))  # Cast to int
             self.d_hidden = config_dict.get("discriminator", {}).get("hidden_dims", [512, 256, 128])
             self.checkpoint = config_dict.get("generation", {}).get("checkpoint")
-            self.n_samples = config_dict.get("generation", {}).get("n_samples", 1.0)
+            self.n_samples = float(config_dict.get("generation", {}).get("n_samples", 1.0))  # Cast to float
             self.label = config_dict.get("generation", {}).get("label")
+            if self.label is not None:  # If label is not None
+                self.label = int(self.label)  # Cast to int
             self.out_file = config_dict.get("generation", {}).get("out_file", "generated.csv")
-            self.gen_batch_size = config_dict.get("generation", {}).get("gen_batch_size", 256)
+            self.gen_batch_size = int(config_dict.get("generation", {}).get("gen_batch_size", 256))  # Cast to int
             self.feature_dim = config_dict.get("generation", {}).get("feature_dim")
-            self.num_workers = config_dict.get("dataloader", {}).get("num_workers", 8)
+            if self.feature_dim is not None:  # If feature_dim is not None
+                self.feature_dim = int(self.feature_dim)  # Cast to int
+            self.num_workers = int(config_dict.get("dataloader", {}).get("num_workers", 8))  # Cast to int
 
     args = ConfigNamespace(final_config)  # Create namespace from config
 
@@ -2009,34 +2042,38 @@ def main():
             self.csv_path = cfg.get("wgangp", {}).get("csv_path")
             self.label_col = cfg.get("wgangp", {}).get("label_col", "Label")
             self.feature_cols = cfg.get("wgangp", {}).get("feature_cols")
-            self.seed = cfg.get("wgangp", {}).get("seed", 42)
+            self.seed = int(cfg.get("wgangp", {}).get("seed", 42))  # Cast to int
             self.force_cpu = cfg.get("wgangp", {}).get("force_cpu", False)
             self.from_scratch = cfg.get("wgangp", {}).get("from_scratch", False)
             self.out_dir = cfg.get("paths", {}).get("out_dir", "outputs")
-            self.epochs = cfg.get("training", {}).get("epochs", 60)
-            self.batch_size = cfg.get("training", {}).get("batch_size", 64)
-            self.critic_steps = cfg.get("training", {}).get("critic_steps", 5)
-            self.lr = cfg.get("training", {}).get("lr", 1e-4)
-            self.beta1 = cfg.get("training", {}).get("beta1", 0.5)
-            self.beta2 = cfg.get("training", {}).get("beta2", 0.9)
-            self.lambda_gp = cfg.get("training", {}).get("lambda_gp", 10.0)
-            self.save_every = cfg.get("training", {}).get("save_every", 5)
-            self.log_interval = cfg.get("training", {}).get("log_interval", 50)
-            self.sample_batch = cfg.get("training", {}).get("sample_batch", 16)
+            self.epochs = int(cfg.get("training", {}).get("epochs", 60))  # Cast to int
+            self.batch_size = int(cfg.get("training", {}).get("batch_size", 64))  # Cast to int
+            self.critic_steps = int(cfg.get("training", {}).get("critic_steps", 5))  # Cast to int
+            self.lr = float(cfg.get("training", {}).get("lr", 1e-4))  # Cast to float
+            self.beta1 = float(cfg.get("training", {}).get("beta1", 0.5))  # Cast to float
+            self.beta2 = float(cfg.get("training", {}).get("beta2", 0.9))  # Cast to float
+            self.lambda_gp = float(cfg.get("training", {}).get("lambda_gp", 10.0))  # Cast to float
+            self.save_every = int(cfg.get("training", {}).get("save_every", 5))  # Cast to int
+            self.log_interval = int(cfg.get("training", {}).get("log_interval", 50))  # Cast to int
+            self.sample_batch = int(cfg.get("training", {}).get("sample_batch", 16))  # Cast to int
             self.use_amp = cfg.get("training", {}).get("use_amp", False)
             self.compile = cfg.get("training", {}).get("compile", False)
-            self.latent_dim = cfg.get("generator", {}).get("latent_dim", 100)
+            self.latent_dim = int(cfg.get("generator", {}).get("latent_dim", 100))  # Cast to int
             self.g_hidden = cfg.get("generator", {}).get("hidden_dims", [256, 512])
-            self.embed_dim = cfg.get("generator", {}).get("embed_dim", 32)
-            self.n_resblocks = cfg.get("generator", {}).get("n_resblocks", 3)
+            self.embed_dim = int(cfg.get("generator", {}).get("embed_dim", 32))  # Cast to int
+            self.n_resblocks = int(cfg.get("generator", {}).get("n_resblocks", 3))  # Cast to int
             self.d_hidden = cfg.get("discriminator", {}).get("hidden_dims", [512, 256, 128])
             self.checkpoint = cfg.get("generation", {}).get("checkpoint")
-            self.n_samples = cfg.get("generation", {}).get("n_samples", 1.0)
+            self.n_samples = float(cfg.get("generation", {}).get("n_samples", 1.0))  # Cast to float
             self.label = cfg.get("generation", {}).get("label")
+            if self.label is not None:  # If label is not None
+                self.label = int(self.label)  # Cast to int
             self.out_file = cfg.get("generation", {}).get("out_file", "generated.csv")
-            self.gen_batch_size = cfg.get("generation", {}).get("gen_batch_size", 256)
+            self.gen_batch_size = int(cfg.get("generation", {}).get("gen_batch_size", 256))  # Cast to int
             self.feature_dim = cfg.get("generation", {}).get("feature_dim")
-            self.num_workers = cfg.get("dataloader", {}).get("num_workers", 8)
+            if self.feature_dim is not None:  # If feature_dim is not None
+                self.feature_dim = int(self.feature_dim)  # Cast to int
+            self.num_workers = int(cfg.get("dataloader", {}).get("num_workers", 8))  # Cast to int
 
     args = ConfigNamespace(config)  # Create args namespace
     
