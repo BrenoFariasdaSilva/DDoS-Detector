@@ -126,6 +126,148 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def generate(args, config: Optional[Dict] = None):
+    """
+    Generate synthetic samples from a saved generator checkpoint.
+
+    :param args: parsed arguments namespace containing generation options
+    :param config: Optional configuration dictionary (will use global CONFIG if not provided)
+    :return: None
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG or get_default_config()  # Use global or default config
+    
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
+    )  # Select device for generation
+
+    send_telegram_message(TELEGRAM_BOT, f"Starting WGAN-GP generation from {Path(args.checkpoint).name}")
+    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)  # Load checkpoint from disk with sklearn objects
+    args_ck = ckpt.get("args", {})  # Retrieve saved arguments from checkpoint
+    scaler = ckpt.get("scaler", None)  # Try to get scaler from checkpoint
+    label_encoder = ckpt.get("label_encoder", None)  # Try to get label encoder from checkpoint
+    feature_cols = ckpt.get("feature_cols", None)  # Try to get feature column names from checkpoint
+    class_distribution = ckpt.get("class_distribution", None)  # Try to get class distribution from checkpoint
+
+    if scaler is None or label_encoder is None or feature_cols is None or (args.n_samples <= 1.0 and class_distribution is None):  # If critical data missing
+        if args.csv_path is None:  # Verify if CSV path is provided
+            raise RuntimeError(
+                "Checkpoint missing scaler/label_encoder/feature_cols/class_distribution. Provide --csv_path to reconstruct them."
+            )  # Raise error if not
+        tmp_ds = CSVFlowDataset(
+            args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols
+        )  # Rebuild dataset to get scaler, encoder, feature names, and class distribution
+        scaler = tmp_ds.scaler  # Use scaler from rebuilt dataset
+        label_encoder = tmp_ds.label_encoder  # Use label encoder from rebuilt dataset
+        feature_cols = tmp_ds.feature_cols  # Use feature column names from rebuilt dataset
+        if args.n_samples < 1.0:  # If percentage mode, calculate class distribution
+            unique_labels, label_counts = np.unique(tmp_ds.labels, return_counts=True)  # Get class distribution
+            class_distribution = dict(zip(unique_labels.tolist(), label_counts.tolist()))  # Create label:count mapping
+
+    if args.feature_dim is not None:  # If feature dimension is provided
+        feature_dim = args.feature_dim  # Use provided feature dimension
+    else:
+        mean_attr = getattr(scaler, "mean_", None) if scaler is not None else None
+        if mean_attr is not None:
+            mean_arr = np.asarray(mean_attr)
+            if mean_arr.ndim == 0:
+                raise RuntimeError(
+                    "Scaler.mean_ is scalar; unable to infer feature dimension. Provide --feature_dim."
+                )
+            feature_dim = int(mean_arr.shape[0])  # Infer feature dimension from scaler
+        else:
+            raise RuntimeError(
+                "Unable to determine feature dimension; provide --feature_dim or a checkpoint with scaler."
+            )  # Raise error if not available
+    n_classes = len(label_encoder.classes_)  # Get number of classes from label encoder
+
+    # Get generator config from checkpoint or use defaults
+    g_leaky_relu_alpha = config.get("generator", {}).get("leaky_relu_alpha", 0.2)  # Get generator LeakyReLU alpha
+    
+    G = Generator(
+        latent_dim=args.latent_dim,
+        feature_dim=feature_dim,
+        n_classes=n_classes,
+        hidden_dims=args.g_hidden,
+        embed_dim=args.embed_dim,
+        n_resblocks=args.n_resblocks,
+        leaky_relu_alpha=g_leaky_relu_alpha,  # Use config value
+    ).to(
+        device
+    )  # Initialize generator model
+    G.load_state_dict(ckpt["state_dict"] if "state_dict" in ckpt else ckpt)  # Load generator weights from checkpoint
+    G.eval()  # Set generator to evaluation mode
+
+    # Get generation config
+    small_class_threshold = config.get("generation", {}).get("small_class_threshold", 100)  # Get small class threshold
+    small_class_min_samples = config.get("generation", {}).get("small_class_min_samples", 10)  # Get min samples for small classes
+    
+    # Determine number of samples to generate (supports both absolute count and percentage)
+    if args.n_samples <= 1.0:  # Percentage mode: generate percentage of training data per class (1.0 == 100%)
+        if class_distribution is None:  # If class distribution not available
+            raise RuntimeError(
+                "Percentage-based generation requires class_distribution in checkpoint or --csv_path to calculate it."
+            )  # Raise error
+        print(f"{BackgroundColors.CYAN}Generating {args.n_samples*100:.1f}% of training data per class (min {small_class_min_samples} samples for small classes){Style.RESET_ALL}")
+        if args.label is not None:  # If specific label requested
+            if args.label not in class_distribution:  # Verify label exists
+                raise ValueError(f"Label {args.label} not found in training data class distribution")  # Raise error
+            original_count = class_distribution[args.label]  # Get original class count
+            calculated = int(original_count * args.n_samples)  # Calculate percentage-based count
+            # For small classes, ensure minimum samples are generated
+            final_count = max(small_class_min_samples if original_count < small_class_threshold else 1, calculated)  # Apply minimum threshold
+            n_per_class = {args.label: final_count}  # Store final count
+        else:  # Generate for all classes
+            n_per_class = {}  # Initialize dictionary
+            for label, original_count in class_distribution.items():  # For each class
+                calculated = int(original_count * args.n_samples)  # Calculate percentage-based count
+                # For small classes, ensure minimum samples are generated
+                final_count = max(small_class_min_samples if original_count < small_class_threshold else 1, calculated)  # Apply minimum threshold
+                n_per_class[label] = final_count  # Store final count
+        labels = []  # List to build label array
+        for label, count in n_per_class.items():  # For each class
+            labels.extend([label] * count)  # Repeat label by count
+        labels = np.array(labels, dtype=np.int64)  # Convert to array
+        n = len(labels)  # Total number of samples
+        print(f"{BackgroundColors.GREEN}Total samples to generate: {BackgroundColors.CYAN}{n}{Style.RESET_ALL}")
+        for label, count in n_per_class.items():  # Print per-class breakdown
+            class_name = label_encoder.inverse_transform([label])[0]  # Get class name
+            print(f"{BackgroundColors.GREEN}  - Class '{class_name}': {BackgroundColors.CYAN}{count}{BackgroundColors.GREEN} samples{Style.RESET_ALL}")
+    else:  # Absolute count mode: generate exact number of samples
+        n = int(args.n_samples)  # Convert to integer
+        print(f"{BackgroundColors.CYAN}Generating {n} samples (absolute count){Style.RESET_ALL}")
+        if args.label is not None:  # If a specific label is requested
+            labels = np.array([args.label] * n, dtype=np.int64)  # Create array of repeated label
+        else:
+            labels = np.random.randint(0, n_classes, size=(n,), dtype=np.int64)  # Sample labels uniformly
+
+    batch_size = args.gen_batch_size  # Set generation batch size
+    all_fake = []  # List to store generated feature batches
+    all_labels = []  # List to store corresponding labels
+    with torch.no_grad():  # Disable gradient computation for generation
+        for i in range(0, n, batch_size):  # Loop over batches for generation
+            b = min(batch_size, n - i)  # Calculate current batch size
+            z = torch.randn(b, args.latent_dim, device=device)  # Sample noise for batch
+            y = torch.from_numpy(labels[i : i + b]).to(device, dtype=torch.long)  # Convert labels to tensor
+            fake = G(z, y).cpu().numpy()  # Generate fake samples and move to CPU
+            all_fake.append(fake)  # Append generated features to list
+            all_labels.append(labels[i : i + b])  # Append labels to list
+
+    X_fake = np.vstack(all_fake)  # Stack all generated feature batches
+    Y_fake = np.concatenate(all_labels)  # Concatenate all label arrays
+
+    X_orig = scaler.inverse_transform(X_fake)  # Inverse transform features to original scale
+
+    # Use feature column names from checkpoint (preserves original feature names)
+    df = pd.DataFrame(X_orig, columns=feature_cols)  # Create DataFrame with original feature names
+    df[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
+    df.to_csv(args.out_file, index=False)  # Save generated data to CSV file
+    print(f"{BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} generated samples to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message
+
+    send_telegram_message(TELEGRAM_BOT, f"Finished WGAN-GP generation, saved {n} samples to {Path(args.out_file).name}")
+
+
 def to_seconds(obj):
     """
     Converts various time-like objects to seconds.
