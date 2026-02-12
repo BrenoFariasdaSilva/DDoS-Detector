@@ -363,6 +363,13 @@ class ResidualBlockFC(nn.Module):
         self.act = nn.LeakyReLU(0.2, inplace=True)  # Activation after merging residual shortcut
 
     def forward(self, x):  # Forward computation of the block
+        """
+        Perform forward pass through the residual block.
+
+        :param x: Input tensor of shape (batch_size, dim)
+        :return: Output tensor after residual connection and activation
+        """
+
         out = self.net(x)  # Compute residual branch output
         out = out + x  # Apply skip connection
         return self.act(out)  # Apply activation to merged result
