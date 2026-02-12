@@ -138,6 +138,26 @@ csv_write_lock = threading.Lock()  # Lock for CSV write operations to prevent ra
 # Functions Definition
 
 
+def initialize_config(config_path=None, cli_args=None):
+    """
+    Initialize global configuration from defaults, file, and CLI arguments.
+
+    :param config_path: Path to configuration file (None for auto-detect)
+    :param cli_args: Parsed CLI arguments (None to parse from sys.argv)
+    :return: Merged configuration dictionary
+    """
+
+    defaults = get_default_config()  # Get default configuration
+    file_config = load_config_file(config_path)  # Load configuration from file
+
+    if cli_args is None:  # If no CLI args provided
+        cli_args = parse_cli_args()  # Parse from command line
+
+    config = merge_configs(defaults, file_config, cli_args)  # Merge all configuration sources
+
+    return config  # Return final configuration
+
+
 def initialize_logger(config):
     """
     Initialize the logger based on configuration.
