@@ -3418,7 +3418,7 @@ def run_population_sweep(
     max_pop=20,
     cxpb=0.5,
     mutpb=0.01,
-    runs=CONFIG["execution"]["runs"],
+    runs=None,
     progress_bar=None,
 ):
     """
