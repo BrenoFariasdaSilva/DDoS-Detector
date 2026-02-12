@@ -3516,7 +3516,7 @@ def run_population_sweep(
             # Send completion message with timing
             send_telegram_message(
                 TELEGRAM_BOT,
-                f"Completed run {run + 1}/{runs} - population size {pop_size}/{max_pop} in {int(elapsed_pop_time)}s"
+                f"Completed run {run + 1}/{runs} - population size {pop_size}/{max_pop} in {int(calculate_execution_time(elapsed_pop_time))}"
             )
 
     try:  # Close the shared pool after all GA iterations are complete
