@@ -346,10 +346,12 @@ class ResidualBlockFC(nn.Module):
 
     def __init__(self, dim):  # Constructor taking the input/output dimension
         """
-        Simple residual fully-connected block used in the generator.
+        Initialize a residual fully-connected block for the generator.
 
-        :param dim: input and output dimensionality of the block
+        :param dim: Input and output dimensionality of the block
+        :return: None
         """
+
         super().__init__()  # Initialize the parent nn.Module class
 
         self.net = nn.Sequential(  # Define the residual transformation path
