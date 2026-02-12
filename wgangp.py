@@ -126,6 +126,386 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def train(args, config: Optional[Dict] = None):
+    """
+    Train the WGAN-GP model using the provided arguments and configuration.
+
+    :param args: parsed arguments namespace containing training configuration
+    :param config: Optional configuration dictionary (will use global CONFIG if not provided)
+    :return: None
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG or get_default_config()  # Use global or default config
+    
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
+    )  # Select device for training
+    set_seed(args.seed)  # Set random seed for reproducibility
+
+    send_telegram_message(TELEGRAM_BOT, f"Starting WGAN-GP training on {Path(args.csv_path).name} for {args.epochs} epochs")
+
+    # Print optimization settings
+    print(f"{BackgroundColors.GREEN}Device: {BackgroundColors.CYAN}{device.type.upper()}{Style.RESET_ALL}")
+    if args.use_amp and device.type == 'cuda':
+        print(f"{BackgroundColors.GREEN}Using Automatic Mixed Precision (AMP) for faster training{Style.RESET_ALL}")
+    if args.compile:
+        print(f"{BackgroundColors.GREEN}Using torch.compile() for optimized execution{Style.RESET_ALL}")
+
+    dataset = CSVFlowDataset(
+        args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols
+    )  # Load dataset from CSV
+    
+    # Get dataloader settings from config
+    num_workers = config.get("dataloader", {}).get("num_workers", 8)  # Get num_workers from config
+    pin_memory = config.get("dataloader", {}).get("pin_memory", True) if device.type == 'cuda' else False  # Get pin_memory from config
+    persistent_workers = config.get("dataloader", {}).get("persistent_workers", True) if num_workers > 0 else False  # Get persistent_workers from config
+    prefetch_factor = config.get("dataloader", {}).get("prefetch_factor", 2) if num_workers > 0 else None  # Get prefetch_factor from config
+    
+    # Optimized DataLoader settings for better performance
+    dataloader = DataLoader(
+        dataset, 
+        batch_size=args.batch_size, 
+        shuffle=True, 
+        drop_last=True, 
+        num_workers=num_workers,  # Configurable number of workers
+        pin_memory=pin_memory,  # Faster CPU->GPU transfer
+        persistent_workers=persistent_workers,  # Keep workers alive between epochs
+        prefetch_factor=prefetch_factor,  # Prefetch batches for better GPU utilization
+    )  # Create dataloader for batching
+
+    feature_dim = dataset.feature_dim  # Get feature dimensionality from dataset
+    n_classes = dataset.n_classes  # Get number of label classes from dataset
+
+    # Get leaky_relu_alpha from config for generator and discriminator
+    g_leaky_relu_alpha = config.get("generator", {}).get("leaky_relu_alpha", 0.2)  # Get generator LeakyReLU alpha
+    d_leaky_relu_alpha = config.get("discriminator", {}).get("leaky_relu_alpha", 0.2)  # Get discriminator LeakyReLU alpha
+    
+    G = Generator(
+        latent_dim=args.latent_dim,
+        feature_dim=feature_dim,
+        n_classes=n_classes,
+        hidden_dims=args.g_hidden,
+        embed_dim=args.embed_dim,
+        n_resblocks=args.n_resblocks,
+        leaky_relu_alpha=g_leaky_relu_alpha,  # Use config value
+    ).to(
+        device
+    )  # Initialize generator model
+    D = Discriminator(
+        feature_dim=feature_dim, n_classes=n_classes, hidden_dims=args.d_hidden, embed_dim=args.embed_dim,
+        leaky_relu_alpha=d_leaky_relu_alpha,  # Use config value
+    ).to(
+        device
+    )  # Initialize discriminator model
+
+    # Apply torch.compile() for faster execution (PyTorch 2.0+)
+    if args.compile:
+        try:
+            G = torch.compile(G, mode="reduce-overhead")  # Compile generator
+            D = torch.compile(D, mode="reduce-overhead")  # Compile discriminator
+            print(f"{BackgroundColors.GREEN}Models compiled successfully{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{BackgroundColors.YELLOW}torch.compile() not available or failed: {e}{Style.RESET_ALL}")
+
+    # Initialize mixed precision scaler for AMP
+    scaler = torch.cuda.amp.GradScaler() if args.use_amp and device.type == 'cuda' else None
+
+    # Create optimizers for generator and discriminator
+    opt_D = torch.optim.Adam(
+        cast(Any, D).parameters(), lr=args.lr, betas=(args.beta1, args.beta2)
+    )  # Create optimizer for discriminator
+    opt_G = torch.optim.Adam(
+        cast(Any, G).parameters(), lr=args.lr, betas=(args.beta1, args.beta2)
+    )  # Create optimizer for generator
+
+    fixed_noise = torch.randn(args.sample_batch, args.latent_dim, device=device)  # Generate fixed noise for inspection
+    fixed_labels = torch.randint(
+        0, n_classes, (args.sample_batch,), device=device
+    )  # Generate fixed labels for inspection
+
+    os.makedirs(args.out_dir, exist_ok=True)  # Ensure output directory exists
+    step = 0  # Initialize global step counter
+    start_epoch = 0  # Initialize starting epoch
+
+    # Initialize metrics tracking
+    metrics_history = {
+        "steps": [],  # Training step numbers
+        "loss_D": [],  # Discriminator loss values
+        "loss_G": [],  # Generator loss values
+        "gp": [],  # Gradient penalty values
+        "D_real": [],  # Average critic score for real samples
+        "D_fake": [],  # Average critic score for fake samples
+        "wasserstein": [],  # Estimated Wasserstein distance (D_real - D_fake)
+    }  # Dictionary to store training metrics
+
+    # Automatically check for existing checkpoints for this specific CSV file
+    if not args.from_scratch and args.csv_path:  # If not forcing from scratch and CSV path provided
+        csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
+        checkpoint_dir = csv_path_obj.parent / "Data_Augmentation" / "Checkpoints"  # Expected checkpoint directory
+        checkpoint_prefix = csv_path_obj.stem  # Expected filename prefix
+        
+        if checkpoint_dir.exists():  # If checkpoint directory exists
+            # Find all generator checkpoints for this specific file
+            checkpoint_files = sorted(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))  # Find matching checkpoints
+            
+            if checkpoint_files:  # If checkpoints found for this file
+                g_checkpoint_path = checkpoint_files[-1]  # Get latest checkpoint
+                # Extract epoch number from filename
+                epoch_num = g_checkpoint_path.stem.split("epoch")[-1]  # Extract epoch number
+                d_checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_discriminator_epoch{epoch_num}.pt"  # Build discriminator path
+                
+                print(f"{BackgroundColors.CYAN}Found existing checkpoints for {csv_path_obj.name}{Style.RESET_ALL}")
+                print(f"{BackgroundColors.CYAN}Attempting to resume from epoch {epoch_num}...{Style.RESET_ALL}")
+                
+                # Load generator checkpoint
+                if g_checkpoint_path.exists():  # If generator checkpoint exists
+                    try:  # Try to load checkpoint
+                        print(f"{BackgroundColors.GREEN}Loading generator checkpoint: {g_checkpoint_path.name}{Style.RESET_ALL}")
+                        g_checkpoint = torch.load(g_checkpoint_path, map_location=device, weights_only=False)  # Load generator checkpoint with sklearn objects
+                        cast(Any, G).load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights
+                        start_epoch = g_checkpoint["epoch"]  # Set starting epoch
+                        
+                        # Load optimizer state if available
+                        if "opt_G_state" in g_checkpoint:  # If optimizer state saved
+                            opt_G.load_state_dict(g_checkpoint["opt_G_state"])  # Restore generator optimizer
+                            print(f"{BackgroundColors.GREEN}✓ Restored generator optimizer state{Style.RESET_ALL}")
+                        
+                        # Load metrics history from checkpoint or separate JSON file
+                        metrics_loaded = False  # Flag to track if metrics were loaded
+                        if "metrics_history" in g_checkpoint:  # If metrics history saved in checkpoint
+                            metrics_history = g_checkpoint["metrics_history"]  # Restore metrics from checkpoint
+                            step = metrics_history["steps"][-1] if metrics_history["steps"] else 0  # Restore step counter
+                            metrics_loaded = True  # Mark as loaded
+                            print(f"{BackgroundColors.GREEN}✓ Restored metrics history from checkpoint ({len(metrics_history['steps'])} steps){Style.RESET_ALL}")
+                        else:  # Try loading from separate JSON file
+                            metrics_json_path = checkpoint_dir / f"{checkpoint_prefix}_metrics_history.json"  # Path to metrics JSON
+                            if metrics_json_path.exists():  # If JSON file exists
+                                try:  # Try to load metrics
+                                    with open(metrics_json_path, 'r') as f:  # Open file for reading
+                                        metrics_history = json.load(f)  # Load metrics from JSON
+                                    step = metrics_history["steps"][-1] if metrics_history["steps"] else 0  # Restore step counter
+                                    metrics_loaded = True  # Mark as loaded
+                                    print(f"{BackgroundColors.GREEN}✓ Restored metrics history from JSON file ({len(metrics_history['steps'])} steps){Style.RESET_ALL}")
+                                except Exception as e:  # If loading fails
+                                    print(f"{BackgroundColors.YELLOW}⚠ Warning: Failed to load metrics from JSON: {e}{Style.RESET_ALL}")
+                        
+                        # Load AMP scaler state if available
+                        if scaler is not None and "scaler_state" in g_checkpoint:  # If using AMP and scaler state saved
+                            scaler.load_state_dict(g_checkpoint["scaler_state"])  # Restore scaler state
+                            print(f"{BackgroundColors.GREEN}✓ Restored AMP scaler state{Style.RESET_ALL}")
+                        
+                        # Load discriminator checkpoint
+                        if d_checkpoint_path.exists():  # If discriminator checkpoint exists
+                            print(f"{BackgroundColors.GREEN}Loading discriminator checkpoint: {d_checkpoint_path.name}{Style.RESET_ALL}")
+                            d_checkpoint = torch.load(d_checkpoint_path, map_location=device, weights_only=False)  # Load discriminator checkpoint
+                            cast(Any, D).load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights
+                            
+                            # Load optimizer state if available
+                            if "opt_D_state" in d_checkpoint:  # If optimizer state saved
+                                opt_D.load_state_dict(d_checkpoint["opt_D_state"])  # Restore discriminator optimizer
+                                print(f"{BackgroundColors.GREEN}✓ Restored discriminator optimizer state{Style.RESET_ALL}")
+                        else:  # Discriminator checkpoint not found
+                            print(f"{BackgroundColors.YELLOW}⚠ Warning: Discriminator checkpoint not found{Style.RESET_ALL}")
+                        
+                        # Check if training metrics plot exists after loading checkpoint
+                        plot_dir = csv_path_obj.parent / "Data_Augmentation"  # Plot directory
+                        plot_filename = csv_path_obj.stem + "_training_metrics.png"  # Plot filename
+                        plot_path = plot_dir / plot_filename  # Full plot path
+                        
+                        if not plot_path.exists():  # If plot doesn't exist
+                            # Check if we have metrics to generate the plot
+                            if metrics_loaded and len(metrics_history.get("steps", [])) > 0:  # If metrics available
+                                print(f"{BackgroundColors.YELLOW}Training metrics plot not found, generating from metrics history...{Style.RESET_ALL}")
+                                os.makedirs(plot_dir, exist_ok=True)  # Ensure directory exists
+                                plot_training_metrics(metrics_history, str(plot_dir), plot_filename)  # Generate plot
+                                print(f"{BackgroundColors.GREEN}✓ Generated training metrics plot: {plot_filename}{Style.RESET_ALL}")
+                            else:  # No metrics available
+                                print(f"{BackgroundColors.YELLOW}⚠ Warning: Training metrics plot not found and no metrics history available to generate it{Style.RESET_ALL}")
+                        else:
+                            print(f"{BackgroundColors.GREEN}✓ Training metrics plot already exists{Style.RESET_ALL}")
+                        
+                        print(f"{BackgroundColors.GREEN}✓ Resuming training from epoch {start_epoch} (step {step}){Style.RESET_ALL}")
+                    except Exception as e:  # If loading fails
+                        print(f"{BackgroundColors.YELLOW}⚠ Failed to load checkpoint: {e}{Style.RESET_ALL}")
+                        print(f"{BackgroundColors.YELLOW}⚠ Starting training from scratch{Style.RESET_ALL}")
+                        start_epoch = 0  # Reset to start from beginning
+                        step = 0  # Reset step counter
+            else:  # No checkpoints found for this file
+                print(f"{BackgroundColors.CYAN}No existing checkpoints found for {csv_path_obj.name}{Style.RESET_ALL}")
+                print(f"{BackgroundColors.CYAN}Starting training from scratch{Style.RESET_ALL}")
+        else:  # Checkpoint directory doesn't exist
+            print(f"{BackgroundColors.CYAN}No checkpoint directory found{Style.RESET_ALL}")
+            print(f"{BackgroundColors.CYAN}Starting training from scratch{Style.RESET_ALL}")
+    elif args.from_scratch:  # If user explicitly requested from scratch
+        print(f"{BackgroundColors.CYAN}--from_scratch flag set, ignoring existing checkpoints{Style.RESET_ALL}")
+        print(f"{BackgroundColors.CYAN}Starting training from scratch{Style.RESET_ALL}")
+
+    for epoch in range(start_epoch, args.epochs):  # Loop over epochs starting from resume point
+        # Create progress bar for current epoch using original stdout to prevent multiple lines
+        pbar = tqdm(
+            dataloader, 
+            desc=f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL}", 
+            unit="batch",
+            file=sys.stdout,  # Use stdout before Logger redirection
+            ncols=None,  # Auto-detect terminal width
+            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'  # Custom format
+        )
+        
+        for real_x_np, labels_np in pbar:  # Loop over batches in dataloader with progress bar
+            real_x = real_x_np.to(device)  # Move real features to device
+            labels = labels_np.to(device, dtype=torch.long)  # Move labels to device and set type
+
+            loss_D = torch.tensor(0.0, device=device)  # Initialize discriminator loss
+            gp = torch.tensor(0.0, device=device)  # Initialize gradient penalty
+            d_real_score = torch.tensor(0.0, device=device)  # Initialize real score tracker
+            d_fake_score = torch.tensor(0.0, device=device)  # Initialize fake score tracker
+            
+            # Train discriminator with optional mixed precision
+            for _ in range(args.critic_steps):  # Train discriminator multiple steps
+                with autocast(device.type, enabled=(scaler is not None)):  # Enable AMP if available
+                    z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for discriminator step
+                    fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
+                    d_real = D(real_x, labels)  # Get discriminator score for real samples
+                    d_fake = D(fake_x, labels)  # Get discriminator score for fake samples
+                    gp = gradient_penalty(D, real_x, fake_x, labels, device, config)  # Compute gradient penalty with config
+                    loss_D = d_fake.mean() - d_real.mean() + args.lambda_gp * gp  # Calculate WGAN-GP discriminator loss
+
+                opt_D.zero_grad()  # Zero discriminator gradients
+                if scaler is not None:  # If using mixed precision
+                    scaler.scale(loss_D).backward()  # Scale loss and backpropagate
+                    scaler.step(opt_D)  # Update discriminator parameters with scaled gradients
+                    scaler.update()  # Update scaler for next iteration
+                else:  # Standard precision
+                    loss_D.backward()  # Backpropagate discriminator loss
+                    opt_D.step()  # Update discriminator parameters
+
+                # Track scores for the last critic step
+                d_real_score = d_real.mean()  # Store average real score
+                d_fake_score = d_fake.mean()  # Store average fake score
+
+            # Train generator with optional mixed precision
+            with autocast(device.type, enabled=(scaler is not None)):  # Enable AMP if available
+                z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for generator step
+                gen_labels = torch.randint(0, n_classes, (args.batch_size,), device=device)  # Sample labels for generator
+                fake_x = G(z, gen_labels)  # Generate fake samples with generator
+                g_loss = -D(fake_x, gen_labels).mean()  # Calculate generator loss
+
+            opt_G.zero_grad()  # Zero generator gradients
+            if scaler is not None:  # If using mixed precision
+                scaler.scale(g_loss).backward()  # Scale loss and backpropagate
+                scaler.step(opt_G)  # Update generator parameters with scaled gradients
+                scaler.update()  # Update scaler for next iteration
+            else:  # Standard precision
+                g_loss.backward()  # Backpropagate generator loss
+                opt_G.step()  # Update generator parameters
+
+            # Update progress bar description with current metrics (colored)
+            pbar.set_description(
+                f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL} | "
+                f"{BackgroundColors.YELLOW}step {step}{Style.RESET_ALL} | "
+                f"{BackgroundColors.RED}loss_D: {loss_D.item():.4f}{Style.RESET_ALL} | "
+                f"{BackgroundColors.GREEN}loss_G: {g_loss.item():.4f}{Style.RESET_ALL} | "
+                f"gp: {gp.item():.4f} | "
+                f"D(real): {d_real_score.item():.4f} | "
+                f"D(fake): {d_fake_score.item():.4f}"
+            )
+            
+            # Track metrics every log_interval steps
+            if step % args.log_interval == 0:  # Log training progress periodically
+                # Calculate Wasserstein distance estimate
+                wasserstein_dist = (d_real_score - d_fake_score).item()  # Compute W-distance
+                
+                # Store metrics
+                metrics_history["steps"].append(step)  # Record step number
+                metrics_history["loss_D"].append(loss_D.item())  # Record discriminator loss
+                metrics_history["loss_G"].append(g_loss.item())  # Record generator loss
+                metrics_history["gp"].append(gp.item())  # Record gradient penalty
+                metrics_history["D_real"].append(d_real_score.item())  # Record real score
+                metrics_history["D_fake"].append(d_fake_score.item())  # Record fake score
+                metrics_history["wasserstein"].append(wasserstein_dist)  # Record Wasserstein distance
+            step += 1  # Increment global step counter
+
+        if (epoch + 1) % args.save_every == 0 or epoch == args.epochs - 1:  # Save checkpoints periodically
+            # Determine checkpoint output directory based on input CSV location
+            if args.csv_path:  # If CSV path is provided
+                csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
+                checkpoint_dir = csv_path_obj.parent / "Data_Augmentation" / "Checkpoints"  # Create Checkpoints subdirectory
+                os.makedirs(checkpoint_dir, exist_ok=True)  # Ensure directory exists
+                checkpoint_prefix = csv_path_obj.stem  # Use input filename as prefix
+            else:  # No CSV path, use default out_dir
+                checkpoint_dir = Path(args.out_dir) / "Checkpoints"  # Create Checkpoints subdirectory in out_dir
+                os.makedirs(checkpoint_dir, exist_ok=True)  # Ensure directory exists
+                checkpoint_prefix = "model"  # Default prefix
+            
+            g_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{epoch+1}.pt"  # Path for generator checkpoint
+            d_path = checkpoint_dir / f"{checkpoint_prefix}_discriminator_epoch{epoch+1}.pt"  # Path for discriminator checkpoint
+            
+            # Calculate class distribution for percentage-based generation
+            unique_labels, label_counts = np.unique(dataset.labels, return_counts=True)  # Get class distribution
+            class_distribution = dict(zip(unique_labels.tolist(), label_counts.tolist()))  # Create label:count mapping
+            
+            # Prepare generator checkpoint with full training state
+            g_checkpoint = {
+                "epoch": epoch + 1,  # Save current epoch number
+                "state_dict": cast(Any, G).state_dict(),  # Save generator state dict
+                "opt_G_state": cast(Any, opt_G).state_dict(),  # Save generator optimizer state
+                "scaler": dataset.scaler,  # Save scaler for inverse transform
+                "label_encoder": dataset.label_encoder,  # Save label encoder for mapping
+                "feature_cols": dataset.feature_cols,  # Save feature column names for generation
+                "class_distribution": class_distribution,  # Save class distribution for percentage-based generation
+                "metrics_history": metrics_history,  # Save metrics history for resume
+                "args": vars(args),  # Save training arguments
+            }
+            # Add AMP scaler state if using mixed precision
+            if scaler is not None:  # If using AMP
+                g_checkpoint["scaler_state"] = scaler.state_dict()  # Save scaler state
+            
+            torch.save(g_checkpoint, str(g_path))  # Save generator checkpoint to disk
+            
+            # Prepare discriminator checkpoint
+            d_checkpoint = {
+                "epoch": epoch + 1,  # Save current epoch number
+                "state_dict": cast(Any, D).state_dict(),  # Save discriminator state dict
+                "opt_D_state": cast(Any, opt_D).state_dict(),  # Save discriminator optimizer state
+                "args": vars(args),  # Save training arguments
+            }
+            torch.save(d_checkpoint, str(d_path))  # Save discriminator checkpoint to disk
+            latest_path = checkpoint_dir / f"{checkpoint_prefix}_generator_latest.pt"  # Path for latest generator
+            torch.save(cast(Any, G).state_dict(), str(latest_path))  # Save latest generator weights
+            
+            # Save metrics history to separate JSON file for easy loading
+            metrics_path = checkpoint_dir / f"{checkpoint_prefix}_metrics_history.json"  # Path for metrics JSON
+            with open(metrics_path, 'w') as f:  # Open file for writing
+                json.dump(metrics_history, f, indent=2)  # Save metrics as JSON
+            print(f"{BackgroundColors.GREEN}Saved metrics history to {BackgroundColors.CYAN}{metrics_path}{Style.RESET_ALL}")  # Print metrics save message
+            print(f"{BackgroundColors.GREEN}Saved generator to {BackgroundColors.CYAN}{g_path}{Style.RESET_ALL}")  # Print checkpoint save message
+    
+    print(f"{BackgroundColors.GREEN}Training finished!{Style.RESET_ALL}")  # Print training completion message
+    
+    # Plot training metrics
+    if len(metrics_history["steps"]) > 0:  # If metrics were collected
+        print(f"{BackgroundColors.GREEN}Generating training metrics plots...{Style.RESET_ALL}")  # Print plotting message
+        # Determine plot output directory based on input CSV location
+        if args.csv_path:  # If CSV path is provided
+            csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
+            plot_dir = csv_path_obj.parent / "Data_Augmentation"  # Create Data_Augmentation subdirectory
+            os.makedirs(plot_dir, exist_ok=True)  # Ensure directory exists
+            # Save plot with same base name as input file
+            plot_filename = csv_path_obj.stem + "_training_metrics.png"  # Use input filename for plot
+            # Temporarily modify out_dir for plotting
+            original_out_dir = args.out_dir  # Save original out_dir
+            args.out_dir = str(plot_dir)  # Set out_dir to Data_Augmentation
+            # Update metrics history to use custom filename
+            temp_metrics = metrics_history.copy()  # Copy metrics
+            plot_training_metrics(temp_metrics, str(plot_dir), plot_filename, config)  # Create and save plots with config
+            args.out_dir = original_out_dir  # Restore original out_dir
+        else:  # No CSV path, use default out_dir
+            plot_training_metrics(metrics_history, args.out_dir, "training_metrics.png", config)  # Create and save plots with config
+
+    send_telegram_message(TELEGRAM_BOT, f"Finished WGAN-GP training on {Path(args.csv_path).name} after {args.epochs} epochs")
+
+
 def generate(args, config: Optional[Dict] = None):
     """
     Generate synthetic samples from a saved generator checkpoint.
