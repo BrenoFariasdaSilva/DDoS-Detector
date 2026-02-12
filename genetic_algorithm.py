@@ -138,6 +138,38 @@ csv_write_lock = threading.Lock()  # Lock for CSV write operations to prevent ra
 # Functions Definition
 
 
+def load_config_file(config_path=None):
+    """
+    Load configuration from YAML or .env file.
+
+    :param config_path: Path to configuration file (None for auto-detect)
+    :return: Dictionary with loaded configuration or empty dict if not found
+    """
+
+    if config_path is None:  # If no path provided, try default locations
+        possible_paths = ["config.yaml", "config.yml", ".env"]  # List of possible config file paths
+        for path in possible_paths:  # Iterate through possible paths
+            if os.path.exists(path):  # Check if file exists
+                config_path = path  # Use this path
+                break  # Stop searching
+
+    if config_path is None or not os.path.exists(config_path):  # If no config file found
+        return {}  # Return empty dictionary
+
+    try:  # Attempt to load the configuration file
+        with open(config_path, "r") as f:  # Open configuration file
+            if config_path.endswith((".yaml", ".yml")):  # If YAML file
+                return yaml.safe_load(f) or {}  # Load and return YAML content
+            elif config_path.endswith(".env"):  # If .env file
+                from dotenv import dotenv_values  # Import dotenv parser
+                return dotenv_values(config_path)  # Load and return .env content
+    except Exception as e:  # If loading fails
+        print(f"{BackgroundColors.YELLOW}Warning: Failed to load config from {config_path}: {e}{Style.RESET_ALL}")  # Output warning
+        return {}  # Return empty dictionary
+
+    return {}  # Return empty dictionary as fallback
+
+
 def deep_merge_dicts(base, override):
     """
     Recursively merge override dictionary into base dictionary.
