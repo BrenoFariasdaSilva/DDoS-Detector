@@ -138,6 +138,114 @@ csv_write_lock = threading.Lock()  # Lock for CSV write operations to prevent ra
 # Functions Definition
 
 
+def get_default_config():
+    """
+    Returns the default configuration dictionary for the genetic algorithm.
+
+    :return: Dictionary containing all default configuration parameters
+    """
+
+    return {
+        "execution": {
+            "verbose": False,  # Set to True to output verbose messages
+            "skip_train_if_model_exists": False,  # If True, try loading exported models instead of retraining
+            "runs": 5,  # Number of runs for Genetic Algorithm analysis
+            "resume_progress": True,  # When True, attempt to resume progress from saved state files
+            "progress_save_interval": 10,  # Save progress every N generations
+            "play_sound": True,  # Set to True to play a sound when the program finishes
+        },
+        "dataset": {
+            "files_to_ignore": [],  # List of files to ignore during processing
+            "test_size": 0.2,  # Test set size for train-test split
+            "min_test_fraction": 0.05,  # Minimum acceptable test fraction
+            "max_test_fraction": 0.50,  # Maximum acceptable test fraction
+            "remove_zero_variance": True,  # Remove zero-variance features during preprocessing
+        },
+        "genetic_algorithm": {
+            "n_generations": 200,  # Number of generations for GA
+            "min_pop": 20,  # Minimum population size
+            "max_pop": 20,  # Maximum population size
+            "cxpb": 0.5,  # Crossover probability
+            "mutpb": 0.01,  # Mutation probability
+        },
+        "early_stop": {
+            "acc_threshold": 0.75,  # Minimum acceptable accuracy for an individual
+            "folds": 3,  # Number of folds to verify before early stopping
+            "generations": 10,  # Number of generations without improvement before early stop
+        },
+        "cross_validation": {
+            "n_folds": 10,  # Number of cross-validation folds
+        },
+        "multiprocessing": {
+            "n_jobs": -1,  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
+            "cpu_processes": 1,  # Initial number of worker processes; can be updated by monitor
+        },
+        "resource_monitor": {
+            "enabled": True,  # Enable resource monitoring
+            "interval_seconds": 30,  # Interval between monitoring cycles in seconds
+            "reserve_cpu_frac": 0.15,  # Fraction of CPU reserved from worker allocation
+            "reserve_mem_frac": 0.15,  # Fraction of memory reserved from worker allocation
+            "min_procs": 1,  # Minimum number of processes allowed
+            "max_procs": None,  # Maximum number of processes allowed
+            "min_gens_before_update": 10,  # Minimum GA generations before updating workers
+            "daemon": True,  # Whether the monitoring thread runs as daemon
+        },
+        "model": {
+            "estimator": "RandomForestClassifier",  # Default estimator for GA fitness evaluation
+            "random_state": None,  # Random state for reproducibility (None for non-deterministic)
+        },
+        "caching": {
+            "enabled": True,  # Enable fitness caching
+            "pickle_protocol": pickle.HIGHEST_PROTOCOL,  # Pickle protocol to use when saving state
+        },
+        "progress": {
+            "state_dir_name": "ga_progress",  # Subfolder under Feature_Analysis to store progress files
+        },
+        "export": {
+            "results_csv_columns": [  # Columns for the results CSV
+                "timestamp",
+                "tool",
+                "run_index",
+                "model",
+                "dataset",
+                "hyperparameters",
+                "cv_method",
+                "train_test_split",
+                "scaling",
+                "cv_accuracy",
+                "cv_precision",
+                "cv_recall",
+                "cv_f1_score",
+                "test_accuracy",
+                "test_precision",
+                "test_recall",
+                "test_f1_score",
+                "test_fpr",
+                "test_fnr",
+                "training_time_s",
+                "testing_time_s",
+                "elapsed_run_time",
+                "hardware",
+                "best_features",
+                "rfe_ranking",
+            ],
+        },
+        "sound": {
+            "commands": {  # The commands to play a sound for each operating system
+                "Darwin": "afplay",
+                "Linux": "aplay",
+                "Windows": "start",
+            },
+            "file": "./.assets/Sounds/NotificationSound.wav",  # The path to the sound file
+        },
+        "paths": {
+            "datasets_dir": None,  # Directory containing datasets (None for auto-detect)
+            "output_dir": "Feature_Analysis",  # Output directory for results
+            "logs_dir": "./Logs",  # Directory for log files
+        },
+    }  # Return the default configuration dictionary
+
+
 def load_config_file(config_path=None):
     """
     Load configuration from YAML or .env file.
