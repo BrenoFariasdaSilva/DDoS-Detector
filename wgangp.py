@@ -126,6 +126,134 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def get_default_config():
+    """
+    Return the default configuration dictionary for WGAN-GP.
+
+    This defines all configurable parameters with their default values.
+    These defaults match config.yaml.example structure and can be overridden
+    by config.yaml file or CLI arguments.
+
+    :return: Dictionary containing default configuration values
+    """
+
+    return {  # Begin configuration dictionary
+        "execution": {  # Execution control parameters
+            "verbose": False,  # Enable verbose output messages
+            "play_sound": True,  # Play sound notification when complete
+            "results_suffix": "_data_augmented",  # Suffix to add to generated filenames
+            "match_filenames_to_process": [""],  # List of specific filenames to search for a match
+            "ignore_files": ["_data_augmented"],  # List of filename substrings to ignore
+            "ignore_dirs": [  # List of directory names to ignore when searching for datasets
+                "Classifiers",
+                "Classifiers_Hyperparameters",
+                "Dataset_Description",
+                "Data_Separability",
+                "Feature_Analysis",
+            ],
+        },
+        "wgangp": {  # WGAN-GP core configuration
+            "mode": "both",  # Mode: train, gen, or both
+            "csv_path": None,  # Path to CSV training data
+            "label_col": "Label",  # Column name for class label
+            "feature_cols": None,  # List of feature column names (None = use all)
+            "seed": 42,  # Random seed for reproducibility
+            "force_cpu": False,  # Force CPU usage even if CUDA available
+            "from_scratch": False,  # Force training from scratch, ignore checkpoints
+        },
+        "dataset": {  # Dataset configuration
+            "remove_zero_variance": True,  # Remove zero-variance features during preprocessing
+            "label_candidates": ["label", "class", "target"],  # Common label column names for auto-detection
+            "datasets": {  # Dictionary containing dataset paths
+                "CICDDoS2019-Dataset": [  # List of paths to the CICDDoS2019 dataset
+                    "./Datasets/CICDDoS2019/01-12/",
+                    "./Datasets/CICDDoS2019/03-11/",
+                ],
+            },
+        },
+        "training": {  # Training hyperparameters
+            "epochs": 60,  # Number of training epochs
+            "batch_size": 64,  # Training batch size
+            "critic_steps": 5,  # Number of discriminator updates per generator update
+            "lr": 1e-4,  # Learning rate for both networks
+            "beta1": 0.5,  # Adam optimizer beta1 parameter
+            "beta2": 0.9,  # Adam optimizer beta2 parameter
+            "lambda_gp": 10.0,  # Gradient penalty coefficient
+            "save_every": 5,  # Save checkpoints every N epochs
+            "log_interval": 50,  # Log metrics every N steps
+            "sample_batch": 16,  # Number of samples for fixed noise generation
+            "use_amp": False,  # Use automatic mixed precision
+            "compile": False,  # Use torch.compile() for faster execution
+        },
+        "generator": {  # Generator architecture
+            "latent_dim": 100,  # Dimensionality of noise vector
+            "hidden_dims": [256, 512],  # Hidden layer sizes
+            "embed_dim": 32,  # Label embedding dimension
+            "n_resblocks": 3,  # Number of residual blocks
+            "leaky_relu_alpha": 0.2,  # LeakyReLU negative slope
+        },
+        "discriminator": {  # Discriminator architecture
+            "hidden_dims": [512, 256, 128],  # Hidden layer sizes
+            "embed_dim": 32,  # Label embedding dimension
+            "leaky_relu_alpha": 0.2,  # LeakyReLU negative slope
+        },
+        "gradient_penalty": {  # Gradient penalty configuration
+            "epsilon": 1e-12,  # Small constant for numerical stability
+        },
+        "generation": {  # Sample generation parameters
+            "checkpoint": None,  # Path to generator checkpoint
+            "n_samples": 1.0,  # Number/percentage of samples to generate
+            "label": None,  # Specific class ID to generate (None = all classes)
+            "out_file": "generated.csv",  # Output CSV filename
+            "gen_batch_size": 256,  # Generation batch size
+            "feature_dim": None,  # Feature dimensionality (None = auto-detect)
+            "small_class_threshold": 100,  # Threshold for small class detection
+            "small_class_min_samples": 10,  # Minimum samples for small classes
+        },
+        "dataloader": {  # DataLoader configuration
+            "num_workers": 8,  # Number of workers for data loading
+            "pin_memory": True,  # Use pinned memory for faster GPU transfer
+            "persistent_workers": True,  # Keep workers alive between epochs
+            "prefetch_factor": 2,  # Number of batches to prefetch
+        },
+        "plotting": {  # Visualization configuration
+            "enabled": True,  # Enable plot generation
+            "filename": "training_metrics.png",  # Plot filename
+            "figsize": [18, 10],  # Figure size [width, height]
+            "dpi": 300,  # Image resolution
+            "subplot_rows": 2,  # Number of subplot rows
+            "subplot_cols": 3,  # Number of subplot columns
+            "linewidth": 1.5,  # Line width for plots
+            "alpha": 0.7,  # Transparency for plot lines
+            "grid_alpha": 0.3,  # Grid transparency
+        },
+        "paths": {  # File paths configuration
+            "out_dir": "outputs",  # Output directory for models/logs
+            "logs_dir": "./Logs",  # Directory for log files
+            "checkpoint_subdir": "Checkpoints",  # Checkpoints subdirectory name
+            "data_augmentation_subdir": "Data_Augmentation",  # Data augmentation subdirectory name
+        },
+        "logging": {  # Logging configuration
+            "enabled": True,  # Enable file logging
+            "clean": True,  # Clear log file on start
+            "tqdm_bar_format": "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",  # Progress bar format
+        },
+        "telegram": {  # Telegram bot configuration
+            "enabled": True,  # Enable Telegram notifications
+            "verify_env": True,  # Verify .env file existence
+        },
+        "sound": {  # Sound notification configuration
+            "enabled": True,  # Enable sound notifications
+            "commands": {  # Commands to play sound for each operating system
+                "Darwin": "afplay",
+                "Linux": "aplay",
+                "Windows": "start",
+            },
+            "file": "./.assets/Sounds/NotificationSound.wav",  # Path to the sound file
+        },
+    }  # End configuration dictionary
+
+
 def load_configuration(config_path: Optional[str] = None, cli_overrides: Optional[Dict] = None):
     """
     Load configuration from config.yaml with fallback to defaults.
