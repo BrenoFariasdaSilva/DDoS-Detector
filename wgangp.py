@@ -126,6 +126,378 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def preprocess_dataframe(df, label_col, remove_zero_variance=None, config: Optional[Dict] = None):
+    """
+    Preprocess a DataFrame by:
+    1. Selecting only numeric feature columns (excluding label)
+    2. Removing rows with NaN or infinite values
+    3. Optionally dropping zero-variance numeric features
+
+    :param df: pandas DataFrame to preprocess
+    :param label_col: name of the label column to preserve
+    :param remove_zero_variance: whether to drop numeric columns with zero variance (None = use config)
+    :param config: Optional configuration dictionary
+    :return: cleaned DataFrame with only numeric features and the label column
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG or get_default_config()  # Use global or default config
+    
+    if remove_zero_variance is None:  # If not specified
+        remove_zero_variance = config.get("dataset", {}).get("remove_zero_variance", True)  # Get from config
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Preprocessing DataFrame: selecting numeric features, removing NaN/inf, handling zero-variance.{Style.RESET_ALL}",
+        config=config
+    )  # Output verbose message
+
+    if df is None:  # If the DataFrame is None
+        return df  # Return None
+
+    # Strip whitespace from all column names
+    df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+
+    # Separate label column
+    labels = df[label_col].copy()  # Save labels
+
+    # Select only numeric columns (excluding label)
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()  # Get numeric column names
+    if label_col in numeric_cols:  # If label is numeric, remove it from features
+        numeric_cols.remove(label_col)  # Remove label from feature list
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Found {len(numeric_cols)} numeric feature columns out of {len(df.columns)-1} total features.{Style.RESET_ALL}"
+    )  # Output count
+
+    # Create DataFrame with only numeric features
+    df_numeric = df[numeric_cols].copy()  # Select numeric features
+
+    # Replace infinite values with NaN, then drop rows with NaN
+    df_numeric = df_numeric.replace([np.inf, -np.inf], np.nan)  # Replace inf with NaN
+    valid_mask = ~df_numeric.isna().any(axis=1)  # Mask for rows without NaN
+
+    df_clean = df_numeric[valid_mask].copy()  # Keep only valid rows
+    labels_clean = labels[valid_mask].copy()  # Keep corresponding labels
+
+    rows_dropped = len(df) - len(df_clean)  # Calculate dropped rows
+    if rows_dropped > 0:  # If rows were dropped
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Dropped {rows_dropped} rows with NaN/inf values ({rows_dropped/len(df)*100:.2f}%).{Style.RESET_ALL}"
+        )  # Output warning
+
+    # Remove zero-variance features if requested
+    if remove_zero_variance and len(df_clean) > 0:  # If removal enabled and data remains
+        variances = df_clean.var(axis=0, ddof=0)  # Calculate column variances
+        zero_var_cols = variances[variances == 0].index.tolist()  # Get zero-variance columns
+        if zero_var_cols:  # If zero-variance columns exist
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Dropping {len(zero_var_cols)} zero-variance columns.{Style.RESET_ALL}"
+            )  # Output warning
+            df_clean = df_clean.drop(columns=zero_var_cols)  # Drop zero-variance columns
+
+    # Add label column back
+    df_clean[label_col] = labels_clean.values  # Restore labels
+
+    return df_clean  # Return cleaned DataFrame
+
+
+# Classes Definitions:
+
+
+class CSVFlowDataset(Dataset):
+    """
+    Initialize the CSVFlowDataset.
+    This class loads flow data from a CSV file, applies scaling to features,
+
+    :param csv_path: Path to CSV file containing flows and labels.
+    :param label_col: Column name that contains the class labels.
+    :param feature_cols: Optional list of feature column names. If None, all columns except label_col are used.
+    :param scaler: Optional pre-fitted StandardScaler to use for features.
+    :param label_encoder: Optional pre-fitted LabelEncoder to transform labels.
+    :param fit_scaler: If True and scaler is None, fit a new StandardScaler on the data.
+    :return: None
+    """
+
+    def __init__(  # Begin constructor for initializing the dataset
+        self,  # Instance reference
+        csv_path: str,  # Path pointing to the CSV file
+        label_col: str,  # Column containing class labels
+        feature_cols: Optional[List[str]] = None,  # Optional list of selected features
+        scaler: Optional[StandardScaler] = None,  # Optional feature scaler
+        label_encoder: Optional[LabelEncoder] = None,  # Optional label encoder
+        fit_scaler: bool = True,  # Whether to fit scaler on data
+    ):  # Close constructor signature
+        df = pd.read_csv(csv_path, low_memory=False)  # Load CSV file into a DataFrame with low_memory=False to avoid DtypeWarning
+        
+        # Strip whitespace from column names immediately after loading
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+
+        # Auto-detect label column if the specified one doesn't exist
+        if label_col not in df.columns:  # If the specified label column is not found
+            detected_col = detect_label_column(df.columns)  # Try to detect the label column
+            if detected_col is not None:  # If a label column was detected
+                print(f"{BackgroundColors.YELLOW}Warning: Label column '{label_col}' not found. Using detected column: '{detected_col}'{Style.RESET_ALL}")  # Warn user
+                label_col = detected_col  # Use the detected column
+            else:  # If no label column was detected
+                raise ValueError(f"Label column '{label_col}' not found in CSV. Available columns: {list(df.columns)}")  # Raise error
+
+        # Preprocess DataFrame: select numeric features, remove NaN/inf, handle zero-variance
+        df = preprocess_dataframe(df, label_col, remove_zero_variance=True)  # Clean and filter DataFrame
+
+        if len(df) == 0:  # If all rows were dropped
+            raise ValueError(f"No valid data remaining after preprocessing {csv_path}")  # Raise error
+
+        # Get available numeric feature columns (excluding label)
+        available_features = [c for c in df.columns if c != label_col]  # List numeric features
+
+        if feature_cols is None:  # When user does not specify features
+            feature_cols = available_features  # Use all available numeric features
+        else:  # User specified features
+            # Filter to only include features that exist and are numeric
+            feature_cols = [c for c in feature_cols if c in available_features]  # Keep valid features
+            if not feature_cols:  # If no valid features remain
+                raise ValueError(f"None of the specified feature columns are numeric or available in {csv_path}")  # Raise error
+
+        self.label_col = label_col  # Save label column name
+        self.feature_cols = feature_cols  # Save list of feature columns
+
+        # Ensure labels_raw is a plain numpy array of Python strings to satisfy type checkers
+        self.labels_raw: np.ndarray = np.asarray(df[label_col].values, dtype=str)
+
+        self.labels: Any  # Must be Any or Pylance will error
+
+        # Use a normalized numpy array for LabelEncoder input
+        labels_arr = np.asarray(self.labels_raw, dtype=str)
+
+        if label_encoder is None:  # If no label encoder is given
+            self.label_encoder = LabelEncoder()  # Create a fresh label encoder
+            self.labels = self.label_encoder.fit_transform(labels_arr)  # Fit encoder and encode labels
+        else:  # If encoder is provided
+            self.label_encoder = label_encoder  # Store provided encoder
+            self.labels = self.label_encoder.transform(labels_arr)  # Encode labels with given encoder
+
+        X = df[feature_cols].values.astype(np.float32)  # Extract features and cast to float32
+
+        if scaler is None:  # If no scaler is provided
+            self.scaler = StandardScaler()  # Instantiate a default scaler
+            if fit_scaler:  # Fit scaler when requested
+                self.X = self.scaler.fit_transform(X)  # Fit and transform features
+            else:  # Do not fit scaler
+                self.X = self.scaler.transform(X)  # Only transform features
+        else:  # Scaler is provided
+            self.scaler = scaler  # Store provided scaler
+            self.X = self.scaler.transform(X)  # Transform features with external scaler
+
+        self.n_classes = len(self.label_encoder.classes_)  # Count number of unique classes
+        self.feature_dim = self.X.shape[1]  # Determine dimensionality of features
+
+    def __len__(self):  # Return number of samples in the dataset
+        """
+        Return the number of samples in the dataset.
+
+        :return: Total number of feature vectors in the dataset
+        """
+
+        return len(self.X)  # Return number of feature vectors
+
+    def __getitem__(self, idx):  # Fetch one item by index
+        """
+        Fetch a single sample by index.
+
+        :param idx: Index of the sample to retrieve
+        :return: Tuple of (features, label) where features is a numpy array and label is an integer
+        """
+
+        x = self.X[idx]  # Get feature row
+        y = int(self.labels[idx])  # Get encoded label
+        return x, y  # Return (features, label)
+
+
+class ResidualBlockFC(nn.Module):
+    """
+    Simple fully-connected residual block used in the generator.
+
+    :param dim: input and output dimensionality of the block
+    :param leaky_relu_alpha: negative slope for LeakyReLU activation
+    """
+
+    def __init__(self, dim, leaky_relu_alpha=0.2):  # Constructor taking the input/output dimension and alpha
+        """
+        Initialize a residual fully-connected block for the generator.
+
+        :param dim: Input and output dimensionality of the block
+        :param leaky_relu_alpha: Negative slope for LeakyReLU activation (default: 0.2)
+        :return: None
+        """
+
+        super().__init__()  # Initialize the parent nn.Module class
+
+        self.net = nn.Sequential(  # Define the residual transformation path
+            nn.Linear(dim, dim),  # First linear projection
+            nn.BatchNorm1d(dim),  # Normalize activations
+            nn.LeakyReLU(leaky_relu_alpha, inplace=True),  # Apply nonlinearity
+            nn.Linear(dim, dim),  # Second linear projection
+            nn.BatchNorm1d(dim),  # Second batch normalization
+        )  # End of sequential block
+
+        self.act = nn.LeakyReLU(leaky_relu_alpha, inplace=True)  # Activation after merging residual shortcut
+
+    def forward(self, x):  # Forward computation of the block
+        """
+        Perform forward pass through the residual block.
+
+        :param x: Input tensor of shape (batch_size, dim)
+        :return: Output tensor after residual connection and activation
+        """
+
+        out = self.net(x)  # Compute residual branch output
+        out = out + x  # Apply skip connection
+        return self.act(out)  # Apply activation to merged result
+
+
+class Generator(nn.Module):
+    """
+    Conditional generator: input z + label embedding (one-hot or embedding), outputs feature vector.
+    Uses residual blocks internally (DRC-style).
+
+    :param latent_dim: dimensionality of input noise vector
+    """
+
+    def __init__(
+        self,
+        latent_dim: int,
+        feature_dim: int,
+        n_classes: int,
+        hidden_dims: Optional[List[int]] = None,
+        embed_dim: int = 32,
+        n_resblocks: int = 3,
+        leaky_relu_alpha: float = 0.2,
+    ):
+        """
+        Initialize conditional generator that maps (z, y) -> feature vector.
+
+        :param latent_dim: Dimensionality of noise vector z
+        :param feature_dim: Dimensionality of output feature vector
+        :param n_classes: Number of conditioning classes
+        :param hidden_dims: List of hidden layer sizes for initial MLP (default: [256, 512])
+        :param embed_dim: Size of label embedding (default: 32)
+        :param n_resblocks: Number of residual blocks to apply (default: 3)
+        :param leaky_relu_alpha: Negative slope for LeakyReLU activation (default: 0.2)
+        :return: None
+        """
+
+        super().__init__()  # Initialize module internals
+
+        if hidden_dims is None:  # Use default architecture if none given
+            hidden_dims = [256, 512]  # Default MLP layer widths
+
+        self.latent_dim = latent_dim  # Store latent input size
+        self.feature_dim = feature_dim  # Store output size
+        self.n_classes = n_classes  # Store number of classes
+        self.embed = nn.Embedding(n_classes, embed_dim)  # Create label embedding table
+
+        input_dim = latent_dim + embed_dim  # Combined dimension of noise + embedding
+        layers = []  # Container for MLP layers
+        prev = input_dim  # Track previous layer width
+
+        for h in hidden_dims:  # Build MLP layers
+            layers.append(nn.Linear(prev, h))  # Add linear layer
+            layers.append(nn.BatchNorm1d(h))  # Normalize activations
+            layers.append(nn.LeakyReLU(leaky_relu_alpha, inplace=True))  # Apply activation
+            prev = h  # Update width tracker
+
+        res_dim = prev  # Width entering residual blocks
+        self.pre = nn.Sequential(*layers)  # Store assembled MLP
+
+        self.resblocks = nn.ModuleList(  # Build list of residual blocks
+            [ResidualBlockFC(res_dim, leaky_relu_alpha) for _ in range(n_resblocks)]  # Create required count of blocks
+        )  # End block list
+
+        self.out = nn.Sequential(  # Output mapping layer
+            nn.Linear(res_dim, feature_dim),  # Final linear projection
+        )  # End output block
+
+    def forward(self, z, y):  # Compute generator output
+        """
+        Generate synthetic features conditioned on labels.
+
+        :param z: Noise tensor of shape (batch_size, latent_dim)
+        :param y: Label tensor of shape (batch_size,) containing class indices
+        :return: Generated feature tensor of shape (batch_size, feature_dim)
+        """
+
+        y_e = self.embed(y)  # Convert class ID to embedding
+        x = torch.cat([z, y_e], dim=1)  # Concatenate noise and embedding
+        x = self.pre(x)  # Process through MLP
+        for b in self.resblocks:  # Loop through residual blocks
+            x = b(x)  # Apply block
+        out = self.out(x)  # Produce final feature vector
+        return out  # Return generated sample
+
+
+class Discriminator(nn.Module):
+    """
+    Conditional critic/discriminator: takes feature vector concatenated with label embedding.
+    Returns scalar score (Wasserstein critic).
+
+    :param feature_dim: dimensionality of input feature vectors
+    """
+
+    def __init__(
+        self,
+        feature_dim: int,
+        n_classes: int,
+        hidden_dims: Optional[List[int]] = None,
+        embed_dim: int = 32,
+        leaky_relu_alpha: float = 0.2,
+    ):
+        """
+        Initialize conditional critic/discriminator network that scores (x, y).
+
+        :param feature_dim: Dimensionality of input feature vector
+        :param n_classes: Number of classes for conditioning
+        :param hidden_dims: List of hidden layer sizes (default: [512, 256, 128])
+        :param embed_dim: Dimensionality of label embedding (default: 32)
+        :param leaky_relu_alpha: Negative slope for LeakyReLU activation (default: 0.2)
+        :return: None
+        """
+
+        super().__init__()  # Initialize discriminator internals
+
+        if hidden_dims is None:  # Assign default architecture when unspecified
+            hidden_dims = [512, 256, 128]  # Standard critic hierarchy
+
+        self.embed = nn.Embedding(n_classes, embed_dim)  # Store label embedding table
+
+        input_dim = feature_dim + embed_dim  # Combined input dimension
+        layers = []  # List to accumulate layers
+        prev = input_dim  # Initialize previous width
+
+        for h in hidden_dims:  # Build critic layers
+            layers.append(nn.Linear(prev, h))  # Linear transformation
+            layers.append(nn.LeakyReLU(leaky_relu_alpha, inplace=True))  # Activation function
+            prev = h  # Update width tracker
+
+        layers.append(nn.Linear(prev, 1))  # Output layer producing scalar score
+        self.net = nn.Sequential(*layers)  # Create critic network
+
+    def forward(self, x, y):  # Compute critic score
+        """
+        Compute critic score for input features conditioned on labels.
+
+        :param x: Feature tensor of shape (batch_size, feature_dim)
+        :param y: Label tensor of shape (batch_size,) containing class indices
+        :return: Scalar critic score tensor of shape (batch_size,)
+        """
+
+        y_e = self.embed(y)  # Convert label to embedding
+        inp = torch.cat([x, y_e], dim=1)  # Join features with embedding
+        return self.net(inp).squeeze(1)  # Produce scalar score
+
+
+# Functions Definitions:
+
+
 def verbose_output(true_string="", false_string="", config: Optional[Dict] = None):
     """
     Outputs a message if the verbose flag is enabled in configuration.
