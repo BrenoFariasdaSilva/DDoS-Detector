@@ -428,6 +428,14 @@ class Generator(nn.Module):
         )  # End output block
 
     def forward(self, z, y):  # Compute generator output
+        """
+        Generate synthetic features conditioned on labels.
+
+        :param z: Noise tensor of shape (batch_size, latent_dim)
+        :param y: Label tensor of shape (batch_size,) containing class indices
+        :return: Generated feature tensor of shape (batch_size, feature_dim)
+        """
+
         y_e = self.embed(y)  # Convert class ID to embedding
         x = torch.cat([z, y_e], dim=1)  # Concatenate noise and embedding
         x = self.pre(x)  # Process through MLP
