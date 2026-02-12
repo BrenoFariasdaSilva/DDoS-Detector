@@ -332,6 +332,13 @@ class CSVFlowDataset(Dataset):
         return len(self.X)  # Return number of feature vectors
 
     def __getitem__(self, idx):  # Fetch one item by index
+        """
+        Fetch a single sample by index.
+
+        :param idx: Index of the sample to retrieve
+        :return: Tuple of (features, label) where features is a numpy array and label is an integer
+        """
+
         x = self.X[idx]  # Get feature row
         y = int(self.labels[idx])  # Get encoded label
         return x, y  # Return (features, label)
