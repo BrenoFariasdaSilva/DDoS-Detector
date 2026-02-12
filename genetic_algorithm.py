@@ -3776,7 +3776,12 @@ def main():
     with global_state_lock:  # Thread-safe initialization
         CPU_PROCESSES = CONFIG["multiprocessing"]["cpu_processes"]  # Set initial CPU processes from config
 
-    csv_path = cli_args.csv_path if cli_args.csv_path else "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Get CSV path from CLI or use default
+    if hasattr(cli_args, "csv_path") and cli_args.csv_path:  # If CSV path provided via CLI, use it; otherwise, use config or default
+        csv_path = cli_args.csv_path  # Use CSV path from CLI arguments if provided
+    else:  # If no CSV path provided via CLI, verify config and then default
+        csv_path = CONFIG.get("paths", {}).get("csv_path")  # Use CSV path from config if available
+    if not csv_path:  # If no CSV path provided via CLI or config, use default
+        csv_path = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Default CSV path
 
     run_genetic_algorithm(config=CONFIG, csv_path=csv_path)  # Run genetic algorithm with configuration
 

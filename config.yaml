@@ -99,3 +99,4 @@ paths:
   datasets_dir: null                  # Directory containing datasets (null for auto-detect)
   output_dir: "Feature_Analysis"      # Output directory for results
   logs_dir: "./Logs"                  # Directory for log files
+  csv_path: null                       # Default dataset CSV path (null to require CLI or auto-detect)
