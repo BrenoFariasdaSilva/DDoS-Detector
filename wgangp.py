@@ -126,6 +126,93 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def plot_training_metrics(metrics_history, out_dir, filename=None, config: Optional[Dict] = None):
+    """
+    Plot training metrics and save to output directory.
+
+    :param metrics_history: dictionary containing lists of metrics over training
+    :param out_dir: directory to save plots
+    :param filename: name of the plot file (default: from config or "training_metrics.png")
+    :param config: Optional configuration dictionary containing plotting settings
+    :return: None
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG or get_default_config()  # Use global or default config
+    
+    if not config.get("plotting", {}).get("enabled", True):  # If plotting disabled
+        return  # Skip plotting
+    
+    if filename is None:  # If no filename provided
+        filename = config.get("plotting", {}).get("filename", "training_metrics.png")  # Get filename from config
+    
+    # Get plotting parameters from config
+    figsize = config.get("plotting", {}).get("figsize", [18, 10])  # Get figure size
+    dpi = config.get("plotting", {}).get("dpi", 300)  # Get DPI
+    subplot_rows = config.get("plotting", {}).get("subplot_rows", 2)  # Get subplot rows
+    subplot_cols = config.get("plotting", {}).get("subplot_cols", 3)  # Get subplot columns
+    linewidth = config.get("plotting", {}).get("linewidth", 1.5)  # Get line width
+    alpha = config.get("plotting", {}).get("alpha", 0.7)  # Get alpha
+    grid_alpha = config.get("plotting", {}).get("grid_alpha", 0.3)  # Get grid alpha
+    
+    fig, axes = plt.subplots(subplot_rows, subplot_cols, figsize=figsize)  # Create subplot grid
+    fig.suptitle("WGAN-GP Training Metrics", fontsize=16, fontweight="bold")  # Add main title
+
+    steps = metrics_history["steps"]  # Get step numbers
+
+    # Plot 1: Discriminator Loss
+    axes[0, 0].plot(steps, metrics_history["loss_D"], color="blue", linewidth=linewidth, alpha=alpha)  # Plot loss_D
+    axes[0, 0].set_title("Discriminator Loss (WGAN)", fontweight="bold")  # Set subplot title
+    axes[0, 0].set_xlabel("Training Step")  # Set x-axis label
+    axes[0, 0].set_ylabel("Loss D")  # Set y-axis label
+    axes[0, 0].grid(True, alpha=grid_alpha)  # Add grid
+
+    # Plot 2: Generator Loss
+    axes[0, 1].plot(steps, metrics_history["loss_G"], color="red", linewidth=linewidth, alpha=alpha)  # Plot loss_G
+    axes[0, 1].set_title("Generator Loss (WGAN)", fontweight="bold")  # Set subplot title
+    axes[0, 1].set_xlabel("Training Step")  # Set x-axis label
+    axes[0, 1].set_ylabel("Loss G")  # Set y-axis label
+    axes[0, 1].grid(True, alpha=grid_alpha)  # Add grid
+
+    # Plot 3: Gradient Penalty
+    axes[0, 2].plot(steps, metrics_history["gp"], color="green", linewidth=linewidth, alpha=alpha)  # Plot gradient penalty
+    axes[0, 2].set_title("Gradient Penalty", fontweight="bold")  # Set subplot title
+    axes[0, 2].set_xlabel("Training Step")  # Set x-axis label
+    axes[0, 2].set_ylabel("GP")  # Set y-axis label
+    axes[0, 2].grid(True, alpha=grid_alpha)  # Add grid
+
+    # Plot 4: Critic Scores (Real vs Fake)
+    axes[1, 0].plot(steps, metrics_history["D_real"], label="E[D(real)]", color="darkblue", linewidth=linewidth, alpha=alpha)  # Plot real scores
+    axes[1, 0].plot(steps, metrics_history["D_fake"], label="E[D(fake)]", color="darkred", linewidth=linewidth, alpha=alpha)  # Plot fake scores
+    axes[1, 0].set_title("Critic Scores (Real vs Fake)", fontweight="bold")  # Set subplot title
+    axes[1, 0].set_xlabel("Training Step")  # Set x-axis label
+    axes[1, 0].set_ylabel("Critic Score")  # Set y-axis label
+    axes[1, 0].legend(loc="best")  # Add legend
+    axes[1, 0].grid(True, alpha=grid_alpha)  # Add grid
+
+    # Plot 5: Wasserstein Distance Estimate
+    axes[1, 1].plot(steps, metrics_history["wasserstein"], color="purple", linewidth=linewidth, alpha=alpha)  # Plot Wasserstein distance
+    axes[1, 1].set_title("Wasserstein Distance Estimate", fontweight="bold")  # Set subplot title
+    axes[1, 1].set_xlabel("Training Step")  # Set x-axis label
+    axes[1, 1].set_ylabel("W-Distance")  # Set y-axis label
+    axes[1, 1].grid(True, alpha=grid_alpha)  # Add grid
+
+    # Plot 6: Combined Loss View
+    axes[1, 2].plot(steps, metrics_history["loss_D"], label="Loss D", color="blue", linewidth=linewidth, alpha=0.6)  # Plot loss_D
+    axes[1, 2].plot(steps, metrics_history["loss_G"], label="Loss G", color="red", linewidth=linewidth, alpha=0.6)  # Plot loss_G
+    axes[1, 2].set_title("Combined Loss View", fontweight="bold")  # Set subplot title
+    axes[1, 2].set_xlabel("Training Step")  # Set x-axis label
+    axes[1, 2].set_ylabel("Loss")  # Set y-axis label
+    axes[1, 2].legend(loc="best")  # Add legend
+    axes[1, 2].grid(True, alpha=grid_alpha)  # Add grid
+
+    plt.tight_layout()  # Adjust spacing between subplots
+    plot_path = os.path.join(out_dir, filename)  # Define plot save path using custom filename
+    plt.savefig(plot_path, dpi=dpi, bbox_inches="tight")  # Save figure to file
+    print(f"{BackgroundColors.GREEN}Training metrics plot saved to: {BackgroundColors.CYAN}{plot_path}{Style.RESET_ALL}")  # Print save message
+    plt.close()  # Close figure to free memory
+
+
 def train(args, config: Optional[Dict] = None):
     """
     Train the WGAN-GP model using the provided arguments and configuration.
