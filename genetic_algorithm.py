@@ -1612,18 +1612,30 @@ def instantiate_estimator(estimator_cls=None):
     :param estimator_cls: Class of the estimator to instantiate (or None)
     :return: instantiated estimator
     """
+    
+    try:  # Try to read multiprocessing configuration from global CONFIG
+        mp_cfg = CONFIG.get("multiprocessing", {}) if CONFIG else {}  # Get multiprocessing config or empty dict
+    except Exception:  # If CONFIG access fails for any reason
+        mp_cfg = {}  # Fallback to empty config
 
-    if estimator_cls is None:  # If no estimator class is provided
-        return RandomForestClassifier(
-            n_estimators=100, random_state=42, n_jobs=CONFIG["multiprocessing"]["n_jobs"]
-        )  # Return a default RandomForestClassifier
+    ga_parallel = (
+        int(mp_cfg.get("cpu_processes", 1)) if isinstance(mp_cfg.get("cpu_processes", 1), int) else 1
+    )  # Determine GA worker count from config
+    if ga_parallel > 1:  # If GA uses multiple processes
+        estimator_n_jobs = 1  # Force single-threaded estimator to avoid nested loky
+    else:  # If GA is not parallelized across processes
+        estimator_n_jobs = CONFIG.get("model", {}).get("n_jobs", 1) if CONFIG else 1  # Use configured model n_jobs
 
-    try:  # Try to instantiate the provided estimator class
-        return estimator_cls()  # Instantiate with default parameters
-    except Exception:  # If instantiation fails
-        return RandomForestClassifier(
-            n_estimators=100, random_state=42, n_jobs=CONFIG["multiprocessing"]["n_jobs"]
-        )  # Fallback to default RandomForestClassifier
+    if estimator_cls is None:  # If no estimator class provided by caller
+        return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=estimator_n_jobs)  # Return default RandomForest
+
+    try:  # Try instantiating the provided estimator class
+        try:  # Try to construct with n_jobs parameter when supported
+            return estimator_cls(n_jobs=estimator_n_jobs)  # Instantiate estimator with n_jobs
+        except TypeError:  # If provided class doesn't accept n_jobs
+            return estimator_cls()  # Instantiate using no-arg constructor
+    except Exception:  # If instantiation fails for any other reason
+        return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=estimator_n_jobs)  # Fallback to RandomForest
 
 
 def evaluate_individual(
