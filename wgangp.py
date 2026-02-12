@@ -352,6 +352,38 @@ def detect_label_column(columns, config: Optional[Dict] = None):
     return None  # Return None if no label column is found
 
 
+def setup_telegram_bot(config: Optional[Dict] = None):
+    """
+    Sets up the Telegram bot for progress messages.
+
+    :param config: Optional configuration dictionary containing telegram settings
+    :return: None
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG or get_default_config()  # Use global or default config
+    
+    if not config.get("telegram", {}).get("enabled", True):  # If Telegram disabled
+        return  # Exit early
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Setting up Telegram bot for messages...{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    verify_dot_env_file(config)  # Verify if the .env file exists
+
+    global TELEGRAM_BOT  # Declare the module-global telegram_bot variable
+
+    try:  # Try to initialize the Telegram bot
+        TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
+        telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
+        telegram_module.RUNNING_CODE = os.path.basename(__file__)
+    except Exception as e:
+        print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+        TELEGRAM_BOT = None  # Set to None if initialization fails
+
+
 def parse_args():
     """
     Parse command-line arguments and return namespace.
