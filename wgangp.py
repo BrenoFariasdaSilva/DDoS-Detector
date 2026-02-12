@@ -126,6 +126,117 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def args_to_config_overrides(args):
+    """
+    Convert parsed CLI arguments to configuration overrides dictionary.
+
+    :param args: argparse.Namespace containing CLI arguments
+    :return: Dictionary with configuration overrides
+    """
+
+    overrides = {}  # Initialize overrides dictionary
+    
+    # Execution
+    if args.verbose:  # If verbose flag set
+        overrides.setdefault("execution", {})["verbose"] = True  # Enable verbose
+    if args.no_sound:  # If no_sound flag set
+        overrides.setdefault("sound", {})["enabled"] = False  # Disable sound
+    
+    # WGAN-GP core
+    if args.mode is not None:  # If mode specified
+        overrides.setdefault("wgangp", {})["mode"] = args.mode  # Set mode
+    if args.csv_path is not None:  # If csv_path specified
+        overrides.setdefault("wgangp", {})["csv_path"] = args.csv_path  # Set csv_path
+    if args.label_col is not None:  # If label_col specified
+        overrides.setdefault("wgangp", {})["label_col"] = args.label_col  # Set label_col
+    if args.feature_cols is not None:  # If feature_cols specified
+        overrides.setdefault("wgangp", {})["feature_cols"] = args.feature_cols  # Set feature_cols
+    if args.seed is not None:  # If seed specified
+        overrides.setdefault("wgangp", {})["seed"] = args.seed  # Set seed
+    if args.force_cpu:  # If force_cpu flag set
+        overrides.setdefault("wgangp", {})["force_cpu"] = True  # Enable force_cpu
+    if args.from_scratch:  # If from_scratch flag set
+        overrides.setdefault("wgangp", {})["from_scratch"] = True  # Enable from_scratch
+    
+    # Paths
+    if args.out_dir is not None:  # If out_dir specified
+        overrides.setdefault("paths", {})["out_dir"] = args.out_dir  # Set out_dir
+    if args.logs_dir is not None:  # If logs_dir specified
+        overrides.setdefault("paths", {})["logs_dir"] = args.logs_dir  # Set logs_dir
+    
+    # Training
+    if args.epochs is not None:  # If epochs specified
+        overrides.setdefault("training", {})["epochs"] = args.epochs  # Set epochs
+    if args.batch_size is not None:  # If batch_size specified
+        overrides.setdefault("training", {})["batch_size"] = args.batch_size  # Set batch_size
+    if args.critic_steps is not None:  # If critic_steps specified
+        overrides.setdefault("training", {})["critic_steps"] = args.critic_steps  # Set critic_steps
+    if args.lr is not None:  # If lr specified
+        overrides.setdefault("training", {})["lr"] = args.lr  # Set lr
+    if args.beta1 is not None:  # If beta1 specified
+        overrides.setdefault("training", {})["beta1"] = args.beta1  # Set beta1
+    if args.beta2 is not None:  # If beta2 specified
+        overrides.setdefault("training", {})["beta2"] = args.beta2  # Set beta2
+    if args.lambda_gp is not None:  # If lambda_gp specified
+        overrides.setdefault("training", {})["lambda_gp"] = args.lambda_gp  # Set lambda_gp
+    if args.save_every is not None:  # If save_every specified
+        overrides.setdefault("training", {})["save_every"] = args.save_every  # Set save_every
+    if args.log_interval is not None:  # If log_interval specified
+        overrides.setdefault("training", {})["log_interval"] = args.log_interval  # Set log_interval
+    if args.sample_batch is not None:  # If sample_batch specified
+        overrides.setdefault("training", {})["sample_batch"] = args.sample_batch  # Set sample_batch
+    if args.use_amp:  # If use_amp flag set
+        overrides.setdefault("training", {})["use_amp"] = True  # Enable use_amp
+    if args.compile:  # If compile flag set
+        overrides.setdefault("training", {})["compile"] = True  # Enable compile
+    
+    # Generator
+    if args.latent_dim is not None:  # If latent_dim specified
+        overrides.setdefault("generator", {})["latent_dim"] = args.latent_dim  # Set latent_dim
+    if args.g_hidden is not None:  # If g_hidden specified
+        overrides.setdefault("generator", {})["hidden_dims"] = args.g_hidden  # Set hidden_dims
+    if args.g_embed_dim is not None:  # If g_embed_dim specified
+        overrides.setdefault("generator", {})["embed_dim"] = args.g_embed_dim  # Set embed_dim
+    if args.n_resblocks is not None:  # If n_resblocks specified
+        overrides.setdefault("generator", {})["n_resblocks"] = args.n_resblocks  # Set n_resblocks
+    if args.g_leaky_relu_alpha is not None:  # If g_leaky_relu_alpha specified
+        overrides.setdefault("generator", {})["leaky_relu_alpha"] = args.g_leaky_relu_alpha  # Set leaky_relu_alpha
+    
+    # Discriminator
+    if args.d_hidden is not None:  # If d_hidden specified
+        overrides.setdefault("discriminator", {})["hidden_dims"] = args.d_hidden  # Set hidden_dims
+    if args.d_embed_dim is not None:  # If d_embed_dim specified
+        overrides.setdefault("discriminator", {})["embed_dim"] = args.d_embed_dim  # Set embed_dim
+    if args.d_leaky_relu_alpha is not None:  # If d_leaky_relu_alpha specified
+        overrides.setdefault("discriminator", {})["leaky_relu_alpha"] = args.d_leaky_relu_alpha  # Set leaky_relu_alpha
+    
+    # Generation
+    if args.checkpoint is not None:  # If checkpoint specified
+        overrides.setdefault("generation", {})["checkpoint"] = args.checkpoint  # Set checkpoint
+    if args.n_samples is not None:  # If n_samples specified
+        overrides.setdefault("generation", {})["n_samples"] = args.n_samples  # Set n_samples
+    if args.gen_label is not None:  # If gen_label specified
+        overrides.setdefault("generation", {})["label"] = args.gen_label  # Set label
+    if args.out_file is not None:  # If out_file specified
+        overrides.setdefault("generation", {})["out_file"] = args.out_file  # Set out_file
+    if args.gen_batch_size is not None:  # If gen_batch_size specified
+        overrides.setdefault("generation", {})["gen_batch_size"] = args.gen_batch_size  # Set gen_batch_size
+    if args.feature_dim is not None:  # If feature_dim specified
+        overrides.setdefault("generation", {})["feature_dim"] = args.feature_dim  # Set feature_dim
+    
+    # DataLoader
+    if args.num_workers is not None:  # If num_workers specified
+        overrides.setdefault("dataloader", {})["num_workers"] = args.num_workers  # Set num_workers
+    
+    # Dataset
+    if args.remove_zero_variance:  # If remove_zero_variance flag set
+        overrides.setdefault("dataset", {})["remove_zero_variance"] = True  # Enable remove_zero_variance
+    if args.no_remove_zero_variance:  # If no_remove_zero_variance flag set
+        overrides.setdefault("dataset", {})["remove_zero_variance"] = False  # Disable remove_zero_variance
+    
+    return overrides  # Return overrides dictionary
+
+
 def set_seed(seed: int):
     """
     Sets random seeds for reproducibility across all libraries.
