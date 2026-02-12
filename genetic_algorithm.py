@@ -75,6 +75,7 @@ import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import threading  # For optional background resource monitor
 import time  # For measuring execution time
+import yaml  # For system-specific parameters and functions
 from colorama import Style  # For coloring the terminal
 from deap import algorithms, base, creator, tools  # For the genetic algorithm
 from functools import partial  # For creating partial functions
@@ -111,61 +112,20 @@ class BackgroundColors:  # Colors for the terminal
     CLEAR_TERMINAL = "\033[H\033[J"  # Clear the terminal
 
 
-# Execution Constants:
-VERBOSE = False  # Set to True to output verbose messages
-SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, try loading exported models instead of retraining
-RUNS = 5  # Number of runs for Genetic Algorithm analysis
-EARLY_STOP_ACC_THRESHOLD = 0.75  # Minimum acceptable accuracy for an individual
-EARLY_STOP_FOLDS = 3  # Number of folds to verify before early stopping
-EARLY_STOP_GENERATIONS = 10  # Number of generations without improvement before early stop
-N_JOBS = -1  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
-CPU_PROCESSES = 1  # Initial number of worker processes; can be updated by monitor
-FILES_TO_IGNORE = [""]  # List of files to ignore during processing
+# Global Configuration (initialized from config file/CLI/defaults):
+CONFIG = None  # Global configuration dictionary
+
+# Runtime State Variables (DO NOT configure these):
+CPU_PROCESSES = None  # Number of CPU processes for multiprocessing (dynamically updated by monitor)
 GA_GENERATIONS_COMPLETED = 0  # Updated by GA loop to inform monitor when some generations have run
 RESOURCE_MONITOR_LAST_FILE = None  # Path of the file currently being processed (monitor uses this)
 RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = False  # Whether monitor already applied an update for the current file
-RESUME_PROGRESS = True  # When True, attempt to resume progress from saved state files
-PROGRESS_STATE_DIR_NAME = "ga_progress"  # Subfolder under Feature_Analysis to store progress files
-PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL  # Pickle protocol to use when saving state
-N_CV_FOLDS = 10  # Number of cross-validation folds (configurable constant)
-MIN_TEST_FRACTION = 0.05  # Minimum acceptable test fraction
-MAX_TEST_FRACTION = 0.50  # Maximum acceptable test fraction
-PROGRESS_SAVE_INTERVAL = 10  # Save progress every N generations
-GA_RESULTS_CSV_COLUMNS = [  # Columns for the results CSV
-    "timestamp",
-    "tool",
-    "run_index",
-    "model",
-    "dataset",
-    "hyperparameters",
-    "cv_method",
-    "train_test_split",
-    "scaling",
-    "cv_accuracy",
-    "cv_precision",
-    "cv_recall",
-    "cv_f1_score",
-    "test_accuracy",
-    "test_precision",
-    "test_recall",
-    "test_f1_score",
-    "test_fpr",
-    "test_fnr",
-    "training_time_s",
-    "testing_time_s",
-    "elapsed_run_time",
-    "hardware",
-    "best_features",
-    "rfe_ranking",
-]
 
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
 
 # Logger Setup:
-logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
-sys.stdout = logger  # Redirect stdout to the logger
-sys.stderr = logger  # Redirect stderr to the logger
+logger = None  # Global logger instance (initialized in initialize_logger)
 
 # Fitness Cache:
 fitness_cache = {}  # Cache for fitness results to avoid re-evaluating same feature masks
@@ -174,19 +134,6 @@ fitness_cache_lock = threading.Lock()  # Thread lock for fitness cache
 # Thread Locks for Global Variables:
 global_state_lock = threading.Lock()  # Lock for CPU_PROCESSES, GA_GENERATIONS_COMPLETED, etc.
 csv_write_lock = threading.Lock()  # Lock for CSV write operations to prevent race conditions
-
-# Sound Constants:
-SOUND_COMMANDS = {
-    "Darwin": "afplay",
-    "Linux": "aplay",
-    "Windows": "start",
-}  # The commands to play a sound for each operating system
-SOUND_FILE = "./.assets/Sounds/NotificationSound.wav"  # The path to the sound file
-
-# RUN_FUNCTIONS:
-RUN_FUNCTIONS = {
-    "Play Sound": True,  # Set to True to play a sound when the program finishes
-}
 
 # Functions Definition
 
