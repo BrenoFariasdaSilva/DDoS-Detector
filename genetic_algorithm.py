@@ -1962,7 +1962,7 @@ def run_genetic_algorithm_loop(
     )  # Output the verbose message
 
     fitness_func = partial(
-        evaluate_individual, X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test
+        evaluate_individual, X_train=X_train, y_train=y_train
     )  # Partial function for evaluation
     toolbox.register("evaluate", partial(ga_fitness, fitness_func=fitness_func))  # Register the global fitness function
 
