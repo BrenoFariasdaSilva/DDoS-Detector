@@ -352,6 +352,79 @@ def detect_label_column(columns, config: Optional[Dict] = None):
     return None  # Return None if no label column is found
 
 
+def parse_args():
+    """
+    Parse command-line arguments and return namespace.
+
+    :return: parsed arguments namespace
+    """
+
+    p = argparse.ArgumentParser(description="DRCGAN-like WGAN-GP for CICDDoS2019 features")  # Create argument parser
+    
+    # Configuration file
+    p.add_argument("--config", type=str, default=None, help="Path to configuration YAML file (default: config.yaml)")  # Add config file argument
+    
+    # Execution control
+    p.add_argument("--verbose", action="store_true", help="Enable verbose output messages")  # Add verbose argument
+    p.add_argument("--no_sound", action="store_true", help="Disable sound notification")  # Add no sound argument
+    
+    # Mode and data
+    p.add_argument("--mode", choices=["train", "gen", "both"], default=None, help="Mode: train, gen, or both")  # Add mode argument
+    p.add_argument("--csv_path", type=str, default=None, help="Path to CSV training data")  # Add CSV path argument
+    p.add_argument("--label_col", type=str, default=None, help="Column name for class label")  # Add label column argument
+    p.add_argument("--feature_cols", nargs="+", default=None, help="List of feature column names")  # Add feature columns argument
+    
+    # Paths
+    p.add_argument("--out_dir", type=str, default=None, help="Output directory for models/logs")  # Add output directory argument
+    p.add_argument("--logs_dir", type=str, default=None, help="Directory for log files")  # Add logs directory argument
+    
+    # Training hyperparameters
+    p.add_argument("--epochs", type=int, default=None, help="Number of training epochs")  # Add epochs argument
+    p.add_argument("--batch_size", type=int, default=None, help="Training batch size")  # Add batch size argument
+    p.add_argument("--critic_steps", type=int, default=None, help="Discriminator updates per generator update")  # Add critic steps argument
+    p.add_argument("--lr", type=float, default=None, help="Learning rate")  # Add learning rate argument
+    p.add_argument("--beta1", type=float, default=None, help="Adam optimizer beta1")  # Add beta1 argument
+    p.add_argument("--beta2", type=float, default=None, help="Adam optimizer beta2")  # Add beta2 argument
+    p.add_argument("--lambda_gp", type=float, default=None, dest="lambda_gp", help="Gradient penalty coefficient")  # Add lambda_gp argument
+    p.add_argument("--seed", type=int, default=None, help="Random seed")  # Add seed argument
+    p.add_argument("--save_every", type=int, default=None, help="Save checkpoint every N epochs")  # Add save_every argument
+    p.add_argument("--log_interval", type=int, default=None, help="Log metrics every N steps")  # Add log_interval argument
+    p.add_argument("--sample_batch", type=int, default=None, help="Number of samples for fixed noise")  # Add sample_batch argument
+    p.add_argument("--force_cpu", action="store_true", help="Force CPU usage")  # Add force_cpu argument
+    p.add_argument("--use_amp", action="store_true", help="Use automatic mixed precision")  # Add use_amp argument
+    p.add_argument("--compile", action="store_true", help="Use torch.compile()")  # Add compile argument
+    p.add_argument("--from_scratch", action="store_true", help="Train from scratch")  # Add from_scratch argument
+    
+    # Generator architecture
+    p.add_argument("--latent_dim", type=int, default=None, help="Noise vector dimensionality")  # Add latent_dim argument
+    p.add_argument("--g_hidden", nargs="+", type=int, default=None, help="Generator hidden layer sizes")  # Add g_hidden argument
+    p.add_argument("--g_embed_dim", type=int, default=None, help="Generator label embedding dim")  # Add g_embed_dim argument
+    p.add_argument("--n_resblocks", type=int, default=None, help="Number of residual blocks")  # Add n_resblocks argument
+    p.add_argument("--g_leaky_relu_alpha", type=float, default=None, help="Generator LeakyReLU alpha")  # Add g_leaky_relu_alpha argument
+    
+    # Discriminator architecture
+    p.add_argument("--d_hidden", nargs="+", type=int, default=None, help="Discriminator hidden layer sizes")  # Add d_hidden argument
+    p.add_argument("--d_embed_dim", type=int, default=None, help="Discriminator label embedding dim")  # Add d_embed_dim argument
+    p.add_argument("--d_leaky_relu_alpha", type=float, default=None, help="Discriminator LeakyReLU alpha")  # Add d_leaky_relu_alpha argument
+    
+    # Generation
+    p.add_argument("--checkpoint", type=str, default=None, help="Generator checkpoint path")  # Add checkpoint argument
+    p.add_argument("--n_samples", type=float, default=None, help="Number/percentage of samples to generate")  # Add n_samples argument
+    p.add_argument("--gen_label", type=int, default=None, help="Specific class ID to generate")  # Add gen_label argument
+    p.add_argument("--out_file", type=str, default=None, help="Output CSV filename")  # Add out_file argument
+    p.add_argument("--gen_batch_size", type=int, default=None, help="Generation batch size")  # Add gen_batch_size argument
+    p.add_argument("--feature_dim", type=int, default=None, help="Feature dimensionality")  # Add feature_dim argument
+    
+    # DataLoader
+    p.add_argument("--num_workers", type=int, default=None, help="Number of DataLoader workers")  # Add num_workers argument
+    
+    # Dataset preprocessing
+    p.add_argument("--remove_zero_variance", action="store_true", help="Remove zero-variance features")  # Add remove_zero_variance argument
+    p.add_argument("--no_remove_zero_variance", action="store_true", help="Don't remove zero-variance features")  # Add no_remove_zero_variance argument
+    
+    return p.parse_args()  # Parse arguments and return namespace
+
+
 def args_to_config_overrides(args):
     """
     Convert parsed CLI arguments to configuration overrides dictionary.
