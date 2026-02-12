@@ -83,9 +83,9 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
-FILE_PATH = Path("./genetic_algorithm.py")  # Path to the target Python file
-START_FUNCTION = "parse_cli_args"  # Name of the first function to include
-END_FUNCTION = "initialize_logger"  # Name of the last function to include
+FILE_PATH = Path("./main.py")  # Path to the target Python file
+START_FUNCTION = ""  # Name of the first function to include
+END_FUNCTION = ""  # Name of the last function to include
 COMMIT_PREFIX = "FEAT: Adding the"  # Prefix for Git commit messages
 FUNCTION_SEPARATOR = "\n\n\n"  # Standardized separator between top-level functions (3 newlines -> 2 empty lines)
 
