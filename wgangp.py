@@ -113,48 +113,18 @@ class BackgroundColors:  # Colors for the terminal
     CLEAR_TERMINAL = "\033[H\033[J"  # Clear the terminal
 
 
-# Execution Constants:
-VERBOSE = False  # Set to True to output verbose messages
-RESULTS_SUFFIX = "_data_augmented"  # Suffix to add to generated filenames
-MATCH_FILENAMES_TO_PROCESS = [""]  # List of specific filenames to search for a match (set to None to process all files)
-IGNORE_FILES = [RESULTS_SUFFIX]  # List of filename substrings to ignore when searching for datasets
-IGNORE_DIRS = [
-    "Classifiers",
-    "Classifiers_Hyperparameters",
-    "Dataset_Description",
-    "Data_Separability",
-    "Feature_Analysis",
-]  # List of directory names to ignore when searching for datasets
-
-DATASETS = {  # Dictionary containing dataset paths and feature files
-    "CICDDoS2019-Dataset": [  # List of paths to the CICDDoS2019 dataset
-        "./Datasets/CICDDoS2019/01-12/",
-        "./Datasets/CICDDoS2019/03-11/",
-    ],
-}
+# Global Configuration Container:
+CONFIG = None  # Will be initialized by load_configuration() - holds all runtime settings
 
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
 
 # Logger Setup:
-logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
-sys.stdout = logger  # Redirect stdout to the logger
-sys.stderr = logger  # Redirect stderr to the logger
+logger = None  # Will be initialized in initialize_logger()
 
-# Sound Constants:
-SOUND_COMMANDS = {
-    "Darwin": "afplay",
-    "Linux": "aplay",
-    "Windows": "start",
-}  # The commands to play a sound for each operating system
-SOUND_FILE = "./.assets/Sounds/NotificationSound.wav"  # The path to the sound file
-
-# RUN_FUNCTIONS:
-RUN_FUNCTIONS = {
-    "Play Sound": True,  # Set to True to play a sound when the program finishes
-}
 
 # Functions Definitions:
+
 
 def detect_label_column(columns):
     """
