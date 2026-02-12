@@ -1,0 +1,101 @@
+# ================================================================================
+# Genetic Algorithm Feature Selection - Configuration File
+# ================================================================================
+# This is an example configuration file for genetic_algorithm.py
+# Copy this file to config.yaml and modify as needed.
+# CLI arguments will override values specified here.
+
+execution:
+  verbose: false                      # Enable verbose output messages
+  skip_train_if_model_exists: false   # Skip training if model artifacts exist
+  runs: 5                             # Number of GA runs per population size
+  resume_progress: true               # Resume from saved state files
+  progress_save_interval: 10          # Save progress every N generations
+  play_sound: true                    # Play sound notification when complete
+
+dataset:
+  files_to_ignore: []                 # List of files to ignore during processing
+  test_size: 0.2                      # Test set size for train-test split
+  min_test_fraction: 0.05             # Minimum acceptable test fraction
+  max_test_fraction: 0.50             # Maximum acceptable test fraction
+  remove_zero_variance: true          # Remove zero-variance features during preprocessing
+
+genetic_algorithm:
+  n_generations: 200                  # Number of generations for GA
+  min_pop: 20                         # Minimum population size
+  max_pop: 20                         # Maximum population size
+  cxpb: 0.5                           # Crossover probability
+  mutpb: 0.01                         # Mutation probability
+
+early_stop:
+  acc_threshold: 0.75                 # Minimum acceptable accuracy for an individual
+  folds: 3                            # Number of folds to verify before early stopping
+  generations: 10                     # Number of generations without improvement before early stop
+
+cross_validation:
+  n_folds: 10                         # Number of cross-validation folds
+
+multiprocessing:
+  n_jobs: -1                          # Number of parallel jobs (-1 uses all processors)
+  cpu_processes: 1                    # Initial number of worker processes
+
+resource_monitor:
+  enabled: true                       # Enable resource monitoring
+  interval_seconds: 30                # Interval between monitoring cycles in seconds
+  reserve_cpu_frac: 0.15              # Fraction of CPU reserved from worker allocation
+  reserve_mem_frac: 0.15              # Fraction of memory reserved from worker allocation
+  min_procs: 1                        # Minimum number of processes allowed
+  max_procs: null                     # Maximum number of processes allowed (null for unlimited)
+  min_gens_before_update: 10          # Minimum GA generations before updating workers
+  daemon: true                        # Whether the monitoring thread runs as daemon
+
+model:
+  estimator: "RandomForestClassifier" # Default estimator for GA fitness evaluation
+  random_state: null                  # Random state for reproducibility (null for non-deterministic)
+
+caching:
+  enabled: true                       # Enable fitness caching
+  pickle_protocol: 4                  # Pickle protocol to use when saving state
+
+progress:
+  state_dir_name: "ga_progress"       # Subfolder under Feature_Analysis to store progress files
+
+export:
+  results_csv_columns:                # Columns for the results CSV
+    - timestamp
+    - tool
+    - run_index
+    - model
+    - dataset
+    - hyperparameters
+    - cv_method
+    - train_test_split
+    - scaling
+    - cv_accuracy
+    - cv_precision
+    - cv_recall
+    - cv_f1_score
+    - test_accuracy
+    - test_precision
+    - test_recall
+    - test_f1_score
+    - test_fpr
+    - test_fnr
+    - training_time_s
+    - testing_time_s
+    - elapsed_run_time
+    - hardware
+    - best_features
+    - rfe_ranking
+
+sound:
+  commands:                           # Commands to play sound for each operating system
+    Darwin: "afplay"
+    Linux: "aplay"
+    Windows: "start"
+  file: "./.assets/Sounds/NotificationSound.wav"  # Path to the sound file
+
+paths:
+  datasets_dir: null                  # Directory containing datasets (null for auto-detect)
+  output_dir: "Feature_Analysis"      # Output directory for results
+  logs_dir: "./Logs"                  # Directory for log files
