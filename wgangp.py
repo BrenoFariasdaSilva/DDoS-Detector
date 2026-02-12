@@ -352,6 +352,27 @@ def detect_label_column(columns, config: Optional[Dict] = None):
     return None  # Return None if no label column is found
 
 
+def verbose_output(true_string="", false_string="", config: Optional[Dict] = None):
+    """
+    Outputs a message if the verbose flag is enabled in configuration.
+
+    :param true_string: The string to be outputted if verbose is enabled.
+    :param false_string: The string to be outputted if verbose is disabled.
+    :param config: Optional configuration dictionary containing verbose setting
+    :return: None
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG or get_default_config()  # Use global or default config
+    
+    verbose = config.get("execution", {}).get("verbose", False)  # Get verbose setting from config
+    
+    if verbose and true_string != "":  # If verbose is True and a true_string was provided
+        print(true_string)  # Output the true statement string
+    elif false_string != "":  # If a false_string was provided
+        print(false_string)  # Output the false statement string
+
+
 def verify_dot_env_file(config: Optional[Dict] = None):
     """
     Verifies if the .env file exists in the current directory.
