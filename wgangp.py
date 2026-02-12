@@ -352,6 +352,166 @@ def detect_label_column(columns, config: Optional[Dict] = None):
     return None  # Return None if no label column is found
 
 
+def run_wgangp(config: Optional[Union [Dict, str]] = None, **kwargs):
+    """
+    Programmatic entry point for WGAN-GP execution from external orchestrators.
+
+    This function allows running WGAN-GP training/generation from Python code
+    without command-line interface. Supports both config dict and config file path.
+
+    Usage examples:
+        # From config dictionary:
+        run_wgangp(config={"wgangp": {"csv_path": "data.csv", "mode": "train"}})
+
+        # From config file:
+        run_wgangp(config="custom_config.yaml")
+
+        # With direct keyword overrides:
+        run_wgangp(csv_path="data.csv", mode="train", epochs=100)
+
+        # Mixed approach:
+        run_wgangp(config="config.yaml", epochs=100, batch_size=128)
+
+    :param config: Configuration dictionary or path to YAML config file (optional)
+    :param kwargs: Direct keyword argument overrides for configuration
+    :return: None
+    """
+
+    global CONFIG  # Declare global CONFIG variable
+
+    if config is None:  # No config provided
+        final_config = load_configuration()  # Load from default locations
+    elif isinstance(config, str):  # Config is a file path
+        final_config = load_configuration(config_path=config)  # Load from specified file
+    elif isinstance(config, dict):  # Config is a dictionary
+        final_config = load_configuration()  # Load defaults first
+        final_config = deep_merge(final_config, config)  # Merge with provided dict
+    else:  # Invalid config type
+        raise TypeError(f"config must be dict, str, or None, not {type(config)}")
+
+    if kwargs:  # If keyword arguments provided
+        cli_style_overrides = {}  # Build config-style dict from kwargs
+        for key, value in kwargs.items():  # For each kwarg
+            if key in ["csv_path", "mode", "label_col", "feature_cols", "seed", "force_cpu", "from_scratch"]:  # WGAN-GP params
+                cli_style_overrides.setdefault("wgangp", {})[key] = value
+            elif key in ["out_dir", "logs_dir"]:  # Path params
+                cli_style_overrides.setdefault("paths", {})[key] = value
+            elif key in ["epochs", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "save_every", "log_interval", "sample_batch", "use_amp", "compile"]:  # Training params
+                cli_style_overrides.setdefault("training", {})[key] = value
+            elif key in ["latent_dim", "n_resblocks", "leaky_relu_alpha"]:  # Generator params
+                cli_style_overrides.setdefault("generator", {})[key] = value
+                if key == "leaky_relu_alpha":  # Also set discriminator alpha
+                    cli_style_overrides.setdefault("discriminator", {})[key] = value
+            elif key in ["g_hidden"]:  # Generator hidden layers
+                cli_style_overrides.setdefault("generator", {})["hidden_dims"] = value
+            elif key in ["d_hidden"]:  # Discriminator hidden layers
+                cli_style_overrides.setdefault("discriminator", {})["hidden_dims"] = value
+            elif key in ["g_embed_dim"]:  # Generator embedding dim
+                cli_style_overrides.setdefault("generator", {})["embed_dim"] = value
+            elif key in ["d_embed_dim"]:  # Discriminator embedding dim
+                cli_style_overrides.setdefault("discriminator", {})["embed_dim"] = value
+            elif key in ["checkpoint", "n_samples", "label", "out_file", "gen_batch_size", "feature_dim"]:  # Generation params
+                cli_style_overrides.setdefault("generation", {})[key] = value
+            elif key in ["num_workers"]:  # DataLoader params
+                cli_style_overrides.setdefault("dataloader", {})[key] = value
+            elif key in ["remove_zero_variance"]:  # Dataset params
+                cli_style_overrides.setdefault("dataset", {})[key] = value
+            elif key in ["verbose"]:  # Execution params
+                cli_style_overrides.setdefault("execution", {})[key] = value
+            elif key in ["play_sound", "enabled"] and key == "play_sound":  # Sound params
+                cli_style_overrides.setdefault("sound", {})["enabled"] = value
+            else:  # Unknown parameter
+                print(f"{BackgroundColors.YELLOW}Warning: Unknown parameter '{key}' will be ignored{Style.RESET_ALL}")
+        final_config = deep_merge(final_config, cli_style_overrides)  # Apply kwargs overrides
+
+    CONFIG = final_config  # Update global config
+
+    initialize_logger(final_config)  # Initialize logger with final configuration
+
+    setup_telegram_bot(final_config)  # Setup Telegram bot with final configuration
+
+    class ConfigNamespace:
+        """
+        Namespace object that wraps configuration dictionary.
+        """
+        
+        def __init__(self, config_dict):
+            """
+            Initialize the ConfigNamespace with a configuration dictionary.
+            
+            :param self: The instance of the ConfigNamespace.
+            :param config_dict: The configuration dictionary to wrap.
+            """
+            
+            self.config = config_dict  # Store the original config dictionary
+            self.mode = config_dict.get("wgangp", {}).get("mode", "both")
+            self.csv_path = config_dict.get("wgangp", {}).get("csv_path")
+            self.label_col = config_dict.get("wgangp", {}).get("label_col", "Label")
+            self.feature_cols = config_dict.get("wgangp", {}).get("feature_cols")
+            self.seed = config_dict.get("wgangp", {}).get("seed", 42)
+            self.force_cpu = config_dict.get("wgangp", {}).get("force_cpu", False)
+            self.from_scratch = config_dict.get("wgangp", {}).get("from_scratch", False)
+            self.out_dir = config_dict.get("paths", {}).get("out_dir", "outputs")
+            self.epochs = config_dict.get("training", {}).get("epochs", 60)
+            self.batch_size = config_dict.get("training", {}).get("batch_size", 64)
+            self.critic_steps = config_dict.get("training", {}).get("critic_steps", 5)
+            self.lr = config_dict.get("training", {}).get("lr", 1e-4)
+            self.beta1 = config_dict.get("training", {}).get("beta1", 0.5)
+            self.beta2 = config_dict.get("training", {}).get("beta2", 0.9)
+            self.lambda_gp = config_dict.get("training", {}).get("lambda_gp", 10.0)
+            self.save_every = config_dict.get("training", {}).get("save_every", 5)
+            self.log_interval = config_dict.get("training", {}).get("log_interval", 50)
+            self.sample_batch = config_dict.get("training", {}).get("sample_batch", 16)
+            self.use_amp = config_dict.get("training", {}).get("use_amp", False)
+            self.compile = config_dict.get("training", {}).get("compile", False)
+            self.latent_dim = config_dict.get("generator", {}).get("latent_dim", 100)
+            self.g_hidden = config_dict.get("generator", {}).get("hidden_dims", [256, 512])
+            self.embed_dim = config_dict.get("generator", {}).get("embed_dim", 32)
+            self.n_resblocks = config_dict.get("generator", {}).get("n_resblocks", 3)
+            self.d_hidden = config_dict.get("discriminator", {}).get("hidden_dims", [512, 256, 128])
+            self.checkpoint = config_dict.get("generation", {}).get("checkpoint")
+            self.n_samples = config_dict.get("generation", {}).get("n_samples", 1.0)
+            self.label = config_dict.get("generation", {}).get("label")
+            self.out_file = config_dict.get("generation", {}).get("out_file", "generated.csv")
+            self.gen_batch_size = config_dict.get("generation", {}).get("gen_batch_size", 256)
+            self.feature_dim = config_dict.get("generation", {}).get("feature_dim")
+            self.num_workers = config_dict.get("dataloader", {}).get("num_workers", 8)
+
+    args = ConfigNamespace(final_config)  # Create namespace from config
+
+    start_time = datetime.datetime.now()  # Record start time
+    send_telegram_message(TELEGRAM_BOT, f"Starting WGAN-GP (programmatic) at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    try:  # Execute with error handling
+        if args.mode == "train":  # Training mode
+            train(args, final_config)  # Train model
+        elif args.mode == "gen":  # Generation mode
+            if args.checkpoint is None:  # Verify checkpoint provided
+                raise ValueError("Generation mode requires checkpoint path")
+            generate(args, final_config)  # Generate samples
+        elif args.mode == "both":  # Combined mode
+            train(args, final_config)  # Train first
+            if args.csv_path:  # If CSV provided
+                csv_path_obj = Path(args.csv_path)
+                checkpoint_dir = csv_path_obj.parent / final_config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / final_config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")
+                checkpoint_path = checkpoint_dir / f"{csv_path_obj.stem}_generator_epoch{args.epochs}.pt"
+                if not checkpoint_path.exists():  # Find latest if specific epoch not found
+                    checkpoints = sorted(checkpoint_dir.glob(f"{csv_path_obj.stem}_generator_epoch*.pt"))
+                    if checkpoints:
+                        checkpoint_path = checkpoints[-1]
+                args.checkpoint = str(checkpoint_path)
+            generate(args, final_config)  # Generate samples
+        else:  # Invalid mode
+            raise ValueError(f"Invalid mode: {args.mode}")
+    finally:  # Always show execution time
+        finish_time = datetime.datetime.now()
+        execution_time = calculate_execution_time(start_time, finish_time)
+        print(f"{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{execution_time}{Style.RESET_ALL}")
+        send_telegram_message(TELEGRAM_BOT, f"WGAN-GP execution finished. Time: {execution_time}")
+        if final_config.get("sound", {}).get("enabled", True):  # If sound enabled
+            play_sound(final_config)  # Play completion sound
+
+
 def main():
     """
     Main CLI entry point.
