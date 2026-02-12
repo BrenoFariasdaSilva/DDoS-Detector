@@ -66,6 +66,7 @@ import telegram_bot as telegram_module  # For setting Telegram prefix and device
 import torch  # PyTorch core
 import torch.nn as nn  # Neural network modules
 import traceback  # For printing tracebacks on exceptions
+import yaml  # For loading configuration files
 from colorama import Style  # For coloring the terminal
 from contextlib import nullcontext  # For null context manager
 from Logger import Logger  # For logging output to both terminal and file
@@ -75,7 +76,7 @@ from telegram_bot import TelegramBot, send_telegram_message  # For sending progr
 from torch import autograd  # For gradient penalty
 from torch.utils.data import DataLoader, Dataset  # Dataset and DataLoader
 from tqdm import tqdm  # For progress bar visualization
-from typing import Any, List, Optional, cast  # For Any type hint and cast
+from typing import Any, Dict, List, Optional, Union, cast  # For Any type hint and cast
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:
