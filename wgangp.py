@@ -352,6 +352,23 @@ def detect_label_column(columns, config: Optional[Dict] = None):
     return None  # Return None if no label column is found
 
 
+def autocast(device_type: str, enabled: bool = True):
+    """
+    Return an autocast context manager when enabled on CUDA, else a nullcontext.
+
+    This avoids referencing `torch.amp.autocast` directly (Pylance warning) and
+    supports environments without CUDA.
+
+    :param device_type: The device type ("cuda" or "cpu") to create autocast context for
+    :param enabled: Whether to enable autocast context (default: True)
+    :return: Autocast context manager if enabled on CUDA, otherwise nullcontext
+    """
+
+    if enabled and device_type == "cuda" and _torch_autocast is not None:  # If enabled and CUDA available and autocast exists
+        return _torch_autocast(device_type)  # Return CUDA autocast context
+    return nullcontext()  # Return null context for CPU or when disabled
+
+
 def train(args, config: Optional[Dict] = None):
     """
     Train the WGAN-GP model using the provided arguments and configuration.
