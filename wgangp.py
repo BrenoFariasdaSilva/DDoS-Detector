@@ -352,6 +352,20 @@ def detect_label_column(columns, config: Optional[Dict] = None):
     return None  # Return None if no label column is found
 
 
+def set_seed(seed: int):
+    """
+    Sets random seeds for reproducibility across all libraries.
+
+    :param seed: The seed value to use for all random number generators
+    :return: None
+    """
+
+    random.seed(seed)  # Set Python random seed for reproducibility
+    np.random.seed(seed)  # Set NumPy random seed for reproducibility
+    torch.manual_seed(seed)  # Set PyTorch CPU seed for reproducibility
+    torch.cuda.manual_seed_all(seed)  # Set CUDA seed for all devices
+
+
 def verify_filepath_exists(filepath):
     """
     Verify if a file or folder exists at the specified path.
