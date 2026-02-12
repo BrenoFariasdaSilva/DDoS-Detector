@@ -126,6 +126,29 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def initialize_logger(config: Dict):
+    """
+    Initialize the logger for output redirection.
+
+    :param config: Configuration dictionary containing logging settings
+    :return: None
+    """
+
+    global logger  # Declare global logger variable
+    
+    if not config.get("logging", {}).get("enabled", True):  # If logging disabled
+        logger = None  # Don't initialize logger
+        return  # Exit early
+    
+    logs_dir = config.get("paths", {}).get("logs_dir", "./Logs")  # Get logs directory
+    log_file = f"{logs_dir}/{Path(__file__).stem}.log"  # Construct log file path
+    clean = config.get("logging", {}).get("clean", True)  # Get clean flag
+    
+    logger = Logger(log_file, clean=clean)  # Create a Logger instance
+    sys.stdout = logger  # Redirect stdout to the logger
+    sys.stderr = logger  # Redirect stderr to the logger
+
+
 def detect_label_column(columns, config: Optional[Dict] = None):
     """
     Try to guess the label column based on common naming conventions.
