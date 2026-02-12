@@ -138,6 +138,24 @@ csv_write_lock = threading.Lock()  # Lock for CSV write operations to prevent ra
 # Functions Definition
 
 
+def initialize_logger(config):
+    """
+    Initialize the logger based on configuration.
+
+    :param config: Configuration dictionary
+    :return: Logger instance
+    """
+
+    logs_dir = config["paths"]["logs_dir"]  # Get logs directory from config
+    log_file = f"{logs_dir}/{Path(__file__).stem}.log"  # Construct log file path
+
+    logger_instance = Logger(log_file, clean=True)  # Create logger instance
+    sys.stdout = logger_instance  # Redirect stdout to logger
+    sys.stderr = logger_instance  # Redirect stderr to logger
+
+    return logger_instance  # Return logger instance
+
+
 def verbose_output(true_string="", false_string=""):
     """
     Outputs a message if the VERBOSE constant is set to True.
