@@ -1920,28 +1920,35 @@ def load_and_apply_generation_state(toolbox, population, output_dir, state_id, r
     return start_gen, fitness_history  # Return the starting generation and fitness history (dict or empty)
 
 
-def save_generation_state(output_dir, state_id, gen, population, hof_best, fitness_history):
+def save_generation_state(output_dir, state_id, gen, population, hof_best, history_data):
     """
-    Persist minimal generation state to disk (lists only).
+    Persist minimal generation state to disk (lists only) including extended history data.
 
     :param output_dir: base output directory
     :param state_id: deterministic id for run
     :param gen: generation number
     :param population: list of individuals
     :param hof_best: best individual list or None
-    :param fitness_history: list of fitness history
+    :param history_data: dict containing all history metrics (best_f1, best_features, etc.) or list for backward compatibility
     :return: None
     """
 
     try:  # Attempt to save the generation state
         gen_path, _ = state_file_paths(output_dir, state_id)  # Get the path for the generation state file
+
+        # Handle both old (list) and new (dict) formats for history_data
+        if isinstance(history_data, dict):  # If new format (extended history)
+            fitness_history_to_save = history_data  # Save the full dict
+        elif isinstance(history_data, list):  # If old format (just F1 scores)
+            fitness_history_to_save = {"best_f1": history_data}  # Wrap in dict for consistency
+        else:  # If unexpected format
+            fitness_history_to_save = {}  # Save empty dict
+
         payload = {  # Prepare the payload dictionary
             "gen": int(gen),  # Current generation number
             "population_lists": [list(ind) for ind in population],  # List of population individuals as lists
             "hof_best": list(hof_best) if hof_best is not None else None,  # Best individual from hall of fame
-            "fitness_history": (
-                list(fitness_history) if fitness_history is not None else []
-            ),  # History of fitness values
+            "fitness_history": fitness_history_to_save,  # Extended history data (dict format)
         }  # End of payload dictionary
         with open(gen_path, "wb") as f:  # Open the file for writing in binary mode
             pickle.dump(payload, f, protocol=CONFIG["caching"]["pickle_protocol"])  # Serialize and save the payload
