@@ -2830,8 +2830,10 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
             plt.close()  # Close plot
 
         # Compute mean absolute SHAP values for feature importance ranking
-        mean_shap_values = np.abs(shap_values_summary).mean(axis=0)  # Compute mean absolute SHAP values
-        shap_importance = dict(zip(feature_names[:len(mean_shap_values)], mean_shap_values))  # Create importance dict
+        shap_array = np.array(shap_values_summary)  # Convert to numpy array for type safety
+        mean_shap_values = np.mean(np.abs(shap_array), axis=0)  # Compute mean absolute SHAP values
+        mean_shap_list = mean_shap_values.tolist() if hasattr(mean_shap_values, 'tolist') else list(mean_shap_values)  # Convert to list
+        shap_importance = dict(zip(feature_names[:len(mean_shap_list)], mean_shap_list))  # Create importance dict
 
         verbose_output(
             f"{BackgroundColors.GREEN}SHAP explanations saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
