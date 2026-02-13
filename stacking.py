@@ -129,6 +129,29 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def get_feature_subset(X_scaled, features, feature_names):
+    """
+    Returns a subset of features from the scaled feature set based on the provided feature names.
+    Also returns the actual feature names that were successfully selected.
+
+    :param X_scaled: Scaled features (numpy array).
+    :param features: List of feature names to select.
+    :param feature_names: List of all feature names corresponding to columns in X_scaled.
+    :return: Tuple of (subset array, list of actual selected feature names)
+    """
+
+    if features:  # Only proceed if the list of selected features is NOT empty/None
+        indices = []  # List to store indices of selected features
+        selected_names = []  # List to store names of selected features
+        for f in features:  # Iterate over each feature in the provided list
+            if f in feature_names:  # Check if the feature exists in the full feature list
+                indices.append(feature_names.index(f))  # Append the index of the feature
+                selected_names.append(f)  # Append the name of the feature
+        return X_scaled[:, indices], selected_names  # Return the subset and actual names
+    else:  # If no features are selected (or features is None)
+        return np.empty((X_scaled.shape[0], 0)), []  # Return empty array and empty list
+
+
 def truncate_value(value):
     """
     Format a numeric value to 4 decimal places, or return None if not possible.
