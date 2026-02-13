@@ -3032,6 +3032,113 @@ def generate_permutation_importance(model, X_test, y_test, feature_names, output
         return None  # Return None
 
 
+def extract_model_feature_importance(model, feature_names, output_dir, model_name, dataset_name, config=None):
+    """
+    Extract built-in feature importance from model if supported.
+
+    :param model: Trained model object
+    :param feature_names: List of feature names
+    :param output_dir: Directory to save feature importance outputs
+    :param model_name: Name of the model for labeling
+    :param dataset_name: Name of the dataset
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Dictionary with feature importance or None if not supported
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    try:  # Attempt to extract feature importance
+        model_type = model.__class__.__name__  # Get model class name
+
+        # Check if model has feature_importances_ attribute
+        if hasattr(model, 'feature_importances_'):  # If model has built-in feature importance
+            verbose_output(
+                f"{BackgroundColors.GREEN}Extracting built-in feature importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+                config=config
+            )  # Log extraction start
+
+            os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+
+            importances = model.feature_importances_  # Get feature importances
+            sorted_indices = np.argsort(importances)[::-1]  # Sort indices by descending importance
+            sorted_features = [feature_names[i] for i in sorted_indices]  # Get sorted feature names
+            sorted_importances = importances[sorted_indices]  # Get sorted importances
+
+            # Create importance dictionary
+            importance_dict = dict(zip(sorted_features, sorted_importances.tolist()))  # Create importance dict
+
+            # Generate bar plot
+            try:  # Try to create bar plot
+                explainer_config = config.get("explainability", {})  # Get explainability config
+                max_display = explainer_config.get("max_display_features", 20)  # Max features to display
+                display_count = min(max_display, len(sorted_features))  # Number of features to display
+
+                plt.figure(figsize=(10, max(6, display_count * 0.3)))  # Create figure with dynamic height
+                y_pos = np.arange(display_count)  # Y positions for bars
+                plt.barh(y_pos, sorted_importances[:display_count], align='center', alpha=0.7, color='forestgreen')  # Create horizontal bar plot
+                plt.yticks(y_pos, sorted_features[:display_count])  # Set Y-axis labels
+                plt.xlabel('Feature Importance', fontsize=12)  # Set X-axis label
+                plt.ylabel('Features', fontsize=12)  # Set Y-axis label
+                plt.title(f'Model Feature Importance - {model_name}\n{dataset_name}', fontsize=14)  # Set title
+                plt.grid(axis='x', alpha=0.3)  # Add X-axis grid
+                plt.tight_layout()  # Adjust layout
+                importance_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_feature_importance.png")  # Build plot path
+                plt.savefig(importance_plot_path, dpi=150, bbox_inches='tight')  # Save plot
+                plt.close()  # Close plot
+            except Exception:  # If plot fails
+                plt.close()  # Close plot
+
+            verbose_output(
+                f"{BackgroundColors.GREEN}Model feature importance saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
+                config=config
+            )  # Log extraction completion
+
+            return {"model_importance": importance_dict}  # Return feature importance results
+
+        elif hasattr(model, 'coef_'):  # If linear model with coefficients
+            verbose_output(
+                f"{BackgroundColors.GREEN}Extracting coefficients as feature importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+                config=config
+            )  # Log extraction start
+
+            os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+
+            coef = model.coef_  # Get coefficients
+            if len(coef.shape) > 1:  # Multi-class case
+                importances = np.abs(coef).mean(axis=0)  # Average absolute coefficients across classes
+            else:  # Binary case
+                importances = np.abs(coef[0] if coef.ndim > 1 else coef)  # Use absolute coefficients
+
+            sorted_indices = np.argsort(importances)[::-1]  # Sort indices by descending importance
+            sorted_features = [feature_names[i] for i in sorted_indices]  # Get sorted feature names
+            sorted_importances = importances[sorted_indices]  # Get sorted importances
+
+            # Create importance dictionary
+            importance_dict = dict(zip(sorted_features, sorted_importances.tolist()))  # Create importance dict
+
+            verbose_output(
+                f"{BackgroundColors.GREEN}Model coefficients saved as importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+                config=config
+            )  # Log extraction completion
+
+            return {"model_importance": importance_dict}  # Return feature importance results
+
+        else:  # Model does not support feature importance
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Model {model_name} does not support built-in feature importance{Style.RESET_ALL}",
+                config=config
+            )  # Log unsupported model
+            return None  # Return None
+
+    except Exception as e:  # If any error
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Failed to extract feature importance for {model_name}: {e}{Style.RESET_ALL}",
+            config=config
+        )  # Log error
+        return None  # Return None
+
+
 def get_hardware_specifications():
     """
     Returns system specs: real CPU model (Windows/Linux/macOS), physical cores,
