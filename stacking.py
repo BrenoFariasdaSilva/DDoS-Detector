@@ -129,6 +129,43 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def build_automl_stacking_model(best_config):
+    """
+    Builds a StackingClassifier from the best AutoML stacking configuration.
+
+    :param best_config: Dictionary with best stacking configuration
+    :return: Configured StackingClassifier instance
+    """
+
+    estimators = []  # Initialize estimators list
+
+    for name in best_config["base_learners"]:  # Iterate over selected base learners
+        params = best_config["base_learner_params"].get(name, {})  # Get model parameters
+        model = create_model_from_params(name, params)  # Create model instance
+        safe_name = name.replace(" ", "_").replace("(", "").replace(")", "")  # Sanitize estimator name
+        estimators.append((safe_name, model))  # Add to estimators list
+
+    meta_learner_name = best_config["meta_learner"]  # Get meta-learner name
+
+    if meta_learner_name == "Logistic Regression":  # Logistic Regression meta-learner
+        meta_model = LogisticRegression(max_iter=1000, random_state=config.get("automl", {}).get("random_state", 42))  # Create LR
+    elif meta_learner_name == "Random Forest":  # Random Forest meta-learner
+        meta_model = RandomForestClassifier(n_estimators=50, random_state=config.get("automl", {}).get("random_state", 42), n_jobs=config.get("evaluation", {}).get("n_jobs", -1))  # Create RF
+    else:  # Gradient Boosting meta-learner
+        meta_model = GradientBoostingClassifier(random_state=config.get("automl", {}).get("random_state", 42))  # Create GB
+
+    stacking_model = StackingClassifier(
+        estimators=estimators,
+        final_estimator=meta_model,
+        cv=StratifiedKFold(
+            n_splits=best_config["stacking_cv_splits"], shuffle=True, random_state=config.get("automl", {}).get("random_state", 42)
+        ),
+        n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
+    )  # Create stacking classifier with optimal configuration
+
+    return stacking_model  # Return configured stacking model
+
+
 def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y_test):
     """
     Trains and evaluates an AutoML-selected model on the held-out test set.
