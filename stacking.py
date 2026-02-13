@@ -129,6 +129,79 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def get_models(config=None):
+    """
+    Initializes and returns a dictionary of models to train.
+
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Dictionary of model name and instance
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Initializing models for training...{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+    
+    # Get configuration values
+    n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Get n_jobs from config
+    random_state = config.get("evaluation", {}).get("random_state", 42)  # Get random_state from config
+    
+    # Get model-specific parameters from config
+    rf_params = config.get("models", {}).get("random_forest", {})  # Random Forest params
+    svm_params = config.get("models", {}).get("svm", {})  # SVM params
+    xgb_params = config.get("models", {}).get("xgboost", {})  # XGBoost params
+    lr_params = config.get("models", {}).get("logistic_regression", {})  # Logistic Regression params
+    knn_params = config.get("models", {}).get("knn", {})  # KNN params
+    gb_params = config.get("models", {}).get("gradient_boosting", {})  # Gradient Boosting params
+    lgb_params = config.get("models", {}).get("lightgbm", {})  # LightGBM params
+    mlp_params = config.get("models", {}).get("mlp", {})  # MLP params
+
+    return {  # Dictionary of models to train
+        "Random Forest": RandomForestClassifier(
+            n_estimators=rf_params.get("n_estimators", 100),
+            random_state=rf_params.get("random_state", random_state),
+            n_jobs=n_jobs
+        ),
+        "SVM": SVC(
+            kernel=svm_params.get("kernel", "rbf"),
+            probability=svm_params.get("probability", True),
+            random_state=svm_params.get("random_state", random_state)
+        ),
+        "XGBoost": XGBClassifier(
+            eval_metric=xgb_params.get("eval_metric", "mlogloss"),
+            random_state=xgb_params.get("random_state", random_state),
+            n_jobs=n_jobs
+        ),
+        "Logistic Regression": LogisticRegression(
+            max_iter=lr_params.get("max_iter", 1000),
+            random_state=lr_params.get("random_state", random_state)
+        ),
+        "KNN": KNeighborsClassifier(
+            n_neighbors=knn_params.get("n_neighbors", 5),
+            n_jobs=n_jobs
+        ),
+        "Nearest Centroid": NearestCentroid(),
+        "Gradient Boosting": GradientBoostingClassifier(
+            random_state=gb_params.get("random_state", random_state)
+        ),
+        "LightGBM": lgb.LGBMClassifier(
+            force_row_wise=lgb_params.get("force_row_wise", True),
+            min_gain_to_split=lgb_params.get("min_gain_to_split", 0.01),
+            random_state=lgb_params.get("random_state", random_state),
+            verbosity=lgb_params.get("verbosity", -1),
+            n_jobs=n_jobs
+        ),
+        "MLP (Neural Net)": MLPClassifier(
+            hidden_layer_sizes=mlp_params.get("hidden_layer_sizes", (100,)),
+            max_iter=mlp_params.get("max_iter", 500),
+            random_state=mlp_params.get("random_state", random_state)
+        ),
+    }
+
+
 def extract_hyperparameter_optimization_results(csv_path, config=None):
     """
     Extract hyperparameter optimization results for a specific dataset file.
