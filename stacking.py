@@ -129,6 +129,53 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
+    """
+    Trains the StackingClassifier model and evaluates its performance on the test set.
+
+    :param model: The fitted StackingClassifier model object.
+    :param X_train: Training features (pandas DataFrame or numpy array with feature names).
+    :param y_train: Training target labels (encoded Series/array).
+    :param X_test: Testing features (pandas DataFrame or numpy array with feature names).
+    :param y_test: Testing target labels (encoded Series/array).
+    :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Starting training and evaluation of Stacking Classifier...{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    start_time = time.time()  # Record the start time for timing training and prediction
+
+    model.fit(X_train, y_train)  # Fit the stacking model on the training data (accepts DataFrame or array)
+
+    y_pred = model.predict(X_test)  # Predict the labels for the test set
+
+    elapsed_time = time.time() - start_time  # Calculate the total time elapsed
+
+    acc = accuracy_score(y_test, y_pred)  # Calculate Accuracy
+    prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Precision (weighted)
+    rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Recall (weighted)
+    f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate F1-Score (weighted)
+
+    if len(np.unique(y_test)) == 2:  # Verify if it's a binary classification problem
+        tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()  # Get Confusion Matrix components
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Calculate False Positive Rate
+        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Calculate False Negative Rate
+    else:  # For multi-class (simplified approach, actual implementation is complex)
+        fpr = 0.0  # Placeholder
+        fnr = 0.0  # Placeholder
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Multi-class FPR/FNR calculation simplified to 0.0.{Style.RESET_ALL}"
+        )  # Warning about simplification
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Evaluation complete. Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed_time))}s{Style.RESET_ALL}"
+    )  # Output the final result summary
+
+    return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
+
+
 def get_hardware_specifications():
     """
     Returns system specs: real CPU model (Windows/Linux/macOS), physical cores,
