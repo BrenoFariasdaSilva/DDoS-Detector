@@ -4012,12 +4012,13 @@ def evaluate_on_dataset(
     augmentation_ratio=None,
     execution_mode_str="binary",
     attack_types_combined=None,
+    df_augmented_for_training=None,
 ):
     """
-    Evaluate classifiers on a single dataset (original or augmented).
+    Evaluate classifiers on a single dataset with optional training-only augmentation.
 
     :param file: Path to the dataset file
-    :param df: DataFrame with the dataset
+    :param df: DataFrame with the original dataset (used for test set)
     :param feature_names: List of feature column names
     :param ga_selected_features: GA selected features
     :param pca_n_components: Number of PCA components
@@ -4030,6 +4031,7 @@ def evaluate_on_dataset(
     :param augmentation_ratio: Augmentation ratio float (e.g., 0.50) or None for original-only
     :param execution_mode_str: Execution mode string ('binary' or 'multi-class')
     :param attack_types_combined: List of attack types for multi-class or None for binary
+    :param df_augmented_for_training: Optional augmented DataFrame to merge into training set only (test set remains original-only)
     :return: Dictionary mapping (feature_set, model_name) to results
     """
 
@@ -4058,9 +4060,17 @@ def evaluate_on_dataset(
         )  # Output the error message
         return {}  # Return empty dictionary
 
-    X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
-        X_full, y
-    )  # Scale and split the data
+    if df_augmented_for_training is not None:  # If augmented data provided for training enhancement
+        X_augmented = df_augmented_for_training.select_dtypes(include=np.number).iloc[:, :-1]  # Extract augmented features (numeric only)
+        y_augmented = df_augmented_for_training.iloc[:, -1]  # Extract augmented target
+        
+        X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
+            X_full, y, config=config, X_augmented=X_augmented, y_augmented=y_augmented
+        )  # Scale and split with augmented data merged into training set only
+    else:  # No augmented data provided
+        X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
+            X_full, y, config=config
+        )  # Scale and split the data normally (original-only)
 
     estimators = [
         (name, model) for name, model in base_models.items() if name != "SVM"
