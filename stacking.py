@@ -2745,6 +2745,112 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
     return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
 
 
+def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config=None):
+    """
+    Generate SHAP explanations for a trained model.
+
+    :param model: Trained model object
+    :param X_test: Test features (numpy array or DataFrame)
+    :param y_test: Test labels
+    :param feature_names: List of feature names
+    :param output_dir: Directory to save SHAP outputs
+    :param model_name: Name of the model for labeling
+    :param dataset_name: Name of the dataset
+    :param execution_mode: Execution mode string ('binary' or 'multi-class')
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Dictionary with SHAP values and summary metrics or None if failed
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    try:  # Attempt to generate SHAP explanations
+        import shap  # Import SHAP library
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Generating SHAP explanations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+            config=config
+        )  # Log SHAP generation start
+
+        shap_config = config.get("explainability", {})  # Get explainability config
+        max_samples = shap_config.get("shap_max_samples", 100)  # Max samples for SHAP computation
+        max_display = shap_config.get("max_display_features", 20)  # Max features to display
+        random_state = shap_config.get("random_state", 42)  # Random state for sampling
+
+        os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+
+        # Sample subset for computational efficiency if dataset is large
+        if len(X_test) > max_samples:  # If test set is large
+            np.random.seed(random_state)  # Set random seed for reproducibility
+            sample_indices = np.random.choice(len(X_test), size=max_samples, replace=False)  # Sample indices
+            X_test_sampled = X_test[sample_indices]  # Sample test features
+            y_test_sampled = y_test.iloc[sample_indices] if hasattr(y_test, 'iloc') else y_test[sample_indices]  # Sample test labels
+        else:  # If test set is small
+            X_test_sampled = X_test  # Use full test set
+            y_test_sampled = y_test  # Use full test labels
+
+        # Determine appropriate explainer based on model type
+        model_type = model.__class__.__name__  # Get model class name
+
+        if model_type in ["RandomForestClassifier", "GradientBoostingClassifier", "XGBClassifier", "LightGBMClassifier", "ExtraTreesClassifier"]:  # Tree-based models
+            explainer = shap.TreeExplainer(model)  # Use TreeExplainer for tree-based models
+        elif model_type in ["LogisticRegression", "LinearSVC", "SGDClassifier"]:  # Linear models
+            explainer = shap.LinearExplainer(model, X_test_sampled)  # Use LinearExplainer for linear models
+        else:  # Other models
+            explainer = shap.KernelExplainer(model.predict_proba, shap.sample(X_test_sampled, 50, random_state=random_state))  # Use KernelExplainer as fallback
+
+        shap_values = explainer.shap_values(X_test_sampled)  # Compute SHAP values
+
+        # Handle multi-class SHAP values (list of arrays, one per class)
+        if isinstance(shap_values, list):  # Multi-class case
+            shap_values_summary = shap_values[0] if len(shap_values) > 0 else shap_values  # Use first class for summary
+        else:  # Binary or regression case
+            shap_values_summary = shap_values  # Use SHAP values directly
+
+        # Generate summary plot
+        try:  # Try to create summary plot
+            plt.figure()  # Create new figure
+            shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, show=False)  # Create summary plot
+            summary_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_summary.png")  # Build plot path
+            plt.tight_layout()  # Adjust layout
+            plt.savefig(summary_plot_path, dpi=150, bbox_inches='tight')  # Save plot
+            plt.close()  # Close plot
+        except Exception:  # If summary plot fails
+            plt.close()  # Close plot
+
+        # Generate feature importance bar plot
+        try:  # Try to create bar plot
+            plt.figure()  # Create new figure
+            shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, plot_type="bar", show=False)  # Create bar plot
+            bar_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_bar.png")  # Build plot path
+            plt.tight_layout()  # Adjust layout
+            plt.savefig(bar_plot_path, dpi=150, bbox_inches='tight')  # Save plot
+            plt.close()  # Close plot
+        except Exception:  # If bar plot fails
+            plt.close()  # Close plot
+
+        # Compute mean absolute SHAP values for feature importance ranking
+        mean_shap_values = np.abs(shap_values_summary).mean(axis=0)  # Compute mean absolute SHAP values
+        shap_importance = dict(zip(feature_names[:len(mean_shap_values)], mean_shap_values))  # Create importance dict
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}SHAP explanations saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
+            config=config
+        )  # Log SHAP completion
+
+        return {"shap_importance": shap_importance, "shap_values": shap_values}  # Return SHAP results
+
+    except ImportError:  # If SHAP not installed
+        print(f"{BackgroundColors.YELLOW}SHAP library not installed. Skipping SHAP explanations. Install with: pip install shap{Style.RESET_ALL}")  # Warn user
+        return None  # Return None
+    except Exception as e:  # If any other error
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Failed to generate SHAP explanations for {model_name}: {e}{Style.RESET_ALL}",
+            config=config
+        )  # Log error
+        return None  # Return None
+
+
 def get_hardware_specifications():
     """
     Returns system specs: real CPU model (Windows/Linux/macOS), physical cores,
