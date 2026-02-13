@@ -129,6 +129,63 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def extract_recursive_feature_elimination_features(file_path, config=None):
+    """
+    Extracts the "top_features" list (Python literal string) from the first row of the
+    "RFE_Run_Results.csv" file located in the "Feature_Analysis" subdirectory
+    relative to the input file's directory.
+
+    :param file_path: Full path to the current CSV file being processed (e.g., "./Datasets/.../DrDoS_DNS.csv").
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: List of top features selected by RFE from the first run, or None if the file is not found or fails to load/parse.
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    file_dir = os.path.dirname(file_path)  # Determine the directory of the input file
+    verbose_output(
+        f"{BackgroundColors.GREEN}Extracting RFE features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    rfe_runs_path = find_feature_file(file_path, "RFE_Run_Results.csv", config=config)  # Find the RFE runs file
+    if rfe_runs_path is None:  # If the RFE runs file does not exist
+        print(
+            f"{BackgroundColors.YELLOW}Warning: RFE runs file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping RFE feature extraction for this file.{Style.RESET_ALL}"
+        )
+        return None  # Return None if the file does not exist
+
+    try:  # Try to load the RFE runs results
+        df = pd.read_csv(rfe_runs_path, usecols=["top_features"])  # Load only the "top_features" column
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+
+        if not df.empty:  # Verify if the DataFrame is not empty
+            top_features_raw = df.loc[0, "top_features"]  # Get the "top_features" from the first row
+
+            top_features_str = str(top_features_raw)  # Ensure it's a string
+
+            rfe_features = ast.literal_eval(top_features_str)  # Convert string to list
+
+            verbose_output(
+                f"{BackgroundColors.GREEN}Successfully extracted RFE top features from Run 1. Total features: {BackgroundColors.CYAN}{len(rfe_features)}{Style.RESET_ALL}",
+                config=config
+            )  # Output the verbose message
+
+            return rfe_features  # Return the list of RFE features
+        else:  # If the DataFrame is empty
+            print(
+                f"{BackgroundColors.RED}Error: RFE runs file at {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.RED} is empty.{Style.RESET_ALL}"
+            )
+            return None  # Return None if the file is empty
+
+    except Exception as e:  # If there is an error loading or parsing the file
+        print(
+            f"{BackgroundColors.RED}Error loading/parsing RFE features from {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
+        )
+        return None  # Return None if there was an error
+
+
 def load_feature_selection_results(file_path, config=None):
     """
     Load GA, RFE and PCA feature selection artifacts for a given dataset file and
