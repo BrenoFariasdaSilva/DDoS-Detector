@@ -3,6 +3,7 @@
 # ================================================================================
 # Central configuration for ALL project scripts:
 #   - genetic_algorithm.py  (Genetic Algorithm Feature Selection)
+#   - stacking.py           (Stacking Ensemble Classifiers with Multi-class Support)
 #   - wgangp.py             (WGAN-GP Data Augmentation)
 #
 # Configuration priority (highest → lowest):
@@ -12,6 +13,7 @@
 #
 # Sections:
 #   [Shared]       execution, dataset, paths, sound, logging, telegram, plotting
+#   [Stacking]     stacking, evaluation, models
 #   [GA-specific]  genetic_algorithm, early_stop, cross_validation,
 #                  multiprocessing, resource_monitor, model, caching,
 #                  progress, export
@@ -43,6 +45,11 @@ execution:
     - "Dataset_Description"
     - "Data_Separability"
     - "Feature_Analysis"
+  # stacking.py specific:
+  csv_file: null                      # Optional single CSV file to process (null = process all)
+  process_entire_dataset: false       # Process all files in dataset (true) or single file (false)
+  test_data_augmentation: true        # Enable data augmentation testing experiments
+  execution_mode: binary              # Execution mode: "binary" (default, one file per eval) or "multi-class" (combined attack types)
 
 # --- Dataset Configuration (shared + per-script keys) ---
 dataset:
@@ -106,6 +113,119 @@ plotting:
   linewidth: 1.5                      # Line width for plots
   alpha: 0.7                          # Transparency for plot lines
   grid_alpha: 0.3                     # Grid transparency
+
+
+# ==============================================================================
+# STACKING CLASSIFIER SECTIONS — Used by stacking.py
+# ==============================================================================
+
+stacking:
+  # --- Output Filenames ---
+  results_filename: "Stacking_Classifiers_Results.csv"  # Main results CSV filename for binary mode
+  multiclass_results_filename: "Stacking_Classifiers_MultiClass_Results.csv"  # Results CSV filename for multi-class mode
+  augmentation_comparison_filename: "Data_Augmentation_Comparison_Results.csv"  # Data augmentation experiments results CSV
+  hyperparameters_filename: "Hyperparameter_Optimization_Results.csv"  # Hyperparameter tuning results filename
+
+  # --- Data Augmentation Configuration ---
+  data_augmentation_suffix: "_data_augmented"  # Suffix for augmented files (matches wgangp.py output)
+  augmentation_ratios: [0.10, 0.25, 0.50, 0.75, 1.00]  # Augmented-to-original sample ratios for experiments
+
+  # --- File Processing Configuration ---
+  cache_prefix: "Cache_"              # Prefix for cached preprocessing artifacts
+  model_export_base: "Feature_Analysis/Stacking/Models/"  # Base directory for model exports
+  match_filenames_to_process: [""]    # List of specific filenames to match (empty = process all)
+  ignore_files:                       # List of result filenames to ignore during processing
+    - "Stacking_Classifiers_Results.csv"
+    - "Hyperparameter_Optimization_Results.csv"
+  ignore_dirs:                        # List of directory names to ignore during processing
+    - "Classifiers"
+    - "Classifiers_Hyperparameters"
+    - "Dataset_Description"
+    - "Data_Separability"
+    - "Feature_Analysis"
+
+  # --- Results CSV Schema ---
+  # Column ordering for results CSV export. Each evaluated model writes one row with these fields.
+  results_csv_columns:
+    - "model"                  # Model identifier (e.g., "RandomForest", "SVM")
+    - "dataset"                # Dataset name extracted from file path
+    - "execution_mode"         # Execution mode: "binary" or "multi-class"
+    - "attack_types_combined"  # For multi-class: comma-separated attack types; for binary: same as dataset
+    - "feature_set"            # Feature extraction method (e.g., "PCA", "RFE", "GA")
+    - "classifier_type"        # Classifier family (e.g., "tree", "ensemble", "neural")
+    - "model_name"             # Full model class name
+    - "data_source"            # Data source type: "original", "augmented", "combined"
+    - "experiment_id"          # Unique experiment identifier (timestamp-based)
+    - "experiment_mode"        # Experiment type: "baseline", "augmentation", "comparison"
+    - "augmentation_ratio"     # Ratio of augmented-to-original samples (null for baseline)
+    - "n_features"             # Number of features in the dataset
+    - "n_samples_train"        # Number of training samples
+    - "n_samples_test"         # Number of testing samples
+    - "accuracy"               # Classification accuracy (0.0-1.0)
+    - "precision"              # Precision score (0.0-1.0)
+    - "recall"                 # Recall score (0.0-1.0)
+    - "f1_score"               # F1 score (0.0-1.0)
+    - "fpr"                    # False Positive Rate (0.0-1.0)
+    - "fnr"                    # False Negative Rate (0.0-1.0)
+    - "elapsed_time_s"         # Elapsed time in seconds for evaluation
+    - "cv_method"              # Cross-validation method (e.g., "StratifiedKFold")
+    - "top_features"           # Top feature names (comma-separated or JSON)
+    - "rfe_ranking"            # RFE feature rankings (comma-separated or JSON)
+    - "hyperparameters"        # Model hyperparameters (JSON string)
+    - "features_list"          # Complete feature list (comma-separated or JSON)
+    - "Hardware"               # Hardware specification (CPU/GPU model)
+
+
+# ==============================================================================
+# EVALUATION CONFIGURATION — Used by stacking.py and other classifiers
+# ==============================================================================
+
+evaluation:
+  n_jobs: -1                          # Number of parallel jobs for model training (-1 = use all available CPUs)
+  threads_limit: 2                    # Thread limit for parallel classifier evaluation (prevents resource exhaustion)
+  cv_folds: 10                        # Number of cross-validation folds for model evaluation
+  random_state: 42                    # Random seed for reproducibility across all models
+  ram_threshold_gb: 128               # RAM threshold (GB) to trigger threads_limit=1 (high-memory datasets)
+
+
+# ==============================================================================
+# MODEL HYPERPARAMETERS — Used by stacking.py
+# ==============================================================================
+
+models:
+  # Random Forest classifier hyperparameters
+  random_forest:
+    n_estimators: 100                 # Number of trees in the forest
+    random_state: 42                  # Random seed for reproducibility
+  
+  # Support Vector Machine hyperparameters
+  svm:
+    kernel: "rbf"                     # Kernel type: "linear", "poly", "rbf", "sigmoid"
+    probability: true                 # Enable probability estimates for predict_proba()
+    random_state: 42                  # Random seed for reproducibility
+  
+  # XGBoost classifier hyperparameters
+  xgboost:
+    eval_metric: "mlogloss"           # Evaluation metric: "mlogloss" for multi-class, "logloss" for binary
+    random_state: 42                  # Random seed for reproducibility
+  
+  # Logistic Regression hyperparameters
+  logistic_regression:
+    max_iter: 1000                    # Maximum number of iterations for solver convergence
+    random_state: 42                  # Random seed for reproducibility
+  
+  # K-Nearest Neighbors hyperparameters
+  knn:
+    n_neighbors: 5                    # Number of neighbors to consider
+  
+  # Gradient Boosting classifier hyperparameters
+  gradient_boosting:
+    random_state: 42                  # Random seed for reproducibility
+  
+  # LightGBM classifier hyperparameters
+  lightgbm:
+    force_row_wise: true              # Force row-wise histogram construction (faster for wide datasets)
+    min_gain_to_split: 0.01           # Minimum information gain to make a split
 
 
 # ==============================================================================
