@@ -129,6 +129,55 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def get_hardware_specifications():
+    """
+    Returns system specs: real CPU model (Windows/Linux/macOS), physical cores,
+    RAM in GB, and OS name/version.
+
+    :return: Dictionary with keys: cpu_model, cores, ram_gb, os
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Fetching system specifications...{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    system = platform.system()  # Identify OS type
+
+    try:  # Try to fetch real CPU model using OS-specific methods
+        if system == "Windows":  # Windows: use WMIC
+            out = subprocess.check_output("wmic cpu get Name", shell=True).decode(errors="ignore")  # Run WMIC
+            cpu_model = out.strip().split("\n")[1].strip()  # Extract model line
+
+        elif system == "Linux":  # Linux: read from /proc/cpuinfo
+            cpu_model = "Unknown"  # Default
+            with open("/proc/cpuinfo") as f:  # Open cpuinfo
+                for line in f:  # Iterate lines
+                    if "model name" in line:  # Model name entry
+                        cpu_model = line.split(":", 1)[1].strip()  # Extract name
+                        break  # Stop after first match
+
+        elif system == "Darwin":  # MacOS: use sysctl
+            out = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"])  # Run sysctl
+            cpu_model = out.decode().strip()  # Extract model string
+
+        else:  # Unsupported OS
+            cpu_model = "Unknown"  # Fallback
+
+    except Exception:  # If any method fails
+        cpu_model = "Unknown"  # Fallback on failure
+
+    cores = psutil.cpu_count(logical=False)  # Physical core count
+    ram_gb = round(psutil.virtual_memory().total / (1024**3), 1)  # Total RAM in GB
+    os_name = f"{platform.system()} {platform.release()}"  # OS name + version
+
+    return {  # Build final dictionary
+        "cpu_model": cpu_model,  # CPU model string
+        "cores": cores,  # Physical cores
+        "ram_gb": ram_gb,  # RAM in gigabytes
+        "os": os_name,  # Operating system
+    }
+
+
 def add_hardware_column(df, columns_order, column_name="Hardware"):
     """
     Ensure a hardware description column named by `column_name` exists on `df`
