@@ -1946,8 +1946,6 @@ def run_genetic_algorithm_loop(
     hof,
     X_train,
     y_train,
-    X_test,
-    y_test,
     n_generations=100,
     show_progress=False,
     progress_bar=None,
@@ -1969,9 +1967,18 @@ def run_genetic_algorithm_loop(
     :param hof: Hall of Fame to store the best individual.
     :param X_train: Training feature set.
     :param y_train: Training target variable.
-    :param X_test: Testing feature set.
-    :param y_test: Testing target variable.
     :param n_generations: Number of generations to run.
+    :param show_progress: Whether to show the tqdm progress bar.
+    :param progress_bar: Optional tqdm progress bar instance to update.
+    :param dataset_name: Optional dataset name for progress bar display.
+    :param csv_path: Optional CSV path for progress bar display.
+    :param pop_size: Optional population size for progress bar display.
+    :param max_pop: Optional max population size for progress bar display.
+    :param cxpb: Crossover probability.
+    :param mutpb: Mutation probability.
+    :param run: Optional run index for progress bar display.
+    :param runs: Optional total runs for progress bar display.
+    :param progress_state: Optional dict to track progress state across calls.
     :return: best individual
     """
 
@@ -2057,26 +2064,29 @@ def run_genetic_algorithm_loop(
             except Exception:  # Silently ignore progress update errors
                 pass  # Do nothing
 
-        population[:] = toolbox.select(offspring, k=len(population))  # Select the next generation population
+        population[:] = toolbox.select(offspring, k=len(population))  # Select the next generation population using NSGA-II multi-objective selection
         hof.update(population)  # Update the Hall of Fame
 
         if hof and len(hof) > 0:  # If hall of fame has a best individual
             if hof[0] not in population:  # If the best individual is not in the new population
                 population[-1] = hof[0]  # Replace the worst individual with the hall-of-fame best
 
-        current_best_fitness = (
+        current_best_fitness_f1 = (
             hof[0].fitness.values[0] if hof and hof[0].fitness.values else None
-        )  # Get current best fitness
+        )  # Get current best F1-score (first objective) from multi-objective fitness
+        current_best_num_features = (
+            -hof[0].fitness.values[1] if hof and hof[0].fitness.values and len(hof[0].fitness.values) > 1 else None
+        )  # Get current number of features (negated second objective) from multi-objective fitness
         try:  # Try to append best fitness to history
             fitness_history.append(
-                float(current_best_fitness) if current_best_fitness is not None else np.nan
-            )  # Record best fitness
+                float(current_best_fitness_f1) if current_best_fitness_f1 is not None else np.nan
+            )  # Record best F1-score for convergence tracking
         except Exception:  # If conversion fails
             fitness_history.append(np.nan)  # Record NaN
-        if best_fitness is None or (current_best_fitness is not None and current_best_fitness > best_fitness):
-            best_fitness = current_best_fitness  # Update best fitness
+        if best_fitness is None or (current_best_fitness_f1 is not None and current_best_fitness_f1 > best_fitness):
+            best_fitness = current_best_fitness_f1  # Update best F1-score
             gens_without_improvement = 0  # Reset counter
-        else:  # If no improvement in best fitness
+        else:  # If no improvement in best F1-score
             gens_without_improvement += 1  # Increment counter
 
             if gens_without_improvement >= early_stop_gens:  # Verify early-stop condition
@@ -2090,8 +2100,8 @@ def run_genetic_algorithm_loop(
 
         should_send = show_progress and (gen % max(1, n_generations // 100) == 0)  # Send updates to Telegram at configured intervals (every 1% of generations)
         send_telegram_message(TELEGRAM_BOT, [
-            f"Pop Size {pop_size}: Generation {gen}/{n_generations}, Best F1-Score: {truncate_value(best_fitness)}"
-        ], should_send)  # Send periodic updates to Telegram telegram_bot
+            f"Pop Size {pop_size}: Generation {gen}/{n_generations}, Best F1-Score: {truncate_value(best_fitness)}, Features: {int(current_best_num_features) if current_best_num_features is not None else 'N/A'}"
+        ], should_send)  # Send periodic updates to Telegram with multi-objective fitness values
 
         gens_ran = gen  # Update gens_ran each generation
         with global_state_lock:  # Thread-safe update to GA_GENERATIONS_COMPLETED
@@ -2335,14 +2345,12 @@ def run_single_ga_iteration(
 
     toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size, pool=shared_pool)  # Setup GA components, reusing shared pool
     best_ind, gens_ran, fitness_history = run_genetic_algorithm_loop(
-        toolbox,
-        population,
-        hof,
-        X_train,
-        y_train,
-        X_test,
-        y_test,
-        n_generations,
+        toolbox=toolbox,
+        population=population,
+        hof=hof,
+        X_train=X_train,
+        y_train=y_train,
+        n_generations=n_generations,
         show_progress=False,
         progress_bar=progress_bar,
         dataset_name=dataset_name,
