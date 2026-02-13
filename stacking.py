@@ -129,6 +129,27 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def verbose_output(true_string="", false_string="", config=None):
+    """
+    Outputs a message if verbose mode is enabled in configuration.
+
+    :param true_string: The string to be outputted if verbose is enabled.
+    :param false_string: The string to be outputted if verbose is disabled.
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    verbose = config.get("execution", {}).get("verbose", False)  # Get verbose flag
+    
+    if verbose and true_string != "":  # If verbose is True and a true_string was provided
+        print(true_string)  # Output the true statement string
+    elif false_string != "":  # If a false_string was provided
+        print(false_string)  # Output the false statement string
+
+
 def verify_dot_env_file(config=None):
     """
     Verifies if the .env file exists in the current directory.
