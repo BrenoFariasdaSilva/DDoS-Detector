@@ -129,6 +129,66 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y_test):
+    """
+    Trains and evaluates an AutoML-selected model on the held-out test set.
+
+    :param model: Classifier instance to evaluate
+    :param model_name: Name of the model for logging
+    :param X_train: Training features array
+    :param y_train: Training target labels
+    :param X_test: Testing features array
+    :param y_test: Testing target labels
+    :return: Dictionary containing all evaluation metrics
+    """
+
+    start_time = time.time()  # Record start time
+
+    model.fit(X_train, y_train)  # Train model on full training set
+    y_pred = model.predict(X_test)  # Generate predictions on test set
+
+    elapsed = time.time() - start_time  # Calculate elapsed training time
+
+    acc = accuracy_score(y_test, y_pred)  # Calculate accuracy
+    prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted precision
+    rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted recall
+    f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted F1 score
+
+    roc_auc = None  # Initialize ROC-AUC as None
+    try:  # Try to compute ROC-AUC
+        if hasattr(model, "predict_proba"):  # If model supports probability predictions
+            y_proba = model.predict_proba(X_test)  # Get probability predictions
+            if len(np.unique(y_test)) == 2:  # Binary classification
+                roc_auc = roc_auc_score(y_test, y_proba[:, 1])  # Compute binary ROC-AUC
+            else:  # Multi-class classification
+                roc_auc = roc_auc_score(y_test, y_proba, multi_class="ovr", average="weighted")  # Compute multi-class ROC-AUC
+    except Exception:  # If ROC-AUC computation fails
+        roc_auc = None  # Keep as None
+
+    if len(np.unique(y_test)) == 2:  # Binary classification metrics
+        tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()  # Get confusion matrix components
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Calculate false positive rate
+        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Calculate false negative rate
+    else:  # Multi-class (simplified)
+        fpr = 0.0  # Placeholder FPR
+        fnr = 0.0  # Placeholder FNR
+
+    print(
+        f"{BackgroundColors.GREEN}AutoML {model_name} Test Results - Acc: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, F1: {BackgroundColors.CYAN}{truncate_value(f1)}{BackgroundColors.GREEN}, ROC-AUC: {BackgroundColors.CYAN}{truncate_value(roc_auc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed))}s{Style.RESET_ALL}"
+    )  # Output test results
+
+    return {  # Build and return metrics dictionary
+        "accuracy": acc,  # Accuracy value
+        "precision": prec,  # Precision value
+        "recall": rec,  # Recall value
+        "f1_score": f1,  # F1 score value
+        "roc_auc": roc_auc,  # ROC-AUC value
+        "fpr": fpr,  # False positive rate
+        "fnr": fnr,  # False negative rate
+        "elapsed_time_s": int(round(elapsed)),  # Elapsed time in seconds
+    }  # Return metrics dictionary
+
+
 def export_automl_search_history(study, output_dir, study_name):
     """
     Exports the Optuna study trial history to a CSV file.
