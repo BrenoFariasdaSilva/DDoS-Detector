@@ -117,88 +117,17 @@ class BackgroundColors:  # Colors for the terminal
     CLEAR_TERMINAL = "\033[H\033[J"  # Clear the terminal
 
 
-# Execution Constants:
-VERBOSE = False  # Set to True to output verbose messages
-N_JOBS = -1  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
-THREADS_LIMIT = 2  # Number of threads for parallel evaluation of individual classifiers
-TEST_DATA_AUGMENTATION = True  # Set to True to compare original vs augmented data performance
-RESULTS_FILENAME = "Stacking_Classifiers_Results.csv"  # Filename for saving stacking results
-AUGMENTATION_COMPARISON_FILENAME = "Data_Augmentation_Comparison_Results.csv"  # Filename for augmentation comparison results
-DATA_AUGMENTATION_SUFFIX = "_data_augmented"  # Suffix appended by wgangp.py to generated augmented filenames
-AUGMENTATION_RATIOS = [0.10, 0.25, 0.50, 0.75, 1.00]  # Augmented-to-original sample ratios for ratio-based experiments
-RESULTS_CSV_COLUMNS = [  # Columns for the results CSV
-    "model",
-    "dataset",
-    "feature_set",
-    "classifier_type",
-    "model_name",
-    "data_source",
-    "experiment_id",
-    "experiment_mode",
-    "augmentation_ratio",
-    "n_features",
-    "n_samples_train",
-    "n_samples_test",
-    "accuracy",
-    "precision",
-    "recall",
-    "f1_score",
-    "fpr",
-    "fnr",
-    "elapsed_time_s",
-    "cv_method",
-    "top_features",
-    "rfe_ranking",
-    "hyperparameters",
-    "features_list",
-    "Hardware",
-]
-MATCH_FILENAMES_TO_PROCESS = [""]  # List of specific filenames to search for a match (set to None to process all files)
-IGNORE_FILES = [RESULTS_FILENAME]  # List of filenames to ignore when searching for datasets
-IGNORE_DIRS = [
-    "Classifiers",
-    "Classifiers_Hyperparameters",
-    "Dataset_Description",
-    "Data_Separability",
-    "Feature_Analysis",
-]  # List of directory names to ignore when searching for datasets
-HYPERPARAMETERS_FILENAME = "Hyperparameter_Optimization_Results.csv"  # Filename for hyperparameter optimization results
-CACHE_PREFIX = "Cache_"  # Prefix for cache filenames
-MODEL_EXPORT_BASE = "Feature_Analysis/Stacking/Models/"
-SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, load exported models instead of retraining when available
-CSV_FILE = None  # Optional CSV override from CLI
-PROCESS_ENTIRE_DATASET = False  # Set to True to process all files in the dataset, False to only process the specified CSV_FILE
-
-# AutoML Constants:
-ENABLE_AUTOML = False  # Set to True to enable AutoML pipeline (Optuna-based)
-AUTOML_N_TRIALS = 50  # Number of Optuna trials for individual model search
-AUTOML_STACKING_TRIALS = 20  # Number of Optuna trials for stacking optimization
-AUTOML_TIMEOUT = 3600  # Timeout in seconds for each Optuna search phase
-AUTOML_CV_FOLDS = 5  # Number of cross-validation folds for AutoML evaluation
-AUTOML_RANDOM_STATE = 42  # Random seed for AutoML reproducibility
-AUTOML_STACKING_TOP_N = 5  # Number of top models to consider as stacking candidates
-AUTOML_RESULTS_FILENAME = "AutoML_Results.csv"  # Filename for AutoML results export
+# Global Configuration Container:
+CONFIG = {}  # Will be initialized by initialize_config() - holds all runtime settings
 
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
 
 # Logger Setup:
-logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
-sys.stdout = logger  # Redirect stdout to the logger
-sys.stderr = logger  # Redirect stderr to the logger
+logger = None  # Will be initialized in initialize_logger()
 
-# Sound Constants:
-SOUND_COMMANDS = {
-    "Darwin": "afplay",
-    "Linux": "aplay",
-    "Windows": "start",
-}  # The commands to play a sound for each operating system
-SOUND_FILE = "./.assets/Sounds/NotificationSound.wav"  # The path to the sound file
+# Functions Definitions:
 
-# RUN_FUNCTIONS:
-RUN_FUNCTIONS = {
-    "Play Sound": True,  # Set to True to play a sound when the program finishes
-}
 
 DATASETS = {  # Dictionary containing dataset paths and feature files
     "CICDDoS2019-Dataset": [  # List of paths to the CICDDoS2019 dataset
