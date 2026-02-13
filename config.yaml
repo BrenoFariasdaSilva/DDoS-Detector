@@ -39,7 +39,7 @@ execution:
   csv_file: null                      # Optional single CSV file to process (null = process all)
   process_entire_dataset: false       # Process all files in dataset (true) or single file (false)
   test_data_augmentation: true        # Enable data augmentation testing experiments
-  execution_mode: binary              # Execution mode: "binary" (default, one file per eval), "multi-class" (combined attacks), or "both" (run binary then multi-class sequentially)
+  execution_mode: both                # Execution mode: "both" (default, runs binary and multi-class sequentially), "binary" (one file per eval), or "multi-class" (combined attacks)
   # wgangp.py specific:
   results_suffix: "_data_augmented"   # Suffix to add to generated filenames
   match_filenames_to_process: [""]    # List of specific filenames to match
