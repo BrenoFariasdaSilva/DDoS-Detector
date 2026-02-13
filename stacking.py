@@ -3778,8 +3778,8 @@ def main():
             f"{BackgroundColors.BOLD}{BackgroundColors.YELLOW}Data Augmentation Testing: {BackgroundColors.CYAN}ENABLED{Style.RESET_ALL}"
         )  # Print augmentation enabled message
         print(
-            f"{BackgroundColors.GREEN}Will compare performance on: Original vs Augmented vs Original+Augmented{Style.RESET_ALL}\n"
-        )  # Print comparison details
+            f"{BackgroundColors.GREEN}Will evaluate Original vs Original+Augmented at ratios: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in AUGMENTATION_RATIOS]}{Style.RESET_ALL}\n"
+        )  # Print augmentation ratios to be evaluated
 
     start_time = datetime.datetime.now()  # Get the start time of the program
 
