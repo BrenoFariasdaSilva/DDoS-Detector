@@ -258,22 +258,22 @@ def load_configuration(config_path: Optional[str] = None, cli_overrides: Optiona
     config = get_default_config()  # Start with default configuration
 
     if config_path is None:  # If no config path provided
-        config_path = Path("config.yaml")  # Try config.yaml first
+        path = Path("config.yaml")  # Try config.yaml first
     else:  # If config path provided
-        config_path = Path(config_path)  # Convert to Path object
+        path = Path(config_path)  # Convert to Path object
 
-    if not config_path.exists():  # If config.yaml not found
-        config_path = Path("config.yaml.example")  # Fallback to example config
+    if not path.exists():  # If config.yaml not found
+        path = Path("config.yaml.example")  # Fallback to example config
 
-    if config_path.exists():  # If a config file exists
+    if path.exists():  # If a config file exists
         try:  # Try to load configuration from file
-            with open(config_path, "r") as f:  # Open config file for reading
+            with open(path, "r") as f:  # Open config file for reading
                 file_config = yaml.safe_load(f)  # Load YAML configuration
             if file_config:  # If config loaded successfully
                 config = deep_merge(config, file_config)  # Merge with defaults
-                print(f"{BackgroundColors.GREEN}Loaded configuration from: {BackgroundColors.CYAN}{config_path}{Style.RESET_ALL}")  # Print success message
+                print(f"{BackgroundColors.GREEN}Loaded configuration from: {BackgroundColors.CYAN}{path}{Style.RESET_ALL}")  # Print success message
         except Exception as e:  # If loading fails
-            print(f"{BackgroundColors.YELLOW}Warning: Failed to load {config_path}: {e}{Style.RESET_ALL}")  # Print warning
+            print(f"{BackgroundColors.YELLOW}Warning: Failed to load {path}: {e}{Style.RESET_ALL}")  # Print warning
             print(f"{BackgroundColors.YELLOW}Using default configuration{Style.RESET_ALL}")  # Fallback message
 
     if cli_overrides:  # If CLI overrides provided
