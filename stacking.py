@@ -129,6 +129,76 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def automl_stacking_objective(trial, X_train, y_train, cv_folds, candidate_models, config=None):
+    """
+    Optuna objective function for optimizing stacking ensemble configuration.
+
+    :param trial: Optuna trial object
+    :param X_train: Training features array
+    :param y_train: Training target array (numpy)
+    :param cv_folds: Number of cross-validation folds
+    :param candidate_models: Dictionary mapping model names to parameter dicts
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Mean cross-validated F1 score (to maximize)
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    automl_random_state = config.get("automl", {}).get("random_state", 42)  # Get random state from config
+    n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Get n_jobs from config
+
+    model_names = list(candidate_models.keys())  # Get list of candidate model names
+    selected_models = []  # Initialize list for selected base learners
+
+    for name in model_names:  # Iterate over each candidate model
+        safe_name = name.replace(" ", "_").replace("(", "").replace(")", "")  # Sanitize name for Optuna parameter
+        include = trial.suggest_categorical(f"use_{safe_name}", [True, False])  # Decide whether to include this model
+        if include:  # If model is selected for inclusion
+            selected_models.append(name)  # Add to selected list
+
+    if len(selected_models) < 2:  # Need at least 2 base learners for stacking
+        return 0.0  # Return zero score if insufficient base learners
+
+    meta_learner_name = trial.suggest_categorical(
+        "meta_learner", ["Logistic Regression", "Random Forest", "Gradient Boosting"]
+    )  # Select meta-learner type
+    n_cv_splits = trial.suggest_int("stacking_cv_splits", 3, min(cv_folds, 10))  # Select CV splits for stacking
+
+    try:  # Try to build and evaluate stacking ensemble
+        estimators = []  # Initialize base estimators list
+        for name in selected_models:  # Build each selected base learner
+            model_params = candidate_models[name]  # Get pre-optimized parameters
+            model = create_model_from_params(name, model_params, config=config)  # Create model instance
+            safe_name = name.replace(" ", "_").replace("(", "").replace(")", "")  # Sanitize estimator name
+            estimators.append((safe_name, model))  # Add to estimators list
+
+        if meta_learner_name == "Logistic Regression":  # Logistic Regression meta-learner
+            meta_model = LogisticRegression(max_iter=1000, random_state=automl_random_state)  # Create LR meta-learner
+        elif meta_learner_name == "Random Forest":  # Random Forest meta-learner
+            meta_model = RandomForestClassifier(n_estimators=50, random_state=automl_random_state, n_jobs=n_jobs)  # Create RF meta-learner
+        else:  # Gradient Boosting meta-learner
+            meta_model = GradientBoostingClassifier(random_state=automl_random_state)  # Create GB meta-learner
+
+        stacking = StackingClassifier(
+            estimators=estimators,
+            final_estimator=meta_model,
+            cv=StratifiedKFold(n_splits=n_cv_splits, shuffle=True, random_state=automl_random_state),
+            n_jobs=n_jobs,
+        )  # Create stacking classifier
+
+        mean_f1 = automl_cross_validate_model(stacking, X_train, y_train, cv_folds, trial)  # Cross-validate stacking
+        return mean_f1  # Return mean F1 score
+
+    except optuna.exceptions.TrialPruned:  # Handle Optuna pruning
+        raise  # Re-raise pruning exception
+    except Exception as e:  # Handle other errors gracefully
+        verbose_output(
+            f"{BackgroundColors.YELLOW}AutoML stacking trial failed: {e}{Style.RESET_ALL}"
+        )  # Log the failure
+        return 0.0  # Return zero for failed trials
+
+
 def extract_top_automl_models(study, top_n=5):
     """
     Extracts the top N unique models from an AutoML study based on F1 score.
