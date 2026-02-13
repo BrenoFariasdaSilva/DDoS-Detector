@@ -129,6 +129,35 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def extract_top_automl_models(study, top_n=5):
+    """
+    Extracts the top N unique models from an AutoML study based on F1 score.
+
+    :param study: Completed Optuna study object
+    :param top_n: Number of top models to extract
+    :return: Dictionary mapping model names to their best parameters
+    """
+
+    completed = [
+        t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE
+    ]  # Filter to completed trials only
+    sorted_trials = sorted(completed, key=lambda t: t.value, reverse=True)  # Sort trials by score descending
+
+    top_models = {}  # Initialize dictionary for top models
+
+    for trial in sorted_trials:  # Iterate through sorted trials
+        model_name = trial.params.get("model_name", "Unknown")  # Get model name from trial
+        if model_name not in top_models:  # If this model type hasn't been added yet
+            params = {
+                k: v for k, v in trial.params.items() if k != "model_name" and not k.endswith("_none")
+            }  # Extract parameters
+            top_models[model_name] = params  # Store best params for this model type
+        if len(top_models) >= top_n:  # If we've collected enough models
+            break  # Stop collecting
+
+    return top_models  # Return dictionary of top models and their parameters
+
+
 def run_automl_stacking_search(X_train, y_train, model_study, file_path):
     """
     Runs Optuna-based optimization to find the best stacking ensemble configuration.
