@@ -149,6 +149,8 @@ def parse_cli_args():
     parser.add_argument("--automl-timeout", type=int, default=None, help="AutoML timeout in seconds")
     parser.add_argument("--test-augmentation", action="store_true", help="Enable data augmentation testing")
     parser.add_argument("--no-test-augmentation", dest="test_augmentation", action="store_false", help="Disable data augmentation testing")
+    parser.add_argument("--multi-class", action="store_true", help="Enable multi-class classification mode (combine all attacks)")
+    parser.add_argument("--binary", dest="multi_class", action="store_false", help="Enable binary classification mode (default)")
     
     return parser.parse_args()  # Return parsed arguments
 
