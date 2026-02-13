@@ -129,6 +129,23 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def deep_merge_dicts(base, override):
+    """Recursively merge override dict into base dict.
+    
+    :param base: Base dictionary
+    :param override: Override dictionary
+    :return: Merged dictionary
+    """
+    
+    result = dict(base)  # Copy base dictionary
+    for key, value in override.items():  # Iterate override items
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):  # Both are dicts
+            result[key] = deep_merge_dicts(result[key], value)  # Recursive merge
+        else:  # Not both dicts
+            result[key] = value  # Override value
+    return result  # Return merged dictionary
+
+
 def merge_configs(defaults, file_config, cli_args):
     """
     Merge configurations with priority: CLI > file > defaults.
