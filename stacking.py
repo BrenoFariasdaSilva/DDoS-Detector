@@ -2998,6 +2998,9 @@ def evaluate_on_dataset(
     base_models,
     data_source_label="Original",
     hyperparams_map=None,
+    experiment_id=None,
+    experiment_mode="original_only",
+    augmentation_ratio=None,
 ):
     """
     Evaluate classifiers on a single dataset (original or augmented).
@@ -3009,7 +3012,11 @@ def evaluate_on_dataset(
     :param pca_n_components: Number of PCA components
     :param rfe_selected_features: RFE selected features
     :param base_models: Dictionary of base models to evaluate
-    :param data_source_label: Label for data source ("Original", "Augmented", or "Original+Augmented")
+    :param data_source_label: Label for data source ("Original", "Original+Augmented@50%", etc.)
+    :param hyperparams_map: Dictionary mapping model names to hyperparameter dicts
+    :param experiment_id: Unique experiment identifier for traceability
+    :param experiment_mode: Experiment mode string ('original_only' or 'original_plus_augmented')
+    :param augmentation_ratio: Augmentation ratio float (e.g., 0.50) or None for original-only
     :return: Dictionary mapping (feature_set, model_name) to results
     """
 
@@ -3157,6 +3164,9 @@ def evaluate_on_dataset(
                     "classifier_type": "Individual",
                     "model_name": model_name,
                     "data_source": data_source_label,
+                    "experiment_id": experiment_id,
+                    "experiment_mode": experiment_mode,
+                    "augmentation_ratio": augmentation_ratio,
                     "n_features": X_train_subset.shape[1],
                     "n_samples_train": len(y_train),
                     "n_samples_test": len(y_test),
@@ -3209,6 +3219,9 @@ def evaluate_on_dataset(
             "classifier_type": "Stacking",
             "model_name": "StackingClassifier",
             "data_source": data_source_label,
+            "experiment_id": experiment_id,
+            "experiment_mode": experiment_mode,
+            "augmentation_ratio": augmentation_ratio,
             "n_features": X_train_subset.shape[1],
             "n_samples_train": len(y_train),
             "n_samples_test": len(y_test),
