@@ -2021,10 +2021,19 @@ def run_genetic_algorithm_loop(
         csv_path or "", pop_size or 0, n_generations, cxpb, mutpb, run or 0, folds, test_frac=None
     )  # Deterministic state id for resume/caching
     start_gen = 1  # Starting generation index
-    fitness_history = []  # List to record best fitness per generation for convergence plot
-    start_gen, fitness_history = load_and_apply_generation_state(
+
+    start_gen, loaded_history = load_and_apply_generation_state(
         toolbox, population, output_dir, state_id, run=run
-    )  # Load and apply saved generation state if available, updating start generation and fitness history
+    )  # Load and apply saved generation state if available, updating start generation and history
+
+    # Initialize history tracking from loaded state or start fresh
+    fitness_history = loaded_history.get("best_f1", []) if isinstance(loaded_history, dict) else []  # Best F1 scores
+    best_features_history = loaded_history.get("best_features", []) if isinstance(loaded_history, dict) else []  # Best feature counts
+    avg_f1_history = loaded_history.get("avg_f1", []) if isinstance(loaded_history, dict) else []  # Population avg F1
+    avg_features_history = loaded_history.get("avg_features", []) if isinstance(loaded_history, dict) else []  # Population avg features
+    pareto_size_history = loaded_history.get("pareto_size", []) if isinstance(loaded_history, dict) else []  # Pareto front sizes
+    hypervolume_history = loaded_history.get("hypervolume", []) if isinstance(loaded_history, dict) else []  # Hypervolume values
+    diversity_history = loaded_history.get("diversity", []) if isinstance(loaded_history, dict) else []  # Diversity values
 
     gen_range = (
         tqdm(range(start_gen, n_generations + 1), desc=f"{BackgroundColors.GREEN}Generations{Style.RESET_ALL}")
@@ -2032,6 +2041,7 @@ def run_genetic_algorithm_loop(
         else range(start_gen, n_generations + 1)
     )  # Create generation range with progress bar if show_progress is enabled, otherwise use plain range
     gens_ran = 0  # Track how many generations were actually executed
+
     for gen in gen_range:  # Loop for the specified number of generations
         (
             update_progress_bar(
@@ -2099,6 +2109,48 @@ def run_genetic_algorithm_loop(
             )  # Record best F1-score for convergence tracking
         except Exception:  # If conversion fails
             fitness_history.append(np.nan)  # Record NaN
+
+        # Track extended metrics for comprehensive convergence plots
+        try:  # Track number of features in best individual
+            best_features_history.append(
+                int(current_best_num_features) if current_best_num_features is not None else 0
+            )  # Record best feature count
+        except Exception:  # If tracking fails
+            best_features_history.append(0)  # Record zero
+
+        try:  # Track population average F1 score
+            valid_f1_scores = [ind.fitness.values[0] for ind in population if ind.fitness.valid and len(ind.fitness.values) > 0]  # Extract valid F1 scores from population
+            avg_f1 = sum(valid_f1_scores) / len(valid_f1_scores) if valid_f1_scores else 0.0  # Calculate average F1
+            avg_f1_history.append(float(avg_f1))  # Record average F1 score
+        except Exception:  # If calculation fails
+            avg_f1_history.append(0.0)  # Record zero
+
+        try:  # Track population average feature count
+            valid_feature_counts = [-ind.fitness.values[1] for ind in population if ind.fitness.valid and len(ind.fitness.values) > 1]  # Extract valid feature counts (negate second objective)
+            avg_features = sum(valid_feature_counts) / len(valid_feature_counts) if valid_feature_counts else 0.0  # Calculate average feature count
+            avg_features_history.append(float(avg_features))  # Record average feature count
+        except Exception:  # If calculation fails
+            avg_features_history.append(0.0)  # Record zero
+
+        try:  # Track Pareto front size
+            pareto_front = extract_pareto_front(population)  # Extract Pareto front from population
+            pareto_size_history.append(len(pareto_front))  # Record Pareto front size
+        except Exception:  # If extraction fails
+            pareto_size_history.append(0)  # Record zero
+
+        try:  # Track hypervolume metric
+            pareto_front = extract_pareto_front(population)  # Extract Pareto front (recompute if needed or reuse from above)
+            hv = calculate_hypervolume(pareto_front)  # Calculate hypervolume for Pareto front
+            hypervolume_history.append(float(hv))  # Record hypervolume
+        except Exception:  # If calculation fails
+            hypervolume_history.append(0.0)  # Record zero
+
+        try:  # Track population diversity
+            diversity = calculate_population_diversity(population)  # Calculate population diversity
+            diversity_history.append(float(diversity))  # Record diversity metric
+        except Exception:  # If calculation fails
+            diversity_history.append(0.0)  # Record zero
+
         if best_fitness is None or (current_best_fitness_f1 is not None and current_best_fitness_f1 > best_fitness):
             best_fitness = current_best_fitness_f1  # Update best F1-score
             gens_without_improvement = 0  # Reset counter
@@ -2126,13 +2178,34 @@ def run_genetic_algorithm_loop(
 
         try:  # Persist per-generation progress so runs can be resumed (every N gens to reduce I/O)
             if CONFIG["execution"]["resume_progress"] and state_id is not None and (gen % CONFIG["execution"]["progress_save_interval"] == 0 or gen == n_generations):  # Use configured interval
+                # Build current history data dict for state persistence
+                current_history_data = {
+                    "best_f1": fitness_history,  # Best F1 scores up to current generation
+                    "best_features": best_features_history,  # Best feature counts up to current generation
+                    "avg_f1": avg_f1_history,  # Average F1 scores up to current generation
+                    "avg_features": avg_features_history,  # Average feature counts up to current generation
+                    "pareto_size": pareto_size_history,  # Pareto sizes up to current generation
+                    "hypervolume": hypervolume_history,  # Hypervolume values up to current generation
+                    "diversity": diversity_history,  # Diversity values up to current generation
+                }  # Consolidated history for state persistence
                 save_generation_state(
-                    output_dir, state_id, gen, population, hof[0] if hof and len(hof) > 0 else None, fitness_history
+                    output_dir, state_id, gen, population, hof[0] if hof and len(hof) > 0 else None, current_history_data
                 )
         except Exception:  # If saving fails
             pass  # Do nothing
 
-    return hof[0], gens_ran, fitness_history  # Return the best individual, gens ran and fitness history
+    # Prepare comprehensive history data for convergence plots
+    history_data = {
+        "best_f1": fitness_history,  # Best F1 score per generation (backward compatible)
+        "best_features": best_features_history,  # Best feature count per generation
+        "avg_f1": avg_f1_history,  # Population average F1 per generation
+        "avg_features": avg_features_history,  # Population average feature count per generation
+        "pareto_size": pareto_size_history,  # Pareto front size per generation
+        "hypervolume": hypervolume_history,  # Hypervolume metric per generation
+        "diversity": diversity_history,  # Population diversity per generation
+    }  # Consolidated history dictionary for plotting
+
+    return hof[0], gens_ran, history_data  # Return the best individual, gens ran and comprehensive history data
 
 
 def adjust_progress_for_early_stop(progress_state, n_generations, pop_size, gens_ran, folds):
@@ -2192,6 +2265,7 @@ def safe_filename(name):
     sanitized = sanitized.strip(". ")  # Remove leading/trailing dots and spaces which can cause issues on some filesystems
     
     return sanitized if sanitized else "unnamed"  # Ensure we don't return an empty string
+
 
 def extract_pareto_front(population):
     """
