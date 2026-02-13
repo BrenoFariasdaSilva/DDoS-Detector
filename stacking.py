@@ -129,6 +129,73 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def process_single_file_evaluation(file, combined_df, combined_file_for_features, config=None):
+    """
+    Processes evaluation for a single file including feature loading, model preparation, and evaluation.
+
+    :param file: File path to process
+    :param combined_df: Combined dataframe (used if file == "combined")
+    :param combined_file_for_features: File to use for feature selection metadata
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Starting single file evaluation for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    print_file_processing_header(file, config=config)  # Print formatted header
+
+    file_for_features = combined_file_for_features if file == "combined" else file  # Determine which file to use for feature selection metadata
+    ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
+        file_for_features, config=config
+    )  # Load feature selection results
+
+    df_original_cleaned, feature_names = load_and_preprocess_dataset(file, combined_df, config=config)  # Load and preprocess the dataset
+
+    if df_original_cleaned is None:  # If loading or preprocessing failed
+        return  # Exit function early
+
+    base_models, hp_params_map = prepare_models_with_hyperparameters(file, config=config)  # Prepare base models with hyperparameters
+
+    original_experiment_id = generate_experiment_id(file, "original_only")  # Generate unique experiment ID for the original-only evaluation
+
+    test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", False)  # Get test data augmentation flag from config
+    augmentation_ratios = config.get("execution", {}).get("augmentation_ratios", [])  # Get augmentation ratios from config
+    
+    if test_data_augmentation:  # If data augmentation testing is enabled
+        generate_augmentation_tsne_visualization(
+            file, df_original_cleaned, None, None, "original_only", config=config
+        )  # Generate t-SNE visualization for original data only
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[1/{1 + len(augmentation_ratios) if test_data_augmentation else 1}] Evaluating on ORIGINAL data{Style.RESET_ALL}"
+    )  # Print progress message with total step count
+    results_original = evaluate_on_dataset(
+        file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
+        rfe_selected_features, base_models, data_source_label="Original", hyperparams_map=hp_params_map,
+        experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
+        config=config
+    )  # Evaluate on original data with experiment traceability metadata
+
+    original_results_list = list(results_original.values())  # Convert results dict to list
+    save_stacking_results(file, original_results_list, config=config)  # Save original results to CSV
+
+    enable_automl = config.get("execution", {}).get("enable_automl", False)  # Get enable automl flag from config
+    if enable_automl:  # If AutoML pipeline is enabled
+        run_automl_pipeline(file, df_original_cleaned, feature_names, config=config)  # Run AutoML pipeline
+
+    if test_data_augmentation:  # If data augmentation testing is enabled
+        process_augmented_data_evaluation(
+            file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
+            rfe_selected_features, base_models, hp_params_map, results_original, config=config
+        )  # Process augmented data evaluation workflow
+
+
 def process_files_in_path(input_path, dataset_name, config=None):
     """
     Processes all files in a given input path including file discovery and dataset combination.
