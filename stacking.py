@@ -129,6 +129,39 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def setup_telegram_bot(config=None):
+    """
+    Sets up the Telegram bot for progress messages.
+
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    telegram_enabled = config.get("telegram", {}).get("enabled", True)  # Get telegram enabled flag
+    
+    if not telegram_enabled:  # If Telegram is disabled
+        return  # Skip setup
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Setting up Telegram bot for messages...{Style.RESET_ALL}", config=config
+    )  # Output the verbose message
+
+    verify_dot_env_file(config)  # Verify if the .env file exists
+
+    global TELEGRAM_BOT  # Declare the module-global telegram_bot variable
+
+    try:  # Try to initialize the Telegram bot
+        TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
+        telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
+        telegram_module.RUNNING_CODE = os.path.basename(__file__)
+    except Exception as e:
+        print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+        TELEGRAM_BOT = None  # Set to None if initialization fails
+
+
 def set_threads_limit_based_on_ram(config=None):
     """
     Sets threads limit to 1 if system RAM is below threshold to avoid memory issues.
