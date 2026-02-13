@@ -4619,15 +4619,16 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
     original_experiment_id = generate_experiment_id(file, "original_only")  # Generate unique experiment ID for the original-only evaluation
 
     test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", False)  # Get test data augmentation flag from config
-    augmentation_ratios = config.get("execution", {}).get("augmentation_ratios", [])  # Get augmentation ratios from config
+    augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
     
     if test_data_augmentation:  # If data augmentation testing is enabled
         generate_augmentation_tsne_visualization(
             file, df_original_cleaned, None, None, "original_only", config=config
         )  # Generate t-SNE visualization for original data only
 
+    total_steps = 1 + (len(augmentation_ratios) if test_data_augmentation else 0)  # Calculate total evaluation steps
     print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[1/{1 + len(augmentation_ratios) if test_data_augmentation else 1}] Evaluating on ORIGINAL data{Style.RESET_ALL}"
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[1/{total_steps}] Evaluating on ORIGINAL data{Style.RESET_ALL}"
     )  # Print progress message with total step count
     results_original = evaluate_on_dataset(
         file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
@@ -4639,7 +4640,7 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
     original_results_list = list(results_original.values())  # Convert results dict to list
     save_stacking_results(file, original_results_list, config=config)  # Save original results to CSV
 
-    enable_automl = config.get("execution", {}).get("enable_automl", False)  # Get enable automl flag from config
+    enable_automl = config.get("automl", {}).get("enabled", False)  # Get enable automl flag from config
     if enable_automl:  # If AutoML pipeline is enabled
         run_automl_pipeline(file, df_original_cleaned, feature_names, config=config)  # Run AutoML pipeline
 
