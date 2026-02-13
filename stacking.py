@@ -129,6 +129,38 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def determine_files_to_process(csv_file, input_path, config=None):
+    """
+    Determines which files to process based on CLI override or directory scan.
+
+    :param csv_file: Optional CSV file path from CLI argument
+    :param input_path: Directory path to search for CSV files
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: List of file paths to process
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Determining files to process from path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    if csv_file:  # If a specific CSV file is provided via CLI
+        try:  # Attempt to validate CSV file path
+            abs_csv = os.path.abspath(csv_file)  # Get absolute path of CSV file
+            abs_input = os.path.abspath(input_path)  # Get absolute path of input directory
+            if abs_csv.startswith(abs_input):  # If CSV file belongs to this input path
+                return [csv_file]  # Return list with single CSV file
+            else:  # CSV override does not belong to this path
+                return []  # Return empty list to skip this path
+        except Exception:  # If validation fails
+            return []  # Return empty list on error
+    else:  # No CLI override, scan directory for CSV files
+        return get_files_to_process(input_path, file_extension=".csv", config=config)  # Get list of CSV files to process
+
+
 def combine_dataset_if_needed(files_to_process, config=None):
     """
     Combines multiple dataset files into one if PROCESS_ENTIRE_DATASET is enabled.
