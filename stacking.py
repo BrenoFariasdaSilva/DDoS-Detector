@@ -129,6 +129,60 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def generate_augmentation_tsne_visualization(original_file, original_df, augmented_df=None, augmentation_ratio=None, experiment_mode="original_only"):
+    """
+    Generate t-SNE visualization for data augmentation experiment.
+
+    :param original_file: Path to original dataset file
+    :param original_df: DataFrame with original data
+    :param augmented_df: DataFrame with augmented data (None for original-only)
+    :param augmentation_ratio: Augmentation ratio (e.g., 0.50 for 50%)
+    :param experiment_mode: Experiment mode string
+    :return: None
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Generating t-SNE visualization for augmentation experiment...{Style.RESET_ALL}"
+    )  # Output verbose message for t-SNE generation
+
+    augmented_file = find_data_augmentation_file(original_file)  # Locate augmented data file
+    if augmented_file is None:  # No augmented file found
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Cannot generate t-SNE - augmented file path not found.{Style.RESET_ALL}"
+        )  # Print warning message
+        return  # Exit function early
+
+    tsne_output_dir = build_tsne_output_directory(original_file, augmented_file)  # Create output directory
+
+    combined_df = combine_and_label_augmentation_data(original_df, augmented_df)  # Prepare labeled data
+
+    X_scaled, labels, success = prepare_numeric_features_for_tsne(combined_df, exclude_col='tsne_label')  # Extract and scale features
+
+    if not success:  # Feature preparation failed
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Skipping t-SNE generation due to feature preparation failure.{Style.RESET_ALL}"
+        )  # Print warning message
+        return  # Exit function early
+
+    file_stem = Path(original_file).stem  # Extract filename without extension
+
+    if experiment_mode == "original_only":  # Original-only experiment
+        plot_filename = f"{file_stem}_original_only_tsne.png"  # Filename for original-only plot
+        plot_title = f"t-SNE: {file_stem} (Original Only)"  # Title for original-only plot
+    else:  # Original + augmented experiment
+        ratio_pct = int(augmentation_ratio * 100) if augmentation_ratio else 0  # Convert ratio to percentage
+        plot_filename = f"{file_stem}_augmented_{ratio_pct}pct_tsne.png"  # Filename for augmented plot
+        plot_title = f"t-SNE: {file_stem} (Original + {ratio_pct}% Augmented)"  # Title for augmented plot
+
+    output_path = tsne_output_dir / plot_filename  # Build full output path
+
+    compute_and_save_tsne_plot(X_scaled, labels, str(output_path), plot_title)  # Generate and save visualization
+
+    send_telegram_message(
+        TELEGRAM_BOT, f"Generated t-SNE plot: {file_stem} ({experiment_mode}, ratio={augmentation_ratio})"
+    )  # Send notification via Telegram
+
+
 def save_augmentation_comparison_results(file_path, comparison_results, config=None):
     """
     Save data augmentation comparison results to CSV file.
