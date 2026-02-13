@@ -1961,6 +1961,134 @@ def remove_cache_file(csv_path):
         )  # Output verbose message
 
 
+def run_automl_pipeline(file, df, feature_names, data_source_label="Original"):
+    """
+    Runs the complete AutoML pipeline: model search, stacking optimization, evaluation, and export.
+
+    :param file: Path to the dataset file being processed
+    :param df: Preprocessed DataFrame with features and target
+    :param feature_names: List of feature column names
+    :param data_source_label: Label identifying the data source
+    :return: Dictionary containing AutoML results, or None on failure
+    """
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}"
+    )  # Print separator
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}AutoML Pipeline - {BackgroundColors.CYAN}{os.path.basename(file)}{Style.RESET_ALL}"
+    )  # Print pipeline header
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}\n"
+    )  # Print separator
+
+    automl_start = time.time()  # Record pipeline start time
+
+    X_full = df.select_dtypes(include=np.number).iloc[:, :-1]  # Extract numeric features
+    y = df.iloc[:, -1]  # Extract target column
+
+    if len(np.unique(y)) < 2:  # Check for at least 2 classes
+        print(
+            f"{BackgroundColors.RED}AutoML: Target has only one class. Skipping.{Style.RESET_ALL}"
+        )  # Output error
+        return None  # Return None
+
+    X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X_full, y)  # Scale and split data
+
+    y_train_arr = np.asarray(y_train)  # Convert training target to numpy array
+    y_test_arr = np.asarray(y_test)  # Convert test target to numpy array
+
+    send_telegram_message(TELEGRAM_BOT, f"Starting AutoML pipeline for {os.path.basename(file)}")  # Notify via Telegram
+
+    best_model_name, best_params, model_study = run_automl_model_search(
+        X_train_scaled, y_train_arr, file
+    )  # Phase 1: Run model search
+
+    if best_model_name is None:  # If model search failed
+        print(
+            f"{BackgroundColors.RED}AutoML pipeline aborted: model search failed.{Style.RESET_ALL}"
+        )  # Output failure message
+        return None  # Return None
+
+    best_individual_model = create_model_from_params(best_model_name, best_params)  # Create best individual model
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating AutoML best individual model on test set...{Style.RESET_ALL}"
+    )  # Output evaluation message
+
+    individual_metrics = evaluate_automl_model_on_test(
+        best_individual_model, best_model_name, X_train_scaled, y_train_arr, X_test_scaled, y_test_arr
+    )  # Evaluate best individual model on test set
+
+    stacking_config = None  # Initialize stacking config as None
+    stacking_metrics = None  # Initialize stacking metrics as None
+    stacking_study = None  # Initialize stacking study as None
+
+    if AUTOML_STACKING_TRIALS > 0:  # If stacking search is enabled
+        stacking_config, stacking_study = run_automl_stacking_search(
+            X_train_scaled, y_train_arr, model_study, file
+        )  # Phase 2: Run stacking search
+
+        if stacking_config is not None:  # If stacking search succeeded
+            best_stacking_model = build_automl_stacking_model(stacking_config)  # Build best stacking model
+
+            print(
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating AutoML best stacking model on test set...{Style.RESET_ALL}"
+            )  # Output evaluation message
+
+            stacking_metrics = evaluate_automl_model_on_test(
+                best_stacking_model, "AutoML_Stacking", X_train_scaled, y_train_arr, X_test_scaled, y_test_arr
+            )  # Evaluate stacking model on test set
+
+    file_path_obj = Path(file)  # Create Path object for file
+    automl_output_dir = str(file_path_obj.parent / "Feature_Analysis" / "AutoML")  # Build AutoML output directory
+
+    export_automl_search_history(model_study, automl_output_dir, "model_search")  # Export model search history
+
+    if stacking_study is not None:  # If stacking study exists
+        export_automl_search_history(stacking_study, automl_output_dir, "stacking_search")  # Export stacking search history
+
+    export_automl_best_config(
+        best_model_name, best_params, individual_metrics, stacking_config, automl_output_dir, feature_names
+    )  # Export best configuration
+
+    export_automl_best_model(
+        best_individual_model, scaler, automl_output_dir, best_model_name, feature_names
+    )  # Export best individual model
+
+    if stacking_config is not None and stacking_metrics is not None:  # If stacking was successful
+        best_stacking_model_final = build_automl_stacking_model(stacking_config)  # Rebuild stacking model for export
+        best_stacking_model_final.fit(X_train_scaled, y_train_arr)  # Fit stacking model on full training data
+        export_automl_best_model(
+            best_stacking_model_final, scaler, automl_output_dir, "AutoML_Stacking", feature_names
+        )  # Export best stacking model
+
+    results_list = build_automl_results_list(
+        best_model_name, best_params, individual_metrics, stacking_metrics, stacking_config,
+        file, feature_names, len(y_train), len(y_test)
+    )  # Build results list for CSV
+
+    save_automl_results(file, results_list)  # Save AutoML results to CSV
+
+    automl_elapsed = time.time() - automl_start  # Calculate total AutoML pipeline time
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}AutoML pipeline completed in {BackgroundColors.CYAN}{calculate_execution_time(0, automl_elapsed)}{Style.RESET_ALL}"
+    )  # Output completion message
+
+    send_telegram_message(
+        TELEGRAM_BOT, f"AutoML pipeline completed for {os.path.basename(file)} in {calculate_execution_time(0, automl_elapsed)}. Best model: {best_model_name} (F1: {truncate_value(individual_metrics['f1_score'])})"
+    )  # Send Telegram notification
+
+    return {  # Return AutoML results summary
+        "best_model_name": best_model_name,  # Best model name
+        "best_params": best_params,  # Best parameters
+        "individual_metrics": individual_metrics,  # Individual model metrics
+        "stacking_config": stacking_config,  # Stacking configuration
+        "stacking_metrics": stacking_metrics,  # Stacking metrics
+    }  # Return results dictionary
+
+
 def evaluate_on_dataset(
     file,
     df,
