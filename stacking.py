@@ -129,6 +129,32 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def process_dataset_paths(dataset_name, paths, config=None):
+    """
+    Processes all paths for a given dataset.
+
+    :param dataset_name: Name of the dataset
+    :param paths: List of paths to process for this dataset
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
+    )  # Print dataset name
+
+    for input_path in paths:  # For each path in the dataset's paths list
+        process_files_in_path(input_path, dataset_name, config=config)  # Process all files in this path
+
+
 def run_stacking_pipeline(config_path=None, **config_overrides):
     """
     Programmatic entry point for stacking classifier evaluation.
