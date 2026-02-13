@@ -129,6 +129,51 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def load_and_preprocess_dataset(file, combined_df, config=None):
+    """
+    Loads and preprocesses a dataset file or uses combined dataframe.
+
+    :param file: File path to load or "combined" keyword
+    :param combined_df: Pre-combined dataframe (used if file == "combined")
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Tuple (df_cleaned, feature_names) or (None, None) if loading/preprocessing fails
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Loading and preprocessing dataset: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    if file == "combined":  # If using combined dataset
+        df_original = combined_df  # Use the pre-combined dataframe
+    else:  # Otherwise load from file
+        df_original = load_dataset(file, config=config)  # Load the original dataset
+
+    if df_original is None:  # If the dataset failed to load
+        verbose_output(
+            f"{BackgroundColors.RED}Failed to load dataset from: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}",
+            config=config
+        )  # Output the failure message
+        return (None, None)  # Return None tuple
+    
+    remove_zero_variance = config.get("dataset", {}).get("remove_zero_variance", True)  # Get remove zero variance flag from config
+
+    df_cleaned = preprocess_dataframe(df_original, remove_zero_variance=remove_zero_variance, config=config)  # Preprocess the DataFrame
+
+    if df_cleaned is None or df_cleaned.empty:  # If the DataFrame is None or empty after preprocessing
+        print(
+            f"{BackgroundColors.RED}Dataset {BackgroundColors.CYAN}{file}{BackgroundColors.RED} empty after preprocessing. Skipping.{Style.RESET_ALL}"
+        )  # Output error message
+        return (None, None)  # Return None tuple
+
+    feature_names = df_cleaned.select_dtypes(include=np.number).iloc[:, :-1].columns.tolist()  # Get numeric feature names excluding target
+
+    return (df_cleaned, feature_names)  # Return cleaned dataframe and feature names
+
+
 def prepare_models_with_hyperparameters(file_path, config=None):
     """
     Prepares base models and applies hyperparameter optimization results if available.
