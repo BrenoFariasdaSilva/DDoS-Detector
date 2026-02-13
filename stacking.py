@@ -3462,7 +3462,7 @@ def export_automl_best_config(best_model_name, best_params, test_metrics, stacki
 
     os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
-    config = {  # Build configuration export dictionary
+    export_config = {  # Build configuration export dictionary
         "best_individual_model": {  # Best individual model section
             "model_name": best_model_name,  # Model name
             "hyperparameters": best_params,  # Model hyperparameters
@@ -3473,20 +3473,20 @@ def export_automl_best_config(best_model_name, best_params, test_metrics, stacki
         },
         "best_stacking_config": stacking_config,  # Stacking configuration (may be None)
         "automl_settings": {  # AutoML settings used
-            "n_trials": config.get("automl", {}).get("n_trials", 50),  # Number of model search trials
-            "stacking_trials": config.get("automl", {}).get("stacking_trials", 20),  # Number of stacking search trials
-            "cv_folds": config.get("automl", {}).get("cv_folds", 5),  # Cross-validation folds
-            "timeout_s": config.get("automl", {}).get("timeout", 3600),  # Timeout in seconds
-            "random_state": config.get("automl", {}).get("random_state", 42),  # Random seed used
+            "n_trials": CONFIG.get("automl", {}).get("n_trials", 50),  # Number of model search trials
+            "stacking_trials": CONFIG.get("automl", {}).get("stacking_trials", 20),  # Number of stacking search trials
+            "cv_folds": CONFIG.get("automl", {}).get("cv_folds", 5),  # Cross-validation folds
+            "timeout_s": CONFIG.get("automl", {}).get("timeout", 3600),  # Timeout in seconds
+            "random_state": CONFIG.get("automl", {}).get("random_state", 42),  # Random seed used
         },
         "feature_names": feature_names,  # Features used in training
         "n_features": len(feature_names),  # Number of features
     }  # Build complete config dictionary
 
-    output_path = os.path.join(output_dir, config.get("automl", {}).get("results_filename", "AutoML_Results.csv").replace(".csv", "_best_config.json"))  # Build output path
+    output_path = os.path.join(output_dir, CONFIG.get("automl", {}).get("results_filename", "AutoML_Results.csv").replace(".csv", "_best_config.json"))  # Build output path
 
     with open(output_path, "w", encoding="utf-8") as f:  # Open file for writing
-        json.dump(config, f, indent=2, default=str)  # Write JSON with indentation
+        json.dump(export_config, f, indent=2, default=str)  # Write JSON with indentation
 
     print(
         f"{BackgroundColors.GREEN}AutoML best configuration exported to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
@@ -4623,7 +4623,7 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
     
     if test_data_augmentation:  # If data augmentation testing is enabled
         generate_augmentation_tsne_visualization(
-            file, df_original_cleaned, None, None, "original_only", config=config
+            file, df_original_cleaned, None, None, "original_only"
         )  # Generate t-SNE visualization for original data only
 
     total_steps = 1 + (len(augmentation_ratios) if test_data_augmentation else 0)  # Calculate total evaluation steps
@@ -4633,8 +4633,7 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
     results_original = evaluate_on_dataset(
         file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
         rfe_selected_features, base_models, data_source_label="Original", hyperparams_map=hp_params_map,
-        experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
-        config=config
+        experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None
     )  # Evaluate on original data with experiment traceability metadata
 
     original_results_list = list(results_original.values())  # Convert results dict to list
