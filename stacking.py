@@ -129,6 +129,34 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def merge_original_and_augmented(original_df, augmented_df, config=None):
+    """
+    Merge original and augmented dataframes by concatenating them.
+
+    :param original_df: Original DataFrame
+    :param augmented_df: Augmented DataFrame
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Merged DataFrame
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Merging original ({len(original_df)} rows) and augmented ({len(augmented_df)} rows) data{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    merged_df = pd.concat([original_df, augmented_df], ignore_index=True)  # Concatenate dataframes
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Merged dataset has {BackgroundColors.CYAN}{len(merged_df)}{BackgroundColors.GREEN} rows{Style.RESET_ALL}",
+        config=config
+    )  # Output the result
+
+    return merged_df  # Return merged dataframe
+
+
 def calculate_metric_improvement(original_value, augmented_value):
     """
     Calculate percentage improvement of a metric.
