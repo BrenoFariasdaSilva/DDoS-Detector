@@ -129,6 +129,121 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def get_default_config():
+    """
+    Return default configuration dictionary for stacking pipeline.
+    
+    All configurable parameters with their default values matching
+    genetic_algorithm.py and wgangp.py configuration architecture.
+    
+    :return: Dictionary containing default configuration values
+    """
+    
+    return {
+        "execution": {
+            "verbose": False,
+            "play_sound": True,
+            "skip_train_if_model_exists": False,
+            "csv_file": None,
+            "process_entire_dataset": False,
+            "test_data_augmentation": True,
+        },
+        "dataset": {
+            "remove_zero_variance": True,
+            "test_size": 0.2,
+            "random_state": 42,
+            "datasets": {
+                "CICDDoS2019-Dataset": [
+                    "./Datasets/CICDDoS2019/01-12/",
+                    "./Datasets/CICDDoS2019/03-11/",
+                ],
+            },
+        },
+        "stacking": {
+            "results_filename": "Stacking_Classifiers_Results.csv",
+            "augmentation_comparison_filename": "Data_Augmentation_Comparison_Results.csv",
+            "data_augmentation_suffix": "_data_augmented",
+            "augmentation_ratios": [0.10, 0.25, 0.50, 0.75, 1.00],
+            "hyperparameters_filename": "Hyperparameter_Optimization_Results.csv",
+            "cache_prefix": "Cache_",
+            "model_export_base": "Feature_Analysis/Stacking/Models/",
+            "results_csv_columns": [
+                "model", "dataset", "feature_set", "classifier_type", "model_name",
+                "data_source", "experiment_id", "experiment_mode", "augmentation_ratio",
+                "n_features", "n_samples_train", "n_samples_test", "accuracy",
+                "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s",
+                "cv_method", "top_features", "rfe_ranking", "hyperparameters",
+                "features_list", "Hardware",
+            ],
+            "match_filenames_to_process": [""],
+            "ignore_files": ["Stacking_Classifiers_Results.csv"],
+            "ignore_dirs": [
+                "Classifiers", "Classifiers_Hyperparameters", "Dataset_Description",
+                "Data_Separability", "Feature_Analysis",
+            ],
+        },
+        "evaluation": {
+            "n_jobs": -1,
+            "threads_limit": 2,
+            "cv_folds": 10,
+            "random_state": 42,
+            "ram_threshold_gb": 128,
+        },
+        "models": {
+            "random_forest": {"n_estimators": 100, "random_state": 42},
+            "svm": {"kernel": "rbf", "probability": True, "random_state": 42},
+            "xgboost": {"eval_metric": "mlogloss", "random_state": 42},
+            "logistic_regression": {"max_iter": 1000, "random_state": 42},
+            "knn": {"n_neighbors": 5},
+            "gradient_boosting": {"random_state": 42},
+            "lightgbm": {"force_row_wise": True, "min_gain_to_split": 0.01, "random_state": 42, "verbosity": -1},
+            "mlp": {"hidden_layer_sizes": (100,), "max_iter": 500, "random_state": 42},
+            "stacking_meta": {"n_estimators": 50, "random_state": 42},
+        },
+        "automl": {
+            "enabled": False,
+            "n_trials": 50,
+            "stacking_trials": 20,
+            "timeout": 3600,
+            "cv_folds": 5,
+            "random_state": 42,
+            "stacking_top_n": 5,
+            "results_filename": "AutoML_Results.csv",
+        },
+        "tsne": {
+            "perplexity": 30,
+            "random_state": 42,
+            "n_iter": 1000,
+            "figsize": [12, 10],
+            "dpi": 300,
+            "alpha": 0.6,
+            "marker_size": 50,
+        },
+        "paths": {
+            "logs_dir": "./Logs",
+            "datasets_dir": None,
+            "output_dir": "Feature_Analysis",
+        },
+        "sound": {
+            "enabled": True,
+            "commands": {
+                "Darwin": "afplay",
+                "Linux": "aplay",
+                "Windows": "start",
+            },
+            "file": "./.assets/Sounds/NotificationSound.wav",
+        },
+        "logging": {
+            "enabled": True,
+            "clean": True,
+        },
+        "telegram": {
+            "enabled": True,
+            "verify_env": True,
+        },
+    }  # Return default configuration
+
+
 def load_config_file(config_path=None):
     """
     Load configuration from YAML file.
