@@ -129,6 +129,49 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def build_tsne_output_directory(original_file_path, augmented_file_path):
+    """
+    Build output directory path for t-SNE plots preserving nested dataset structure.
+
+    :param original_file_path: Path to original dataset file
+    :param augmented_file_path: Path to augmented dataset file
+    :return: Path object for t-SNE output directory
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Building t-SNE output directory for: {BackgroundColors.CYAN}{original_file_path}{Style.RESET_ALL}"
+    )  # Output verbose message for directory creation
+
+    original_path = Path(original_file_path)  # Create Path object for original file
+    augmented_path = Path(augmented_file_path)  # Create Path object for augmented file
+
+    datasets_keyword = "Datasets"  # Standard directory name in project structure
+    relative_parts = []  # List to accumulate relative path components
+    found_datasets = False  # Flag to track if Datasets directory was found
+
+    for part in original_path.parts:  # Iterate through path components
+        if found_datasets and part != original_path.name:  # After Datasets, before filename
+            relative_parts.append(part)  # Add intermediate directories to relative path
+        if part == datasets_keyword:  # Found the Datasets directory
+            found_datasets = True  # Set flag to start collecting relative parts
+
+    augmented_parent = augmented_path.parent  # Get parent directory of augmented file
+    tsne_base = augmented_parent / "tsne_plots"  # Base directory for all t-SNE plots
+
+    if relative_parts:  # If nested structure exists
+        tsne_dir = tsne_base / Path(*relative_parts) / original_path.stem  # Preserve nested path
+    else:  # Flat structure
+        tsne_dir = tsne_base / original_path.stem  # Use filename stem only
+
+    os.makedirs(tsne_dir, exist_ok=True)  # Create directory structure if it doesn't exist
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Created t-SNE directory: {BackgroundColors.CYAN}{tsne_dir}{Style.RESET_ALL}"
+    )  # Output confirmation message
+
+    return tsne_dir  # Return the output directory path
+
+
 def combine_and_label_augmentation_data(original_df, augmented_df=None, label_col=None):
     """
     Combine original and augmented data with source labels for t-SNE visualization.
