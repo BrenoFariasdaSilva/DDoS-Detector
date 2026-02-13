@@ -1961,6 +1961,37 @@ def remove_cache_file(csv_path):
         )  # Output verbose message
 
 
+def save_automl_results(csv_path, results_list):
+    """
+    Saves AutoML results to a dedicated CSV file in the Feature_Analysis/AutoML directory.
+
+    :param csv_path: Path to the original dataset CSV file
+    :param results_list: List of result dictionaries to save
+    :return: None
+    """
+
+    if not results_list:  # If no results to save
+        return  # Exit early
+
+    file_path_obj = Path(csv_path)  # Create Path object for dataset file
+    automl_dir = file_path_obj.parent / "Feature_Analysis" / "AutoML"  # Build AutoML output directory
+    os.makedirs(automl_dir, exist_ok=True)  # Ensure directory exists
+    output_path = automl_dir / AUTOML_RESULTS_FILENAME  # Build output file path
+
+    df = pd.DataFrame(results_list)  # Convert results to DataFrame
+    column_order = list(RESULTS_CSV_COLUMNS)  # Use canonical column ordering
+    existing_columns = [col for col in column_order if col in df.columns]  # Filter to existing columns
+    df = df[existing_columns + [c for c in df.columns if c not in existing_columns]]  # Reorder columns
+
+    df = add_hardware_column(df, existing_columns)  # Add hardware specifications column
+
+    df.to_csv(str(output_path), index=False, encoding="utf-8")  # Save to CSV file
+
+    print(
+        f"\n{BackgroundColors.GREEN}AutoML results saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+    )  # Output save confirmation
+
+
 def run_automl_pipeline(file, df, feature_names, data_source_label="Original"):
     """
     Runs the complete AutoML pipeline: model search, stacking optimization, evaluation, and export.
