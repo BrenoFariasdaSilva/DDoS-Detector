@@ -160,6 +160,16 @@ SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, load exported models instead of r
 CSV_FILE = None  # Optional CSV override from CLI
 PROCESS_ENTIRE_DATASET = False  # Set to True to process all files in the dataset, False to only process the specified CSV_FILE
 
+# AutoML Constants:
+ENABLE_AUTOML = False  # Set to True to enable AutoML pipeline (Optuna-based)
+AUTOML_N_TRIALS = 50  # Number of Optuna trials for individual model search
+AUTOML_STACKING_TRIALS = 20  # Number of Optuna trials for stacking optimization
+AUTOML_TIMEOUT = 3600  # Timeout in seconds for each Optuna search phase
+AUTOML_CV_FOLDS = 5  # Number of cross-validation folds for AutoML evaluation
+AUTOML_RANDOM_STATE = 42  # Random seed for AutoML reproducibility
+AUTOML_STACKING_TOP_N = 5  # Number of top models to consider as stacking candidates
+AUTOML_RESULTS_FILENAME = "AutoML_Results.csv"  # Filename for AutoML results export
+
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
 
