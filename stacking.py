@@ -1961,6 +1961,40 @@ def remove_cache_file(csv_path):
         )  # Output verbose message
 
 
+def automl_cross_validate_model(model, X_train, y_train, cv_folds, trial=None):
+    """
+    Performs stratified cross-validation on a model and returns mean F1 score.
+
+    :param model: Classifier instance to evaluate
+    :param X_train: Training features array
+    :param y_train: Training target array (numpy)
+    :param cv_folds: Number of cross-validation folds
+    :param trial: Optional Optuna trial for intermediate reporting and pruning
+    :return: Mean cross-validated F1 score
+    """
+
+    skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=AUTOML_RANDOM_STATE)  # Create stratified k-fold
+    f1_scores = []  # Initialize list for F1 scores
+
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):  # Iterate over folds
+        X_fold_train = X_train[train_idx]  # Get fold training features
+        y_fold_train = y_train[train_idx]  # Get fold training target
+        X_fold_val = X_train[val_idx]  # Get fold validation features
+        y_fold_val = y_train[val_idx]  # Get fold validation target
+
+        model.fit(X_fold_train, y_fold_train)  # Fit model on fold training data
+        y_pred = model.predict(X_fold_val)  # Predict on fold validation data
+        fold_f1 = f1_score(y_fold_val, y_pred, average="weighted", zero_division=0)  # Calculate fold F1
+        f1_scores.append(fold_f1)  # Append fold F1 score
+
+        if trial is not None:  # If Optuna trial is provided
+            trial.report(np.mean(f1_scores), fold_idx)  # Report intermediate value for pruning
+            if trial.should_prune():  # Check if trial should be pruned
+                raise optuna.exceptions.TrialPruned()  # Prune this trial
+
+    return np.mean(f1_scores)  # Return mean F1 score across folds
+
+
 def automl_objective(trial, X_train, y_train, cv_folds):
     """
     Optuna objective function for automated model and hyperparameter selection.
