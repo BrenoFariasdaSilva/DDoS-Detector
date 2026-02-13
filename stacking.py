@@ -173,6 +173,7 @@ def get_default_config():
             "csv_file": None,
             "process_entire_dataset": False,
             "test_data_augmentation": True,
+            "execution_mode": "binary",
         },
         "dataset": {
             "remove_zero_variance": True,
@@ -187,6 +188,7 @@ def get_default_config():
         },
         "stacking": {
             "results_filename": "Stacking_Classifiers_Results.csv",
+            "multiclass_results_filename": "Stacking_Classifiers_MultiClass_Results.csv",
             "augmentation_comparison_filename": "Data_Augmentation_Comparison_Results.csv",
             "data_augmentation_suffix": "_data_augmented",
             "augmentation_ratios": [0.10, 0.25, 0.50, 0.75, 1.00],
@@ -194,7 +196,7 @@ def get_default_config():
             "cache_prefix": "Cache_",
             "model_export_base": "Feature_Analysis/Stacking/Models/",
             "results_csv_columns": [
-                "model", "dataset", "feature_set", "classifier_type", "model_name",
+                "model", "dataset", "execution_mode", "attack_types_combined", "feature_set", "classifier_type", "model_name",
                 "data_source", "experiment_id", "experiment_mode", "augmentation_ratio",
                 "n_features", "n_samples_train", "n_samples_test", "accuracy",
                 "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s",
