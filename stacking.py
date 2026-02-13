@@ -5015,7 +5015,8 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
     results_original = evaluate_on_dataset(
         file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
         rfe_selected_features, base_models, data_source_label="Original", hyperparams_map=hp_params_map,
-        experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None
+        experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
+        execution_mode_str="binary", attack_types_combined=None
     )  # Evaluate on original data with experiment traceability metadata
 
     original_results_list = list(results_original.values())  # Convert results dict to list
