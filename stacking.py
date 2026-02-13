@@ -129,6 +129,74 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def save_augmentation_comparison_results(file_path, comparison_results, config=None):
+    """
+    Save data augmentation comparison results to CSV file.
+
+    :param file_path: Path to the original CSV file being processed
+    :param comparison_results: List of dictionaries containing comparison metrics
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    augmentation_comparison_filename = config.get("stacking", {}).get("augmentation_comparison_filename", "Data_Augmentation_Comparison_Results.csv")  # Get filename from config
+
+    if not comparison_results:  # If no results to save
+        return  # Exit early
+
+    file_path_obj = Path(file_path)  # Create Path object
+    feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"  # Feature_Analysis directory
+    os.makedirs(feature_analysis_dir, exist_ok=True)  # Ensure directory exists
+    output_path = feature_analysis_dir / augmentation_comparison_filename  # Output file path
+
+    df = pd.DataFrame(comparison_results)  # Convert results to DataFrame
+
+    # Define column order for better readability
+    column_order = [
+        "dataset",
+        "feature_set",
+        "classifier_type",
+        "model_name",
+        "data_source",
+        "experiment_id",
+        "experiment_mode",
+        "augmentation_ratio",
+        "n_features",
+        "n_samples_train",
+        "n_samples_test",
+        "accuracy",
+        "precision",
+        "recall",
+        "f1_score",
+        "fpr",
+        "fnr",
+        "training_time",
+        "accuracy_improvement",
+        "precision_improvement",
+        "recall_improvement",
+        "f1_score_improvement",
+        "fpr_improvement",
+        "fnr_improvement",
+        "training_time_improvement",
+        "features_list",
+        "Hardware",
+    ]  # Define desired column order with experiment traceability columns
+
+    # Reorder columns (only include columns that exist)
+    existing_columns = [col for col in column_order if col in df.columns]  # Filter to existing columns
+    df = df[existing_columns]  # Reorder DataFrame columns
+
+    df = add_hardware_column(df, existing_columns)  # Add hardware specifications column
+
+    df.to_csv(output_path, index=False)  # Save to CSV file
+    print(
+        f"{BackgroundColors.GREEN}Saved augmentation comparison results to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+    )  # Output success message
+
+
 def find_local_feature_file(file_dir, filename, config=None):
     """
     Attempt to locate <file_dir>/Feature_Analysis/<filename>.
