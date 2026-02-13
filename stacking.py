@@ -3139,6 +3139,100 @@ def extract_model_feature_importance(model, feature_names, output_dir, model_nam
         return None  # Return None
 
 
+def generate_combined_importance_report(shap_result, lime_result, perm_result, model_result, feature_names, output_dir, model_name, dataset_name, config=None):
+    """
+    Generate a combined importance report aggregating all explainability methods.
+
+    :param shap_result: SHAP results dictionary or None
+    :param lime_result: LIME results dictionary or None
+    :param perm_result: Permutation importance results dictionary or None
+    :param model_result: Model feature importance results dictionary or None
+    :param feature_names: List of feature names
+    :param output_dir: Directory to save combined report
+    :param model_name: Name of the model for labeling
+    :param dataset_name: Name of the dataset
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Path to saved report or None if failed
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    try:  # Attempt to generate combined report
+        verbose_output(
+            f"{BackgroundColors.GREEN}Generating combined importance report for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+            config=config
+        )  # Log report generation start
+
+        os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+
+        # Build combined dataframe
+        report_data = []  # List to store report rows
+
+        for feature in feature_names:  # For each feature
+            row = {"feature": feature}  # Initialize row with feature name
+
+            # Add SHAP importance if available
+            if shap_result and "shap_importance" in shap_result:  # If SHAP results available
+                row["shap_importance"] = shap_result["shap_importance"].get(feature, 0.0)  # Get SHAP importance
+            else:  # If SHAP not available
+                row["shap_importance"] = np.nan  # Set to NaN
+
+            # Add permutation importance if available
+            if perm_result and "permutation_importance" in perm_result:  # If permutation results available
+                perm_dict = perm_result["permutation_importance"].get(feature, {})  # Get permutation dict for feature
+                row["permutation_importance_mean"] = perm_dict.get("mean", np.nan)  # Get mean importance
+                row["permutation_importance_std"] = perm_dict.get("std", np.nan)  # Get std
+
+            else:  # If permutation not available
+                row["permutation_importance_mean"] = np.nan  # Set to NaN
+                row["permutation_importance_std"] = np.nan  # Set to NaN
+
+            # Add model importance if available
+            if model_result and "model_importance" in model_result:  # If model importance available
+                row["model_importance"] = model_result["model_importance"].get(feature, 0.0)  # Get model importance
+            else:  # If model importance not available
+                row["model_importance"] = np.nan  # Set to NaN
+
+            report_data.append(row)  # Add row to report data
+
+        # Create DataFrame
+        report_df = pd.DataFrame(report_data)  # Create DataFrame from report data
+
+        # Compute consistency score (correlation between methods)
+        importance_cols = [col for col in report_df.columns if col != "feature" and "std" not in col]  # Get importance columns
+        if len(importance_cols) >= 2:  # If at least 2 importance methods available
+            # Compute average rank across methods (lower rank = more important)
+            for col in importance_cols:  # For each importance column
+                report_df[f"{col}_rank"] = report_df[col].rank(ascending=False, na_option='bottom')  # Compute rank
+
+            rank_cols = [f"{col}_rank" for col in importance_cols]  # Get rank column names
+            report_df["average_rank"] = report_df[rank_cols].mean(axis=1)  # Compute average rank
+            report_df["rank_std"] = report_df[rank_cols].std(axis=1)  # Compute rank standard deviation
+            report_df["consistency_score"] = 1.0 / (1.0 + report_df["rank_std"])  # Compute consistency score (higher = more consistent)
+
+            # Sort by average rank (most important first)
+            report_df = report_df.sort_values("average_rank")  # Sort by average rank
+
+        # Save combined report to CSV
+        report_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_combined_importance.csv")  # Build report path
+        report_df.to_csv(report_path, index=False)  # Save report to CSV
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Combined importance report saved to {BackgroundColors.CYAN}{report_path}{Style.RESET_ALL}",
+            config=config
+        )  # Log report completion
+
+        return report_path  # Return path to saved report
+
+    except Exception as e:  # If any error
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Failed to generate combined importance report for {model_name}: {e}{Style.RESET_ALL}",
+            config=config
+        )  # Log error
+        return None  # Return None
+
+
 def get_hardware_specifications():
     """
     Returns system specs: real CPU model (Windows/Linux/macOS), physical cores,
