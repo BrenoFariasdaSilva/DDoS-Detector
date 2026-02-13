@@ -2851,6 +2851,99 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
         return None  # Return None
 
 
+def generate_lime_explanations(model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config=None):
+    """
+    Generate LIME explanations for a trained model.
+
+    :param model: Trained model object
+    :param X_test: Test features (numpy array or DataFrame)
+    :param y_test: Test labels
+    :param feature_names: List of feature names
+    :param output_dir: Directory to save LIME outputs
+    :param model_name: Name of the model for labeling
+    :param dataset_name: Name of the dataset
+    :param execution_mode: Execution mode string ('binary' or 'multi-class')
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Dictionary with LIME explanations or None if failed
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    try:  # Attempt to generate LIME explanations
+        from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Generating LIME explanations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+            config=config
+        )  # Log LIME generation start
+
+        lime_config = config.get("explainability", {})  # Get explainability config
+        num_features = lime_config.get("lime_num_features", 10)  # Number of features in explanation
+        num_samples = lime_config.get("lime_num_samples", 1000)  # Number of samples for LIME
+        random_state = lime_config.get("random_state", 42)  # Random state for sampling
+
+        os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+
+        # Determine mode for LIME
+        mode = "classification"  # Default mode
+        class_names = [str(c) for c in np.unique(y_test)]  # Get class names
+
+        # Create LIME explainer
+        explainer = LimeTabularExplainer(
+            X_test,
+            feature_names=feature_names[:X_test.shape[1]],
+            class_names=class_names,
+            mode=mode,
+            random_state=random_state
+        )  # Initialize LIME explainer
+
+        # Select a few test instances to explain (use fixed indices for reproducibility)
+        np.random.seed(random_state)  # Set random seed
+        num_instances_to_explain = min(5, len(X_test))  # Explain up to 5 instances
+        instance_indices = np.random.choice(len(X_test), size=num_instances_to_explain, replace=False)  # Sample indices
+
+        lime_explanations = []  # List to store LIME explanations
+
+        for idx in instance_indices:  # For each instance to explain
+            instance = X_test[idx]  # Get instance
+            explanation = explainer.explain_instance(
+                instance,
+                model.predict_proba,
+                num_features=num_features,
+                num_samples=num_samples
+            )  # Generate LIME explanation
+
+            # Save explanation as figure
+            try:  # Try to save explanation figure
+                fig = explanation.as_pyplot_figure()  # Get matplotlib figure
+                explanation_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_lime_instance_{idx}.png")  # Build plot path
+                plt.tight_layout()  # Adjust layout
+                plt.savefig(explanation_plot_path, dpi=150, bbox_inches='tight')  # Save plot
+                plt.close()  # Close plot
+            except Exception:  # If plot save fails
+                plt.close()  # Close plot
+
+            lime_explanations.append(explanation.as_list())  # Store explanation as list
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}LIME explanations saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
+            config=config
+        )  # Log LIME completion
+
+        return {"lime_explanations": lime_explanations}  # Return LIME results
+
+    except ImportError:  # If LIME not installed
+        print(f"{BackgroundColors.YELLOW}LIME library not installed. Skipping LIME explanations. Install with: pip install lime{Style.RESET_ALL}")  # Warn user
+        return None  # Return None
+    except Exception as e:  # If any other error
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Failed to generate LIME explanations for {model_name}: {e}{Style.RESET_ALL}",
+            config=config
+        )  # Log error
+        return None  # Return None
+
+
 def get_hardware_specifications():
     """
     Returns system specs: real CPU model (Windows/Linux/macOS), physical cores,
