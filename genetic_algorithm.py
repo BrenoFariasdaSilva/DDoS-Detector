@@ -2208,6 +2208,43 @@ def extract_pareto_front(population):
     return pareto_front  # Return the Pareto front
 
 
+def calculate_hypervolume(pareto_front, reference_point=(0.0, -100.0)):
+    """
+    Calculate hypervolume metric for a Pareto front (simplified 2D implementation).
+
+    :param pareto_front: List of individuals in Pareto front with 2-objective fitness
+    :param reference_point: Reference point (f1_min, -num_features_max) for hypervolume calculation
+    :return: Hypervolume value as float, or 0.0 if calculation fails
+    """
+
+    if not pareto_front:  # If Pareto front is empty
+        return 0.0  # Return zero hypervolume
+
+    try:  # Attempt hypervolume calculation
+        points = []  # List to store valid fitness points
+        for ind in pareto_front:  # Iterate over Pareto front individuals
+            if ind.fitness.valid and len(ind.fitness.values) >= 2:  # Verify valid 2-objective fitness
+                points.append((ind.fitness.values[0], ind.fitness.values[1]))  # Extract (f1, -features) tuple
+
+        if len(points) < 1:  # If no valid points
+            return 0.0  # Return zero hypervolume
+
+        points = sorted(points, key=lambda p: p[0], reverse=True)  # Sort points by F1 score descending for sweep algorithm
+        hypervolume = 0.0  # Initialize hypervolume accumulator
+        prev_f1 = reference_point[0]  # Initialize previous F1 from reference point
+
+        for f1, neg_features in points:  # Sweep through sorted points
+            width = f1 - prev_f1  # Width of hypervolume slice
+            height = neg_features - reference_point[1]  # Height of hypervolume slice
+            if width > 0 and height > 0:  # Only add positive contributions
+                hypervolume += width * height  # Add slice area to total hypervolume
+            prev_f1 = f1  # Update previous F1 for next slice
+
+        return hypervolume  # Return calculated hypervolume
+    except Exception:  # If any error occurs
+        return 0.0  # Return zero hypervolume
+
+
 def plot_ga_convergence(
     csv_path, pop_size, run, fitness_history, dataset_name=None, n_generations=None, cxpb=0.5, mutpb=0.2
 ):
