@@ -60,6 +60,7 @@ import json  # Import json for handling JSON strings within the CSV
 import lightgbm as lgb  # For LightGBM model
 import math  # For mathematical operations
 import numpy as np  # Import numpy for numerical operations
+import optuna  # For Bayesian hyperparameter optimization (AutoML)
 import os  # For running a command in the terminal
 import pandas as pd  # Import pandas for data manipulation
 import pickle  # For loading PCA objects
@@ -76,6 +77,7 @@ from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.decomposition import PCA  # For Principal Component Analysis
 from sklearn.ensemble import (  # For ensemble models
+    ExtraTreesClassifier,
     GradientBoostingClassifier,
     RandomForestClassifier,
     StackingClassifier,
@@ -87,12 +89,14 @@ from sklearn.metrics import (  # For performance metrics
     f1_score,
     precision_score,
     recall_score,
+    roc_auc_score,
 )
 from sklearn.model_selection import StratifiedKFold, train_test_split  # For splitting the dataset and CV
 from sklearn.neighbors import KNeighborsClassifier, NearestCentroid  # For k-nearest neighbors model
 from sklearn.neural_network import MLPClassifier  # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For label encoding and feature scaling
 from sklearn.svm import SVC  # For Support Vector Machine model
+from sklearn.tree import DecisionTreeClassifier  # For Decision Tree classifier model
 from telegram_bot import TelegramBot, send_telegram_message  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
 from xgboost import XGBClassifier  # For XGBoost classifier
