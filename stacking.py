@@ -129,6 +129,38 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def load_dataset(csv_path, config=None):
+    """
+    Load CSV and return DataFrame.
+
+    :param csv_path: Path to CSV dataset.
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: DataFrame
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"\n{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}",
+        config=config
+    )  # Output the loading dataset message
+
+    if not verify_filepath_exists(csv_path):  # If the CSV file does not exist
+        print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
+        return None  # Return None
+
+    df = pd.read_csv(csv_path, low_memory=False)  # Load the dataset
+
+    df.columns = df.columns.str.strip()  # Clean column names by stripping leading/trailing whitespace
+
+    if df.shape[1] < 2:  # If there are less than 2 columns
+        print(f"{BackgroundColors.RED}CSV must have at least 1 feature and 1 target.{Style.RESET_ALL}")
+        return None  # Return None
+
+    return df  # Return the loaded DataFrame
+
+
 def sanitize_feature_names(columns):
     r"""
     Sanitize column names by removing special JSON characters that LightGBM doesn't support.
