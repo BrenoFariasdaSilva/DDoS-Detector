@@ -2944,6 +2944,94 @@ def generate_lime_explanations(model, X_test, y_test, feature_names, output_dir,
         return None  # Return None
 
 
+def generate_permutation_importance(model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, config=None):
+    """
+    Generate permutation feature importance for a trained model.
+
+    :param model: Trained model object
+    :param X_test: Test features (numpy array or DataFrame)
+    :param y_test: Test labels
+    :param feature_names: List of feature names
+    :param output_dir: Directory to save permutation importance outputs
+    :param model_name: Name of the model for labeling
+    :param dataset_name: Name of the dataset
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Dictionary with permutation importance or None if failed
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    try:  # Attempt to generate permutation importance
+        from sklearn.inspection import permutation_importance  # Import permutation importance
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Computing permutation importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+            config=config
+        )  # Log permutation importance computation start
+
+        explainer_config = config.get("explainability", {})  # Get explainability config
+        random_state = explainer_config.get("random_state", 42)  # Random state for permutation
+        n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Number of parallel jobs
+
+        os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+
+        # Compute permutation importance
+        perm_importance = permutation_importance(
+            model,
+            X_test,
+            y_test,
+            n_repeats=10,
+            random_state=random_state,
+            n_jobs=n_jobs
+        )  # Compute permutation importance
+
+        # Sort features by importance
+        sorted_indices = perm_importance.importances_mean.argsort()[::-1]  # Sort indices by descending importance
+        sorted_features = [feature_names[i] for i in sorted_indices]  # Get sorted feature names
+        sorted_importances = perm_importance.importances_mean[sorted_indices]  # Get sorted importances
+        sorted_std = perm_importance.importances_std[sorted_indices]  # Get sorted standard deviations
+
+        # Create importance dictionary
+        importance_dict = {}  # Initialize importance dictionary
+        for feat, imp, std in zip(sorted_features, sorted_importances, sorted_std):  # For each feature
+            importance_dict[feat] = {"mean": float(imp), "std": float(std)}  # Store importance and std
+
+        # Generate bar plot
+        try:  # Try to create bar plot
+            max_display = explainer_config.get("max_display_features", 20)  # Max features to display
+            display_count = min(max_display, len(sorted_features))  # Number of features to display
+
+            plt.figure(figsize=(10, max(6, display_count * 0.3)))  # Create figure with dynamic height
+            y_pos = np.arange(display_count)  # Y positions for bars
+            plt.barh(y_pos, sorted_importances[:display_count], xerr=sorted_std[:display_count], align='center', alpha=0.7, color='steelblue')  # Create horizontal bar plot with error bars
+            plt.yticks(y_pos, sorted_features[:display_count])  # Set Y-axis labels
+            plt.xlabel('Permutation Importance', fontsize=12)  # Set X-axis label
+            plt.ylabel('Features', fontsize=12)  # Set Y-axis label
+            plt.title(f'Permutation Importance - {model_name}\n{dataset_name}', fontsize=14)  # Set title
+            plt.grid(axis='x', alpha=0.3)  # Add X-axis grid
+            plt.tight_layout()  # Adjust layout
+            perm_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_permutation_importance.png")  # Build plot path
+            plt.savefig(perm_plot_path, dpi=150, bbox_inches='tight')  # Save plot
+            plt.close()  # Close plot
+        except Exception:  # If plot fails
+            plt.close()  # Close plot
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Permutation importance saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
+            config=config
+        )  # Log permutation importance completion
+
+        return {"permutation_importance": importance_dict}  # Return permutation importance results
+
+    except Exception as e:  # If any error
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Failed to compute permutation importance for {model_name}: {e}{Style.RESET_ALL}",
+            config=config
+        )  # Log error
+        return None  # Return None
+
+
 def get_hardware_specifications():
     """
     Returns system specs: real CPU model (Windows/Linux/macOS), physical cores,
