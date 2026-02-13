@@ -129,6 +129,22 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def calculate_metric_improvement(original_value, augmented_value):
+    """
+    Calculate percentage improvement of a metric.
+
+    :param original_value: Original metric value
+    :param augmented_value: Augmented metric value
+    :return: Percentage improvement (positive = better, negative = worse)
+    """
+
+    if original_value == 0:  # Avoid division by zero
+        return 0.0 if augmented_value == 0 else float('inf')  # Return 0 if both are 0, inf if only original is 0
+    
+    improvement = ((augmented_value - original_value) / original_value) * 100  # Calculate percentage improvement
+    return improvement  # Return improvement
+
+
 def generate_experiment_id(file_path, experiment_mode, augmentation_ratio=None):
     """
     Generates a unique experiment identifier for traceability in CSV results.
