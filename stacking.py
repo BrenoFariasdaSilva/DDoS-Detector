@@ -347,6 +347,8 @@ def merge_configs(defaults, file_config, cli_args):
         config["automl"]["timeout"] = cli_args.automl_timeout
     if hasattr(cli_args, "test_augmentation"):  # Test augmentation flag (explicit True or False)
         config["execution"]["test_data_augmentation"] = cli_args.test_augmentation
+    if hasattr(cli_args, "multi_class"):  # Multi-class mode flag
+        config["execution"]["execution_mode"] = "multi-class" if cli_args.multi_class else "binary"
     
     return config  # Return final merged configuration
 
