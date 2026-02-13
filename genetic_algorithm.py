@@ -2821,10 +2821,11 @@ def run_single_ga_iteration(
     iteration_elapsed_time = time.time() - iteration_start_time  # Calculate total iteration time
     metrics_with_iteration_time = metrics + (iteration_elapsed_time,)  # Add total iteration time as 7th element
 
-    try:  # Try to generate comprehensive convergence plots
-        generate_convergence_plots(
-            history_data, csv_path, pop_size, run, dataset_name, n_generations=n_generations, cxpb=cxpb, mutpb=mutpb
-        )  # Generate all convergence and progress plots
+    try:  # Try to generate comprehensive convergence plots (if function exists)
+        if 'generate_convergence_plots' in globals():  # Check if plotting function is available
+            generate_convergence_plots(
+                history_data, csv_path, pop_size, run, dataset_name, n_generations=n_generations, cxpb=cxpb, mutpb=mutpb
+            )  # Generate all convergence and progress plots
     except Exception as e:  # On any plotting error
         verbose_output(
             f"{BackgroundColors.YELLOW}Failed to generate convergence plots: {e}{Style.RESET_ALL}"
@@ -2834,7 +2835,9 @@ def run_single_ga_iteration(
         "best_ind": best_ind,
         "metrics": metrics_with_iteration_time,
         "best_features": best_features,
-    }  # Build result dict
+        "history_data": history_data,  # Include comprehensive history data for multi-run aggregation
+        "gens_ran": gens_ran,  # Include generations actually executed (for early stopping tracking)
+    }  # Build result dict with extended tracking data
 
     try:  # Try to save run result
         if CONFIG["execution"]["resume_progress"] and state_id is not None:  # If resume is enabled and state_id exists
