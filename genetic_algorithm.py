@@ -1768,14 +1768,17 @@ def evaluate_individual(
 
 def ga_fitness(ind, fitness_func):
     """
-    Global fitness function for GA evaluation to avoid pickle issues with local functions.
+    Global fitness function for GA multi-objective evaluation to avoid pickle issues with local functions.
 
     :param ind: Individual to evaluate
     :param fitness_func: Partial function for evaluation
-    :return: Tuple with F1-score
+    :return: Tuple with (F1-score, -num_features) for multi-objective optimization (maximize F1, minimize features)
     """
 
-    return (fitness_func(ind)[3],)  # Return only the F1-score for GA optimization
+    evaluation_result = fitness_func(ind)  # Evaluate individual to get full metrics tuple
+    f1_score = evaluation_result[3]  # Extract F1-score (index 3 in metrics tuple)
+    num_features = evaluation_result[12]  # Extract number of selected features (index 12 in extended metrics tuple)
+    return (f1_score, -num_features)  # Return multi-objective fitness: maximize F1-score, minimize feature count (via negative)
 
 
 def evaluate_individual_with_test(individual, X_train, y_train, X_test, y_test, estimator_cls=None):
