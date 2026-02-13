@@ -129,6 +129,30 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def verify_dot_env_file(config=None):
+    """
+    Verifies if the .env file exists in the current directory.
+
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: True if the .env file exists, False otherwise
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    verify_env = config.get("telegram", {}).get("verify_env", True)  # Get verify_env flag
+    
+    if not verify_env:  # If verification is disabled
+        return True  # Skip verification
+    
+    env_path = Path(__file__).parent / ".env"  # Path to the .env file
+    if not env_path.exists():  # If the .env file does not exist
+        print(f"{BackgroundColors.CYAN}.env{BackgroundColors.YELLOW} file not found at {BackgroundColors.CYAN}{env_path}{BackgroundColors.YELLOW}. Telegram messages may not be sent.{Style.RESET_ALL}")
+        return False  # Return False
+
+    return True  # Return True if the .env file exists
+
+
 def setup_telegram_bot(config=None):
     """
     Sets up the Telegram bot for progress messages.
