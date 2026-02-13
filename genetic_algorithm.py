@@ -3472,6 +3472,8 @@ def run_population_sweep(
 
     X_train, X_test, y_train, y_test, feature_names = data  # Unpack prepared data
 
+    folds = CONFIG.get("cross_validation", {}).get("n_folds", 10)  # Use configured constant for CV folds
+    
     progress_state = compute_progress_state(
         min_pop, max_pop, n_generations, runs, progress_bar, folds=folds
     )  # Compute progress state for tracking
