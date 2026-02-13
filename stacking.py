@@ -129,6 +129,42 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def find_common_features_and_target(processed_files, config=None):
+    """
+    Find common features and consistent target column from processed files.
+
+    :param processed_files: List of (f, df_clean, target_col, feat_cols)
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Tuple (common_features, target_col_name, dfs) or (None, None, []) if invalid
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Finding common features and target column among processed files...{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    dfs = []  # Initialize list to store valid dataframes
+    common_features = None  # Initialize set for common features
+    target_col_name = None  # Initialize target column name
+
+    for f, df_clean, this_target, feat_cols in processed_files:  # Iterate over processed files
+        target_col_name, df_clean = handle_target_column_consistency(target_col_name, this_target, f, df_clean, config=config)  # Handle target consistency
+        common_features = intersect_features(common_features, feat_cols, config=config)  # Intersect features
+        dfs.append((f, df_clean))  # Add the file and cleaned dataframe to the list
+
+    if not dfs or not common_features:  # If no valid dataframes or no common features
+        return (None, None, [])  # Return invalid
+
+    if target_col_name is None:  # If no target column was found
+        return (None, None, [])  # Return invalid
+
+    common_features = sorted(list(common_features))  # Sort the common features list
+    return (common_features, target_col_name, dfs)  # Return the results
+
+
 def create_reduced_dataframes(dfs, common_features, target_col_name, config=None):
     """
     Create reduced dataframes with only common features and target.
