@@ -3616,7 +3616,9 @@ def generate_ratio_comparison_report(results_original, all_ratio_results):
 
 def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, results_original):
     """
-    Handles complete augmented data evaluation workflow including loading, evaluating, and comparing results.
+    Handles complete augmented data evaluation workflow with ratio-based experiments.
+    For each ratio in AUGMENTATION_RATIOS, samples augmented data proportionally,
+    merges with original, evaluates classifiers, and compares against original baseline.
 
     :param file: Original file path
     :param df_original_cleaned: Cleaned original dataframe
@@ -3634,57 +3636,92 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
         f"{BackgroundColors.GREEN}Processing augmented data evaluation for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
     )  # Output the verbose message
 
-    augmented_file = find_data_augmentation_file(file)  # Look for augmented data file
+    augmented_file = find_data_augmentation_file(file)  # Look for augmented data file using wgangp.py naming convention
 
-    if augmented_file is None:  # If no augmented file found
+    if augmented_file is None:  # If no augmented file found at expected path
         print(
             f"\n{BackgroundColors.YELLOW}No augmented data found for this file. Skipping augmentation comparison.{Style.RESET_ALL}"
-        )  # Print warning message
-        return  # Exit function early
+        )  # Print warning message about missing augmented file
+        return  # Exit function early when no augmented file exists
 
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[2/3] Evaluating on AUGMENTED data{Style.RESET_ALL}"
-    )  # Print progress message
+    df_augmented = load_dataset(augmented_file)  # Load the augmented dataset from the discovered file
 
-    df_augmented = load_dataset(augmented_file)  # Load the augmented dataset
-
-    if df_augmented is None:  # If augmented dataset failed to load
+    if df_augmented is None:  # If augmented dataset failed to load from disk
         print(
-            f"{BackgroundColors.YELLOW}Warning: Failed to load augmented dataset. Skipping augmentation comparison.{Style.RESET_ALL}"
-        )  # Print warning message
-        return  # Exit function early
+            f"{BackgroundColors.YELLOW}Warning: Failed to load augmented dataset from {BackgroundColors.CYAN}{augmented_file}{BackgroundColors.YELLOW}. Skipping.{Style.RESET_ALL}"
+        )  # Print warning message about load failure
+        return  # Exit function early on load failure
 
-    df_augmented_cleaned = preprocess_dataframe(df_augmented)  # Preprocess the augmented dataframe
+    df_augmented_cleaned = preprocess_dataframe(df_augmented)  # Preprocess the augmented dataframe with same pipeline as original
 
-    if df_augmented_cleaned is None or df_augmented_cleaned.empty:  # If augmented dataframe is empty after preprocessing
+    if not validate_augmented_dataframe(df_original_cleaned, df_augmented_cleaned, file):  # Validate augmented data is compatible with original
+        return  # Exit function early if augmented data fails validation checks
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
+    )  # Print separator line for visual clarity
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}RATIO-BASED DATA AUGMENTATION EXPERIMENTS{Style.RESET_ALL}"
+    )  # Print header for the ratio-based experiments section
+    print(
+        f"{BackgroundColors.GREEN}Ratios to evaluate: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in AUGMENTATION_RATIOS]}{Style.RESET_ALL}"
+    )  # Print the list of ratios that will be evaluated
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
+    )  # Print closing separator line
+
+    all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
+
+    for ratio_idx, ratio in enumerate(AUGMENTATION_RATIOS, start=1):  # Iterate over each augmentation ratio
+        ratio_pct = int(ratio * 100)  # Convert float ratio to integer percentage for display
+        experiment_id = generate_experiment_id(file, "original_plus_augmented", ratio)  # Generate unique experiment ID for this ratio
+
         print(
-            f"{BackgroundColors.YELLOW}Warning: Augmented dataset empty after preprocessing. Skipping augmentation comparison.{Style.RESET_ALL}"
-        )  # Print warning message
-        return  # Exit function early
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx}/{len(AUGMENTATION_RATIOS)}] Evaluating Original + Augmented@{ratio_pct}%{Style.RESET_ALL}"
+        )  # Print progress indicator for current ratio experiment
 
-    results_augmented = evaluate_on_dataset(
-        file, df_augmented_cleaned, feature_names, ga_selected_features, pca_n_components,
-        rfe_selected_features, base_models, data_source_label="Augmented", hyperparams_map=hp_params_map
-    )  # Evaluate on augmented data only
+        df_sampled = sample_augmented_by_ratio(df_augmented_cleaned, df_original_cleaned, ratio)  # Sample augmented rows at the current ratio
+
+        if df_sampled is None or df_sampled.empty:  # If sampling returned no valid data
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Could not sample augmented data at ratio {ratio}. Skipping this ratio.{Style.RESET_ALL}"
+            )  # Print warning about sampling failure
+            continue  # Skip to the next ratio in the loop
+
+        df_merged = merge_original_and_augmented(df_original_cleaned, df_sampled)  # Merge original data with sampled augmented data
+
+        data_source_label = f"Original+Augmented@{ratio_pct}%"  # Build descriptive data source label for CSV traceability
+
+        print(
+            f"{BackgroundColors.GREEN}Merged dataset: {BackgroundColors.CYAN}{len(df_original_cleaned)} original + {len(df_sampled)} augmented = {len(df_merged)} total rows{Style.RESET_ALL}"
+        )  # Print merged dataset size breakdown for transparency
+
+        results_ratio = evaluate_on_dataset(
+            file, df_merged, feature_names, ga_selected_features, pca_n_components,
+            rfe_selected_features, base_models, data_source_label=data_source_label,
+            hyperparams_map=hp_params_map, experiment_id=experiment_id,
+            experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+        )  # Evaluate all classifiers on the merged dataset with experiment metadata
+
+        all_ratio_results[ratio] = results_ratio  # Store the results for this ratio in the results dictionary
+
+        send_telegram_message(
+            TELEGRAM_BOT, f"Completed augmentation ratio {ratio_pct}% for {os.path.basename(file)}"
+        )  # Send Telegram notification for ratio completion
+
+    if not all_ratio_results:  # If no ratio experiments produced valid results
+        print(
+            f"{BackgroundColors.YELLOW}Warning: No ratio experiments completed successfully. Skipping comparison report.{Style.RESET_ALL}"
+        )  # Print warning about no completed experiments
+        return  # Exit function early when no results are available
+
+    comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate the comparison report across all ratios
+
+    save_augmentation_comparison_results(file, comparison_results)  # Save comparison results to CSV file
 
     print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[3/3] Evaluating on ORIGINAL + AUGMENTED data{Style.RESET_ALL}"
-    )  # Print progress message
-
-    df_merged = merge_original_and_augmented(df_original_cleaned, df_augmented_cleaned)  # Merge original and augmented dataframes
-
-    results_merged = evaluate_on_dataset(
-        file, df_merged, feature_names, ga_selected_features, pca_n_components,
-        rfe_selected_features, base_models, data_source_label="Original+Augmented", hyperparams_map=hp_params_map
-    )  # Evaluate on merged data
-
-    comparison_results = generate_comparison_report(results_original, results_augmented, results_merged)  # Generate and print comparison report
-
-    save_augmentation_comparison_results(file, comparison_results)  # Save comparison results to CSV
-
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Data augmentation comparison complete!{Style.RESET_ALL}"
-    )  # Print success message
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Data augmentation ratio-based comparison complete!{Style.RESET_ALL}"
+    )  # Print success message indicating all ratio experiments are done
 
 
 def print_file_processing_header(file):
