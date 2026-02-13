@@ -129,6 +129,33 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def get_cache_file_path(csv_path, config=None):
+    """
+    Generate the cache file path for a given dataset CSV path.
+
+    :param csv_path: Path to the dataset CSV file
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Path to the cache file
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Generating cache file path for: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    cache_prefix = config.get("stacking", {}).get("cache_prefix", "CACHE_")  # Get cache prefix from config
+    dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Get base dataset name
+    output_dir = f"{os.path.dirname(csv_path)}/Classifiers"  # Directory relative to the dataset
+    os.makedirs(output_dir, exist_ok=True)  # Ensure the directory exists
+    cache_filename = f"{cache_prefix}{dataset_name}-Stacking_Classifiers_Results.csv"  # Cache filename
+    cache_path = os.path.join(output_dir, cache_filename)  # Full cache file path
+
+    return cache_path  # Return the cache file path
+
+
 def load_cache_results(csv_path, config=None):
     """
     Load cached results from the cache file if it exists.
