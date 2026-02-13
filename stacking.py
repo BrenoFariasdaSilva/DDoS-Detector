@@ -129,6 +129,40 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def suggest_hyperparameters_for_model(trial, model_name, search_spaces):
+    """
+    Suggests hyperparameters for a given model using an Optuna trial.
+
+    :param trial: Optuna trial object for parameter suggestion
+    :param model_name: Name of the model to suggest hyperparameters for
+    :param search_spaces: Dictionary of search space definitions
+    :return: Dictionary of suggested hyperparameters
+    """
+
+    space = search_spaces.get(model_name, {})  # Get the search space for this model
+    params = {}  # Initialize empty parameters dictionary
+
+    for param_name, config in space.items():  # Iterate over each parameter definition
+        param_type = config[0]  # Extract the parameter type
+
+        if param_type == "int":  # Integer parameter
+            params[param_name] = trial.suggest_int(param_name, config[1], config[2])  # Suggest integer value
+        elif param_type == "float":  # Float parameter (uniform)
+            params[param_name] = trial.suggest_float(param_name, config[1], config[2])  # Suggest float value
+        elif param_type == "float_log":  # Float parameter (log scale)
+            params[param_name] = trial.suggest_float(param_name, config[1], config[2], log=True)  # Suggest log-scaled float
+        elif param_type == "categorical":  # Categorical parameter
+            params[param_name] = trial.suggest_categorical(param_name, config[1])  # Suggest from categories
+        elif param_type == "int_or_none":  # Integer or None parameter
+            use_none = trial.suggest_categorical(f"{param_name}_none", [True, False])  # Decide whether to use None
+            if use_none:  # If None is selected
+                params[param_name] = None  # Set parameter to None
+            else:  # Otherwise suggest an integer
+                params[param_name] = trial.suggest_int(param_name, config[1], config[2])  # Suggest integer value
+
+    return params  # Return the suggested parameters
+
+
 def create_model_from_params(model_name, params, config=None):
     """
     Creates a classifier instance from a model name and hyperparameters dictionary.
