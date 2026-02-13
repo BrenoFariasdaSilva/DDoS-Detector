@@ -129,6 +129,42 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def merge_configs(defaults, file_config, cli_args):
+    """
+    Merge configurations with priority: CLI > file > defaults.
+    
+    :param defaults: Default configuration dictionary
+    :param file_config: Configuration from file
+    :param cli_args: Parsed CLI arguments
+    :return: Merged configuration dictionary
+    """
+    
+    config = deep_merge_dicts(defaults, file_config)  # Merge file config into defaults
+    
+    if cli_args is None:  # If no CLI args
+        return config  # Return merged config
+    
+    # Apply CLI overrides with highest priority
+    if hasattr(cli_args, "verbose") and cli_args.verbose:  # Verbose flag
+        config["execution"]["verbose"] = True
+    if hasattr(cli_args, "skip_train") and cli_args.skip_train:  # Skip train flag
+        config["execution"]["skip_train_if_model_exists"] = True
+    if hasattr(cli_args, "csv") and cli_args.csv:  # CSV file override
+        config["execution"]["csv_file"] = cli_args.csv
+    if hasattr(cli_args, "automl") and cli_args.automl:  # AutoML flag
+        config["automl"]["enabled"] = True
+    if hasattr(cli_args, "automl_trials") and cli_args.automl_trials is not None:  # AutoML trials
+        config["automl"]["n_trials"] = cli_args.automl_trials
+    if hasattr(cli_args, "automl_stacking_trials") and cli_args.automl_stacking_trials is not None:  # Stacking trials
+        config["automl"]["stacking_trials"] = cli_args.automl_stacking_trials
+    if hasattr(cli_args, "automl_timeout") and cli_args.automl_timeout is not None:  # AutoML timeout
+        config["automl"]["timeout"] = cli_args.automl_timeout
+    if hasattr(cli_args, "test_augmentation"):  # Test augmentation flag (explicit True or False)
+        config["execution"]["test_data_augmentation"] = cli_args.test_augmentation
+    
+    return config  # Return final merged configuration
+
+
 def initialize_config(config_path=None, cli_args=None):
     """
     Initialize global CONFIG with merged configuration.
