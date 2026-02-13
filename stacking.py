@@ -129,6 +129,24 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def generate_experiment_id(file_path, experiment_mode, augmentation_ratio=None):
+    """
+    Generates a unique experiment identifier for traceability in CSV results.
+
+    :param file_path: Path to the dataset file being processed
+    :param experiment_mode: Experiment mode string (e.g., 'original_only' or 'original_plus_augmented')
+    :param augmentation_ratio: Augmentation ratio float (e.g., 0.10) or None for original-only mode
+    :return: String experiment identifier combining timestamp, filename, mode and ratio
+    """
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")  # Create a timestamp string for uniqueness
+    file_stem = Path(file_path).stem  # Extract the filename stem without extension
+    ratio_tag = f"_ratio{int(augmentation_ratio * 100)}" if augmentation_ratio is not None else ""  # Build ratio tag string or empty
+    experiment_id = f"{timestamp}_{file_stem}_{experiment_mode}{ratio_tag}"  # Concatenate all parts into unique identifier
+
+    return experiment_id  # Return the generated experiment identifier
+
+
 def validate_augmented_dataframe(original_df, augmented_df, file_path):
     """
     Validates that the augmented DataFrame is compatible with the original for merging.
