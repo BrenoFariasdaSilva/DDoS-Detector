@@ -129,6 +129,67 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def load_feature_selection_results(file_path, config=None):
+    """
+    Load GA, RFE and PCA feature selection artifacts for a given dataset file and
+    print concise status messages.
+
+    :param file_path: Path to the dataset CSV being processed.
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Tuple (ga_selected_features, pca_n_components, rfe_selected_features)
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    ga_selected_features = extract_genetic_algorithm_features(file_path, config=config)  # Extract GA features
+    if ga_selected_features:  # If GA features were successfully extracted
+        verbose_output(
+            f"{BackgroundColors.GREEN}Genetic Algorithm Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file_path)}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(ga_selected_features)}{Style.RESET_ALL}",
+            config=config
+        )
+        verbose_output(
+            f"{BackgroundColors.GREEN}Genetic Algorithm Selected Features: {BackgroundColors.CYAN}{ga_selected_features}{Style.RESET_ALL}",
+            config=config
+        )
+    else:  # If GA features were not extracted
+        print(
+            f"{BackgroundColors.YELLOW}Proceeding without GA features for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}"
+        )
+
+    pca_n_components = extract_principal_component_analysis_features(file_path, config=config)  # Extract PCA components
+    if pca_n_components:  # If PCA components were successfully extracted
+        verbose_output(
+            f"{BackgroundColors.GREEN}PCA optimal components successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file_path)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{pca_n_components}{Style.RESET_ALL}",
+            config=config
+        )
+        verbose_output(
+            f"{BackgroundColors.GREEN}PCA Number of Components: {BackgroundColors.CYAN}{pca_n_components}{Style.RESET_ALL}",
+            config=config
+        )
+    else:  # If PCA components were not extracted
+        print(
+            f"{BackgroundColors.YELLOW}Proceeding without PCA components for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}"
+        )
+
+    rfe_selected_features = extract_recursive_feature_elimination_features(file_path, config=config)  # Extract RFE features
+    if rfe_selected_features:  # If RFE features were successfully extracted
+        verbose_output(
+            f"{BackgroundColors.GREEN}RFE Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file_path)}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(rfe_selected_features)}{Style.RESET_ALL}",
+            config=config
+        )
+        verbose_output(
+            f"{BackgroundColors.GREEN}RFE Selected Features: {BackgroundColors.CYAN}{rfe_selected_features}{Style.RESET_ALL}",
+            config=config
+        )
+    else:  # If RFE features were not extracted
+        print(
+            f"{BackgroundColors.YELLOW}Proceeding without RFE features for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}"
+        )
+
+    return ga_selected_features, pca_n_components, rfe_selected_features  # Return the extracted features
+
+
 def load_dataset(csv_path, config=None):
     """
     Load CSV and return DataFrame.
