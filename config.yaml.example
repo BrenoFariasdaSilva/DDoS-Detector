@@ -13,10 +13,10 @@
 #
 # Sections:
 #   [Shared]       execution, dataset, paths, sound, logging, telegram, plotting
-#   [Stacking]     stacking, evaluation, models
 #   [GA-specific]  genetic_algorithm, early_stop, cross_validation,
 #                  multiprocessing, resource_monitor, model, caching,
 #                  progress, export
+#   [Stacking]     stacking, evaluation, models, automl, tsne
 #   [WGAN-GP]      wgangp, training, generator, discriminator,
 #                  gradient_penalty, generation, dataloader
 # ================================================================================
@@ -35,6 +35,11 @@ execution:
   runs: 5                             # Number of GA runs per population size
   resume_progress: true               # Resume from saved state files
   progress_save_interval: 10          # Save progress every N generations
+  # stacking.py specific:
+  csv_file: null                      # Optional single CSV file to process (null = process all)
+  process_entire_dataset: false       # Process all files in dataset (true) or single file (false)
+  test_data_augmentation: true        # Enable data augmentation testing experiments
+  execution_mode: binary              # Execution mode: "binary" (default, one file per eval) or "multi-class" (combined attack types)
   # wgangp.py specific:
   results_suffix: "_data_augmented"   # Suffix to add to generated filenames
   match_filenames_to_process: [""]    # List of specific filenames to match
@@ -45,11 +50,6 @@ execution:
     - "Dataset_Description"
     - "Data_Separability"
     - "Feature_Analysis"
-  # stacking.py specific:
-  csv_file: null                      # Optional single CSV file to process (null = process all)
-  process_entire_dataset: false       # Process all files in dataset (true) or single file (false)
-  test_data_augmentation: true        # Enable data augmentation testing experiments
-  execution_mode: binary              # Execution mode: "binary" (default, one file per eval) or "multi-class" (combined attack types)
 
 # --- Dataset Configuration (shared + per-script keys) ---
 dataset:
@@ -116,7 +116,80 @@ plotting:
 
 
 # ==============================================================================
-# STACKING CLASSIFIER SECTIONS — Used by stacking.py
+# GENETIC ALGORITHM SECTIONS — Used by genetic_algorithm.py
+# ==============================================================================
+
+genetic_algorithm:
+  n_generations: 200                  # Number of generations for GA
+  min_pop: 20                         # Minimum population size
+  max_pop: 20                         # Maximum population size
+  cxpb: 0.5                           # Crossover probability
+  mutpb: 0.01                         # Mutation probability
+
+early_stop:
+  acc_threshold: 0.75                 # Minimum acceptable accuracy for an individual
+  folds: 3                            # Number of folds to verify before early stopping
+  generations: 10                     # Number of generations without improvement before early stop
+
+cross_validation:
+  n_folds: 10                         # Number of cross-validation folds
+
+multiprocessing:
+  n_jobs: -1                          # Number of parallel jobs (-1 uses all processors)
+  cpu_processes: 1                    # Initial number of worker processes
+
+resource_monitor:
+  enabled: true                       # Enable resource monitoring
+  interval_seconds: 30                # Interval between monitoring cycles in seconds
+  reserve_cpu_frac: 0.15              # Fraction of CPU reserved from worker allocation
+  reserve_mem_frac: 0.15              # Fraction of memory reserved from worker allocation
+  min_procs: 1                        # Minimum number of processes allowed
+  max_procs: null                     # Maximum number of processes allowed (null for unlimited)
+  min_gens_before_update: 10          # Minimum GA generations before updating workers
+  daemon: true                        # Whether the monitoring thread runs as daemon
+
+model:
+  estimator: "RandomForestClassifier" # Default estimator for GA fitness evaluation
+  random_state: null                  # Random state for reproducibility (null for non-deterministic)
+
+caching:
+  enabled: true                       # Enable fitness caching
+  pickle_protocol: 4                  # Pickle protocol to use when saving state
+
+progress:
+  state_dir_name: "ga_progress"       # Subfolder under Feature_Analysis to store progress files
+
+export:
+  results_csv_columns:                # Columns for the results CSV
+    - timestamp
+    - tool
+    - run_index
+    - model
+    - dataset
+    - hyperparameters
+    - cv_method
+    - train_test_split
+    - scaling
+    - cv_accuracy
+    - cv_precision
+    - cv_recall
+    - cv_f1_score
+    - test_accuracy
+    - test_precision
+    - test_recall
+    - test_f1_score
+    - test_fpr
+    - test_fnr
+    - training_time_s
+    - testing_time_s
+    - elapsed_run_time
+    - hardware
+    - best_features
+    - rfe_ranking
+
+
+# ==============================================================================
+# STACKING SECTIONS — Used by stacking.py
 # ==============================================================================
 
 stacking:
@@ -226,79 +299,34 @@ models:
   lightgbm:
     force_row_wise: true              # Force row-wise histogram construction (faster for wide datasets)
     min_gain_to_split: 0.01           # Minimum information gain to make a split
+    random_state: 42                  # Random seed for reproducibility
+    verbosity: -1                     # Suppress warnings
+  mlp:
+    hidden_layer_sizes: [100]
+    max_iter: 500
+    random_state: 42
+  stacking_meta:                      # Meta-estimator for stacking classifier
+    n_estimators: 50
+    random_state: 42
 
+automl:
+  enabled: false                      # Enable AutoML Optuna pipeline
+  n_trials: 50                        # Number of Optuna trials for model search
+  stacking_trials: 20                 # Number of Optuna trials for stacking search
+  timeout: 3600                       # Timeout in seconds per search phase
+  cv_folds: 5                         # Cross-validation folds for AutoML evaluation
+  random_state: 42                    # Random seed for AutoML reproducibility
+  stacking_top_n: 5                   # Number of top models to consider for stacking
+  results_filename: "AutoML_Results.csv"  # AutoML results export filename
 
-# ==============================================================================
-# GENETIC ALGORITHM SECTIONS — Used by genetic_algorithm.py
-# ==============================================================================
-
-genetic_algorithm:
-  n_generations: 200                  # Number of generations for GA
-  min_pop: 20                         # Minimum population size
-  max_pop: 20                         # Maximum population size
-  cxpb: 0.5                           # Crossover probability
-  mutpb: 0.01                         # Mutation probability
-
-early_stop:
-  acc_threshold: 0.75                 # Minimum acceptable accuracy for an individual
-  folds: 3                            # Number of folds to verify before early stopping
-  generations: 10                     # Number of generations without improvement before early stop
-
-cross_validation:
-  n_folds: 10                         # Number of cross-validation folds
-
-multiprocessing:
-  n_jobs: -1                          # Number of parallel jobs (-1 uses all processors)
-  cpu_processes: 1                    # Initial number of worker processes
-
-resource_monitor:
-  enabled: true                       # Enable resource monitoring
-  interval_seconds: 30                # Interval between monitoring cycles in seconds
-  reserve_cpu_frac: 0.15              # Fraction of CPU reserved from worker allocation
-  reserve_mem_frac: 0.15              # Fraction of memory reserved from worker allocation
-  min_procs: 1                        # Minimum number of processes allowed
-  max_procs: null                     # Maximum number of processes allowed (null for unlimited)
-  min_gens_before_update: 10          # Minimum GA generations before updating workers
-  daemon: true                        # Whether the monitoring thread runs as daemon
-
-model:
-  estimator: "RandomForestClassifier" # Default estimator for GA fitness evaluation
-  random_state: null                  # Random state for reproducibility (null for non-deterministic)
-
-caching:
-  enabled: true                       # Enable fitness caching
-  pickle_protocol: 4                  # Pickle protocol to use when saving state
-
-progress:
-  state_dir_name: "ga_progress"       # Subfolder under Feature_Analysis to store progress files
-
-export:
-  results_csv_columns:                # Columns for the results CSV
-    - timestamp
-    - tool
-    - run_index
-    - model
-    - dataset
-    - hyperparameters
-    - cv_method
-    - train_test_split
-    - scaling
-    - cv_accuracy
-    - cv_precision
-    - cv_recall
-    - cv_f1_score
-    - test_accuracy
-    - test_precision
-    - test_recall
-    - test_f1_score
-    - test_fpr
-    - test_fnr
-    - training_time_s
-    - testing_time_s
-    - elapsed_run_time
-    - hardware
-    - best_features
-    - rfe_ranking
+tsne:
+  perplexity: 30                      # t-SNE perplexity parameter
+  random_state: 42                    # Random seed for t-SNE
+  n_iter: 1000                        # Number of t-SNE iterations
+  figsize: [12, 10]                   # Figure size for t-SNE plots
+  dpi: 300                            # DPI for t-SNE plots
+  alpha: 0.6                          # Marker transparency
+  marker_size: 50                     # Marker size for scatter plots
 
 
 # ==============================================================================
