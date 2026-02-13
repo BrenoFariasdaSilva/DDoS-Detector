@@ -129,6 +129,39 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def find_parent_feature_file(file_dir, filename, config=None):
+    """
+    Ascend parent directories searching for <parent>/Feature_Analysis/<filename>.
+
+    :param file_dir: Directory to search within
+    :param filename: Filename to search for
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: The matching path or None
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Ascending parent directories from: {BackgroundColors.CYAN}{file_dir}{BackgroundColors.GREEN} searching for file: {BackgroundColors.CYAN}{filename}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    path = file_dir  # Start from the file's directory
+    while True:  # Loop until break
+        candidate = os.path.join(path, "Feature_Analysis", filename)  # Construct candidate path
+        if os.path.exists(candidate):  # If the candidate file exists
+            return candidate  # Return the candidate path
+
+        parent = os.path.dirname(path)  # Get the parent directory
+        if parent == path:  # If reached the root directory
+            break  # Break the loop
+
+        path = parent  # Move up to the parent directory
+
+    return None  # Not found
+
+
 def find_dataset_level_feature_file(file_path, filename, config=None):
     """
     Try dataset-level search:
