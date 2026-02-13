@@ -4726,6 +4726,7 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
             rfe_selected_features, base_models, data_source_label=data_source_label,
             hyperparams_map=hp_params_map, experiment_id=experiment_id,
             experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+            execution_mode_str="binary", attack_types_combined=None
         )  # Evaluate all classifiers on the merged dataset with experiment metadata
 
         all_ratio_results[ratio] = results_ratio  # Store the results for this ratio in the results dictionary
@@ -4747,6 +4748,193 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Data augmentation ratio-based comparison complete!{Style.RESET_ALL}"
     )  # Print success message indicating all ratio experiments are done
+
+
+def process_multiclass_evaluation(original_files_list, combined_multiclass_df, attack_types_list, dataset_name, config=None):
+    """
+    Process evaluation for multi-class classification mode with optional data augmentation.
+    
+    :param original_files_list: List of original file paths used for multi-class combination
+    :param combined_multiclass_df: Combined multi-class DataFrame with 'attack_type' column
+    :param attack_types_list: List of unique attack type labels
+    :param dataset_name: Name of the dataset being processed
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Processing multi-class evaluation for dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+    
+    # Use first file for feature selection metadata discovery
+    reference_file = original_files_list[0] if original_files_list else "multiclass_combined"  # Get reference file for feature metadata
+    
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+    )  # Print separator line
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing multi-class dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
+    )  # Print dataset header
+    print(
+        f"{BackgroundColors.GREEN}Attack types: {BackgroundColors.CYAN}{attack_types_list}{Style.RESET_ALL}"
+    )  # Print attack types
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+    )  # Print closing separator
+    
+    # Load feature selection results from reference file
+    ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
+        reference_file, config=config
+    )  # Load feature selection results
+    
+    # Extract feature names from combined dataframe (excluding attack_type target)
+    feature_names = [col for col in combined_multiclass_df.columns if col != 'attack_type']  # Get feature column names
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Multi-class dataset features: {BackgroundColors.CYAN}{len(feature_names)} features{Style.RESET_ALL}",
+        config=config
+    )  # Output feature count
+    
+    # Prepare base models with hyperparameters
+    base_models, hp_params_map = prepare_models_with_hyperparameters(reference_file, config=config)  # Prepare base models
+    
+    # Generate experiment ID for multi-class original evaluation
+    original_experiment_id = generate_experiment_id(reference_file, "multiclass_original_only")  # Generate unique experiment ID
+    
+    test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", False)  # Get test data augmentation flag from config
+    augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
+    
+    total_steps = 1 + (len(augmentation_ratios) if test_data_augmentation else 0)  # Calculate total evaluation steps
+    
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[1/{total_steps}] Evaluating on ORIGINAL MULTI-CLASS data{Style.RESET_ALL}"
+    )  # Print progress message with total step count
+    
+    # Evaluate on original multi-class dataset
+    results_original = evaluate_on_dataset(
+        reference_file, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components,
+        rfe_selected_features, base_models, data_source_label="Original_MultiClass", hyperparams_map=hp_params_map,
+        experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
+        execution_mode_str="multi-class", attack_types_combined=attack_types_list
+    )  # Evaluate on original multi-class data with execution mode tracking
+    
+    original_results_list = list(results_original.values())  # Convert results dict to list
+    
+    # Save multi-class results to separate CSV file
+    multiclass_results_filename = config.get("stacking", {}).get("multiclass_results_filename", "Stacking_Classifiers_MultiClass_Results.csv")  # Get multi-class results filename
+    reference_file_path = Path(reference_file)  # Create Path object
+    feature_analysis_dir = reference_file_path.parent / "Feature_Analysis"  # Feature_Analysis directory
+    os.makedirs(feature_analysis_dir, exist_ok=True)  # Ensure directory exists
+    multiclass_results_path = feature_analysis_dir / multiclass_results_filename  # Build multi-class results path
+    
+    save_stacking_results(str(multiclass_results_path), original_results_list, config=config)  # Save multi-class results to CSV
+    
+    enable_automl = config.get("automl", {}).get("enabled", False)  # Get enable automl flag from config
+    if enable_automl:  # If AutoML pipeline is enabled
+        run_automl_pipeline(reference_file, combined_multiclass_df, feature_names, data_source_label="Original_MultiClass", config=config)  # Run AutoML pipeline for multi-class
+    
+    if test_data_augmentation:  # If data augmentation testing is enabled
+        verbose_output(
+            f"{BackgroundColors.GREEN}Processing multi-class augmented data evaluation...{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
+        
+        # Load augmented files for all original files
+        augmented_files_list = load_augmented_files_for_multiclass(original_files_list, config=config)  # Load augmented files
+        
+        if not augmented_files_list:  # If no augmented files found
+            print(
+                f"{BackgroundColors.YELLOW}No augmented files found for multi-class mode. Skipping augmentation testing.{Style.RESET_ALL}"
+            )  # Print warning
+            return  # Exit function
+        
+        # Combine augmented files for multi-class
+        combined_augmented_df, augmented_attack_types, augmented_target_col = combine_files_for_multiclass(augmented_files_list, config=config)  # Combine augmented files
+        
+        if combined_augmented_df is None:  # If augmented combination failed
+            print(
+                f"{BackgroundColors.YELLOW}Failed to combine augmented files for multi-class. Skipping augmentation testing.{Style.RESET_ALL}"
+            )  # Print warning
+            return  # Exit function
+        
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
+        )  # Print separator line for visual clarity
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}RATIO-BASED DATA AUGMENTATION EXPERIMENTS (Multi-Class){Style.RESET_ALL}"
+        )  # Print header for the ratio-based experiments section
+        print(
+            f"{BackgroundColors.GREEN}Ratios to evaluate: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in augmentation_ratios]}{Style.RESET_ALL}"
+        )  # Print the list of ratios that will be evaluated
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
+        )  # Print closing separator line
+        
+        all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
+        
+        for ratio_idx, ratio in enumerate(augmentation_ratios, start=1):  # Iterate over each augmentation ratio
+            ratio_pct = int(ratio * 100)  # Convert ratio to percentage for display
+            
+            print(
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx + 1}/{total_steps}] Evaluating with {ratio_pct}% augmented data (Multi-Class){Style.RESET_ALL}"
+            )  # Print experiment step progress
+            
+            # Sample augmented data by ratio
+            df_sampled = sample_augmented_by_ratio(combined_augmented_df, combined_multiclass_df, ratio)  # Sample augmented data proportionally
+            
+            if df_sampled is None:  # If sampling failed
+                print(
+                    f"{BackgroundColors.YELLOW}Failed to sample augmented data at ratio {ratio_pct}%. Skipping.{Style.RESET_ALL}"
+                )  # Print warning
+                continue  # Skip to next ratio
+            
+            # Merge original and sampled augmented data
+            df_merged = merge_original_and_augmented(combined_multiclass_df, df_sampled, config=config)  # Merge original and augmented dataframes
+            
+            data_source_label = f"Original+Augmented@{ratio_pct}%_MultiClass"  # Build data source label for this experiment
+            experiment_id = generate_experiment_id(reference_file, "multiclass_original_plus_augmented", ratio)  # Generate unique experiment ID
+            
+            send_telegram_message(
+                TELEGRAM_BOT, f"Starting multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
+            )  # Send Telegram notification
+            
+            # Evaluate on merged dataset
+            results_ratio = evaluate_on_dataset(
+                reference_file, df_merged, feature_names, ga_selected_features, pca_n_components,
+                rfe_selected_features, base_models, data_source_label=data_source_label,
+                hyperparams_map=hp_params_map, experiment_id=experiment_id,
+                experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+                execution_mode_str="multi-class", attack_types_combined=attack_types_list
+            )  # Evaluate all classifiers on the merged multi-class dataset with execution mode tracking
+            
+            all_ratio_results[ratio] = results_ratio  # Store the results for this ratio in the results dictionary
+            
+            send_telegram_message(
+                TELEGRAM_BOT, f"Completed multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
+            )  # Send completion notification
+        
+        if not all_ratio_results:  # If no ratio experiments succeeded
+            print(
+                f"{BackgroundColors.YELLOW}No augmentation ratio experiments completed successfully for multi-class.{Style.RESET_ALL}"
+            )  # Print warning
+            return  # Exit function
+        
+        # Generate and save comparison results
+        comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate the comparison report across all ratios
+        
+        augmentation_comparison_filename = config.get("stacking", {}).get("augmentation_comparison_filename", "Data_Augmentation_Comparison_Results.csv")  # Get comparison filename
+        multiclass_comparison_filename = augmentation_comparison_filename.replace(".csv", "_MultiClass.csv")  # Build multi-class comparison filename
+        multiclass_comparison_path = feature_analysis_dir / multiclass_comparison_filename  # Build comparison file path
+        
+        save_augmentation_comparison_results(str(multiclass_comparison_path), comparison_results, config=config)  # Save comparison results to CSV file
+        
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Multi-class data augmentation ratio-based comparison complete!{Style.RESET_ALL}"
+        )  # Print success message indicating all ratio experiments are done
 
 
 def print_file_processing_header(file, config=None):
