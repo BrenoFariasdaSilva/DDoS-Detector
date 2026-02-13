@@ -129,6 +129,51 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def create_model_from_params(model_name, params, config=None):
+    """
+    Creates a classifier instance from a model name and hyperparameters dictionary.
+
+    :param model_name: Name of the classifier to instantiate
+    :param params: Dictionary of hyperparameters to apply
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Instantiated classifier object
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    automl_random_state = config.get("automl", {}).get("random_state", 42)  # Get random state from config
+    n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Get n_jobs from config
+
+    clean_params = {k: v for k, v in params.items() if not k.endswith("_none")}  # Copy params excluding _none flags
+
+    if model_name == "Random Forest":  # Random Forest classifier
+        return RandomForestClassifier(random_state=automl_random_state, n_jobs=n_jobs, **clean_params)  # Create RF instance
+    elif model_name == "XGBoost":  # XGBoost classifier
+        return XGBClassifier(eval_metric="mlogloss", random_state=automl_random_state, n_jobs=n_jobs, **clean_params)  # Create XGB instance
+    elif model_name == "LightGBM":  # LightGBM classifier
+        return lgb.LGBMClassifier(force_row_wise=True, random_state=automl_random_state, verbosity=-1, n_jobs=n_jobs, **clean_params)  # Create LGBM instance
+    elif model_name == "Logistic Regression":  # Logistic Regression classifier
+        return LogisticRegression(random_state=automl_random_state, **clean_params)  # Create LR instance
+    elif model_name == "SVM":  # Support Vector Machine classifier
+        return SVC(probability=True, random_state=automl_random_state, **clean_params)  # Create SVM instance
+    elif model_name == "Extra Trees":  # Extra Trees classifier
+        return ExtraTreesClassifier(random_state=automl_random_state, n_jobs=n_jobs, **clean_params)  # Create ET instance
+    elif model_name == "Gradient Boosting":  # Gradient Boosting classifier
+        return GradientBoostingClassifier(random_state=automl_random_state, **clean_params)  # Create GB instance
+    elif model_name == "MLP (Neural Net)":  # MLP Neural Network classifier
+        hidden_0 = clean_params.pop("hidden_layer_sizes_0", 100)  # Extract first hidden layer size
+        hidden_1 = clean_params.pop("hidden_layer_sizes_1", 0)  # Extract second hidden layer size
+        hidden_layers = (hidden_0,) if hidden_1 == 0 else (hidden_0, hidden_1)  # Build hidden layer tuple
+        return MLPClassifier(hidden_layer_sizes=hidden_layers, random_state=automl_random_state, **clean_params)  # Create MLP instance
+    elif model_name == "Decision Tree":  # Decision Tree classifier
+        return DecisionTreeClassifier(random_state=automl_random_state, **clean_params)  # Create DT instance
+    elif model_name == "KNN":  # K-Nearest Neighbors classifier
+        return KNeighborsClassifier(n_jobs=n_jobs, **clean_params)  # Create KNN instance
+    else:  # Unknown model type
+        raise ValueError(f"Unknown AutoML model name: {model_name}")  # Raise error for unknown model
+
+
 def automl_cross_validate_model(model, X_train, y_train, cv_folds, trial=None, config=None):
     """
     Performs stratified cross-validation on a model and returns mean F1 score.
