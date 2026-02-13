@@ -129,6 +129,268 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def evaluate_on_dataset(
+    file,
+    df,
+    feature_names,
+    ga_selected_features,
+    pca_n_components,
+    rfe_selected_features,
+    base_models,
+    data_source_label="Original",
+    hyperparams_map=None,
+    experiment_id=None,
+    experiment_mode="original_only",
+    augmentation_ratio=None,
+):
+    """
+    Evaluate classifiers on a single dataset (original or augmented).
+
+    :param file: Path to the dataset file
+    :param df: DataFrame with the dataset
+    :param feature_names: List of feature column names
+    :param ga_selected_features: GA selected features
+    :param pca_n_components: Number of PCA components
+    :param rfe_selected_features: RFE selected features
+    :param base_models: Dictionary of base models to evaluate
+    :param data_source_label: Label for data source ("Original", "Original+Augmented@50%", etc.)
+    :param hyperparams_map: Dictionary mapping model names to hyperparameter dicts
+    :param experiment_id: Unique experiment identifier for traceability
+    :param experiment_mode: Experiment mode string ('original_only' or 'original_plus_augmented')
+    :param augmentation_ratio: Augmentation ratio float (e.g., 0.50) or None for original-only
+    :return: Dictionary mapping (feature_set, model_name) to results
+    """
+
+    # Sanitize GA and RFE feature names to match the sanitized feature_names in the DataFrame
+    if ga_selected_features:
+        ga_selected_features = sanitize_feature_names(ga_selected_features)
+    if rfe_selected_features:
+        rfe_selected_features = sanitize_feature_names(rfe_selected_features)
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}"
+    )
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating on: {BackgroundColors.CYAN}{data_source_label} Data{Style.RESET_ALL}"
+    )
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}\n"
+    )
+
+    X_full = df.select_dtypes(include=np.number).iloc[:, :-1]  # Features (numeric only)
+    y = df.iloc[:, -1]  # Target
+
+    if len(np.unique(y)) < 2:  # Verify if there is more than one class
+        print(
+            f"{BackgroundColors.RED}Target column has only one class. Cannot perform classification. Skipping.{Style.RESET_ALL}"
+        )  # Output the error message
+        return {}  # Return empty dictionary
+
+    X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
+        X_full, y
+    )  # Scale and split the data
+
+    estimators = [
+        (name, model) for name, model in base_models.items() if name != "SVM"
+    ]  # Define estimators (excluding SVM)
+
+    stacking_model = StackingClassifier(
+        estimators=estimators,
+        final_estimator=RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=config.get("evaluation", {}).get("n_jobs", -1)),
+        cv=StratifiedKFold(n_splits=10, shuffle=True, random_state=42),
+        n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
+    )  # Define the Stacking Classifier model
+
+    X_train_pca, X_test_pca = apply_pca_transformation(
+        X_train_scaled, X_test_scaled, pca_n_components, file
+    )  # Apply PCA transformation if applicable
+
+    # Get feature subsets with actual selected feature names
+    X_train_ga, ga_actual_features = get_feature_subset(X_train_scaled, ga_selected_features, feature_names)
+    X_test_ga, _ = get_feature_subset(X_test_scaled, ga_selected_features, feature_names)
+    
+    X_train_rfe, rfe_actual_features = get_feature_subset(X_train_scaled, rfe_selected_features, feature_names)
+    X_test_rfe, _ = get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)
+
+    feature_sets = {  # Dictionary of feature sets to evaluate
+        "Full Features": (X_train_scaled, X_test_scaled, feature_names),  # All features with names
+        "GA Features": (X_train_ga, X_test_ga, ga_actual_features),  # GA subset with actual names
+        "PCA Components": (
+            (X_train_pca, X_test_pca, None) if X_train_pca is not None else None
+        ),  # PCA components (only if PCA was applied)
+        "RFE Features": (X_train_rfe, X_test_rfe, rfe_actual_features),  # RFE subset with actual names
+    }
+
+    feature_sets = {
+        k: v for k, v in feature_sets.items() if v is not None
+    }  # Remove any None entries (e.g., PCA if not applied)
+    feature_sets = dict(sorted(feature_sets.items()))  # Sort the feature sets by name
+
+    individual_models = {
+        k: v for k, v in base_models.items()
+    }  # Use the base models (with hyperparameters applied) for individual evaluation
+    total_steps = len(feature_sets) * (
+        len(individual_models) + 1
+    )  # Total steps: models + stacking per feature set
+    progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout)  # Progress bar for all evaluations
+
+    all_results = {}  # Dictionary to store results: (feature_set, model_name) -> result_entry
+
+    current_combination = 1  # Counter for combination index
+
+    for idx, (name, (X_train_subset, X_test_subset, subset_feature_names_list)) in enumerate(feature_sets.items(), start=1):
+        if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}"
+            )  # Output warning
+            progress_bar.update(len(individual_models) + 1)  # Skip all steps for this feature set
+            continue  # Skip to the next set
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating models on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}"
+        )  # Output evaluation status
+
+        if name == "PCA Components":  # If the feature set is PCA Components
+            subset_feature_names = [
+                f"PC{i+1}" for i in range(X_train_subset.shape[1])
+            ]  # Generate PCA component names
+        else:  # For other feature sets
+            subset_feature_names = (
+                subset_feature_names_list if subset_feature_names_list else [f"feature_{i}" for i in range(X_train_subset.shape[1])]
+            )  # Use actual feature names or generate generic ones
+
+        X_train_df = pd.DataFrame(
+            X_train_subset, columns=subset_feature_names
+        )  # Convert training features to DataFrame
+        X_test_df = pd.DataFrame(
+            X_test_subset, columns=subset_feature_names
+        )  # Convert test features to DataFrame
+
+        progress_bar.set_description(
+            f"{data_source_label} - {name} (Individual)"
+        )  # Update progress bar description
+        
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=config.get("evaluation", {}).get("threads_limit", 2)
+        ) as executor:  # Create a thread pool executor for parallel evaluation
+            future_to_model = {}  # Dictionary to map futures to model names
+            for model_name, model in individual_models.items():  # Iterate over each individual model
+                send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - {model_name}")
+                future = executor.submit(
+                    evaluate_individual_classifier,
+                    model,
+                    model_name,
+                    X_train_df.values,
+                    y_train,
+                    X_test_df.values,
+                    y_test,
+                    file,
+                    scaler,
+                    subset_feature_names,
+                    name,
+                )  # Submit evaluation task to thread pool (using .values for numpy arrays)
+                # Store both the model name and its class name for richer metadata
+                future_to_model[future] = (model_name, model.__class__.__name__, current_combination)
+                current_combination += 1
+            
+            for future in concurrent.futures.as_completed(future_to_model):  # As each evaluation completes
+                model_name, model_class, comb_idx = future_to_model[future]  # Get metadata from mapping
+                metrics = future.result()  # Get the metrics from the completed future
+                # Flatten metrics into named fields and include extra metadata similar to rfe.py
+                acc, prec, rec, f1, fpr, fnr, elapsed = metrics
+                result_entry = {
+                    "model": model_class,
+                    "dataset": os.path.relpath(file),
+                    "feature_set": name,
+                    "classifier_type": "Individual",
+                    "model_name": model_name,
+                    "data_source": data_source_label,
+                    "experiment_id": experiment_id,
+                    "experiment_mode": experiment_mode,
+                    "augmentation_ratio": augmentation_ratio,
+                    "n_features": X_train_subset.shape[1],
+                    "n_samples_train": len(y_train),
+                    "n_samples_test": len(y_test),
+                    "accuracy": truncate_value(acc),
+                    "precision": truncate_value(prec),
+                    "recall": truncate_value(rec),
+                    "f1_score": truncate_value(f1),
+                    "fpr": truncate_value(fpr),
+                    "fnr": truncate_value(fnr),
+                    "elapsed_time_s": int(round(elapsed)),
+                    "cv_method": f"StratifiedKFold(n_splits=10)",
+                    "top_features": json.dumps(subset_feature_names),
+                    "rfe_ranking": None,
+                    "hyperparameters": json.dumps(hyperparams_map.get(model_name)) if hyperparams_map and hyperparams_map.get(model_name) is not None else None,
+                    "features_list": subset_feature_names,
+                }  # Prepare result entry
+                all_results[(name, model_name)] = result_entry  # Store result with key
+                send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} with F1: {truncate_value(f1)} in {calculate_execution_time(0, elapsed)}")
+                print(
+                    f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(metrics[0])}{Style.RESET_ALL}"
+                )  # Output accuracy
+                progress_bar.update(1)  # Update progress after each model
+
+        print(
+            f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}"
+        )
+        progress_bar.set_description(
+            f"{data_source_label} - {name} (Stacking)"
+        )  # Update progress bar description for stacking
+
+        send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - StackingClassifier")
+
+        stacking_metrics = evaluate_stacking_classifier(
+            stacking_model, X_train_df, y_train, X_test_df, y_test
+        )  # Evaluate stacking model with DataFrames
+
+        # Export stacking model and scaler
+        try:
+            dataset_name = os.path.basename(os.path.dirname(file))
+            export_model_and_scaler(stacking_model, scaler, dataset_name, "StackingClassifier", subset_feature_names, best_params=None, feature_set=name, dataset_csv_path=file)
+        except Exception:
+            pass
+
+        # Flatten stacking metrics and include richer metadata
+        s_acc, s_prec, s_rec, s_f1, s_fpr, s_fnr, s_elapsed = stacking_metrics
+        stacking_result_entry = {
+            "model": stacking_model.__class__.__name__,
+            "dataset": os.path.relpath(file),
+            "feature_set": name,
+            "classifier_type": "Stacking",
+            "model_name": "StackingClassifier",
+            "data_source": data_source_label,
+            "experiment_id": experiment_id,
+            "experiment_mode": experiment_mode,
+            "augmentation_ratio": augmentation_ratio,
+            "n_features": X_train_subset.shape[1],
+            "n_samples_train": len(y_train),
+            "n_samples_test": len(y_test),
+            "accuracy": truncate_value(s_acc),
+            "precision": truncate_value(s_prec),
+            "recall": truncate_value(s_rec),
+            "f1_score": truncate_value(s_f1),
+            "fpr": truncate_value(s_fpr),
+            "fnr": truncate_value(s_fnr),
+            "elapsed_time_s": int(round(s_elapsed)),
+            "cv_method": f"StratifiedKFold(n_splits=10)",
+            "top_features": json.dumps(subset_feature_names),
+            "rfe_ranking": None,
+            "hyperparameters": None,
+            "features_list": subset_feature_names,
+        }  # Prepare stacking result entry
+        all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store result with key
+        send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier with F1: {truncate_value(s_f1)} in {calculate_execution_time(0, s_elapsed)}")
+        print(
+            f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{truncate_value(stacking_metrics[0])}{Style.RESET_ALL}"
+        )  # Output accuracy
+        progress_bar.update(1)  # Update progress after stacking
+        current_combination += 1
+
+    progress_bar.close()  # Close progress bar
+    return all_results  # Return dictionary of results
+
+
 def determine_files_to_process(csv_file, input_path, config=None):
     """
     Determines which files to process based on CLI override or directory scan.
