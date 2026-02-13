@@ -129,6 +129,41 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def prepare_models_with_hyperparameters(file_path, config=None):
+    """
+    Prepares base models and applies hyperparameter optimization results if available.
+
+    :param file_path: Path to the dataset file for loading hyperparameters
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Tuple (base_models, hp_params_map)
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Preparing models with hyperparameters for: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    base_models = get_models(config=config)  # Get the base models with default parameters
+
+    hp_params_map = {}  # Initialize empty hyperparameters mapping
+    hp_results_raw = extract_hyperparameter_optimization_results(file_path, config=config)  # Extract hyperparameter optimization results
+
+    if hp_results_raw:  # If results were found, extract the params mapping and apply
+        hp_params_map = {
+            k: (v.get("best_params") if isinstance(v, dict) else v) for k, v in hp_results_raw.items()
+        }  # Extract only the best_params mapping
+        base_models = apply_hyperparameters_to_models(hp_params_map, base_models, config=config)  # Apply hyperparameters to base models
+        verbose_output(
+            f"{BackgroundColors.GREEN}Applied hyperparameters from optimization results{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
+
+    return (base_models, hp_params_map)  # Return models and hyperparameters mapping
+
+
 def extract_metrics_from_result(result):
     """
     Extracts metrics from a result dictionary into a list.
