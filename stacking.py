@@ -881,6 +881,59 @@ def find_data_augmentation_file(original_file_path, config=None):
     return None  # Return None when no augmented file is found
 
 
+def load_augmented_files_for_multiclass(original_files_list, config=None):
+    """
+    Load augmented data files corresponding to original files for multi-class mode.
+    
+    :param original_files_list: List of original dataset CSV file paths
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: List of augmented file paths (None entries where augmented file not found)
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Loading augmented files for multi-class mode: {BackgroundColors.CYAN}{len(original_files_list)} files{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+    
+    augmented_files = []  # Initialize list to store augmented file paths
+    found_count = 0  # Initialize counter for found augmented files
+    
+    for original_file in original_files_list:  # Iterate over each original file
+        augmented_file = find_data_augmentation_file(original_file, config=config)  # Find corresponding augmented file
+        if augmented_file is not None:  # If augmented file was found
+            augmented_files.append(augmented_file)  # Add to augmented files list
+            found_count += 1  # Increment found counter
+        else:  # If augmented file was not found
+            verbose_output(
+                f"{BackgroundColors.YELLOW}No augmented file found for: {BackgroundColors.CYAN}{original_file}{Style.RESET_ALL}",
+                config=config
+            )  # Output warning message
+            augmented_files.append(None)  # Add None placeholder to maintain alignment
+    
+    if found_count == 0:  # If no augmented files were found at all
+        print(
+            f"{BackgroundColors.YELLOW}No augmented files found for any original files in multi-class mode.{Style.RESET_ALL}"
+        )  # Print warning message
+        return []  # Return empty list
+    
+    if found_count < len(original_files_list):  # If some but not all augmented files were found
+        print(
+            f"{BackgroundColors.YELLOW}Found augmented files for {BackgroundColors.CYAN}{found_count}/{len(original_files_list)}{BackgroundColors.YELLOW} original files.{Style.RESET_ALL}"
+        )  # Print partial match warning
+    else:  # If all augmented files were found
+        print(
+            f"{BackgroundColors.GREEN}Found augmented files for all {BackgroundColors.CYAN}{found_count}{BackgroundColors.GREEN} original files.{Style.RESET_ALL}"
+        )  # Print success message
+    
+    # Filter out None entries to return only valid augmented file paths
+    valid_augmented_files = [f for f in augmented_files if f is not None]  # Filter out None entries
+    
+    return valid_augmented_files  # Return list of valid augmented file paths
+
+
 def merge_original_and_augmented(original_df, augmented_df, config=None):
     """
     Merge original and augmented dataframes by concatenating them.
