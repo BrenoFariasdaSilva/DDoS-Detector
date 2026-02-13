@@ -919,7 +919,8 @@ def compute_and_save_tsne_plot(X_scaled, labels, output_path, title, perplexity=
         unique_labels = np.unique(labels)  # Extract unique label values
         n_labels = len(unique_labels)  # Count unique labels
 
-        colors = plt.cm.rainbow(np.linspace(0, 1, n_labels))  # Generate distinct colors
+        cmap = plt.cm.get_cmap("rainbow")  # Get rainbow colormap for distinct colors
+        colors = cmap(np.linspace(0, 1, n_labels))  # Generate distinct colors from colormap
 
         for idx, label in enumerate(unique_labels):  # Iterate over unique labels
             mask = labels == label  # Create boolean mask for current label
