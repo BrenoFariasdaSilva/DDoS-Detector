@@ -129,6 +129,43 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def export_automl_search_history(study, output_dir, study_name):
+    """
+    Exports the Optuna study trial history to a CSV file.
+
+    :param study: Completed Optuna study object
+    :param output_dir: Directory path for saving the export file
+    :param study_name: Name prefix for the output file
+    :return: Path to the exported CSV file
+    """
+
+    os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+
+    trials_data = []  # Initialize list for trial data
+
+    for trial in study.trials:  # Iterate over all trials
+        trial_entry = {  # Build entry for this trial
+            "trial_number": trial.number,  # Trial index number
+            "value": trial.value if trial.value is not None else None,  # Objective value (F1 score)
+            "state": trial.state.name,  # Trial state (COMPLETE, PRUNED, FAIL)
+            "duration_s": (
+                trial.duration.total_seconds() if trial.duration else None
+            ),  # Trial duration in seconds
+        }  # Build basic trial entry
+        trial_entry.update(trial.params)  # Add trial parameters to entry
+        trials_data.append(trial_entry)  # Append to trials data list
+
+    df = pd.DataFrame(trials_data)  # Convert trials data to DataFrame
+    output_path = os.path.join(output_dir, f"{study_name}_search_history.csv")  # Build output file path
+    df.to_csv(output_path, index=False)  # Save to CSV
+
+    print(
+        f"{BackgroundColors.GREEN}AutoML search history exported to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+    )  # Output export confirmation
+
+    return output_path  # Return the output file path
+
+
 def export_automl_best_config(best_model_name, best_params, test_metrics, stacking_config, output_dir, feature_names):
     """
     Exports the best AutoML configuration and metrics to a JSON file.
