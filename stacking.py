@@ -129,6 +129,24 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def truncate_value(value):
+    """
+    Format a numeric value to 4 decimal places, or return None if not possible.
+    
+    :param value: Numeric value
+    :return: Formatted string or None
+    """
+
+    try:  # Try to format the value
+        if value is None:  # If value is None
+            return None  # Return None
+        v = float(value)  # Convert to float
+        truncated = math.trunc(v * 10000) / 10000.0  # Truncate to 4 decimal places
+        return f"{truncated:.4f}"  # Return formatted string
+    except Exception:  # On failure
+        return None  # Return None
+
+
 def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_names, best_params=None, feature_set=None, dataset_csv_path=None, config=None):
     """
     Export model, scaler and metadata for stacking evaluations.
