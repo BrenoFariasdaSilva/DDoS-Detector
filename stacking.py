@@ -129,6 +129,25 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def initialize_config(config_path=None, cli_args=None):
+    """
+    Initialize global CONFIG with merged configuration.
+    
+    :param config_path: Path to config file (None for default)
+    :param cli_args: Parsed CLI arguments (None for no CLI overrides)
+    :return: Merged configuration dictionary
+    """
+    
+    defaults = get_default_config()  # Get default configuration
+    file_config = load_config_file(config_path)  # Load file configuration
+    config = merge_configs(defaults, file_config, cli_args)  # Merge all configurations
+    
+    global CONFIG  # Access global CONFIG
+    CONFIG = config  # Set global CONFIG
+    
+    return config  # Return merged configuration
+
+
 def initialize_logger(config=None):
     """
     Initialize logger using configuration.
