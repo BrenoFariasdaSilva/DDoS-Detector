@@ -738,6 +738,9 @@ def sample_augmented_by_ratio(augmented_df, original_df, ratio):
     )  # Output verbose message confirming sampling details
 
     return sampled_df  # Return the sampled augmented DataFrame
+
+
+def save_augmentation_comparison_results(file_path, comparison_results):
     """
     Save data augmentation comparison results to CSV file.
 
