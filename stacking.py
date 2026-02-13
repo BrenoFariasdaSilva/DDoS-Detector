@@ -129,6 +129,44 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def combine_dataset_if_needed(files_to_process, config=None):
+    """
+    Combines multiple dataset files into one if PROCESS_ENTIRE_DATASET is enabled.
+
+    :param files_to_process: List of file paths to process
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Tuple (combined_df, combined_file_for_features, updated_files_list) or (None, None, files_to_process)
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Checking if dataset combination is needed...{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+    
+    process_entire_dataset = config.get("execution", {}).get("process_entire_dataset", False)  # Get process entire dataset flag from config
+
+    if process_entire_dataset and len(files_to_process) > 1:  # If combining is enabled and multiple files exist
+        verbose_output(
+            f"{BackgroundColors.GREEN}Attempting to combine {BackgroundColors.CYAN}{len(files_to_process)}{BackgroundColors.GREEN} dataset files...{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
+        result = combine_dataset_files(files_to_process, config=config)  # Attempt to combine all files
+        if result is not None:  # If combination was successful
+            combined_df, combined_target_col = result  # Unpack the combined dataframe and target column
+            combined_file_for_features = files_to_process[0]  # Use first file for feature selection metadata
+            files_to_process = ["combined"]  # Replace file list with single "combined" entry
+            return (combined_df, combined_file_for_features, files_to_process)  # Return combined data and updated file list
+        else:  # If combination failed
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Could not combine dataset files. Processing individually.{Style.RESET_ALL}"
+            )  # Output warning message
+
+    return (None, None, files_to_process)  # Return original file list unchanged
+
+
 def load_and_preprocess_dataset(file, combined_df, config=None):
     """
     Loads and preprocesses a dataset file or uses combined dataframe.
