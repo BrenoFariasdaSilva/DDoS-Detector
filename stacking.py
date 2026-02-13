@@ -129,6 +129,34 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def print_file_processing_header(file, config=None):
+    """
+    Prints formatted header for file processing section.
+
+    :param file: File path being processed
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Printing file processing header for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+    )  # Print separator line
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
+    )  # Print file being processed
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+    )  # Print separator line
+
+
 def process_single_file_evaluation(file, combined_df, combined_file_for_features, config=None):
     """
     Processes evaluation for a single file including feature loading, model preparation, and evaluation.
