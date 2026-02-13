@@ -863,6 +863,105 @@ def extract_attack_label_from_path(file_path):
     return attack_label  # Return attack type label string
 
 
+def combine_files_for_multiclass(files_list, config=None):
+    """
+    Combine multiple dataset files into a single multi-class dataset.
+    Each file represents a different attack type and becomes a unique class label.
+    
+    :param files_list: List of dataset CSV file paths to combine for multi-class
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Tuple (combined_df, attack_types_list, target_col_name) or (None, None, None) if failed
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Combining files for multi-class classification: {BackgroundColors.CYAN}{len(files_list)} files{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+    
+    if not files_list:  # If files list is empty
+        print(f"{BackgroundColors.RED}No files provided for multi-class combination.{Style.RESET_ALL}")  # Print error message
+        return (None, None, None)  # Return None tuple
+    
+    processed_files_with_labels = []  # Initialize list for processed file data with attack labels
+    attack_types_set = set()  # Initialize set to track unique attack types
+    
+    for f in files_list:  # Iterate over each file in the list
+        result = process_single_file(f, config=config)  # Process the single file
+        if result is not None:  # If processing succeeded
+            df_clean, target_col, feat_cols = result  # Unpack the result
+            attack_label = extract_attack_label_from_path(f)  # Extract attack type from filename
+            attack_types_set.add(attack_label)  # Add attack type to set
+            processed_files_with_labels.append((f, df_clean, target_col, feat_cols, attack_label))  # Add to processed list with label
+        else:  # If processing failed
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Skipping file due to processing failure: {BackgroundColors.CYAN}{f}{Style.RESET_ALL}",
+                config=config
+            )  # Output warning message
+    
+    if not processed_files_with_labels:  # If no files were processed successfully
+        print(f"{BackgroundColors.RED}No compatible files found to combine for multi-class dataset.{Style.RESET_ALL}")  # Print error
+        return (None, None, None)  # Return None tuple
+    
+    print(
+        f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{len(attack_types_set)}{BackgroundColors.GREEN} unique attack types for multi-class: {BackgroundColors.CYAN}{sorted(attack_types_set)}{Style.RESET_ALL}"
+    )  # Print attack types summary
+    
+    # Find common features across all files
+    common_features = None  # Initialize common features set
+    target_col_name = None  # Initialize target column name
+    
+    for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # Iterate over processed files
+        if target_col_name is None:  # If target not yet set
+            target_col_name = this_target  # Set target column name
+        
+        if common_features is None:  # If common features not yet initialized
+            common_features = set(feat_cols)  # Initialize with first file's features
+        else:  # If common features already initialized
+            common_features = common_features.intersection(set(feat_cols))  # Intersect with current file's features
+    
+    if not common_features:  # If no common features found
+        print(f"{BackgroundColors.RED}No common features found across files for multi-class combination.{Style.RESET_ALL}")  # Print error
+        return (None, None, None)  # Return None tuple
+    
+    common_features_list = sorted(list(common_features))  # Convert to sorted list
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Common features for multi-class: {BackgroundColors.CYAN}{len(common_features_list)} features{Style.RESET_ALL}",
+        config=config
+    )  # Output common features count
+    
+    # Build combined dataframe with attack type labels
+    combined_parts = []  # Initialize list to accumulate dataframe parts
+    
+    for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # Iterate over processed files
+        df_subset = df_clean[common_features_list].copy()  # Select only common features
+        df_subset['attack_type'] = attack_label  # Add attack type column with the extracted label
+        combined_parts.append(df_subset)  # Append to combined parts list
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Added {BackgroundColors.CYAN}{len(df_subset)}{BackgroundColors.GREEN} samples from {BackgroundColors.CYAN}{attack_label}{Style.RESET_ALL}",
+            config=config
+        )  # Output samples added message
+    
+    combined_df = pd.concat(combined_parts, ignore_index=True)  # Concatenate all parts into single dataframe
+    combined_df = combined_df.replace([np.inf, -np.inf], np.nan).dropna()  # Replace inf with nan and drop na
+    
+    if combined_df.empty:  # If combined dataframe is empty after cleaning
+        print(f"{BackgroundColors.RED}Combined multi-class dataset is empty after cleaning.{Style.RESET_ALL}")  # Print error
+        return (None, None, None)  # Return None tuple
+    
+    attack_types_list = sorted(list(attack_types_set))  # Convert attack types set to sorted list
+    
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Multi-class dataset created: {BackgroundColors.CYAN}{len(combined_df)} samples, {len(common_features_list)} features, {len(attack_types_list)} classes{Style.RESET_ALL}"
+    )  # Print summary of combined dataset
+    
+    return (combined_df, attack_types_list, 'attack_type')  # Return combined dataframe, attack types list, and new target column name
+
+
 def find_data_augmentation_file(original_file_path, config=None):
     """
     Find the corresponding data augmentation file for an original CSV file.
