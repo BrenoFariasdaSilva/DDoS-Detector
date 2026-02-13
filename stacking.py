@@ -2690,6 +2690,9 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
     original_results_list = list(results_original.values())  # Convert results dict to list
     save_stacking_results(file, original_results_list)  # Save original results to CSV
 
+    if ENABLE_AUTOML:  # If AutoML pipeline is enabled
+        run_automl_pipeline(file, df_original_cleaned, feature_names)  # Run AutoML pipeline
+
     if TEST_DATA_AUGMENTATION:  # If data augmentation testing is enabled
         process_augmented_data_evaluation(
             file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
