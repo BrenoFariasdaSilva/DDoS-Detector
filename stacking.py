@@ -129,6 +129,30 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def calculate_all_improvements(orig_metrics, merged_metrics):
+    """
+    Calculates improvement percentages for all metrics comparing original vs merged data.
+
+    :param orig_metrics: List of original metrics [accuracy, precision, recall, f1, fpr, fnr, time]
+    :param merged_metrics: List of merged metrics [accuracy, precision, recall, f1, fpr, fnr, time]
+    :return: Dictionary of improvement percentages for each metric
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Calculating metric improvements...{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    return {
+        "accuracy": calculate_metric_improvement(orig_metrics[0], merged_metrics[0]),  # Calculate accuracy improvement
+        "precision": calculate_metric_improvement(orig_metrics[1], merged_metrics[1]),  # Calculate precision improvement
+        "recall": calculate_metric_improvement(orig_metrics[2], merged_metrics[2]),  # Calculate recall improvement
+        "f1_score": calculate_metric_improvement(orig_metrics[3], merged_metrics[3]),  # Calculate F1 score improvement
+        "fpr": calculate_metric_improvement(orig_metrics[4], merged_metrics[4]),  # Calculate FPR change (lower is better)
+        "fnr": calculate_metric_improvement(orig_metrics[5], merged_metrics[5]),  # Calculate FNR change (lower is better)
+        "training_time": calculate_metric_improvement(orig_metrics[6], merged_metrics[6]),  # Calculate time change (lower is better)
+    }  # Return dictionary of improvements
+
+
 def print_model_comparison(feature_set, model_name, orig_metrics, aug_metrics, merged_metrics, improvements):
     """
     Prints detailed comparison of metrics for a single model across data sources.
