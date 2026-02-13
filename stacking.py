@@ -129,6 +129,63 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def print_model_comparison(feature_set, model_name, orig_metrics, aug_metrics, merged_metrics, improvements):
+    """
+    Prints detailed comparison of metrics for a single model across data sources.
+
+    :param feature_set: Name of the feature set used
+    :param model_name: Name of the model
+    :param orig_metrics: List of original data metrics
+    :param aug_metrics: List of augmented data metrics
+    :param merged_metrics: List of merged data metrics
+    :param improvements: Dictionary of improvement percentages
+    :return: None
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Printing comparison for model: {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}, feature set: {BackgroundColors.CYAN}{feature_set}{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Feature Set: {BackgroundColors.CYAN}{feature_set}{BackgroundColors.GREEN} | Model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
+    )  # Print header with feature set and model name
+
+    print(f"  {BackgroundColors.YELLOW}Accuracy:{Style.RESET_ALL}")  # Print accuracy label
+    print(
+        f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[0])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[0])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[0])} | {BackgroundColors.CYAN}Improvement: {improvements['accuracy']:+.2f}%{Style.RESET_ALL}"
+    )  # Print accuracy comparison
+
+    print(f"  {BackgroundColors.YELLOW}Precision:{Style.RESET_ALL}")  # Print precision label
+    print(
+        f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[1])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[1])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[1])} | {BackgroundColors.CYAN}Improvement: {improvements['precision']:+.2f}%{Style.RESET_ALL}"
+    )  # Print precision comparison
+
+    print(f"  {BackgroundColors.YELLOW}Recall:{Style.RESET_ALL}")  # Print recall label
+    print(
+        f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[2])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[2])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[2])} | {BackgroundColors.CYAN}Improvement: {improvements['recall']:+.2f}%{Style.RESET_ALL}"
+    )  # Print recall comparison
+
+    print(f"  {BackgroundColors.YELLOW}F1-Score:{Style.RESET_ALL}")  # Print F1 score label
+    print(
+        f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[3])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[3])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[3])} | {BackgroundColors.CYAN}Improvement: {improvements['f1_score']:+.2f}%{Style.RESET_ALL}"
+    )  # Print F1 score comparison
+
+    print(f"  {BackgroundColors.YELLOW}FPR (lower is better):{Style.RESET_ALL}")  # Print FPR label
+    print(
+        f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[4])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[4])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[4])} | {BackgroundColors.CYAN}Change: {improvements['fpr']:+.2f}%{Style.RESET_ALL}"
+    )  # Print FPR comparison
+
+    print(f"  {BackgroundColors.YELLOW}FNR (lower is better):{Style.RESET_ALL}")  # Print FNR label
+    print(
+        f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[5])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[5])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[5])} | {BackgroundColors.CYAN}Change: {improvements['fnr']:+.2f}%{Style.RESET_ALL}"
+    )  # Print FNR comparison
+
+    print(f"  {BackgroundColors.YELLOW}Training Time (seconds, lower is better):{Style.RESET_ALL}")  # Print training time label
+    print(
+        f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[6]:.2f}s | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[6]:.2f}s | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[6]:.2f}s | {BackgroundColors.CYAN}Change: {improvements['training_time']:+.2f}%{Style.RESET_ALL}\n"
+    )  # Print training time comparison
+
+
 def build_comparison_result_entry(orig_result, feature_set, classifier_type, model_name, data_source, metrics, improvements, n_features_override=None, n_samples_train_override=None, n_samples_test_override=None, experiment_id=None, experiment_mode="original_only", augmentation_ratio=None):
     """
     Builds a single comparison result entry for CSV export.
