@@ -129,6 +129,70 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file_path=None, config=None):
+    """
+    Applies Principal Component Analysis (PCA) transformation to the scaled training
+    and testing datasets using the optimal number of components.
+
+    First attempts to load a pre-fitted PCA object from disk. If not found,
+    fits a new PCA model on the training data.
+
+    :param X_train_scaled: Scaled training features (numpy array).
+    :param X_test_scaled: Scaled testing features (numpy array).
+    :param pca_n_components: Optimal number of components (integer), or None/0 if PCA is skipped.
+    :param file_path: Path to the dataset CSV file (optional, for loading pre-fitted PCA).
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Tuple (X_train_pca, X_test_pca) - Transformed features, or (None, None).
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    X_train_pca = None  # Initialize PCA training features
+    X_test_pca = None  # Initialize PCA testing features
+
+    if pca_n_components is not None and pca_n_components > 0:  # If PCA components are specified
+        verbose_output(
+            f"{BackgroundColors.GREEN}Starting PCA transformation with {BackgroundColors.CYAN}{pca_n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
+
+        n_features = X_train_scaled.shape[1]  # Get the number of features in the training set
+        n_components = min(
+            pca_n_components, n_features
+        )  # Effective number of components cannot exceed number of features
+
+        if n_components < pca_n_components:  # Verify if the component count was reduced
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Reduced PCA components from {pca_n_components} to {n_components} due to limited features ({n_features}).{Style.RESET_ALL}"
+            )
+
+        pca = None  # Initialize PCA object as None
+        if file_path:  # Only attempt to load if file_path is provided
+            pca = load_pca_object(file_path, n_components, config=config)  # Load pre-fitted PCA object
+
+        if pca is None:  # If PCA object wasn't loaded, fit a new one
+            verbose_output(
+                f"{BackgroundColors.GREEN}Fitting new PCA model with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}",
+                config=config
+            )
+            pca = PCA(n_components=n_components)  # Initialize PCA with the effective number of components
+            X_train_pca = pca.fit_transform(X_train_scaled)  # Fit and transform the training data
+        else:  # PCA object was loaded successfully
+            print(
+                f"{BackgroundColors.GREEN}Using pre-fitted PCA model with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components{Style.RESET_ALL}"
+            )
+            X_train_pca = pca.transform(X_train_scaled)  # Only transform the training data
+
+        X_test_pca = pca.transform(X_test_scaled)  # Transform the testing data
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}PCA applied successfully. Transformed data shape: {BackgroundColors.CYAN}{X_train_pca.shape}{Style.RESET_ALL}"
+        )  # Output the transformed shape
+
+    return X_train_pca, X_test_pca  # Return the transformed features
+
+
 def get_feature_subset(X_scaled, features, feature_names):
     """
     Returns a subset of features from the scaled feature set based on the provided feature names.
