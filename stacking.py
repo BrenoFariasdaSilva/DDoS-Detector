@@ -174,7 +174,7 @@ def get_default_config():
             "csv_file": None,
             "process_entire_dataset": False,
             "test_data_augmentation": True,
-            "execution_mode": "binary",
+            "execution_mode": "both",
         },
         "dataset": {
             "remove_zero_variance": True,
@@ -5072,7 +5072,7 @@ def process_files_in_path(input_path, dataset_name, config=None):
         return  # Exit function early
     
     csv_file = config.get("execution", {}).get("csv_file", None)  # Get CSV file override from config
-    execution_mode = config.get("execution", {}).get("execution_mode", "binary")  # Get execution mode from config (binary/multi-class/both)
+    execution_mode = config.get("execution", {}).get("execution_mode", "both")  # Get execution mode from config (binary/multi-class/both, default: both)
 
     files_to_process = determine_files_to_process(csv_file, input_path, config=config)  # Determine which files to process
 
