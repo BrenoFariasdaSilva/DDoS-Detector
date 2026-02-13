@@ -4230,6 +4230,27 @@ def evaluate_on_dataset(
                     f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(metrics[0])}{Style.RESET_ALL}"
                 )  # Output accuracy
                 progress_bar.update(1)  # Update progress after each model
+                
+                # Run explainability for this individual model (only on original test data)
+                if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run on original data
+                    try:  # Attempt explainability
+                        trained_model = individual_models[model_name]  # Get trained model object
+                        run_explainability_pipeline(
+                            trained_model,
+                            model_name,
+                            X_test_subset,
+                            y_test,
+                            subset_feature_names,
+                            file,
+                            name,
+                            execution_mode_str,
+                            config
+                        )  # Run explainability pipeline on original test data only
+                    except Exception as e:  # If explainability fails
+                        verbose_output(
+                            f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
+                            config=config
+                        )  # Log error but continue
 
         print(
             f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}"
@@ -4288,6 +4309,26 @@ def evaluate_on_dataset(
         )  # Output accuracy
         progress_bar.update(1)  # Update progress after stacking
         current_combination += 1
+        
+        # Run explainability for stacking model (only on original test data)
+        if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run on original data
+            try:  # Attempt explainability
+                run_explainability_pipeline(
+                    stacking_model,
+                    "StackingClassifier",
+                    X_test_subset,
+                    y_test,
+                    subset_feature_names,
+                    file,
+                    name,
+                    execution_mode_str,
+                    config
+                )  # Run explainability pipeline on original test data only for stacking model
+            except Exception as e:  # If explainability fails
+                verbose_output(
+                    f"{BackgroundColors.YELLOW}Explainability failed for StackingClassifier: {e}{Style.RESET_ALL}",
+                    config=config
+                )  # Log error but continue
 
     progress_bar.close()  # Close progress bar
     return all_results  # Return dictionary of results
