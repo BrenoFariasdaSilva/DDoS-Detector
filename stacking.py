@@ -129,6 +129,95 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def extract_hyperparameter_optimization_results(csv_path, config=None):
+    """
+    Extract hyperparameter optimization results for a specific dataset file.
+
+    Looks for the HYPERPARAMETERS_FILENAME file in the "Classifiers_Hyperparameters"
+    subdirectory relative to the dataset CSV file. Filters results to match the
+    current base_csv filename being processed.
+
+    This function extracts **only the best hyperparameters** for each classifier
+    that corresponds to the current file being processed.
+
+    :param csv_path: Path to the dataset CSV file being processed.
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Dictionary mapping model names to their best hyperparameters, or None if not found.
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Looking for hyperparameter optimization results for: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}",
+        config=config
+    )  # Inform user which dataset we're searching for
+
+    file_dir = os.path.dirname(csv_path)  # Directory containing the dataset file
+    base_filename = os.path.basename(csv_path)  # Get the base filename (e.g., "UDPLag.csv")
+    
+    hyperparameters_filename = config.get("stacking", {}).get("hyperparameters_filename", "Hyperparameter_Optimization_Results.csv")  # Get filename from config
+
+    hyperparams_path = os.path.join(
+        file_dir, "Classifiers_Hyperparameters", hyperparameters_filename
+    )  # Path to hyperparameter optimization results
+
+    if not verify_filepath_exists(hyperparams_path):  # If the hyperparameters file does not exist
+        verbose_output(
+            f"{BackgroundColors.YELLOW}No hyperparameter optimization results found at: {BackgroundColors.CYAN}{hyperparams_path}{Style.RESET_ALL}",
+            config=config
+        )
+        return None  # Return None if no optimization results found
+
+    try:  # Try to load the CSV file
+        df = pd.read_csv(hyperparams_path)  # Load the CSV into a DataFrame
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+    except Exception as e:  # If there is an error loading the CSV
+        print(
+            f"{BackgroundColors.RED}Failed to load hyperparameter optimization file {hyperparams_path}: {e}{Style.RESET_ALL}"
+        )
+        return {}  # Return empty dict on failure
+
+    matching_rows = df[df["base_csv"] == base_filename]  # Filter by base_csv column
+
+    if matching_rows.empty:  # If no matching rows found
+        verbose_output(
+            f"{BackgroundColors.YELLOW}No hyperparameter results found for file: {BackgroundColors.CYAN}{base_filename}{BackgroundColors.YELLOW} in {BackgroundColors.CYAN}{hyperparams_path}{Style.RESET_ALL}",
+            config=config
+        )
+        return None  # Return None if no results for this file
+
+    results = {}  # Initialize dictionary to hold parsed results per model
+    for _, row in matching_rows.iterrows():  # Iterate over each matching row
+        try:  # Try to parse each row
+            model = row.get("model") or row.get("Model")  # Try common column names for model identifier
+            if not model:  # If model identifier is missing
+                continue  # Skip invalid rows
+
+            best_params_raw = (
+                row.get("best_params") or row.get("best_params_json") or row.get("best_params_str")
+            )  # Try common column names for best_params
+            best_params = None  # Default if parsing fails or value missing
+            if isinstance(best_params_raw, str) and best_params_raw.strip():  # If best_params_raw is a non-empty string
+                try:  # Try to parse best_params as JSON first
+                    best_params = json.loads(best_params_raw)  # Parse JSON string if possible
+                except Exception:  # If JSON parsing fails, try ast.literal_eval as a fallback
+                    try:  # Try to parse using ast.literal_eval
+                        best_params = ast.literal_eval(best_params_raw)  # Safely evaluate string to Python literal
+                    except Exception:  # If both parsing attempts fail
+                        best_params = None  # Leave as None if parsing fails
+
+            results[str(model)] = {"best_params": best_params}  # Store parsed parameters only
+        except Exception:  # Catch any unexpected errors during row parsing
+            continue  # Skip problematic rows silently
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(results)}{BackgroundColors.GREEN} hyperparameter optimization results for {BackgroundColors.CYAN}{base_filename}{BackgroundColors.GREEN} from: {BackgroundColors.CYAN}{hyperparams_path}{Style.RESET_ALL}",
+        config=config
+    )
+    return results  # Return the normalized results mapping
+
+
 def apply_hyperparameters_to_models(hyperparams_map, models_map, config=None):
     """
     Apply hyperparameter mappings to instantiated models.
