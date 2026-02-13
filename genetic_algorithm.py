@@ -2611,7 +2611,7 @@ def run_single_ga_iteration(
         return cached  # Return cached result immediately
 
     toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size, pool=shared_pool)  # Setup GA components, reusing shared pool
-    best_ind, gens_ran, fitness_history = run_genetic_algorithm_loop(
+    best_ind, gens_ran, history_data = run_genetic_algorithm_loop(
         toolbox=toolbox,
         population=population,
         hof=hof,
@@ -2629,7 +2629,7 @@ def run_single_ga_iteration(
         run=run,
         runs=runs,
         progress_state=progress_state,
-    )  # Run GA loop and get generations actually run and fitness history
+    )  # Run GA loop and get generations actually run and comprehensive history data
 
     if best_ind is None:  # If GA failed
         return None  # Exit early
@@ -2662,13 +2662,13 @@ def run_single_ga_iteration(
     iteration_elapsed_time = time.time() - iteration_start_time  # Calculate total iteration time
     metrics_with_iteration_time = metrics + (iteration_elapsed_time,)  # Add total iteration time as 7th element
 
-    try:  # Try to generate GA convergence plot
-        plot_ga_convergence(
-            csv_path, pop_size, run, fitness_history, dataset_name, n_generations=n_generations, cxpb=cxpb, mutpb=mutpb
-        )  # Generate convergence plot
+    try:  # Try to generate comprehensive convergence plots
+        generate_convergence_plots(
+            history_data, csv_path, pop_size, run, dataset_name, n_generations=n_generations, cxpb=cxpb, mutpb=mutpb
+        )  # Generate all convergence and progress plots
     except Exception as e:  # On any plotting error
         verbose_output(
-            f"{BackgroundColors.YELLOW}Failed to generate GA convergence plot: {e}{Style.RESET_ALL}"
+            f"{BackgroundColors.YELLOW}Failed to generate convergence plots: {e}{Style.RESET_ALL}"
         )  # Log warning
 
     result = {
