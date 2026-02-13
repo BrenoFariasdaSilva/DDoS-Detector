@@ -129,6 +129,46 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def run_stacking_pipeline(config_path=None, **config_overrides):
+    """
+    Programmatic entry point for stacking classifier evaluation.
+    
+    Allows calling this module as a library with configuration overrides:
+    
+    Example:
+        from stacking import run_stacking_pipeline
+        
+        # Using config file
+        run_stacking_pipeline(config_path="custom_config.yaml")
+        
+        # Using direct parameter overrides
+        run_stacking_pipeline(
+            execution={\"verbose\": True, \"test_data_augmentation\": False},
+            automl={\"enabled\": True, \"n_trials\": 100}
+        )
+    
+    :param config_path: Path to configuration file (None for default config.yaml)
+    :param config_overrides: Dictionary overrides for configuration
+    :return: None
+    """
+    
+    # Initialize configuration
+    config = initialize_config(config_path=config_path, cli_args=None)  # Load base config
+    
+    # Apply programmatic overrides
+    for key, value in config_overrides.items():  # Iterate over provided overrides
+        if isinstance(value, dict) and key in config:  # If override is dict and key exists
+            config[key] = deep_merge_dicts(config[key], value)  # Deep merge override
+        else:  # Direct override
+            config[key] = value  # Set value directly
+    
+    # Initialize logger
+    initialize_logger(config=config)  # Setup logging
+    
+    # Run main pipeline
+    main(config=config)  # Execute stacking pipeline
+
+
 def to_seconds(obj):
     """
     Converts various time-like objects to seconds.
