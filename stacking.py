@@ -129,6 +129,36 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def set_threads_limit_based_on_ram(config=None):
+    """
+    Sets threads limit to 1 if system RAM is below threshold to avoid memory issues.
+
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Threads limit value
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Verifying system RAM to set threads_limit...{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    threads_limit = config.get("evaluation", {}).get("threads_limit", 2)  # Get threads limit from config
+    ram_threshold = config.get("evaluation", {}).get("ram_threshold_gb", 128)  # Get RAM threshold from config
+    ram_gb = psutil.virtual_memory().total / (1024**3)  # Get total system RAM in GB
+
+    if ram_gb <= ram_threshold:  # If RAM is less than or equal to threshold
+        threads_limit = 1  # Set threads_limit to 1
+        verbose_output(
+            f"{BackgroundColors.YELLOW}System RAM is {ram_gb:.1f}GB (<={ram_threshold}GB). Setting threads_limit to 1.{Style.RESET_ALL}",
+            config=config
+        )
+    
+    return threads_limit  # Return the threads limit value
+
+
 def verify_filepath_exists(filepath):
     """
     Verify if a file or folder exists at the specified path.
