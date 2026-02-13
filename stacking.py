@@ -129,6 +129,46 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def export_automl_best_model(model, scaler, output_dir, model_name, feature_names):
+    """
+    Exports the best AutoML model and scaler to disk using joblib.
+
+    :param model: Trained best model instance
+    :param scaler: Fitted StandardScaler instance
+    :param output_dir: Directory path for saving model files
+    :param model_name: Name of the model for file naming
+    :param feature_names: List of feature names for metadata
+    :return: Tuple (model_path, scaler_path)
+    """
+
+    os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+
+    safe_name = re.sub(r'[\\/*?:"<>|() ]', "_", str(model_name))  # Sanitize model name for filename
+    model_path = os.path.join(output_dir, f"AutoML_best_{safe_name}_model.joblib")  # Build model file path
+    scaler_path = os.path.join(output_dir, f"AutoML_best_{safe_name}_scaler.joblib")  # Build scaler file path
+
+    dump(model, model_path)  # Export model to disk
+
+    if scaler is not None:  # If scaler is provided
+        dump(scaler, scaler_path)  # Export scaler to disk
+
+    meta_path = os.path.join(output_dir, f"AutoML_best_{safe_name}_meta.json")  # Build metadata file path
+    meta = {  # Build metadata dictionary
+        "model_name": model_name,  # Model name
+        "features": feature_names,  # Feature names used
+        "n_features": len(feature_names),  # Number of features
+    }  # Metadata content
+
+    with open(meta_path, "w", encoding="utf-8") as f:  # Open metadata file
+        json.dump(meta, f, indent=2)  # Write metadata JSON
+
+    print(
+        f"{BackgroundColors.GREEN}AutoML best model exported to: {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}"
+    )  # Output export confirmation
+
+    return (model_path, scaler_path)  # Return file paths
+
+
 def build_automl_results_list(best_model_name, best_params, individual_metrics, stacking_metrics, stacking_config, file_path, feature_names, n_train, n_test):
     """
     Builds the results list for AutoML CSV export matching existing results format.
