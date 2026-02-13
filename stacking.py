@@ -129,6 +129,32 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def intersect_features(common_features, feat_cols, config=None):
+    """
+    Intersect features with common features set.
+
+    :param common_features: Current common features set (or None)
+    :param feat_cols: Feature columns in this file
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Updated common features set
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Intersecting features for current file...{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    if common_features is None:  # If common features not set yet
+        common_features = set(feat_cols)  # Initialize with this file's features
+    else:  # Otherwise, intersect with existing common features
+        common_features &= set(feat_cols)  # Update common features
+
+    return common_features  # Return updated common features
+
+
 def find_common_features_and_target(processed_files, config=None):
     """
     Find common features and consistent target column from processed files.
