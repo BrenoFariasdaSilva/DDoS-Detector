@@ -129,6 +129,30 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def parse_cli_args():
+    """
+    Parse command-line arguments for stacking pipeline.
+    
+    :return: Namespace object containing parsed arguments
+    """
+    
+    parser = argparse.ArgumentParser(
+        description="Run stacking classifier evaluation pipeline with optional AutoML and data augmentation testing."
+    )  # Create argument parser
+    parser.add_argument("--config", type=str, default=None, help="Path to config.yaml file")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("--skip-train-if-model-exists", dest="skip_train", action="store_true", help="Load existing models instead of retraining")
+    parser.add_argument("--csv", type=str, default=None, help="Path to specific CSV file to process")
+    parser.add_argument("--automl", action="store_true", help="Enable AutoML pipeline")
+    parser.add_argument("--automl-trials", type=int, default=None, help="Number of AutoML trials")
+    parser.add_argument("--automl-stacking-trials", type=int, default=None, help="Number of stacking trials")
+    parser.add_argument("--automl-timeout", type=int, default=None, help="AutoML timeout in seconds")
+    parser.add_argument("--test-augmentation", action="store_true", help="Enable data augmentation testing")
+    parser.add_argument("--no-test-augmentation", dest="test_augmentation", action="store_false", help="Disable data augmentation testing")
+    
+    return parser.parse_args()  # Return parsed arguments
+
+
 def get_default_config():
     """
     Return default configuration dictionary for stacking pipeline.
