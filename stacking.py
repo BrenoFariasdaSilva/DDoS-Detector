@@ -129,6 +129,51 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def find_feature_file(file_path, filename, config=None):
+    """
+    Locate a feature-analysis CSV file related to `file_path`.
+
+    Search order:
+    - <file_dir>/Feature_Analysis/<filename>
+    - ascend parent directories checking <parent>/Feature_Analysis/<filename>
+    - dataset-level folder under `.../Datasets/<dataset_name>/Feature_Analysis/<filename>`
+    - fallback: search under workspace ./Datasets/**/Feature_Analysis/<filename`
+
+    :param file_path: Path to the file
+    :param filename: Filename to search for
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: The matching path or None
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Searching for feature analysis file: {BackgroundColors.CYAN}{filename}{BackgroundColors.GREEN} related to file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    file_dir = os.path.dirname(os.path.abspath(file_path))  # Get the directory of the input file
+
+    result = find_local_feature_file(file_dir, filename, config=config)  # 1. Local Feature_Analysis in the same directory
+    if result is not None:  # If found
+        return result  # Return the result
+
+    result = find_parent_feature_file(file_dir, filename, config=config)  # 2. Ascend parents checking for Feature_Analysis
+    if result is not None:  # If found
+        return result  # Return the result
+
+    result = find_dataset_level_feature_file(file_path, filename, config=config)  # 3. Dataset-level Feature_Analysis
+    if result is not None:  # If found
+        return result  # Return the result
+
+    print(
+        f"{BackgroundColors.YELLOW}Warning: Feature analysis file {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}.{Style.RESET_ALL}"
+    )  # Output the warning message
+
+    return None  # Return None if not found
+
+
 def extract_genetic_algorithm_features(file_path, config=None):
     """
     Extracts the features selected by the Genetic Algorithm from the corresponding
