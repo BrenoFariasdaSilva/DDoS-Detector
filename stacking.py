@@ -129,6 +129,41 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def automl_objective(trial, X_train, y_train, cv_folds, config=None):
+    """
+    Optuna objective function for automated model and hyperparameter selection.
+
+    :param trial: Optuna trial object
+    :param X_train: Training features array
+    :param y_train: Training target array (numpy)
+    :param cv_folds: Number of cross-validation folds
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Mean cross-validated F1 score (to maximize)
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    search_spaces = get_automl_search_spaces()  # Get all model search spaces
+    model_names = list(search_spaces.keys())  # Get list of available model names
+
+    model_name = trial.suggest_categorical("model_name", model_names)  # Select model type via trial
+    params = suggest_hyperparameters_for_model(trial, model_name, search_spaces)  # Suggest hyperparameters
+
+    try:  # Try to create and evaluate the model
+        model = create_model_from_params(model_name, params, config=config)  # Create model instance from params
+        mean_f1 = automl_cross_validate_model(model, X_train, y_train, cv_folds, trial, config=config)  # Cross-validate
+        return mean_f1  # Return mean F1 score
+    except optuna.exceptions.TrialPruned:  # Handle Optuna pruning
+        raise  # Re-raise pruning exception
+    except Exception as e:  # Handle other errors gracefully
+        verbose_output(
+            f"{BackgroundColors.YELLOW}AutoML trial failed for {model_name}: {e}{Style.RESET_ALL}",
+            config=config,
+        )  # Log the trial failure
+        return 0.0  # Return zero score for failed trials
+
+
 def run_automl_model_search(X_train, y_train, file_path, config=None):
     """
     Runs Optuna-based AutoML model search to find optimal classifier and hyperparameters.
