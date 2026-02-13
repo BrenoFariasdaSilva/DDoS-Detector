@@ -129,6 +129,81 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def save_stacking_results(csv_path, results_list, config=None):
+    """Save the stacking results to CSV file located in same dataset Feature_Analysis directory.
+
+    Writes richer metadata fields matching RFE outputs: model, dataset, accuracy, precision,
+    recall, f1_score, fpr, fnr, elapsed_time_s, cv_method, top_features, rfe_ranking,
+    hyperparameters, features_list and Hardware.
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Preparing to save {BackgroundColors.CYAN}{len(results_list)}{BackgroundColors.GREEN} stacking results to CSV...{Style.RESET_ALL}",
+        config=config
+    )
+
+    if not results_list:
+        print(f"{BackgroundColors.YELLOW}Warning: No results provided to save.{Style.RESET_ALL}")
+        return
+
+    results_filename = config.get("stacking", {}).get("results_filename", "Stacking_Classifiers_Results.csv")  # Get results filename from config
+    file_path_obj = Path(csv_path)
+    feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"
+    os.makedirs(feature_analysis_dir, exist_ok=True)
+    stacking_dir = feature_analysis_dir / "Stacking"
+    os.makedirs(stacking_dir, exist_ok=True)
+    output_path = stacking_dir / results_filename
+
+    flat_rows = []
+    for res in results_list:
+        row = dict(res)
+
+        # Truncate metrics to 4 decimal places
+        for metric in ["accuracy", "precision", "recall", "f1_score", "fpr", "fnr"]:
+            if metric in row and row[metric] is not None:
+                row[metric] = truncate_value(row[metric])
+
+        # Serialize list-like fields into JSON strings for CSV stability
+        if "features_list" in row and not isinstance(row["features_list"], str):
+            row["features_list"] = json.dumps(row["features_list"])
+        if "top_features" in row and not isinstance(row["top_features"], str):
+            row["top_features"] = json.dumps(row["top_features"])
+        if "rfe_ranking" in row and row["rfe_ranking"] is not None and not isinstance(
+            row["rfe_ranking"], str
+        ):
+            row["rfe_ranking"] = json.dumps(row["rfe_ranking"])
+        if "hyperparameters" in row and row["hyperparameters"] is not None and not isinstance(
+            row["hyperparameters"], str
+        ):
+            row["hyperparameters"] = json.dumps(row["hyperparameters"])
+
+        flat_rows.append(row)
+
+    df = pd.DataFrame(flat_rows)
+
+    # Use the canonical header constant for results CSV column ordering
+    results_csv_columns = config.get("stacking", {}).get("results_csv_columns", [])  # Get columns from config
+    column_order = list(results_csv_columns) if results_csv_columns else list(config.get("stacking", {}).get("results_csv_columns", []))  # Use config or fallback to global
+
+    existing_columns = [col for col in column_order if col in df.columns]
+    df = df[existing_columns + [c for c in df.columns if c not in existing_columns]]
+
+    df = add_hardware_column(df, existing_columns)
+
+    try:
+        df.to_csv(str(output_path), index=False, encoding="utf-8")
+        print(
+            f"\n{BackgroundColors.GREEN}Stacking classifier results successfully saved to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+        )
+    except Exception as e:
+        print(
+            f"{BackgroundColors.RED}Failed to write Stacking Classifier CSV to {BackgroundColors.CYAN}{output_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
+        )
+
+
 def get_cache_file_path(csv_path, config=None):
     """
     Generate the cache file path for a given dataset CSV path.
