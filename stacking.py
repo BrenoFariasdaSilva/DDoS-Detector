@@ -129,6 +129,111 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None):
+    """
+    Trains an individual classifier and evaluates its performance on the test set.
+
+    :param model: The classifier model object to train.
+    :param model_name: Name of the classifier (for logging).
+    :param X_train: Training features (scaled numpy array).
+    :param y_train: Training target labels (encoded Series/array).
+    :param X_test: Testing features (scaled numpy array).
+    :param y_test: Testing target labels (encoded Series/array).
+    :param dataset_file: Path to dataset file
+    :param scaler: Scaler object
+    :param feature_names: List of feature names
+    :param feature_set: Feature set name
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    skip_train_if_model_exists = config.get("execution", {}).get("skip_train_if_model_exists", False)  # Get skip train flag from config
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Training {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}...{Style.RESET_ALL}",
+        config=config,
+    )  # Output the verbose message
+
+    start_time = time.time()  # Record the start time
+
+    # If requested, attempt to load an existing exported model instead of retraining
+    if dataset_file is not None and skip_train_if_model_exists:
+        try:
+            models_dir = Path(dataset_file).parent / "Classifiers" / "Models"
+            if models_dir.exists():
+                safe_model = re.sub(r'[\\/*?:"<>|]', "_", str(model_name))
+                pattern = f"*{safe_model}*"
+                if feature_set:
+                    safe_fs = re.sub(r'[\\/*?:"<>|]', "_", str(feature_set))
+                    pattern = f"*{safe_model}*{safe_fs}*"
+                matches = list(models_dir.glob(f"{pattern}_model.joblib"))
+                if matches:
+                    try:
+                        loaded = load(str(matches[0]))
+                        model = loaded
+                        # Try load scaler with same base name
+                        scaler_path = str(matches[0]).replace("_model.joblib", "_scaler.joblib")
+                        if os.path.exists(scaler_path):
+                            scaler = load(scaler_path)
+                        verbose_output(f"Loaded existing model from {matches[0]}")
+                        # Compute predictions and metrics without retraining
+                        y_pred = model.predict(X_test)
+                        elapsed_time = 0.0
+                        acc = accuracy_score(y_test, y_pred)
+                        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)
+                        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)
+                        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
+                        if len(np.unique(y_test)) == 2:
+                            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+                            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+                            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0
+                        else:
+                            fpr = 0.0
+                            fnr = 0.0
+                        return (acc, prec, rec, f1, fpr, fnr, elapsed_time)
+                    except Exception:
+                        # Fallback to training if loading fails
+                        verbose_output(f"Failed to load existing model for {model_name}; retraining.")
+        except Exception:
+            pass
+
+    model.fit(X_train, y_train)  # Fit the model on the training data
+
+    y_pred = model.predict(X_test)  # Predict the labels for the test set
+
+    elapsed_time = time.time() - start_time  # Calculate the total time elapsed
+
+    acc = accuracy_score(y_test, y_pred)  # Calculate Accuracy
+    prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Precision
+    rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Recall
+    f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate F1-Score
+
+    if len(np.unique(y_test)) == 2:  # Binary classification
+        tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()  # Get confusion matrix components
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Calculate FPR
+        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Calculate FNR
+    else:  # Multi-class
+        fpr = 0.0  # Placeholder
+        fnr = 0.0  # Placeholder
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed_time))}s{Style.RESET_ALL}"
+    )  # Output result
+
+    # Export trained model and scaler if dataset info is available
+    try:
+        if dataset_file is not None:
+            dataset_name = os.path.basename(os.path.dirname(dataset_file))
+            export_model_and_scaler(model, scaler, dataset_name, model_name, feature_names or [], best_params=None, feature_set=feature_set, dataset_csv_path=dataset_file)
+    except Exception:
+        pass
+
+    return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
+
+
 def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
     """
     Trains the StackingClassifier model and evaluates its performance on the test set.
