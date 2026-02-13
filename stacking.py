@@ -129,6 +129,52 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def find_dataset_level_feature_file(file_path, filename, config=None):
+    """
+    Try dataset-level search:
+
+    - /.../Datasets/<dataset_name>/Feature_Analysis/<filename>
+    - recursive search under dataset directory
+
+    :param file_path: Path to the file
+    :param filename: Filename to search for
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: The matching path or None
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Searching dataset-level Feature_Analysis for file: {BackgroundColors.CYAN}{filename}{BackgroundColors.GREEN} related to file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    abs_path = os.path.abspath(file_path)  # Get absolute path of the input file
+    parts = abs_path.split(os.sep)  # Split the path into parts
+
+    if "Datasets" not in parts:  # If "Datasets" is not in the path parts
+        return None  # Nothing to do
+
+    idx = parts.index("Datasets")  # Get the index of "Datasets"
+    if idx + 1 >= len(parts):  # If there is no dataset name after "Datasets"
+        return None  # Nothing to do
+
+    dataset_dir = os.sep.join(parts[: idx + 2])  # Construct the dataset directory path
+
+    candidate = os.path.join(dataset_dir, "Feature_Analysis", filename)  # Construct candidate path for the direct path
+    if os.path.exists(candidate):  # If the candidate file exists
+        return candidate  # Return the candidate path
+
+    matches = glob.glob(
+        os.path.join(dataset_dir, "**", "Feature_Analysis", filename), recursive=True
+    )  # Search recursively
+    if matches:  # If matches are found
+        return matches[0]  # Return the first match
+
+    return None  # Not found
+
+
 def find_feature_file(file_path, filename, config=None):
     """
     Locate a feature-analysis CSV file related to `file_path`.
