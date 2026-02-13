@@ -129,6 +129,54 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def export_automl_best_config(best_model_name, best_params, test_metrics, stacking_config, output_dir, feature_names):
+    """
+    Exports the best AutoML configuration and metrics to a JSON file.
+
+    :param best_model_name: Name of the best model found
+    :param best_params: Best hyperparameters dictionary
+    :param test_metrics: Test set evaluation metrics dictionary
+    :param stacking_config: Best stacking configuration dictionary (or None)
+    :param output_dir: Directory path for saving the export file
+    :param feature_names: List of feature names used
+    :return: Path to the exported JSON file
+    """
+
+    os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+
+    config = {  # Build configuration export dictionary
+        "best_individual_model": {  # Best individual model section
+            "model_name": best_model_name,  # Model name
+            "hyperparameters": best_params,  # Model hyperparameters
+            "test_metrics": {
+                k: truncate_value(v) if isinstance(v, (int, float)) and v is not None else v
+                for k, v in test_metrics.items()
+            },  # Test metrics with truncation
+        },
+        "best_stacking_config": stacking_config,  # Stacking configuration (may be None)
+        "automl_settings": {  # AutoML settings used
+            "n_trials": config.get("automl", {}).get("n_trials", 50),  # Number of model search trials
+            "stacking_trials": config.get("automl", {}).get("stacking_trials", 20),  # Number of stacking search trials
+            "cv_folds": config.get("automl", {}).get("cv_folds", 5),  # Cross-validation folds
+            "timeout_s": config.get("automl", {}).get("timeout", 3600),  # Timeout in seconds
+            "random_state": config.get("automl", {}).get("random_state", 42),  # Random seed used
+        },
+        "feature_names": feature_names,  # Features used in training
+        "n_features": len(feature_names),  # Number of features
+    }  # Build complete config dictionary
+
+    output_path = os.path.join(output_dir, config.get("automl", {}).get("results_filename", "AutoML_Results.csv").replace(".csv", "_best_config.json"))  # Build output path
+
+    with open(output_path, "w", encoding="utf-8") as f:  # Open file for writing
+        json.dump(config, f, indent=2, default=str)  # Write JSON with indentation
+
+    print(
+        f"{BackgroundColors.GREEN}AutoML best configuration exported to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+    )  # Output export confirmation
+
+    return output_path  # Return the output file path
+
+
 def export_automl_best_model(model, scaler, output_dir, model_name, feature_names):
     """
     Exports the best AutoML model and scaler to disk using joblib.
