@@ -129,6 +129,91 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def load_cache_results(csv_path, config=None):
+    """
+    Load cached results from the cache file if it exists.
+
+    :param csv_path: Path to the dataset CSV file
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Dictionary mapping (feature_set, model_name) to result entry
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    cache_path = get_cache_file_path(csv_path, config=config)  # Get the cache file path
+
+    if not os.path.exists(cache_path):  # If cache file doesn't exist
+        verbose_output(
+            f"{BackgroundColors.YELLOW}No cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
+        return {}  # Return empty dictionary
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Loading cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    try:  # Try to load the cache file
+        df_cache = pd.read_csv(cache_path)  # Read the cache file
+        df_cache.columns = df_cache.columns.str.strip()  # Remove leading/trailing whitespace from column names
+        cache_dict = {}  # Initialize cache dictionary
+
+        for _, row in df_cache.iterrows():  # Iterate through each row
+            feature_set = row.get("feature_set", "")  # Get feature set name
+            model_name = row.get("model_name", "")  # Get model name
+            cache_key = (feature_set, model_name)  # Create cache key tuple
+
+            def _safe_load_json(val):
+                if pd.isna(val):
+                    return None
+                if isinstance(val, str):
+                    try:
+                        return json.loads(val)
+                    except Exception:
+                        return val
+                return val
+
+            result_entry = {
+                "model": row.get("model", ""),
+                "dataset": row.get("dataset", ""),
+                "feature_set": feature_set,
+                "classifier_type": row.get("classifier_type", ""),
+                "model_name": model_name,
+                "data_source": row.get("data_source", ""),
+                "experiment_id": row.get("experiment_id", None),
+                "experiment_mode": row.get("experiment_mode", "original_only"),
+                "augmentation_ratio": float(row["augmentation_ratio"]) if "augmentation_ratio" in row and not pd.isna(row.get("augmentation_ratio")) else None,
+                "n_features": int(row["n_features"]) if "n_features" in row and not pd.isna(row["n_features"]) else None,
+                "n_samples_train": int(row["n_samples_train"]) if "n_samples_train" in row and not pd.isna(row["n_samples_train"]) else None,
+                "n_samples_test": int(row["n_samples_test"]) if "n_samples_test" in row and not pd.isna(row["n_samples_test"]) else None,
+                "accuracy": float(row["accuracy"]) if "accuracy" in row and not pd.isna(row["accuracy"]) else None,
+                "precision": float(row["precision"]) if "precision" in row and not pd.isna(row["precision"]) else None,
+                "recall": float(row["recall"]) if "recall" in row and not pd.isna(row["recall"]) else None,
+                "f1_score": float(row["f1_score"]) if "f1_score" in row and not pd.isna(row["f1_score"]) else None,
+                "fpr": float(row["fpr"]) if "fpr" in row and not pd.isna(row["fpr"]) else None,
+                "fnr": float(row["fnr"]) if "fnr" in row and not pd.isna(row["fnr"]) else None,
+                "elapsed_time_s": float(row["elapsed_time_s"]) if "elapsed_time_s" in row and not pd.isna(row["elapsed_time_s"]) else None,
+                "cv_method": row.get("cv_method", None),
+                "top_features": _safe_load_json(row.get("top_features", None)),
+                "rfe_ranking": _safe_load_json(row.get("rfe_ranking", None)),
+                "hyperparameters": _safe_load_json(row.get("hyperparameters", None)),
+                "features_list": _safe_load_json(row.get("features_list", None)),
+                "Hardware": row.get("Hardware", None),
+            }
+
+            cache_dict[cache_key] = result_entry
+
+        print(f"{BackgroundColors.GREEN}Loaded cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")
+        return cache_dict
+
+    except Exception as e:  # Catch any errors
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Failed to save to cache {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
+        )  # Print warning message
+
+
 def remove_cache_file(csv_path, config=None):
     """
     Remove the cache file after successful completion.
