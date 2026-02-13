@@ -39,6 +39,7 @@ execution:
   csv_file: null                      # Optional single CSV file to process
   process_entire_dataset: false       # Process all files in dataset (true) or single file (false)
   test_data_augmentation: true        # Enable data augmentation testing
+  execution_mode: binary              # Execution mode: binary (default) or multi-class
   # wgangp.py specific:
   results_suffix: "_data_augmented"   # Suffix to add to generated filenames
   match_filenames_to_process: [""]    # List of specific filenames to match
@@ -193,6 +194,7 @@ export:
 
 stacking:
   results_filename: "Stacking_Classifiers_Results.csv"  # Main results CSV filename
+  multiclass_results_filename: "Stacking_Classifiers_MultiClass_Results.csv"  # Multi-class results CSV filename
   augmentation_comparison_filename: "Data_Augmentation_Comparison_Results.csv"  # Augmentation test results CSV
   data_augmentation_suffix: "_data_augmented"  # Suffix for augmented files (matches wgangp output)
   augmentation_ratios: [0.10, 0.25, 0.50, 0.75, 1.00]  # Augmented-to-original sample ratios for experiments
@@ -212,6 +214,8 @@ stacking:
   results_csv_columns:                # CSV column ordering for results export
     - "model"
     - "dataset"
+    - "execution_mode"
+    - "attack_types_combined"
     - "feature_set"
     - "classifier_type"
     - "model_name"
