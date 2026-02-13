@@ -2918,6 +2918,33 @@ if __name__ == "__main__":
         help="Enable verbose output during the run.",
     )
     parser.add_argument(
+        "--automl",
+        dest="automl",
+        action="store_true",
+        help="Enable AutoML pipeline for automated model selection and hyperparameter optimization.",
+    )
+    parser.add_argument(
+        "--automl-trials",
+        dest="automl_trials",
+        type=int,
+        default=None,
+        help="Number of Optuna trials for AutoML model search (default: 50).",
+    )
+    parser.add_argument(
+        "--automl-stacking-trials",
+        dest="automl_stacking_trials",
+        type=int,
+        default=None,
+        help="Number of Optuna trials for AutoML stacking search (default: 20).",
+    )
+    parser.add_argument(
+        "--automl-timeout",
+        dest="automl_timeout",
+        type=int,
+        default=None,
+        help="Timeout in seconds for each AutoML search phase (default: 3600).",
+    )
+    parser.add_argument(
         "--csv",
         dest="csv",
         type=str,
@@ -2930,5 +2957,9 @@ if __name__ == "__main__":
     SKIP_TRAIN_IF_MODEL_EXISTS = bool(args.skip_train)
     VERBOSE = bool(args.verbose)
     CSV_FILE = args.csv if args.csv else CSV_FILE
+    ENABLE_AUTOML = bool(args.automl)
+    AUTOML_N_TRIALS = args.automl_trials if args.automl_trials else AUTOML_N_TRIALS
+    AUTOML_STACKING_TRIALS = args.automl_stacking_trials if args.automl_stacking_trials else AUTOML_STACKING_TRIALS
+    AUTOML_TIMEOUT = args.automl_timeout if args.automl_timeout else AUTOML_TIMEOUT
 
     main()  # Call the main function
