@@ -4165,38 +4165,46 @@ def play_sound():
         )
 
 
-def main():
+def main(config=None):
     """
     Main function.
 
-    :param: None
+    :param config: Configuration dictionary (uses global CONFIG if None)
     :return: None
     """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
 
     print(
         f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Classifiers Stacking{BackgroundColors.GREEN} program!{Style.RESET_ALL}\n"
     )  # Output the welcome message
+    
+    test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", True)  # Get test augmentation flag from config
+    augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
 
-    if TEST_DATA_AUGMENTATION:  # If data augmentation testing is enabled
+    if test_data_augmentation:  # If data augmentation testing is enabled
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.YELLOW}Data Augmentation Testing: {BackgroundColors.CYAN}ENABLED{Style.RESET_ALL}"
         )  # Print augmentation enabled message
         print(
-            f"{BackgroundColors.GREEN}Will evaluate Original vs Original+Augmented at ratios: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in AUGMENTATION_RATIOS]}{Style.RESET_ALL}\n"
+            f"{BackgroundColors.GREEN}Will evaluate Original vs Original+Augmented at ratios: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in augmentation_ratios]}{Style.RESET_ALL}\n"
         )  # Print augmentation ratios to be evaluated
 
     start_time = datetime.datetime.now()  # Get the start time of the program
 
-    setup_telegram_bot()  # Setup Telegram bot if configured
+    setup_telegram_bot(config=config)  # Setup Telegram bot if configured
 
     send_telegram_message(
         TELEGRAM_BOT, [f"Starting Classifiers Stacking at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"]
     )  # Send Telegram message indicating start
 
-    set_threads_limit_based_on_ram()  # Adjust THREADS_LIMIT based on system RAM
+    threads_limit = set_threads_limit_based_on_ram(config=config)  # Adjust config.get("evaluation", {}).get("threads_limit", 2) based on system RAM
+    
+    datasets = config.get("dataset", {}).get("datasets", {})  # Get datasets from config
 
-    for dataset_name, paths in DATASETS.items():  # For each dataset in the DATASETS dictionary
-        process_dataset_paths(dataset_name, paths)  # Process all paths for this dataset
+    for dataset_name, paths in datasets.items():  # For each dataset in the datasets dictionary
+        process_dataset_paths(dataset_name, paths, config=config)  # Process all paths for this dataset
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
@@ -4207,10 +4215,10 @@ def main():
     )  # Output the end of the program message
 
     send_telegram_message(TELEGRAM_BOT, [f"Finished Classifiers Stacking at {finish_time.strftime('%Y-%m-%d %H:%M:%S')} | Execution time: {calculate_execution_time(start_time, finish_time)}"])  # Send Telegram message indicating finish
-
-    (
-        atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
-    )  # Register the play_sound function to be called when the program finishes
+    
+    play_sound_enabled = config.get("sound", {}).get("enabled", True)  # Get play sound flag from config
+    if play_sound_enabled:  # If play sound is enabled
+        atexit.register(play_sound, config=config)  # Register the play_sound function to be called when the program finishes
 
 
 if __name__ == "__main__":
