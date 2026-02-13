@@ -5059,15 +5059,55 @@ def process_files_in_path(input_path, dataset_name, config=None):
         return  # Exit function early
     
     csv_file = config.get("execution", {}).get("csv_file", None)  # Get CSV file override from config
+    execution_mode = config.get("execution", {}).get("execution_mode", "binary")  # Get execution mode from config (binary/multi-class)
 
     files_to_process = determine_files_to_process(csv_file, input_path, config=config)  # Determine which files to process
 
     local_dataset_name = dataset_name or get_dataset_name(input_path)  # Use provided dataset name or infer from path
 
-    combined_df, combined_file_for_features, files_to_process = combine_dataset_if_needed(files_to_process, config=config)  # Combine dataset files if needed
+    if execution_mode == "multi-class":  # If multi-class execution mode is enabled
+        verbose_output(
+            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: MULTI-CLASS{Style.RESET_ALL}",
+            config=config
+        )  # Output execution mode
+        
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+        )  # Print separator line
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}MULTI-CLASS CLASSIFICATION MODE{Style.RESET_ALL}"
+        )  # Print mode header
+        print(
+            f"{BackgroundColors.GREEN}Combining {BackgroundColors.CYAN}{len(files_to_process)}{BackgroundColors.GREEN} files into single multi-class dataset{Style.RESET_ALL}"
+        )  # Print files count
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+        )  # Print closing separator
 
-    for file in files_to_process:  # For each file to process
-        process_single_file_evaluation(file, combined_df, combined_file_for_features, config=config)  # Process the single file evaluation
+        # Combine all files into multi-class dataset
+        combined_multiclass_df, attack_types_list, target_col_name = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for multi-class
+        
+        if combined_multiclass_df is None:  # If combination failed
+            print(
+                f"{BackgroundColors.RED}Failed to create multi-class dataset. Skipping multi-class evaluation.{Style.RESET_ALL}"
+            )  # Print error
+            return  # Exit function
+        
+        # Process multi-class dataset evaluation
+        process_multiclass_evaluation(
+            files_to_process, combined_multiclass_df, attack_types_list, local_dataset_name, config=config
+        )  # Process multi-class evaluation workflow
+        
+    else:  # If binary execution mode (default)
+        verbose_output(
+            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: BINARY{Style.RESET_ALL}",
+            config=config
+        )  # Output execution mode
+        
+        combined_df, combined_file_for_features, files_to_process = combine_dataset_if_needed(files_to_process, config=config)  # Combine dataset files if needed
+
+        for file in files_to_process:  # For each file to process
+            process_single_file_evaluation(file, combined_df, combined_file_for_features, config=config)  # Process the single file evaluation
 
 
 def process_dataset_paths(dataset_name, paths, config=None):
