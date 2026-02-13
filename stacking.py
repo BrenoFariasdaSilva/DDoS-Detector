@@ -3983,6 +3983,8 @@ def evaluate_on_dataset(
     experiment_id=None,
     experiment_mode="original_only",
     augmentation_ratio=None,
+    execution_mode_str="binary",
+    attack_types_combined=None,
 ):
     """
     Evaluate classifiers on a single dataset (original or augmented).
@@ -3999,6 +4001,8 @@ def evaluate_on_dataset(
     :param experiment_id: Unique experiment identifier for traceability
     :param experiment_mode: Experiment mode string ('original_only' or 'original_plus_augmented')
     :param augmentation_ratio: Augmentation ratio float (e.g., 0.50) or None for original-only
+    :param execution_mode_str: Execution mode string ('binary' or 'multi-class')
+    :param attack_types_combined: List of attack types for multi-class or None for binary
     :return: Dictionary mapping (feature_set, model_name) to results
     """
 
@@ -4142,6 +4146,8 @@ def evaluate_on_dataset(
                 result_entry = {
                     "model": model_class,
                     "dataset": os.path.relpath(file),
+                    "execution_mode": execution_mode_str,
+                    "attack_types_combined": json.dumps(attack_types_combined) if attack_types_combined else None,
                     "feature_set": name,
                     "classifier_type": "Individual",
                     "model_name": model_name,
@@ -4197,6 +4203,8 @@ def evaluate_on_dataset(
         stacking_result_entry = {
             "model": stacking_model.__class__.__name__,
             "dataset": os.path.relpath(file),
+            "execution_mode": execution_mode_str,
+            "attack_types_combined": json.dumps(attack_types_combined) if attack_types_combined else None,
             "feature_set": name,
             "classifier_type": "Stacking",
             "model_name": "StackingClassifier",
