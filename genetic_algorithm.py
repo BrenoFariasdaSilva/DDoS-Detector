@@ -2988,6 +2988,105 @@ def aggregate_run_metrics(run_result):
         return None  # Return None
 
 
+def generate_run_comparison_table(results_dict, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb):
+    """
+    Generate a CSV comparison table aggregating metrics across all runs and population sizes.
+
+    :param results_dict: Dict mapping pop_size to {"runs": [...], "avg_metrics": ..., "common_features": ...}
+    :param csv_path: Path to the dataset CSV (used to determine output directory)
+    :param dataset_name: Name of the dataset
+    :param min_pop: Minimum population size tested
+    :param max_pop: Maximum population size tested
+    :param n_generations: Number of generations configured
+    :param cxpb: Crossover probability used
+    :param mutpb: Mutation probability used
+    :return: Path to the saved comparison CSV file, or None if generation failed
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Generating multi-run comparison table for {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
+    )  # Log generation start
+
+    try:  # Attempt to generate comparison table
+        output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis"  # Base output directory
+        comparison_dir = os.path.join(output_dir, "ga_run_comparisons")  # Subdirectory for comparison tables
+        os.makedirs(comparison_dir, exist_ok=True)  # Ensure directory exists
+
+        # Build comparison data rows
+        comparison_rows = []  # List to store comparison data rows
+        for pop_size in range(min_pop, max_pop + 1):  # For each population size
+            if pop_size not in results_dict:  # If no results for this population size
+                continue  # Skip to next
+
+            runs_list = results_dict[pop_size].get("runs", [])  # Get runs list
+            for run_idx, run_result in enumerate(runs_list, start=1):  # For each run (1-based indexing)
+                aggregated = aggregate_run_metrics(run_result)  # Aggregate metrics from this run
+                if aggregated is None:  # If aggregation failed
+                    continue  # Skip this run
+
+                row = {
+                    "dataset": dataset_name,  # Dataset name
+                    "pop_size": pop_size,  # Population size
+                    "run_id": run_idx,  # Run identifier (1-based)
+                    "n_generations": n_generations,  # Configured generations
+                    "cxpb": cxpb,  # Crossover probability
+                    "mutpb": mutpb,  # Mutation probability
+                    "best_f1_final": aggregated["best_f1_final"],  # Final best F1 score
+                    "features_final": aggregated["features_final"],  # Final feature count
+                    "avg_population_f1": aggregated["avg_population_f1"],  # Average population F1
+                    "avg_feature_count": aggregated["avg_feature_count"],  # Average feature count
+                    "pareto_size_final": aggregated["pareto_size_final"],  # Final Pareto size
+                    "hypervolume_final": aggregated["hypervolume_final"],  # Final hypervolume
+                    "convergence_gen": aggregated["convergence_gen"],  # Convergence generation
+                    "gens_executed": aggregated["gens_executed"],  # Generations executed
+                }  # Build row dict
+                comparison_rows.append(row)  # Add row to list
+
+        if not comparison_rows:  # If no rows generated
+            verbose_output(
+                f"{BackgroundColors.YELLOW}No comparison data available to generate table{Style.RESET_ALL}"
+            )  # Log warning
+            return None  # Return None
+
+        # Convert to DataFrame for easy CSV export
+        df_comparison = pd.DataFrame(comparison_rows)  # Create DataFrame from rows
+
+        # Sort by population size and run_id for consistent ordering
+        df_comparison = df_comparison.sort_values(["pop_size", "run_id"]).reset_index(drop=True)  # Sort and reset index
+
+        # Generate deterministic filename
+        base_dataset_name = safe_filename(os.path.splitext(os.path.basename(csv_path))[0])  # Sanitized dataset name
+        comparison_filename = f"{base_dataset_name}_multi_run_comparison.csv"  # Deterministic filename
+        comparison_path = os.path.join(comparison_dir, comparison_filename)  # Full path
+
+        # Write to CSV
+        df_comparison.to_csv(comparison_path, index=False)  # Save DataFrame to CSV without index
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Saved multi-run comparison table to {BackgroundColors.CYAN}{comparison_path}{Style.RESET_ALL}"
+        )  # Log success
+
+        # Print summary statistics
+        print(f"\n{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Multi-Run Comparison Summary for {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Total Runs Analyzed: {BackgroundColors.CYAN}{len(comparison_rows)}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Population Sizes: {BackgroundColors.CYAN}{min_pop} - {max_pop}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Mean Best F1: {BackgroundColors.CYAN}{df_comparison['best_f1_final'].mean():.4f}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Std Best F1: {BackgroundColors.CYAN}{df_comparison['best_f1_final'].std():.4f}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Mean Final Features: {BackgroundColors.CYAN}{df_comparison['features_final'].mean():.2f}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Mean Convergence Gen: {BackgroundColors.CYAN}{df_comparison['convergence_gen'].mean():.1f}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}\n")
+
+        return comparison_path  # Return path to saved file
+
+    except Exception as e:  # If any error occurs
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Failed to generate comparison table: {e}{Style.RESET_ALL}"
+        )  # Log error
+        return None  # Return None
+
+
 def print_metrics(metrics):
     """
     Print performance metrics including multi-objective fitness values.
