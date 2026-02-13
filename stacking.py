@@ -643,6 +643,49 @@ def calculate_metric_improvement(original_value, augmented_value):
     return improvement  # Return improvement
 
 
+def validate_augmented_dataframe(original_df, augmented_df, file_path):
+    """
+    Validates that the augmented DataFrame is compatible with the original for merging.
+
+    :param original_df: Original cleaned DataFrame to compare against
+    :param augmented_df: Augmented DataFrame to validate
+    :param file_path: File path string for error message context
+    :return: True if augmented data is valid and compatible, False otherwise
+    """
+
+    if augmented_df is None or augmented_df.empty:  # Check if augmented DataFrame is None or contains no rows
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Augmented DataFrame is empty for {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping.{Style.RESET_ALL}"
+        )  # Print warning about empty augmented data
+        return False  # Return False for empty augmented data
+
+    original_cols = set(original_df.columns)  # Get the set of column names from the original DataFrame
+    augmented_cols = set(augmented_df.columns)  # Get the set of column names from the augmented DataFrame
+    missing_cols = original_cols - augmented_cols  # Compute columns present in original but missing in augmented
+
+    if missing_cols:  # If there are columns missing from the augmented DataFrame
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Augmented data for {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW} is missing columns: {BackgroundColors.CYAN}{missing_cols}{BackgroundColors.YELLOW}. Skipping.{Style.RESET_ALL}"
+        )  # Print warning listing the missing column names
+        return False  # Return False due to column mismatch
+
+    original_dtypes = original_df.select_dtypes(include=np.number).columns.tolist()  # Get list of numeric columns in original
+    augmented_dtypes = augmented_df.select_dtypes(include=np.number).columns.tolist()  # Get list of numeric columns in augmented
+    numeric_overlap = set(original_dtypes) & set(augmented_dtypes)  # Compute intersection of numeric columns
+
+    if len(numeric_overlap) < 2:  # Check if there are at least 2 overlapping numeric columns (features + target)
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Augmented data for {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW} has insufficient numeric column overlap ({len(numeric_overlap)}). Skipping.{Style.RESET_ALL}"
+        )  # Print warning about insufficient numeric overlap
+        return False  # Return False due to insufficient numeric columns
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Augmented data validation passed for {BackgroundColors.CYAN}{file_path}{BackgroundColors.GREEN}: {len(augmented_df)} rows, {len(augmented_cols)} columns{Style.RESET_ALL}"
+    )  # Output verbose message confirming validation success
+
+    return True  # Return True indicating augmented data is valid and compatible
+
+
 def sample_augmented_by_ratio(augmented_df, original_df, ratio):
     """
     Samples rows from the augmented DataFrame proportional to the original dataset size.
