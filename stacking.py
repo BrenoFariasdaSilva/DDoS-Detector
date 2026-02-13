@@ -129,6 +129,86 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def compute_and_save_tsne_plot(X_scaled, labels, output_path, title, perplexity=30, random_state=42):
+    """
+    Compute t-SNE embedding and save visualization plot.
+
+    :param X_scaled: Scaled numeric feature array
+    :param labels: Array of labels for coloring
+    :param output_path: Full path for saving the plot file
+    :param title: Title for the plot
+    :param perplexity: t-SNE perplexity parameter
+    :param random_state: Random seed for reproducibility
+    :return: True if successful, False otherwise
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Computing t-SNE embedding and saving plot...{Style.RESET_ALL}"
+    )  # Output verbose message for t-SNE computation
+
+    try:  # Attempt t-SNE computation
+        max_perplexity = (X_scaled.shape[0] - 1) // 3  # Maximum valid perplexity
+        actual_perplexity = min(perplexity, max_perplexity)  # Use minimum of requested and maximum
+
+        if actual_perplexity < 5:  # Perplexity too small for meaningful results
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Sample size too small for t-SNE (n={X_scaled.shape[0]}).{Style.RESET_ALL}"
+            )  # Print warning message
+            return False  # Return failure flag
+
+        tsne = TSNE(
+            n_components=2,  # 2D embedding for visualization
+            perplexity=actual_perplexity,  # Adjusted perplexity parameter
+            random_state=random_state,  # Random seed for reproducibility
+            n_iter=1000  # Number of iterations
+        )  # Create t-SNE object
+
+        X_embedded = tsne.fit_transform(X_scaled)  # Compute 2D embedding
+
+        plt.figure(figsize=(12, 10))  # Create figure with specified size
+
+        unique_labels = np.unique(labels)  # Extract unique label values
+        n_labels = len(unique_labels)  # Count unique labels
+
+        cmap = plt.cm.get_cmap("rainbow")  # Get rainbow colormap for distinct colors
+        colors = cmap(np.linspace(0, 1, n_labels))  # Generate distinct colors from colormap
+
+        for idx, label in enumerate(unique_labels):  # Iterate over unique labels
+            mask = labels == label  # Create boolean mask for current label
+            plt.scatter(
+                X_embedded[mask, 0],  # X coordinates for current class
+                X_embedded[mask, 1],  # Y coordinates for current class
+                c=[colors[idx]],  # Color for current class
+                label=label,  # Legend label
+                alpha=0.6,  # Transparency
+                edgecolors='k',  # Black edge color
+                linewidth=0.5,  # Edge line width
+                s=50  # Marker size
+            )  # Plot scatter points for current class
+
+        plt.title(title, fontsize=16, fontweight='bold')  # Set plot title
+        plt.xlabel('t-SNE Component 1', fontsize=12)  # Set x-axis label
+        plt.ylabel('t-SNE Component 2', fontsize=12)  # Set y-axis label
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)  # Add legend outside plot
+        plt.grid(True, alpha=0.3)  # Add grid with transparency
+        plt.tight_layout()  # Adjust layout to prevent label cutoff
+
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')  # Save figure with high resolution
+        plt.close()  # Close figure to free memory
+
+        print(
+            f"{BackgroundColors.GREEN}t-SNE plot saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+        )  # Print success message
+
+        return True  # Return success flag
+
+    except Exception as e:  # t-SNE computation or plotting failed
+        print(
+            f"{BackgroundColors.RED}Error generating t-SNE plot: {e}{Style.RESET_ALL}"
+        )  # Print error message
+        return False  # Return failure flag
+
+
 def generate_augmentation_tsne_visualization(original_file, original_df, augmented_df=None, augmentation_ratio=None, experiment_mode="original_only"):
     """
     Generate t-SNE visualization for data augmentation experiment.
