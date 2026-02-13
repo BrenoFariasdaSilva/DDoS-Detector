@@ -2987,10 +2987,12 @@ def generate_permutation_importance(model, X_test, y_test, feature_names, output
         )  # Compute permutation importance
 
         # Sort features by importance
-        sorted_indices = perm_importance.importances_mean.argsort()[::-1]  # Sort indices by descending importance
+        importances_mean = perm_importance['importances_mean']  # Extract mean importances from Bunch
+        importances_std = perm_importance['importances_std']  # Extract std importances from Bunch
+        sorted_indices = importances_mean.argsort()[::-1]  # Sort indices by descending importance
         sorted_features = [feature_names[i] for i in sorted_indices]  # Get sorted feature names
-        sorted_importances = perm_importance.importances_mean[sorted_indices]  # Get sorted importances
-        sorted_std = perm_importance.importances_std[sorted_indices]  # Get sorted standard deviations
+        sorted_importances = importances_mean[sorted_indices]  # Get sorted importances
+        sorted_std = importances_std[sorted_indices]  # Get sorted standard deviations
 
         # Create importance dictionary
         importance_dict = {}  # Initialize importance dictionary
