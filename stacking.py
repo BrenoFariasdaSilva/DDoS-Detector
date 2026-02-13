@@ -129,6 +129,74 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def get_files_to_process(directory_path, file_extension=".csv", config=None):
+    """
+    Collect all files with a given extension inside a directory (non-recursive).
+
+    Performs validation, respects IGNORE_FILES, and optionally filters by
+    MATCH_FILENAMES_TO_PROCESS when defined.
+
+    :param directory_path: Path to the directory to scan
+    :param file_extension: File extension to include (default: ".csv")
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Sorted list of matching file paths
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Getting all {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files in: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}",
+        config=config
+    )  # Verbose: starting file collection
+    verify_filepath_exists(directory_path)  # Validate directory path exists
+
+    if not os.path.isdir(directory_path):  # Check if path is a valid directory
+        verbose_output(
+            f"{BackgroundColors.RED}Not a directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}",
+            config=config
+        )  # Verbose: invalid directory
+        return []  # Return empty list for invalid paths
+
+    match_filenames = config.get("stacking", {}).get("match_filenames_to_process", [""])  # Get match filenames from config
+    ignore_files = config.get("stacking", {}).get("ignore_files", [])  # Get ignore files from config
+    
+    match_names = (
+        set(match_filenames) if match_filenames not in ([], [""], [" "]) else None
+    )  # Load match list or None
+    if match_names:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Filtering to filenames: {BackgroundColors.CYAN}{match_names}{Style.RESET_ALL}",
+            config=config
+        )  # Verbose: applying filename filter
+
+    files = []  # Accumulator for valid files
+
+    for item in os.listdir(directory_path):  # Iterate directory entries
+        item_path = os.path.join(directory_path, item)  # Absolute path
+        filename = os.path.basename(item_path)  # Extract just the filename
+
+        if any(ignore == filename or ignore == item_path for ignore in ignore_files):  # Check if file is in ignore list
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Ignoring {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} (listed in IGNORE_FILES){Style.RESET_ALL}",
+                config=config
+            )  # Verbose: ignoring file
+            continue  # Skip ignored file
+
+        if os.path.isfile(item_path) and item.lower().endswith(file_extension):  # File matches extension requirement
+            if (
+                match_names is not None and filename not in match_names
+            ):  # Filename not included in MATCH_FILENAMES_TO_PROCESS
+                verbose_output(
+                    f"{BackgroundColors.YELLOW}Skipping {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} (not in MATCH_FILENAMES_TO_PROCESS){Style.RESET_ALL}",
+                    config=config
+                )  # Verbose: skipping non-matching file
+                continue  # Skip this file
+            files.append(item_path)  # Add file to result list
+
+    return sorted(files)  # Return sorted list for deterministic output
+
+
 def get_dataset_name(input_path):
     """
     Extract the dataset name from CSVs path.
