@@ -1565,12 +1565,12 @@ def setup_genetic_algorithm(n_features, population_size=None, pool=None):
         f"{BackgroundColors.GREEN}Setting up Genetic Algorithm with {n_features} features and population size {population_size}.{Style.RESET_ALL}"
     )  # Output the verbose message
 
-    if not hasattr(creator, "FitnessMax"):  # If FitnessMax class doesn't exist in creator
-        creator.create("FitnessMax", base.Fitness, weights=(1.0,))  # Create FitnessMax with positive weight for maximization
-    FitnessMax = creator.FitnessMax  # Get FitnessMax from creator namespace
+    if not hasattr(creator, "FitnessMulti"):  # If FitnessMulti class doesn't exist in creator
+        creator.create("FitnessMulti", base.Fitness, weights=(1.0, 1.0))  # Create FitnessMulti with 2 objectives: maximize F1-score (1.0) and maximize negative feature count (1.0, which minimizes feature count)
+    FitnessMulti = creator.FitnessMulti  # Get FitnessMulti from creator namespace
 
     if not hasattr(creator, "Individual"):  # If Individual class doesn't exist in creator
-        creator.create("Individual", list, fitness=creator.FitnessMax)  # Create Individual as list with FitnessMax attribute
+        creator.create("Individual", list, fitness=creator.FitnessMulti)  # Create Individual as list with FitnessMulti attribute
     Individual = creator.Individual  # Get Individual from creator namespace
 
     toolbox: Any = base.Toolbox()  # Toolbox (typed Any to avoid analyzer confusion)
@@ -1587,7 +1587,7 @@ def setup_genetic_algorithm(n_features, population_size=None, pool=None):
 
     toolbox.register("mate", tools.cxTwoPoint)  # Crossover operator
     toolbox.register("mutate", tools.mutFlipBit, indpb=0.05)  # Mutation operator
-    toolbox.register("select", tools.selTournament, tournsize=3)  # Selection operator
+    toolbox.register("select", tools.selNSGA2)  # Selection operator using NSGA-II for multi-objective Pareto-based optimization
 
     if pool is None:  # If no external pool was provided, create one
         with global_state_lock:  # Thread-safe read of CPU_PROCESSES
