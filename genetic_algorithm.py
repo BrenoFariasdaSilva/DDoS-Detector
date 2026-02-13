@@ -2901,6 +2901,33 @@ def aggregate_sweep_results(results, min_pop, max_pop, dataset_name):
     return best_score, best_result, best_metrics, results  # Return aggregated results
 
 
+def compute_convergence_generation(history_f1, threshold_pct=0.95):
+    """
+    Compute the generation at which the algorithm reached a specified percentage of its best F1 score.
+
+    :param history_f1: List of best F1 scores per generation
+    :param threshold_pct: Percentage of best score to consider as convergence (default: 0.95 = 95%)
+    :return: Generation number where convergence was reached, or len(history_f1) if never reached
+    """
+
+    if not history_f1:  # If no history data
+        return 0  # Return 0 as fallback
+
+    try:  # Attempt to compute convergence generation
+        best_f1 = max(history_f1)  # Find the best F1 score achieved
+        if best_f1 <= 0:  # If best F1 is zero or negative
+            return len(history_f1)  # Return total generations as fallback
+
+        threshold = best_f1 * threshold_pct  # Compute threshold value
+        for gen, f1 in enumerate(history_f1, start=1):  # Iterate through history with 1-based generation numbers
+            if f1 >= threshold:  # If this generation reached the threshold
+                return gen  # Return the generation number
+
+        return len(history_f1)  # Return total generations if threshold never reached
+    except Exception:  # If calculation fails
+        return len(history_f1) if history_f1 else 0  # Return length or 0
+
+
 def print_metrics(metrics):
     """
     Print performance metrics including multi-objective fitness values.
