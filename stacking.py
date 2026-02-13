@@ -59,6 +59,9 @@ import glob  # For file pattern matching
 import json  # Import json for handling JSON strings within the CSV
 import lightgbm as lgb  # For LightGBM model
 import math  # For mathematical operations
+import matplotlib  # For plotting configuration
+matplotlib.use('Agg')  # Use non-interactive backend for server environments
+import matplotlib.pyplot as plt  # For creating t-SNE visualization plots
 import numpy as np  # Import numpy for numerical operations
 import optuna  # For Bayesian hyperparameter optimization (AutoML)
 import os  # For running a command in the terminal
@@ -83,6 +86,7 @@ from sklearn.ensemble import (  # For ensemble models
     StackingClassifier,
 )
 from sklearn.linear_model import LogisticRegression  # For logistic regression model
+from sklearn.manifold import TSNE  # For t-SNE dimensionality reduction
 from sklearn.metrics import (  # For performance metrics
     accuracy_score,
     confusion_matrix,
@@ -738,6 +742,273 @@ def sample_augmented_by_ratio(augmented_df, original_df, ratio):
     )  # Output verbose message confirming sampling details
 
     return sampled_df  # Return the sampled augmented DataFrame
+
+
+def build_tsne_output_directory(original_file_path, augmented_file_path):
+    """
+    Build output directory path for t-SNE plots preserving nested dataset structure.
+
+    :param original_file_path: Path to original dataset file
+    :param augmented_file_path: Path to augmented dataset file
+    :return: Path object for t-SNE output directory
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Building t-SNE output directory for: {BackgroundColors.CYAN}{original_file_path}{Style.RESET_ALL}"
+    )  # Output verbose message for directory creation
+
+    original_path = Path(original_file_path)  # Create Path object for original file
+    augmented_path = Path(augmented_file_path)  # Create Path object for augmented file
+
+    datasets_keyword = "Datasets"  # Standard directory name in project structure
+    relative_parts = []  # List to accumulate relative path components
+    found_datasets = False  # Flag to track if Datasets directory was found
+
+    for part in original_path.parts:  # Iterate through path components
+        if found_datasets and part != original_path.name:  # After Datasets, before filename
+            relative_parts.append(part)  # Add intermediate directories to relative path
+        if part == datasets_keyword:  # Found the Datasets directory
+            found_datasets = True  # Set flag to start collecting relative parts
+
+    augmented_parent = augmented_path.parent  # Get parent directory of augmented file
+    tsne_base = augmented_parent / "tsne_plots"  # Base directory for all t-SNE plots
+
+    if relative_parts:  # If nested structure exists
+        tsne_dir = tsne_base / Path(*relative_parts) / original_path.stem  # Preserve nested path
+    else:  # Flat structure
+        tsne_dir = tsne_base / original_path.stem  # Use filename stem only
+
+    os.makedirs(tsne_dir, exist_ok=True)  # Create directory structure if it doesn't exist
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Created t-SNE directory: {BackgroundColors.CYAN}{tsne_dir}{Style.RESET_ALL}"
+    )  # Output confirmation message
+
+    return tsne_dir  # Return the output directory path
+
+
+def combine_and_label_augmentation_data(original_df, augmented_df=None, label_col=None):
+    """
+    Combine original and augmented data with source labels for t-SNE visualization.
+
+    :param original_df: DataFrame with original data
+    :param augmented_df: DataFrame with augmented data (None for original-only)
+    :param label_col: Name of the label/class column
+    :return: Combined DataFrame with composite labels for visualization
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Combining and labeling data for t-SNE visualization...{Style.RESET_ALL}"
+    )  # Output verbose message for data combination
+
+    if label_col is None:  # No label column specified
+        label_col = original_df.columns[-1]  # Use last column as label
+
+    df_orig = original_df.copy()  # Copy original DataFrame to avoid modifying input
+
+    if label_col in df_orig.columns:  # If label column exists
+        df_orig['tsne_label'] = df_orig[label_col].astype(str) + "_original"  # Create composite label
+    else:  # No label column found
+        df_orig['tsne_label'] = "original"  # Use simple source label
+
+    if augmented_df is not None:  # If augmented data provided
+        df_aug = augmented_df.copy()  # Copy augmented DataFrame to avoid modifying input
+
+        if label_col in df_aug.columns:  # If label column exists
+            df_aug['tsne_label'] = df_aug[label_col].astype(str) + "_augmented"  # Create composite label
+        else:  # No label column found
+            df_aug['tsne_label'] = "augmented"  # Use simple source label
+
+        combined_df = pd.concat([df_orig, df_aug], ignore_index=True)  # Concatenate DataFrames
+    else:  # Original only
+        combined_df = df_orig  # Use original DataFrame only
+
+    return combined_df  # Return combined DataFrame with composite labels
+
+
+def prepare_numeric_features_for_tsne(df, exclude_col='tsne_label'):
+    """
+    Extract and prepare numeric features from DataFrame for t-SNE.
+
+    :param df: DataFrame with mixed features
+    :param exclude_col: Column name to exclude from numeric extraction
+    :return: Tuple (numeric_array, labels_array, success_flag)
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Preparing numeric features for t-SNE...{Style.RESET_ALL}"
+    )  # Output verbose message for feature preparation
+
+    if exclude_col in df.columns:  # If label column exists
+        labels = df[exclude_col].values  # Extract labels as numpy array
+        df_work = df.drop(columns=[exclude_col])  # Remove label column for numeric extraction
+    else:  # No label column
+        labels = np.array(['unknown'] * len(df))  # Create default labels
+        df_work = df.copy()  # Use full DataFrame
+
+    numeric_df = df_work.select_dtypes(include=np.number)  # Select only numeric columns
+
+    if numeric_df.empty:  # No numeric columns found
+        print(
+            f"{BackgroundColors.YELLOW}Warning: No numeric features found for t-SNE generation.{Style.RESET_ALL}"
+        )  # Print warning message
+        return (None, None, False)  # Return failure tuple
+
+    numeric_df = numeric_df.replace([np.inf, -np.inf], np.nan)  # Replace infinities with NaN
+    numeric_df = numeric_df.fillna(numeric_df.median())  # Fill NaN with column median
+    numeric_df = numeric_df.fillna(0)  # Fill remaining NaN with zero
+
+    if numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0:  # Empty result after cleaning
+        print(
+            f"{BackgroundColors.YELLOW}Warning: No valid numeric data remaining after cleaning.{Style.RESET_ALL}"
+        )  # Print warning message
+        return (None, None, False)  # Return failure tuple
+
+    X = numeric_df.values  # Extract values as numpy array
+
+    try:  # Attempt feature scaling
+        scaler = StandardScaler()  # Initialize standard scaler
+        X_scaled = scaler.fit_transform(X)  # Scale features to zero mean and unit variance
+    except Exception as e:  # Scaling failed
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Feature scaling failed: {e}. Using unscaled data.{Style.RESET_ALL}"
+        )  # Print warning message
+        X_scaled = X  # Use unscaled data as fallback
+
+    return (X_scaled, labels, True)  # Return scaled features, labels, and success flag
+
+
+def compute_and_save_tsne_plot(X_scaled, labels, output_path, title, perplexity=30, random_state=42):
+    """
+    Compute t-SNE embedding and save visualization plot.
+
+    :param X_scaled: Scaled numeric feature array
+    :param labels: Array of labels for coloring
+    :param output_path: Full path for saving the plot file
+    :param title: Title for the plot
+    :param perplexity: t-SNE perplexity parameter
+    :param random_state: Random seed for reproducibility
+    :return: True if successful, False otherwise
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Computing t-SNE embedding and saving plot...{Style.RESET_ALL}"
+    )  # Output verbose message for t-SNE computation
+
+    try:  # Attempt t-SNE computation
+        max_perplexity = (X_scaled.shape[0] - 1) // 3  # Maximum valid perplexity
+        actual_perplexity = min(perplexity, max_perplexity)  # Use minimum of requested and maximum
+
+        if actual_perplexity < 5:  # Perplexity too small for meaningful results
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Sample size too small for t-SNE (n={X_scaled.shape[0]}).{Style.RESET_ALL}"
+            )  # Print warning message
+            return False  # Return failure flag
+
+        tsne = TSNE(
+            n_components=2,  # 2D embedding for visualization
+            perplexity=actual_perplexity,  # Adjusted perplexity parameter
+            random_state=random_state,  # Random seed for reproducibility
+            n_iter=1000  # Number of iterations
+        )  # Create t-SNE object
+
+        X_embedded = tsne.fit_transform(X_scaled)  # Compute 2D embedding
+
+        plt.figure(figsize=(12, 10))  # Create figure with specified size
+
+        unique_labels = np.unique(labels)  # Extract unique label values
+        n_labels = len(unique_labels)  # Count unique labels
+
+        colors = plt.cm.rainbow(np.linspace(0, 1, n_labels))  # Generate distinct colors
+
+        for idx, label in enumerate(unique_labels):  # Iterate over unique labels
+            mask = labels == label  # Create boolean mask for current label
+            plt.scatter(
+                X_embedded[mask, 0],  # X coordinates for current class
+                X_embedded[mask, 1],  # Y coordinates for current class
+                c=[colors[idx]],  # Color for current class
+                label=label,  # Legend label
+                alpha=0.6,  # Transparency
+                edgecolors='k',  # Black edge color
+                linewidth=0.5,  # Edge line width
+                s=50  # Marker size
+            )  # Plot scatter points for current class
+
+        plt.title(title, fontsize=16, fontweight='bold')  # Set plot title
+        plt.xlabel('t-SNE Component 1', fontsize=12)  # Set x-axis label
+        plt.ylabel('t-SNE Component 2', fontsize=12)  # Set y-axis label
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)  # Add legend outside plot
+        plt.grid(True, alpha=0.3)  # Add grid with transparency
+        plt.tight_layout()  # Adjust layout to prevent label cutoff
+
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')  # Save figure with high resolution
+        plt.close()  # Close figure to free memory
+
+        print(
+            f"{BackgroundColors.GREEN}t-SNE plot saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+        )  # Print success message
+
+        return True  # Return success flag
+
+    except Exception as e:  # t-SNE computation or plotting failed
+        print(
+            f"{BackgroundColors.RED}Error generating t-SNE plot: {e}{Style.RESET_ALL}"
+        )  # Print error message
+        return False  # Return failure flag
+
+
+def generate_augmentation_tsne_visualization(original_file, original_df, augmented_df=None, augmentation_ratio=None, experiment_mode="original_only"):
+    """
+    Generate t-SNE visualization for data augmentation experiment.
+
+    :param original_file: Path to original dataset file
+    :param original_df: DataFrame with original data
+    :param augmented_df: DataFrame with augmented data (None for original-only)
+    :param augmentation_ratio: Augmentation ratio (e.g., 0.50 for 50%)
+    :param experiment_mode: Experiment mode string
+    :return: None
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Generating t-SNE visualization for augmentation experiment...{Style.RESET_ALL}"
+    )  # Output verbose message for t-SNE generation
+
+    augmented_file = find_data_augmentation_file(original_file)  # Locate augmented data file
+    if augmented_file is None:  # No augmented file found
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Cannot generate t-SNE - augmented file path not found.{Style.RESET_ALL}"
+        )  # Print warning message
+        return  # Exit function early
+
+    tsne_output_dir = build_tsne_output_directory(original_file, augmented_file)  # Create output directory
+
+    combined_df = combine_and_label_augmentation_data(original_df, augmented_df)  # Prepare labeled data
+
+    X_scaled, labels, success = prepare_numeric_features_for_tsne(combined_df, exclude_col='tsne_label')  # Extract and scale features
+
+    if not success:  # Feature preparation failed
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Skipping t-SNE generation due to feature preparation failure.{Style.RESET_ALL}"
+        )  # Print warning message
+        return  # Exit function early
+
+    file_stem = Path(original_file).stem  # Extract filename without extension
+
+    if experiment_mode == "original_only":  # Original-only experiment
+        plot_filename = f"{file_stem}_original_only_tsne.png"  # Filename for original-only plot
+        plot_title = f"t-SNE: {file_stem} (Original Only)"  # Title for original-only plot
+    else:  # Original + augmented experiment
+        ratio_pct = int(augmentation_ratio * 100) if augmentation_ratio else 0  # Convert ratio to percentage
+        plot_filename = f"{file_stem}_augmented_{ratio_pct}pct_tsne.png"  # Filename for augmented plot
+        plot_title = f"t-SNE: {file_stem} (Original + {ratio_pct}% Augmented)"  # Title for augmented plot
+
+    output_path = tsne_output_dir / plot_filename  # Build full output path
+
+    compute_and_save_tsne_plot(X_scaled, labels, str(output_path), plot_title)  # Generate and save visualization
+
+    send_telegram_message(
+        TELEGRAM_BOT, f"Generated t-SNE plot: {file_stem} ({experiment_mode}, ratio={augmentation_ratio})"
+    )  # Send notification via Telegram
 
 
 def save_augmentation_comparison_results(file_path, comparison_results):
@@ -3699,6 +3970,10 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
             f"{BackgroundColors.GREEN}Merged dataset: {BackgroundColors.CYAN}{len(df_original_cleaned)} original + {len(df_sampled)} augmented = {len(df_merged)} total rows{Style.RESET_ALL}"
         )  # Print merged dataset size breakdown for transparency
 
+        generate_augmentation_tsne_visualization(
+            file, df_original_cleaned, df_sampled, ratio, "original_plus_augmented"
+        )  # Generate t-SNE visualization for this augmentation ratio
+
         results_ratio = evaluate_on_dataset(
             file, df_merged, feature_names, ga_selected_features, pca_n_components,
             rfe_selected_features, base_models, data_source_label=data_source_label,
@@ -3779,6 +4054,11 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
     base_models, hp_params_map = prepare_models_with_hyperparameters(file)  # Prepare base models with hyperparameters
 
     original_experiment_id = generate_experiment_id(file, "original_only")  # Generate unique experiment ID for the original-only evaluation
+
+    if TEST_DATA_AUGMENTATION:  # If data augmentation testing is enabled
+        generate_augmentation_tsne_visualization(
+            file, df_original_cleaned, None, None, "original_only"
+        )  # Generate t-SNE visualization for original data only
 
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[1/{1 + len(AUGMENTATION_RATIOS) if TEST_DATA_AUGMENTATION else 1}] Evaluating on ORIGINAL data{Style.RESET_ALL}"
