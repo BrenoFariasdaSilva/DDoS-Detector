@@ -129,6 +129,33 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def combine_and_clean_dataframes(reduced_dfs, config=None):
+    """
+    Combine reduced dataframes, clean, and validate.
+
+    :param reduced_dfs: List of reduced dataframes
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Combined dataframe or None if empty
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Combining reduced dataframes and cleaning...{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    combined = pd.concat(reduced_dfs, ignore_index=True)  # Concatenate all reduced dataframes
+    combined = combined.replace([np.inf, -np.inf], np.nan).dropna()  # Replace inf with nan and drop na
+
+    if combined.empty:  # If combined dataframe is empty
+        print(f"{BackgroundColors.RED}Combined dataset is empty after alignment and NaN removal.{Style.RESET_ALL}")  # Print error
+        return None  # Return None
+
+    return combined  # Return the combined dataframe
+
+
 def combine_dataset_files(files_list, config=None):
     """
     Load, preprocess and combine multiple dataset CSVs into a single DataFrame.
