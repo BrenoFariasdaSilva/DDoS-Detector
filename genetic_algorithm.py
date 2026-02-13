@@ -269,6 +269,7 @@ def get_default_config():
                 "cv_precision",
                 "cv_recall",
                 "cv_f1_score",
+                "num_features_selected",
                 "test_accuracy",
                 "test_precision",
                 "test_recall",
