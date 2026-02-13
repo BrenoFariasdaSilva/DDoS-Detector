@@ -129,6 +129,36 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def remove_cache_file(csv_path, config=None):
+    """
+    Remove the cache file after successful completion.
+
+    :param csv_path: Path to the dataset CSV file
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    cache_path = get_cache_file_path(csv_path, config=config)  # Get the cache file path
+
+    if os.path.exists(cache_path):  # If cache file exists
+        try:  # Try to remove the cache file
+            os.remove(cache_path)  # Delete the cache file
+            print(
+                f"{BackgroundColors.GREEN}Cache file removed: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
+            )  # Print success message
+        except Exception as e:  # Catch any errors
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Failed to remove cache file {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
+            )  # Print warning message
+    else:  # If cache file doesn't exist
+        verbose_output(
+            f"{BackgroundColors.YELLOW}No cache file to remove at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
+        )  # Output verbose message
+
+
 def get_automl_search_spaces():
     """
     Returns hyperparameter search space definitions for all AutoML candidate models.
