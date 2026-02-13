@@ -129,6 +129,70 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def extract_principal_component_analysis_features(file_path, config=None):
+    """
+    Extracts the optimal number of Principal Components (n_components)
+    from the "PCA_Results.csv" file located in the "Feature_Analysis"
+    subdirectory relative to the input file's directory.
+
+    The best result is determined by the highest 'cv_f1_score'.
+
+    :param file_path: Full path to the current CSV file being processed (e.g., "./Datasets/.../DrDoS_DNS.csv").
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Integer representing the optimal number of components (n_components), or None if the file is not found or fails to load/parse.
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    file_dir = os.path.dirname(file_path)  # Determine the directory of the input file
+    verbose_output(
+        f"{BackgroundColors.GREEN}Extracting PCA features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    pca_results_path = find_feature_file(file_path, "PCA_Results.csv", config=config)  # Find the PCA results file
+    if pca_results_path is None:  # If the PCA results file does not exist
+        print(
+            f"{BackgroundColors.YELLOW}Warning: PCA results file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping PCA feature extraction for this file.{Style.RESET_ALL}"
+        )
+        return None  # Return None if the file does not exist
+
+    try:  # Try to load the PCA results
+        df = pd.read_csv(pca_results_path, usecols=["n_components", "cv_f1_score"])  # Load only the necessary columns
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+
+        if df.empty:  # Verify if the DataFrame is empty
+            print(
+                f"{BackgroundColors.RED}Error: PCA results file at {BackgroundColors.CYAN}{pca_results_path}{BackgroundColors.RED} is empty.{Style.RESET_ALL}"
+            )
+            return None  # Return None if the file is empty
+
+        best_row_index = df["cv_f1_score"].idxmax()  # Get the index of the row with the highest CV F1-Score
+        best_n_components = df.loc[best_row_index, "n_components"]  # Get the optimal number of components
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Successfully extracted best PCA configuration. Optimal components: {BackgroundColors.CYAN}{best_n_components}{Style.RESET_ALL}"
+        )  # Output the verbose message
+
+        best_n_components = df.loc[best_row_index, "n_components"]  # Get the optimal number of components
+
+        best_n_components_int = int(pd.to_numeric(best_n_components, errors="raise"))  # Ensure it's an integer
+
+        return best_n_components_int  # Return the optimal number of components
+
+    except KeyError as e:  # Handle missing columns
+        print(
+            f"{BackgroundColors.RED}Error: Required column {e} not found in PCA results file at {BackgroundColors.CYAN}{pca_results_path}{Style.RESET_ALL}"
+        )
+        return None  # Return None if required column is missing
+    except Exception as e:  # Handle other errors (loading, parsing, etc.)
+        print(
+            f"{BackgroundColors.RED}Error loading/parsing PCA features from {BackgroundColors.CYAN}{pca_results_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
+        )
+        return None  # Return None if there was an error
+
+
 def extract_recursive_feature_elimination_features(file_path, config=None):
     """
     Extracts the "top_features" list (Python literal string) from the first row of the
