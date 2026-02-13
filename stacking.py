@@ -4843,6 +4843,11 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
             config=config
         )  # Output the verbose message
         
+        # Generate t-SNE visualization for original multi-class data
+        generate_augmentation_tsne_visualization(
+            reference_file, combined_multiclass_df, None, None, "original_only"
+        )  # Generate t-SNE visualization for original multi-class data only
+        
         # Load augmented files for all original files
         augmented_files_list = load_augmented_files_for_multiclass(original_files_list, config=config)  # Load augmented files
         
@@ -4897,6 +4902,11 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
             
             data_source_label = f"Original+Augmented@{ratio_pct}%_MultiClass"  # Build data source label for this experiment
             experiment_id = generate_experiment_id(reference_file, "multiclass_original_plus_augmented", ratio)  # Generate unique experiment ID
+            
+            # Generate t-SNE visualization for this augmentation ratio
+            generate_augmentation_tsne_visualization(
+                reference_file, combined_multiclass_df, df_sampled, ratio, "original_plus_augmented"
+            )  # Generate t-SNE visualization for multi-class augmented experiment
             
             send_telegram_message(
                 TELEGRAM_BOT, f"Starting multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
