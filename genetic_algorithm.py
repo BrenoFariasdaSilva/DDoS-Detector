@@ -4567,6 +4567,16 @@ def run_population_sweep(
             f"{BackgroundColors.YELLOW}Skipping comparison table generation due to error: {e}{Style.RESET_ALL}"
         )  # Log warning but continue
 
+    # Generate multi-run comparison visualization plots
+    try:  # Attempt to generate comparison plots
+        generate_multi_run_comparison_plots(
+            results, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb
+        )  # Generate multi-run comparison visualization plots
+    except Exception as e:  # If plot generation fails
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Skipping multi-run comparison plots due to error: {e}{Style.RESET_ALL}"
+        )  # Log warning but continue
+
     elapsed_run_time = time.time() - start_run_time  # Calculate elapsed time for the entire run process
     
     if best_result:  # If a best result was found
