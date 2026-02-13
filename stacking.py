@@ -4933,11 +4933,12 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
                 )  # Print warning
                 continue  # Skip to next ratio
             
-            # Merge original and sampled augmented data
-            df_merged = merge_original_and_augmented(combined_multiclass_df, df_sampled, config=config)  # Merge original and augmented dataframes
-            
             data_source_label = f"Original+Augmented@{ratio_pct}%_MultiClass"  # Build data source label for this experiment
             experiment_id = generate_experiment_id(reference_file, "multiclass_original_plus_augmented", ratio)  # Generate unique experiment ID
+            
+            print(
+                f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
+            )  # Print sampled dataset size for transparency
             
             # Generate t-SNE visualization for this augmentation ratio
             generate_augmentation_tsne_visualization(
@@ -4948,14 +4949,15 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
                 TELEGRAM_BOT, f"Starting multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
             )  # Send Telegram notification
             
-            # Evaluate on merged dataset
+            # Evaluate on dataset with augmented data in training only
             results_ratio = evaluate_on_dataset(
-                reference_file, df_merged, feature_names, ga_selected_features, pca_n_components,
+                reference_file, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components,
                 rfe_selected_features, base_models, data_source_label=data_source_label,
                 hyperparams_map=hp_params_map, experiment_id=experiment_id,
                 experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
-                execution_mode_str="multi-class", attack_types_combined=attack_types_list
-            )  # Evaluate all classifiers on the merged multi-class dataset with execution mode tracking
+                execution_mode_str="multi-class", attack_types_combined=attack_types_list,
+                df_augmented_for_training=df_sampled
+            )  # Evaluate all classifiers with augmented data in training only (test remains original-only)
             
             all_ratio_results[ratio] = results_ratio  # Store the results for this ratio in the results dictionary
             
