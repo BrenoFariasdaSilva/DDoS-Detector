@@ -3087,6 +3087,399 @@ def generate_run_comparison_table(results_dict, csv_path, dataset_name, min_pop,
         return None  # Return None
 
 
+def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb):
+    """
+    Generate comprehensive multi-run comparison visualization plots.
+
+    Creates overlay plots, distribution plots, bar charts, aggregated convergence
+    plots, and optional advanced visualizations for comparing multiple GA runs.
+
+    :param results_dict: Dict mapping pop_size to {"runs": [...], "avg_metrics": ..., "common_features": ...}
+    :param csv_path: Path to the dataset CSV (used to determine output directory)
+    :param dataset_name: Name of the dataset
+    :param min_pop: Minimum population size tested
+    :param max_pop: Maximum population size tested
+    :param n_generations: Number of generations configured
+    :param cxpb: Crossover probability used
+    :param mutpb: Mutation probability used
+    :return: List of paths to all saved comparison plots
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Generating multi-run comparison plots for {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
+    )  # Log generation start
+
+    try:  # Attempt to generate all comparison plots
+        output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis"  # Base output directory
+        comparison_dir = os.path.join(output_dir, "ga_run_comparisons", "multi_run_plots")  # Subdirectory for comparison plots
+        os.makedirs(comparison_dir, exist_ok=True)  # Ensure directory exists
+
+        base_dataset_name = safe_filename(os.path.splitext(os.path.basename(csv_path))[0])  # Sanitized dataset name
+        saved_plots = []  # List to track all saved plot paths
+
+        # Extract all run data with history for plotting
+        all_runs_data = []  # List to store all runs data for comparison
+        for pop_size in range(min_pop, max_pop + 1):  # For each population size
+            if pop_size not in results_dict:  # If no results for this population size
+                continue  # Skip to next
+
+            runs_list = results_dict[pop_size].get("runs", [])  # Get runs list
+            for run_idx, run_result in enumerate(runs_list, start=1):  # For each run (1-based indexing)
+                history_data = run_result.get("history_data", {})  # Get history data
+                metrics = run_result.get("metrics", [])  # Get final metrics
+                
+                if not isinstance(history_data, dict):  # If history data not available
+                    continue  # Skip this run
+
+                run_info = {
+                    "pop_size": pop_size,  # Population size
+                    "run_id": run_idx,  # Run identifier
+                    "history_data": history_data,  # History data dict
+                    "final_f1": metrics[3] if len(metrics) > 3 else 0.0,  # Final F1 score
+                    "final_features": len(run_result.get("best_features", [])),  # Final feature count
+                }  # Build run info dict
+                all_runs_data.append(run_info)  # Add to list
+
+        if not all_runs_data:  # If no run data available
+            verbose_output(
+                f"{BackgroundColors.YELLOW}No run history data available for comparison plots{Style.RESET_ALL}"
+            )  # Log warning
+            return []  # Return empty list
+
+        total_runs = len(all_runs_data)  # Count total runs
+        verbose_output(
+            f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{total_runs}{BackgroundColors.GREEN} runs for comparison visualization{Style.RESET_ALL}"
+        )  # Log run count
+
+        # PLOT A: Overlay Plot - Generation vs Best F1-score (one line per run)
+        try:  # Try to create overlay plot
+            plt.figure(figsize=(12, 7))  # Create figure with larger dimensions
+            cmap = plt.cm.get_cmap('tab10' if total_runs <= 10 else 'tab20')  # Get colormap based on number of runs
+            colors = [cmap(i / min(total_runs, 20 if total_runs > 10 else 10)) for i in range(total_runs)]  # Generate color list
+
+            for idx, run_data in enumerate(all_runs_data):  # For each run
+                best_f1_history = run_data["history_data"].get("best_f1", [])  # Get best F1 history
+                if not best_f1_history:  # If no history data
+                    continue  # Skip this run
+
+                generations = list(range(1, len(best_f1_history) + 1))  # Generate generation numbers
+                color = colors[idx % len(colors)]  # Select color from palette
+                label = f"Pop{run_data['pop_size']}_Run{run_data['run_id']}"  # Create label
+
+                plt.plot(generations, best_f1_history, linestyle="-", color=color, linewidth=1.5, alpha=0.7, label=label)  # Plot run
+
+            plt.xlabel("Generation", fontsize=12)  # Set X-axis label
+            plt.ylabel("Best F1-Score", fontsize=12)  # Set Y-axis label
+            plt.title(f"Multi-Run Best F1-Score Overlay\\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+            plt.grid(True, linestyle="--", alpha=0.3)  # Add grid with reduced alpha
+            if total_runs <= 15:  # If 15 runs or fewer
+                plt.legend(loc="best", fontsize=8, ncol=2)  # Add legend with 2 columns
+            plt.tight_layout()  # Adjust layout
+            plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_overlay_best_f1.png")  # Define plot path
+            plt.savefig(plot_path, dpi=150)  # Save figure
+            plt.close()  # Close plot
+            saved_plots.append(plot_path)  # Add to saved plots list
+        except Exception:  # If plotting fails
+            plt.close()  # Close plot
+
+        # PLOT B1: Distribution Plot - Final Best F1-score
+        try:  # Try to create distribution plot
+            final_f1_scores = [run["final_f1"] for run in all_runs_data]  # Extract final F1 scores
+            
+            plt.figure(figsize=(10, 6))  # Create figure
+            plt.hist(final_f1_scores, bins=min(20, max(5, total_runs // 2)), color="#2ca02c", alpha=0.7, edgecolor="black")  # Plot histogram
+            plt.axvline(float(np.mean(final_f1_scores)), color="red", linestyle="--", linewidth=2, label=f"Mean: {np.mean(final_f1_scores):.4f}")  # Add mean line
+            plt.axvline(float(np.median(final_f1_scores)), color="blue", linestyle="--", linewidth=2, label=f"Median: {np.median(final_f1_scores):.4f}")  # Add median line
+            plt.xlabel("Final Best F1-Score", fontsize=12)  # Set X-axis label
+            plt.ylabel("Frequency", fontsize=12)  # Set Y-axis label
+            plt.title(f"Distribution of Final Best F1-Scores\\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+            plt.legend(loc="best")  # Add legend
+            plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
+            plt.tight_layout()  # Adjust layout
+            plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_dist_final_f1.png")  # Define plot path
+            plt.savefig(plot_path, dpi=150)  # Save figure
+            plt.close()  # Close plot
+            saved_plots.append(plot_path)  # Add to saved plots list
+        except Exception:  # If plotting fails
+            plt.close()  # Close plot
+
+        # PLOT B2: Distribution Plot - Final Feature Count
+        try:  # Try to create distribution plot
+            final_features = [run["final_features"] for run in all_runs_data]  # Extract final feature counts
+            
+            plt.figure(figsize=(10, 6))  # Create figure
+            plt.hist(final_features, bins=min(20, max(5, total_runs // 2)), color="#ff7f0e", alpha=0.7, edgecolor="black")  # Plot histogram
+            plt.axvline(float(np.mean(final_features)), color="red", linestyle="--", linewidth=2, label=f"Mean: {np.mean(final_features):.1f}")  # Add mean line
+            plt.axvline(float(np.median(final_features)), color="blue", linestyle="--", linewidth=2, label=f"Median: {np.median(final_features):.0f}")  # Add median line
+            plt.xlabel("Final Feature Count", fontsize=12)  # Set X-axis label
+            plt.ylabel("Frequency", fontsize=12)  # Set Y-axis label
+            plt.title(f"Distribution of Final Feature Counts\\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+            plt.legend(loc="best")  # Add legend
+            plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
+            plt.tight_layout()  # Adjust layout
+            plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_dist_final_features.png")  # Define plot path
+            plt.savefig(plot_path, dpi=150)  # Save figure
+            plt.close()  # Close plot
+            saved_plots.append(plot_path)  # Add to saved plots list
+        except Exception:  # If plotting fails
+            plt.close()  # Close plot
+
+        # PLOT B3: Distribution Plot - Final Hypervolume (if available)
+        try:  # Try to create distribution plot
+            final_hypervolumes = []  # List to store hypervolume values
+            for run in all_runs_data:  # For each run
+                hv_history = run["history_data"].get("hypervolume", [])  # Get hypervolume history
+                if hv_history:  # If hypervolume data exists
+                    final_hypervolumes.append(hv_history[-1])  # Add final hypervolume
+
+            if final_hypervolumes:  # If any hypervolume data collected
+                plt.figure(figsize=(10, 6))  # Create figure
+                plt.hist(final_hypervolumes, bins=min(20, max(5, len(final_hypervolumes) // 2)), color="#8c564b", alpha=0.7, edgecolor="black")  # Plot histogram
+                plt.axvline(float(np.mean(final_hypervolumes)), color="red", linestyle="--", linewidth=2, label=f"Mean: {np.mean(final_hypervolumes):.4f}")  # Add mean line
+                plt.axvline(float(np.median(final_hypervolumes)), color="blue", linestyle="--", linewidth=2, label=f"Median: {np.median(final_hypervolumes):.4f}")  # Add median line
+                plt.xlabel("Final Hypervolume", fontsize=12)  # Set X-axis label
+                plt.ylabel("Frequency", fontsize=12)  # Set Y-axis label
+                plt.title(f"Distribution of Final Hypervolume\\n{dataset_name} ({len(final_hypervolumes)} runs)", fontsize=14)  # Set plot title
+                plt.legend(loc="best")  # Add legend
+                plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
+                plt.tight_layout()  # Adjust layout
+                plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_dist_final_hypervolume.png")  # Define plot path
+                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.close()  # Close plot
+                saved_plots.append(plot_path)  # Add to saved plots list
+        except Exception:  # If plotting fails
+            plt.close()  # Close plot
+
+        # PLOT C1: Bar Chart - Final Best F1 per run
+        try:  # Try to create bar chart
+            run_labels = [f"P{run['pop_size']}_R{run['run_id']}" for run in all_runs_data]  # Create run labels
+            final_f1_scores = [run["final_f1"] for run in all_runs_data]  # Extract final F1 scores
+            
+            plt.figure(figsize=(max(12, total_runs * 0.4), 6))  # Create figure with width scaled to number of runs
+            bars = plt.bar(range(len(run_labels)), final_f1_scores, color="#1f77b4", alpha=0.7, edgecolor="black")  # Create bar chart
+            
+            # Color bars by performance (top 25% green, bottom 25% red)
+            sorted_f1 = sorted(final_f1_scores)  # Sort F1 scores
+            threshold_high = sorted_f1[int(0.75 * len(sorted_f1))] if len(sorted_f1) > 4 else max(sorted_f1)  # Top 25% threshold
+            threshold_low = sorted_f1[int(0.25 * len(sorted_f1))] if len(sorted_f1) > 4 else min(sorted_f1)  # Bottom 25% threshold
+            
+            for idx, (bar, f1) in enumerate(zip(bars, final_f1_scores)):  # For each bar
+                if f1 >= threshold_high:  # If in top 25%
+                    bar.set_color("#2ca02c")  # Green
+                elif f1 <= threshold_low:  # If in bottom 25%
+                    bar.set_color("#d62728")  # Red
+
+            plt.xlabel("Run ID", fontsize=12)  # Set X-axis label
+            plt.ylabel("Final Best F1-Score", fontsize=12)  # Set Y-axis label
+            plt.title(f"Final Best F1-Score per Run\\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+            plt.xticks(range(len(run_labels)), run_labels, rotation=45, ha="right", fontsize=8)  # Set X-axis ticks with rotation
+            plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
+            plt.tight_layout()  # Adjust layout
+            plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_bar_final_f1.png")  # Define plot path
+            plt.savefig(plot_path, dpi=150)  # Save figure
+            plt.close()  # Close plot
+            saved_plots.append(plot_path)  # Add to saved plots list
+        except Exception:  # If plotting fails
+            plt.close()  # Close plot
+
+        # PLOT C2: Bar Chart - Final Feature Count per run
+        try:  # Try to create bar chart
+            run_labels = [f"P{run['pop_size']}_R{run['run_id']}" for run in all_runs_data]  # Create run labels
+            final_features = [run["final_features"] for run in all_runs_data]  # Extract final feature counts
+            
+            plt.figure(figsize=(max(12, total_runs * 0.4), 6))  # Create figure with width scaled to number of runs
+            plt.bar(range(len(run_labels)), final_features, color="#ff7f0e", alpha=0.7, edgecolor="black")  # Create bar chart
+            plt.xlabel("Run ID", fontsize=12)  # Set X-axis label
+            plt.ylabel("Final Feature Count", fontsize=12)  # Set Y-axis label
+            plt.title(f"Final Feature Count per Run\\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+            plt.xticks(range(len(run_labels)), run_labels, rotation=45, ha="right", fontsize=8)  # Set X-axis ticks with rotation
+            plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
+            plt.tight_layout()  # Adjust layout
+            plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_bar_final_features.png")  # Define plot path
+            plt.savefig(plot_path, dpi=150)  # Save figure
+            plt.close()  # Close plot
+            saved_plots.append(plot_path)  # Add to saved plots list
+        except Exception:  # If plotting fails
+            plt.close()  # Close plot
+
+        # PLOT C3: Bar Chart - Final Hypervolume per run (if available)
+        try:  # Try to create bar chart
+            run_info_with_hv = []  # List to store runs with hypervolume data
+            for run in all_runs_data:  # For each run
+                hv_history = run["history_data"].get("hypervolume", [])  # Get hypervolume history
+                if hv_history:  # If hypervolume data exists
+                    run_info_with_hv.append({
+                        "label": f"P{run['pop_size']}_R{run['run_id']}",  # Run label
+                        "hypervolume": hv_history[-1],  # Final hypervolume
+                    })  # Add to list
+
+            if run_info_with_hv:  # If any runs have hypervolume data
+                run_labels_hv = [r["label"] for r in run_info_with_hv]  # Extract labels
+                hypervolumes = [r["hypervolume"] for r in run_info_with_hv]  # Extract hypervolumes
+                
+                plt.figure(figsize=(max(12, len(run_labels_hv) * 0.4), 6))  # Create figure
+                plt.bar(range(len(run_labels_hv)), hypervolumes, color="#8c564b", alpha=0.7, edgecolor="black")  # Create bar chart
+                plt.xlabel("Run ID", fontsize=12)  # Set X-axis label
+                plt.ylabel("Final Hypervolume", fontsize=12)  # Set Y-axis label
+                plt.title(f"Final Hypervolume per Run\\n{dataset_name} ({len(run_labels_hv)} runs)", fontsize=14)  # Set plot title
+                plt.xticks(range(len(run_labels_hv)), run_labels_hv, rotation=45, ha="right", fontsize=8)  # Set X-axis ticks
+                plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
+                plt.tight_layout()  # Adjust layout
+                plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_bar_final_hypervolume.png")  # Define plot path
+                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.close()  # Close plot
+                saved_plots.append(plot_path)  # Add to saved plots list
+        except Exception:  # If plotting fails
+            plt.close()  # Close plot
+
+        # PLOT D: Aggregated Convergence Plot - Mean ± Std Dev Best F1-score per generation
+        try:  # Try to create aggregated convergence plot
+            # Collect all best F1 histories and align by generation
+            all_f1_histories = []  # List to store all F1 histories
+            max_gens = 0  # Track maximum generation count
+            
+            for run in all_runs_data:  # For each run
+                best_f1_history = run["history_data"].get("best_f1", [])  # Get best F1 history
+                if best_f1_history:  # If history exists
+                    all_f1_histories.append(best_f1_history)  # Add to list
+                    max_gens = max(max_gens, len(best_f1_history))  # Update max generations
+
+            if all_f1_histories and max_gens > 0:  # If any F1 histories collected
+                # Align all histories to same length (pad shorter ones with their last value)
+                aligned_histories = []  # List to store aligned histories
+                for history in all_f1_histories:  # For each history
+                    if len(history) < max_gens:  # If shorter than max
+                        padded = history + [history[-1]] * (max_gens - len(history))  # Pad with last value
+                        aligned_histories.append(padded)  # Add padded history
+                    else:  # If already at max length
+                        aligned_histories.append(history)  # Add as is
+
+                # Compute mean and std dev per generation
+                histories_array = np.array(aligned_histories)  # Convert to numpy array
+                mean_f1 = np.mean(histories_array, axis=0)  # Compute mean per generation
+                std_f1 = np.std(histories_array, axis=0)  # Compute std dev per generation
+                generations = list(range(1, max_gens + 1))  # Generate generation numbers
+
+                plt.figure(figsize=(12, 7))  # Create figure
+                plt.plot(generations, mean_f1, color="#1f77b4", linewidth=2.5, label="Mean Best F1")  # Plot mean
+                plt.fill_between(generations, mean_f1 - std_f1, mean_f1 + std_f1, color="#1f77b4", alpha=0.2, label="± 1 Std Dev")  # Fill std dev region
+                plt.xlabel("Generation", fontsize=12)  # Set X-axis label
+                plt.ylabel("Best F1-Score", fontsize=12)  # Set Y-axis label
+                plt.title(f"Aggregated Best F1-Score Convergence (Mean ± Std Dev)\\n{dataset_name} ({len(all_f1_histories)} runs)", fontsize=14)  # Set plot title
+                plt.legend(loc="best", fontsize=10)  # Add legend
+                plt.grid(True, linestyle="--", alpha=0.3)  # Add grid
+                plt.tight_layout()  # Adjust layout
+                plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_aggregated_convergence.png")  # Define plot path
+                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.close()  # Close plot
+                saved_plots.append(plot_path)  # Add to saved plots list
+        except Exception:  # If plotting fails
+            plt.close()  # Close plot
+
+        # PLOT E1: Scatter Plot - Best F1 vs Feature Count
+        try:  # Try to create scatter plot
+            final_f1_scores = [run["final_f1"] for run in all_runs_data]  # Extract final F1 scores
+            final_features = [run["final_features"] for run in all_runs_data]  # Extract final feature counts
+            colors_pop = [run["pop_size"] for run in all_runs_data]  # Extract population sizes for coloring
+            
+            plt.figure(figsize=(10, 7))  # Create figure
+            scatter = plt.scatter(final_features, final_f1_scores, c=colors_pop, cmap="viridis", s=100, alpha=0.6, edgecolors="black", linewidth=1)  # Create scatter plot
+            plt.colorbar(scatter, label="Population Size")  # Add colorbar
+            plt.xlabel("Final Feature Count", fontsize=12)  # Set X-axis label
+            plt.ylabel("Final Best F1-Score", fontsize=12)  # Set Y-axis label
+            plt.title(f"Best F1-Score vs Feature Count\\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+            plt.grid(True, linestyle="--", alpha=0.3)  # Add grid
+            plt.tight_layout()  # Adjust layout
+            plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_scatter_f1_vs_features.png")  # Define plot path
+            plt.savefig(plot_path, dpi=150)  # Save figure
+            plt.close()  # Close plot
+            saved_plots.append(plot_path)  # Add to saved plots list
+        except Exception:  # If plotting fails
+            plt.close()  # Close plot
+
+        # PLOT E2: Correlation Heatmap of Metrics
+        try:  # Try to create correlation heatmap
+            # Build metrics dataframe for correlation analysis
+            metrics_data = []  # List to store metrics for each run
+            for run in all_runs_data:  # For each run
+                history = run["history_data"]  # Get history data
+                hv_history = history.get("hypervolume", [])  # Get hypervolume history
+                div_history = history.get("diversity", [])  # Get diversity history
+                
+                metrics_row = {
+                    "Final F1": run["final_f1"],  # Final F1 score
+                    "Final Features": run["final_features"],  # Final feature count
+                    "Final Hypervolume": hv_history[-1] if hv_history else np.nan,  # Final hypervolume
+                    "Final Diversity": div_history[-1] if div_history else np.nan,  # Final diversity
+                }  # Build metrics row
+                metrics_data.append(metrics_row)  # Add to list
+
+            df_metrics = pd.DataFrame(metrics_data)  # Create DataFrame
+            df_metrics = df_metrics.dropna(axis=1, how="all")  # Drop columns with all NaN values
+            
+            if df_metrics.shape[1] >= 2:  # If at least 2 metrics available
+                correlation_matrix = df_metrics.corr()  # Compute correlation matrix
+                
+                plt.figure(figsize=(8, 6))  # Create figure
+                sns.heatmap(correlation_matrix, annot=True, cmap="coolwarm", center=0, vmin=-1, vmax=1, square=True, linewidths=1, cbar_kws={"shrink": 0.8})  # Create heatmap
+                plt.title(f"Metric Correlation Heatmap\\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+                plt.tight_layout()  # Adjust layout
+                plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_correlation_heatmap.png")  # Define plot path
+                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.close()  # Close plot
+                saved_plots.append(plot_path)  # Add to saved plots list
+        except Exception:  # If plotting fails
+            plt.close()  # Close plot
+
+        # PLOT E3: Boxplot - F1 Score Distribution by Population Size
+        try:  # Try to create boxplot
+            if max_pop > min_pop:  # If multiple population sizes tested
+                pop_sizes = sorted(set(run["pop_size"] for run in all_runs_data))  # Get unique population sizes
+                f1_by_pop = {}  # Dict to store F1 scores by population size
+                
+                for pop in pop_sizes:  # For each population size
+                    f1_by_pop[pop] = [run["final_f1"] for run in all_runs_data if run["pop_size"] == pop]  # Collect F1 scores
+                
+                plt.figure(figsize=(10, 6))  # Create figure
+                box_positions = list(range(1, len(f1_by_pop) + 1))  # Create box positions
+                plt.boxplot(list(f1_by_pop.values()), positions=box_positions, patch_artist=True, boxprops=dict(facecolor="#1f77b4", alpha=0.7))  # Create boxplot
+                plt.xticks(box_positions, [f"Pop {p}" for p in f1_by_pop.keys()], fontsize=10)  # Set X-axis tick labels
+                plt.xlabel("Population Size", fontsize=12)  # Set X-axis label
+                plt.ylabel("Final Best F1-Score", fontsize=12)  # Set Y-axis label
+                plt.title(f"F1-Score Distribution by Population Size\\n{dataset_name}", fontsize=14)  # Set plot title
+                plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
+                plt.tight_layout()  # Adjust layout
+                plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_boxplot_f1_by_pop.png")  # Define plot path
+                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.close()  # Close plot
+                saved_plots.append(plot_path)  # Add to saved plots list
+        except Exception:  # If plotting fails
+            plt.close()  # Close plot
+
+        if saved_plots:  # If any plots were saved
+            verbose_output(
+                f"{BackgroundColors.GREEN}Generated {len(saved_plots)} multi-run comparison plots in {BackgroundColors.CYAN}{comparison_dir}{Style.RESET_ALL}"
+            )  # Notify user
+            print(f"\n{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.GREEN}Multi-Run Visualization Summary{Style.RESET_ALL}")
+            print(f"{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.GREEN}Total Plots Generated: {BackgroundColors.CYAN}{len(saved_plots)}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.GREEN}Output Directory: {BackgroundColors.CYAN}{comparison_dir}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}\n")
+
+        return saved_plots  # Return list of saved plot paths
+
+    except Exception as e:  # If any error occurs during generation
+        try:  # Try to close any open plots
+            plt.close("all")  # Close all plots
+        except Exception:  # Ignore errors during cleanup
+            pass  # Do nothing
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Failed to generate multi-run comparison plots: {e}{Style.RESET_ALL}"
+        )  # Log warning
+        return []  # Return empty list
+
+
 def print_metrics(metrics):
     """
     Print performance metrics including multi-objective fitness values.
