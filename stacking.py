@@ -3221,7 +3221,7 @@ def extract_top_automl_models(study, top_n=5):
     return top_models  # Return dictionary of top models and their parameters
 
 
-def run_automl_stacking_search(X_train, y_train, model_study, file_path):
+def run_automl_stacking_search(X_train, y_train, model_study, file_path, config=None):
     """
     Runs Optuna-based optimization to find the best stacking ensemble configuration.
 
@@ -3229,8 +3229,12 @@ def run_automl_stacking_search(X_train, y_train, model_study, file_path):
     :param y_train: Training target labels (numpy array)
     :param model_study: Completed Optuna study from model search
     :param file_path: Path to the dataset file for logging
+    :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Tuple (best_stacking_config, stacking_study) or (None, None) on failure
     """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
 
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Starting AutoML stacking search with {BackgroundColors.CYAN}{config.get("automl", {}).get("stacking_trials", 20)}{BackgroundColors.GREEN} trials...{Style.RESET_ALL}"
@@ -3305,13 +3309,17 @@ def run_automl_stacking_search(X_train, y_train, model_study, file_path):
     return (best_config, stacking_study)  # Return best config and study
 
 
-def build_automl_stacking_model(best_config):
+def build_automl_stacking_model(best_config, config=None):
     """
     Builds a StackingClassifier from the best AutoML stacking configuration.
 
     :param best_config: Dictionary with best stacking configuration
+    :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Configured StackingClassifier instance
     """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
 
     estimators = []  # Initialize estimators list
 
@@ -3527,7 +3535,7 @@ def export_automl_best_model(model, scaler, output_dir, model_name, feature_name
     return (model_path, scaler_path)  # Return file paths
 
 
-def build_automl_results_list(best_model_name, best_params, individual_metrics, stacking_metrics, stacking_config, file_path, feature_names, n_train, n_test):
+def build_automl_results_list(best_model_name, best_params, individual_metrics, stacking_metrics, stacking_config, file_path, feature_names, n_train, n_test, config=None):
     """
     Builds the results list for AutoML CSV export matching existing results format.
 
@@ -3540,8 +3548,12 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
     :param feature_names: List of feature names
     :param n_train: Number of training samples
     :param n_test: Number of test samples
+    :param config: Configuration dictionary (uses global CONFIG if None)
     :return: List of result dictionaries for CSV export
     """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
 
     results = []  # Initialize results list
 
@@ -3605,14 +3617,18 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
     return results  # Return results list
 
 
-def save_automl_results(csv_path, results_list):
+def save_automl_results(csv_path, results_list, config=None):
     """
     Saves AutoML results to a dedicated CSV file in the Feature_Analysis/AutoML directory.
 
     :param csv_path: Path to the original dataset CSV file
     :param results_list: List of result dictionaries to save
+    :param config: Configuration dictionary (uses global CONFIG if None)
     :return: None
     """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
 
     if not results_list:  # If no results to save
         return  # Exit early
@@ -3636,7 +3652,7 @@ def save_automl_results(csv_path, results_list):
     )  # Output save confirmation
 
 
-def run_automl_pipeline(file, df, feature_names, data_source_label="Original"):
+def run_automl_pipeline(file, df, feature_names, data_source_label="Original", config=None):
     """
     Runs the complete AutoML pipeline: model search, stacking optimization, evaluation, and export.
 
@@ -3644,8 +3660,12 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original"):
     :param df: Preprocessed DataFrame with features and target
     :param feature_names: List of feature column names
     :param data_source_label: Label identifying the data source
+    :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Dictionary containing AutoML results, or None on failure
     """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
 
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}"
@@ -3701,11 +3721,11 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original"):
 
     if config.get("automl", {}).get("stacking_trials", 20) > 0:  # If stacking search is enabled
         stacking_config, stacking_study = run_automl_stacking_search(
-            X_train_scaled, y_train_arr, model_study, file
+            X_train_scaled, y_train_arr, model_study, file, config=config
         )  # Phase 2: Run stacking search
 
         if stacking_config is not None:  # If stacking search succeeded
-            best_stacking_model = build_automl_stacking_model(stacking_config)  # Build best stacking model
+            best_stacking_model = build_automl_stacking_model(stacking_config, config=config)  # Build best stacking model
 
             print(
                 f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating AutoML best stacking model on test set...{Style.RESET_ALL}"
@@ -3732,7 +3752,7 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original"):
     )  # Export best individual model
 
     if stacking_config is not None and stacking_metrics is not None:  # If stacking was successful
-        best_stacking_model_final = build_automl_stacking_model(stacking_config)  # Rebuild stacking model for export
+        best_stacking_model_final = build_automl_stacking_model(stacking_config, config=config)  # Rebuild stacking model for export
         best_stacking_model_final.fit(X_train_scaled, y_train_arr)  # Fit stacking model on full training data
         export_automl_best_model(
             best_stacking_model_final, scaler, automl_output_dir, "AutoML_Stacking", feature_names
@@ -3740,10 +3760,10 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original"):
 
     results_list = build_automl_results_list(
         best_model_name, best_params, individual_metrics, stacking_metrics, stacking_config,
-        file, feature_names, len(y_train), len(y_test)
+        file, feature_names, len(y_train), len(y_test), config=config
     )  # Build results list for CSV
 
-    save_automl_results(file, results_list)  # Save AutoML results to CSV
+    save_automl_results(file, results_list, config=config)  # Save AutoML results to CSV
 
     automl_elapsed = time.time() - automl_start  # Calculate total AutoML pipeline time
 
@@ -4417,7 +4437,7 @@ def generate_ratio_comparison_report(results_original, all_ratio_results):
     return comparison_results  # Return list of all comparison result entries for CSV export
 
 
-def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, results_original):
+def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, results_original, config=None):
     """
     Handles complete augmented data evaluation workflow with ratio-based experiments.
     For each ratio in config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]), samples augmented data proportionally,
@@ -4432,8 +4452,12 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
     :param base_models: Dictionary of base models
     :param hp_params_map: Hyperparameters mapping
     :param results_original: Results from original data evaluation
+    :param config: Configuration dictionary (uses global CONFIG if None)
     :return: None
     """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
 
     verbose_output(
         f"{BackgroundColors.GREEN}Processing augmented data evaluation for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
