@@ -1961,6 +1961,64 @@ def remove_cache_file(csv_path):
         )  # Output verbose message
 
 
+def run_automl_model_search(X_train, y_train, file_path):
+    """
+    Runs Optuna-based AutoML model search to find optimal classifier and hyperparameters.
+
+    :param X_train: Scaled training features (numpy array)
+    :param y_train: Training target labels (numpy array)
+    :param file_path: Path to the dataset file for logging
+    :return: Tuple (best_model_name, best_params, study) or (None, None, None) on failure
+    """
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Starting AutoML model search with {BackgroundColors.CYAN}{AUTOML_N_TRIALS}{BackgroundColors.GREEN} trials...{Style.RESET_ALL}"
+    )  # Output search start message
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)  # Suppress verbose Optuna logging
+
+    sampler = optuna.samplers.TPESampler(seed=AUTOML_RANDOM_STATE)  # Create TPE sampler with deterministic seed
+    pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=2)  # Create median pruner for early stopping
+
+    study = optuna.create_study(
+        direction="maximize", sampler=sampler, pruner=pruner, study_name="automl_model_search"
+    )  # Create Optuna study to maximize F1 score
+
+    objective_fn = lambda trial: automl_objective(trial, X_train, y_train, AUTOML_CV_FOLDS)  # Create objective wrapper
+    study.optimize(objective_fn, n_trials=AUTOML_N_TRIALS, timeout=AUTOML_TIMEOUT, n_jobs=1)  # Run the optimization
+
+    completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]  # Get completed trials
+
+    if not completed_trials:  # If no trials completed successfully
+        print(
+            f"{BackgroundColors.RED}AutoML model search failed: no successful trials completed.{Style.RESET_ALL}"
+        )  # Output failure message
+        return (None, None, None)  # Return None tuple
+
+    best_trial = study.best_trial  # Get the best trial
+    best_model_name = best_trial.params.get("model_name", "Unknown")  # Extract best model name
+    best_params = {
+        k: v for k, v in best_trial.params.items() if k != "model_name" and not k.endswith("_none")
+    }  # Extract best params excluding model_name and _none flags
+
+    pruned_count = len([t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED])  # Count pruned trials
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}AutoML Best Model: {BackgroundColors.CYAN}{best_model_name}{Style.RESET_ALL}"
+    )  # Output best model name
+    print(
+        f"{BackgroundColors.GREEN}Best CV F1 Score: {BackgroundColors.CYAN}{truncate_value(study.best_value)}{Style.RESET_ALL}"
+    )  # Output best F1 score
+    print(
+        f"{BackgroundColors.GREEN}Best Parameters: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}"
+    )  # Output best parameters
+    print(
+        f"{BackgroundColors.GREEN}Trials: {BackgroundColors.CYAN}{len(completed_trials)} completed, {pruned_count} pruned{Style.RESET_ALL}"
+    )  # Output trial statistics
+
+    return (best_model_name, best_params, study)  # Return best model info and study object
+
+
 def automl_stacking_objective(trial, X_train, y_train, cv_folds, candidate_models):
     """
     Optuna objective function for optimizing stacking ensemble configuration.
