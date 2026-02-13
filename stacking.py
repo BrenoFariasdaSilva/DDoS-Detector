@@ -129,6 +129,61 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def extract_genetic_algorithm_features(file_path, config=None):
+    """
+    Extracts the features selected by the Genetic Algorithm from the corresponding
+    "Genetic_Algorithm_Results.csv" file located in the "Feature_Analysis"
+    subdirectory relative to the input file's directory.
+
+    It specifically retrieves the 'best_features' (a JSON string) from the row
+    where the 'run_index' is 'best', and returns it as a Python list.
+
+    :param file_path: Full path to the current CSV file being processed (e.g., "./Datasets/.../DrDoS_DNS.csv").
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: List of features selected by the GA, or None if the file is not found or fails to load/parse.
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    file_dir = os.path.dirname(file_path)  # Determine the directory of the input file
+    verbose_output(
+        f"{BackgroundColors.GREEN}Extracting GA features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    ga_results_path = find_feature_file(file_path, "Genetic_Algorithm_Results.csv", config=config)  # Find the GA results file
+    if ga_results_path is None:  # If the GA results file does not exist
+        print(
+            f"{BackgroundColors.YELLOW}Warning: GA results file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping GA feature extraction for this file.{Style.RESET_ALL}"
+        )
+        return None  # Return None if the file does not exist
+
+    try:  # Try to load the GA results
+        df = pd.read_csv(ga_results_path, usecols=["best_features", "run_index"])  # Load only the necessary columns
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+        best_row = df[df["run_index"] == "best"].iloc[0]  # Get the row where run_index is 'best'
+        best_features_json = best_row["best_features"]  # Get the JSON string of best features
+        ga_features = json.loads(best_features_json)  # Parse the JSON string into a Python list
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Successfully extracted {BackgroundColors.CYAN}{len(ga_features)}{BackgroundColors.GREEN} GA features from the 'best' run.{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
+
+        return ga_features  # Return the list of GA features
+    except IndexError:  # If there is no 'best' run_index
+        print(
+            f"{BackgroundColors.RED}Error: 'best' run_index not found in GA results file at {BackgroundColors.CYAN}{ga_results_path}{Style.RESET_ALL}"
+        )
+        return None  # Return None if 'best' run_index is not found
+    except Exception as e:  # If there is an error loading or parsing the file
+        print(
+            f"{BackgroundColors.RED}Error loading/parsing GA features from {BackgroundColors.CYAN}{ga_results_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
+        )
+        return None  # Return None if there was an error
+
+
 def extract_principal_component_analysis_features(file_path, config=None):
     """
     Extracts the optimal number of Principal Components (n_components)
