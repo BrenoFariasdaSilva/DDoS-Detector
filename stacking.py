@@ -129,6 +129,42 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def sample_augmented_by_ratio(augmented_df, original_df, ratio):
+    """
+    Samples rows from the augmented DataFrame proportional to the original dataset size.
+
+    :param augmented_df: Full augmented DataFrame to sample from
+    :param original_df: Original DataFrame used to determine sample count
+    :param ratio: Float ratio (e.g., 0.10 means 10% of original size)
+    :return: Sampled DataFrame with at most ratio * len(original_df) rows, or None on failure
+    """
+
+    n_original = len(original_df)  # Get the number of rows in the original dataset
+    n_requested = max(1, int(round(ratio * n_original)))  # Calculate requested sample size capped at minimum 1 row
+    n_available = len(augmented_df)  # Get the total number of rows available in augmented data
+
+    if n_available == 0:  # Check if augmented DataFrame has zero rows
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Augmented DataFrame is empty. Cannot sample at ratio {ratio}.{Style.RESET_ALL}"
+        )  # Print warning about empty augmented source
+        return None  # Return None for empty augmented data
+
+    n_sample = min(n_requested, n_available)  # Cap the sample size at the available number of augmented rows
+
+    if n_sample < n_requested:  # Log a warning if capping occurred (fewer augmented rows than requested)
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Augmented data has only {n_available} rows; requested {n_requested} (ratio={ratio}). Using all {n_available}.{Style.RESET_ALL}"
+        )  # Warn that fewer rows than requested are available
+
+    sampled_df = augmented_df.sample(n=n_sample, random_state=42, replace=False)  # Randomly sample n_sample rows with fixed seed for reproducibility
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Sampled {BackgroundColors.CYAN}{n_sample}{BackgroundColors.GREEN} augmented rows at ratio {BackgroundColors.CYAN}{ratio}{BackgroundColors.GREEN} (original has {n_original} rows){Style.RESET_ALL}"
+    )  # Output verbose message confirming sampling details
+
+    return sampled_df  # Return the sampled augmented DataFrame
+
+
 def build_tsne_output_directory(original_file_path, augmented_file_path):
     """
     Build output directory path for t-SNE plots preserving nested dataset structure.
