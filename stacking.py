@@ -4746,25 +4746,24 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
             )  # Print warning about sampling failure
             continue  # Skip to the next ratio in the loop
 
-        df_merged = merge_original_and_augmented(df_original_cleaned, df_sampled)  # Merge original data with sampled augmented data
-
         data_source_label = f"Original+Augmented@{ratio_pct}%"  # Build descriptive data source label for CSV traceability
 
         print(
-            f"{BackgroundColors.GREEN}Merged dataset: {BackgroundColors.CYAN}{len(df_original_cleaned)} original + {len(df_sampled)} augmented = {len(df_merged)} total rows{Style.RESET_ALL}"
-        )  # Print merged dataset size breakdown for transparency
+            f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
+        )  # Print sampled dataset size for transparency
 
         generate_augmentation_tsne_visualization(
             file, df_original_cleaned, df_sampled, ratio, "original_plus_augmented"
         )  # Generate t-SNE visualization for this augmentation ratio
 
         results_ratio = evaluate_on_dataset(
-            file, df_merged, feature_names, ga_selected_features, pca_n_components,
+            file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
             rfe_selected_features, base_models, data_source_label=data_source_label,
             hyperparams_map=hp_params_map, experiment_id=experiment_id,
             experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
-            execution_mode_str="binary", attack_types_combined=None
-        )  # Evaluate all classifiers on the merged dataset with experiment metadata
+            execution_mode_str="binary", attack_types_combined=None,
+            df_augmented_for_training=df_sampled
+        )  # Evaluate all classifiers with augmented data in training only (test remains original-only)
 
         all_ratio_results[ratio] = results_ratio  # Store the results for this ratio in the results dictionary
 
