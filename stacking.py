@@ -129,6 +129,51 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def load_pca_object(file_path, pca_n_components, config=None):
+    """
+    Loads a pre-fitted PCA object from a pickle file.
+
+    :param file_path: Path to the dataset CSV file.
+    :param pca_n_components: Number of PCA components to load.
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: PCA object if found, None otherwise.
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Loading the PCA Cache object with {BackgroundColors.CYAN}{pca_n_components}{BackgroundColors.GREEN} components from file {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    file_dir = os.path.dirname(file_path)  # Get the directory of the dataset
+    pca_file = os.path.join(
+        file_dir, "Cache", f"PCA_{pca_n_components}_components.pkl"
+    )  # Construct the path to the PCA pickle file
+
+    if not verify_filepath_exists(pca_file):  # Check if the PCA file exists
+        verbose_output(
+            f"{BackgroundColors.YELLOW}PCA object file not found at {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}",
+            config=config
+        )
+        return None  # Return None if the file doesn't exist
+
+    try:  # Try to load the PCA object
+        with open(pca_file, "rb") as f:  # Open the PCA pickle file
+            pca = pickle.load(f)  # Load the PCA object
+        verbose_output(
+            f"{BackgroundColors.GREEN}Successfully loaded PCA object from {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}",
+            config=config
+        )
+        return pca  # Return the loaded PCA object
+    except Exception as e:  # Handle any errors during loading
+        print(
+            f"{BackgroundColors.RED}Error loading PCA object from {BackgroundColors.CYAN}{pca_file}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
+        )
+        return None  # Return None if there was an error
+
+
 def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file_path=None, config=None):
     """
     Applies Principal Component Analysis (PCA) transformation to the scaled training
