@@ -3775,13 +3775,16 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
 
     base_models, hp_params_map = prepare_models_with_hyperparameters(file)  # Prepare base models with hyperparameters
 
+    original_experiment_id = generate_experiment_id(file, "original_only")  # Generate unique experiment ID for the original-only evaluation
+
     print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[1/3] Evaluating on ORIGINAL data{Style.RESET_ALL}"
-    )  # Print progress message
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[1/{1 + len(AUGMENTATION_RATIOS) if TEST_DATA_AUGMENTATION else 1}] Evaluating on ORIGINAL data{Style.RESET_ALL}"
+    )  # Print progress message with total step count
     results_original = evaluate_on_dataset(
         file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
-        rfe_selected_features, base_models, data_source_label="Original", hyperparams_map=hp_params_map
-    )  # Evaluate on original data
+        rfe_selected_features, base_models, data_source_label="Original", hyperparams_map=hp_params_map,
+        experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
+    )  # Evaluate on original data with experiment traceability metadata
 
     original_results_list = list(results_original.values())  # Convert results dict to list
     save_stacking_results(file, original_results_list)  # Save original results to CSV
