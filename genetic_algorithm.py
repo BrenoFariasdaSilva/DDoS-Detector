@@ -113,7 +113,7 @@ class BackgroundColors:  # Colors for the terminal
 
 
 # Global Configuration (initialized from config file/CLI/defaults):
-CONFIG = None  # Global configuration dictionary
+CONFIG: dict[str, Any] = {}  # Global configuration dictionary (initialized in main/run_genetic_algorithm)
 
 # Runtime State Variables (DO NOT configure these):
 CPU_PROCESSES = None  # Number of CPU processes for multiprocessing (dynamically updated by monitor)
@@ -474,7 +474,7 @@ def verbose_output(true_string="", false_string=""):
 
     global CONFIG  # Access global configuration
 
-    verbose = CONFIG["execution"]["verbose"] if CONFIG else False  # Get verbose setting from config
+    verbose = CONFIG.get("execution", {}).get("verbose", False) if CONFIG else False  # Get verbose setting from config
 
     if verbose and true_string != "":  # If verbose is True and a true_string was provided
         print(true_string)  # Output the true statement string
@@ -1391,7 +1391,7 @@ def prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations):
 
     (
         print_ga_parameters(min_pop, max_pop, n_generations, len(feature_names) if feature_names is not None else 0)
-        if CONFIG["execution"]["verbose"]
+        if CONFIG.get("execution", {}).get("verbose", False)
         else None
     )  # Print GA parameters if verbose
 
@@ -1614,7 +1614,7 @@ def instantiate_estimator(estimator_cls=None):
     """
     
     try:  # Try to read multiprocessing configuration from global CONFIG
-        mp_cfg = CONFIG.get("multiprocessing", {}) if CONFIG else {}  # Get multiprocessing config or empty dict
+        mp_cfg = CONFIG.get("multiprocessing", {})  # Get multiprocessing config or empty dict
     except Exception:  # If CONFIG access fails for any reason
         mp_cfg = {}  # Fallback to empty config
 
@@ -1624,7 +1624,7 @@ def instantiate_estimator(estimator_cls=None):
     if ga_parallel > 1:  # If GA uses multiple processes
         estimator_n_jobs = 1  # Force single-threaded estimator to avoid nested loky
     else:  # If GA is not parallelized across processes
-        estimator_n_jobs = CONFIG.get("model", {}).get("n_jobs", 1) if CONFIG else 1  # Use configured model n_jobs
+        estimator_n_jobs = CONFIG.get("model", {}).get("n_jobs", 1)  # Use configured model n_jobs
 
     if estimator_cls is None:  # If no estimator class provided by caller
         return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=estimator_n_jobs)  # Return default RandomForest
@@ -1671,7 +1671,7 @@ def evaluate_individual(
     mask = np.array(individual, dtype=bool)  # Create boolean mask from individual
     X_train_sel = X_train[:, mask]  # Select features based on the mask
 
-    n_cv_folds = CONFIG["cross_validation"]["n_folds"]  # Use configurable constant
+    n_cv_folds = CONFIG.get("cross_validation", {}).get("n_folds", 10)  # Use configurable constant
     metrics = np.empty((n_cv_folds, 6), dtype=float)  # Pre-allocate metrics array for each fold: [acc, prec, rec, f1, fpr, fnr]
     fold_count = 0  # Track how many folds actually ran
 
@@ -1981,9 +1981,9 @@ def run_genetic_algorithm_loop(
     global GA_GENERATIONS_COMPLETED  # To track completed generations
     best_fitness = None  # Track the best fitness value
     gens_without_improvement = 0  # Counter for generations with no improvement
-    early_stop_gens = CONFIG["early_stop"]["generations"]  # Use configured constant
+    early_stop_gens = CONFIG.get("early_stop", {}).get("generations", 10)  # Use configured constant
 
-    folds = CONFIG["cross_validation"]["n_folds"]  # Use configured constant for CV folds
+    folds = CONFIG.get("cross_validation", {}).get("n_folds", 10)  # Use configured constant for CV folds
 
     output_dir = (
         f"{os.path.dirname(csv_path)}/Feature_Analysis" if csv_path else os.path.join(".", "Feature_Analysis")
@@ -2961,7 +2961,7 @@ def maybe_evaluate_on_test(rf_m, best_ind_local, X, y, X_test, y_test):
     """
 
     if rf_m is None and X_test is not None and y_test is not None:  # Only perform evaluation if metrics are missing and a test set is available
-        return evaluate_individual(best_ind_local, X, y, X_test, y_test)  # Evaluate individual on test set to generate metrics
+        return evaluate_individual(best_ind_local, X, y, X_test)  # Evaluate individual on test set to generate metrics
     return rf_m  # Return existing metrics if already available
 
 
@@ -3453,6 +3453,9 @@ def run_population_sweep(
     :return: Dictionary mapping population sizes to their results including runs and divergence.
     """
 
+    if runs is None:  # If runs is not provided, use the configured default
+        runs = CONFIG.get("execution", {}).get("runs", 5)  # Default to configured runs or 5
+
     verbose_output(
         f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {BackgroundColors.CYAN}{min_pop}{BackgroundColors.GREEN} to {BackgroundColors.CYAN}{max_pop}{BackgroundColors.GREEN}, running {BackgroundColors.CYAN}{n_generations}{BackgroundColors.GREEN} generations and {BackgroundColors.CYAN}{runs}{BackgroundColors.GREEN} runs each.{Style.RESET_ALL}"
     )
@@ -3469,7 +3472,6 @@ def run_population_sweep(
 
     X_train, X_test, y_train, y_test, feature_names = data  # Unpack prepared data
 
-    folds = CONFIG["cross_validation"]["n_folds"]  # Use configured constant for CV folds
     progress_state = compute_progress_state(
         min_pop, max_pop, n_generations, runs, progress_bar, folds=folds
     )  # Compute progress state for tracking
@@ -3540,7 +3542,7 @@ def run_population_sweep(
         print(
             f"{BackgroundColors.GREEN}Common features across runs: {BackgroundColors.CYAN}{len(common_features)}{Style.RESET_ALL}"
         )
-        print_metrics(best_metrics) if CONFIG["execution"]["verbose"] else None  # Print metrics if VERBOSE is enabled
+        print_metrics(best_metrics) if CONFIG.get("execution", {}).get("verbose", False) else None  # Print metrics if VERBOSE is enabled
         best_run = max(runs_list, key=lambda r: r["metrics"][3])  # Select the run with the best F1-Score
         best_ind = best_run["best_ind"]  # Get the best individual from the best run
         best_metrics = best_run["metrics"]  # Get the metrics from the best run
@@ -3685,7 +3687,7 @@ def run_genetic_algorithm(config=None, csv_path=None):
 
     if config is not None:  # If configuration provided
         CONFIG = config  # Use provided configuration
-    elif CONFIG is None:  # If no configuration set
+    elif not CONFIG:  # If no configuration set (empty dict)
         CONFIG = get_default_config()  # Use defaults
 
     with global_state_lock:  # Thread-safe initialization
@@ -3695,13 +3697,13 @@ def run_genetic_algorithm(config=None, csv_path=None):
     if csv_path is None:  # If no path provided
         csv_path = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Use default
 
-    n_generations = CONFIG["genetic_algorithm"]["n_generations"]  # Get generations from config
-    min_pop = CONFIG["genetic_algorithm"]["min_pop"]  # Get min population from config
-    max_pop = CONFIG["genetic_algorithm"]["max_pop"]  # Get max population from config
-    cxpb = CONFIG["genetic_algorithm"]["cxpb"]  # Get crossover probability from config
-    mutpb = CONFIG["genetic_algorithm"]["mutpb"]  # Get mutation probability from config
-    runs = CONFIG["execution"]["runs"]  # Get number of runs from config
-    skip_train = CONFIG["execution"]["skip_train_if_model_exists"]  # Get skip train flag from config
+    n_generations = CONFIG.get("genetic_algorithm", {}).get("n_generations", 200)  # Get generations from config
+    min_pop = CONFIG.get("genetic_algorithm", {}).get("min_pop", 20)  # Get min population from config
+    max_pop = CONFIG.get("genetic_algorithm", {}).get("max_pop", 20)  # Get max population from config
+    cxpb = CONFIG.get("genetic_algorithm", {}).get("cxpb", 0.5)  # Get crossover probability from config
+    mutpb = CONFIG.get("genetic_algorithm", {}).get("mutpb", 0.01)  # Get mutation probability from config
+    runs = CONFIG.get("execution", {}).get("runs", 5)  # Get number of runs from config
+    skip_train = CONFIG.get("execution", {}).get("skip_train_if_model_exists", False)  # Get skip train flag from config
 
     dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Extract dataset name
 
@@ -3724,15 +3726,15 @@ def run_genetic_algorithm(config=None, csv_path=None):
         if should_return:  # If model loaded successfully
             return {}  # Exit early
 
-    if CONFIG["resource_monitor"]["enabled"]:  # If resource monitor enabled
+    if CONFIG.get("resource_monitor", {}).get("enabled", True):  # If resource monitor enabled
         start_resource_monitor_safe(
-            interval_seconds=CONFIG["resource_monitor"]["interval_seconds"],
-            reserve_cpu_frac=CONFIG["resource_monitor"]["reserve_cpu_frac"],
-            reserve_mem_frac=CONFIG["resource_monitor"]["reserve_mem_frac"],
-            min_procs=CONFIG["resource_monitor"]["min_procs"],
-            max_procs=CONFIG["resource_monitor"]["max_procs"],
-            min_gens_before_update=CONFIG["resource_monitor"]["min_gens_before_update"],
-            daemon=CONFIG["resource_monitor"]["daemon"],
+            interval_seconds=CONFIG.get("resource_monitor", {}).get("interval_seconds", 30),
+            reserve_cpu_frac=CONFIG.get("resource_monitor", {}).get("reserve_cpu_frac", 0.15),
+            reserve_mem_frac=CONFIG.get("resource_monitor", {}).get("reserve_mem_frac", 0.15),
+            min_procs=CONFIG.get("resource_monitor", {}).get("min_procs", 1),
+            max_procs=CONFIG.get("resource_monitor", {}).get("max_procs", None),
+            min_gens_before_update=CONFIG.get("resource_monitor", {}).get("min_gens_before_update", 10),
+            daemon=CONFIG.get("resource_monitor", {}).get("daemon", True),
         )  # Start resource monitor thread
 
     sweep_results = run_population_sweep(
@@ -3747,7 +3749,7 @@ def run_genetic_algorithm(config=None, csv_path=None):
         progress_bar=None,
     )  # Execute population sweep
 
-    verbose = CONFIG["execution"]["verbose"]  # Get verbose flag
+    verbose = CONFIG.get("execution", {}).get("verbose", False)  # Get verbose flag
     if verbose and sweep_results:  # If verbose and results exist
         print(f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}")  # Print header
         for pop_size, features in sweep_results.items():  # Iterate results
@@ -3764,7 +3766,7 @@ def run_genetic_algorithm(config=None, csv_path=None):
         [f"Genetic Algorithm feature selection completed for {dataset_name}. Execution time: {calculate_execution_time(start_time, finish_time)}"]
     )  # Send completion message
 
-    if CONFIG["execution"]["play_sound"]:  # If sound enabled
+    if CONFIG.get("execution", {}).get("play_sound", True):  # If sound enabled
         atexit.register(play_sound)  # Register sound callback
 
     return sweep_results  # Return results
