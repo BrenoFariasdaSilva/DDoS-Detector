@@ -835,6 +835,34 @@ def combine_dataset_files(files_list, config=None):
     return combined, target_col_name  # Return the combined dataframe and target column name
 
 
+def extract_attack_label_from_path(file_path):
+    """
+    Extract attack type label from file path for multi-class classification.
+    
+    :param file_path: Path to the dataset CSV file
+    :return: Attack type string extracted from filename or path
+    """
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Extracting attack label from path: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}"
+    )  # Output the verbose message
+    
+    file_path_obj = Path(file_path)  # Create Path object from file path string
+    filename_stem = file_path_obj.stem  # Extract filename without extension
+    
+    # Remove common suffixes to get clean attack name
+    clean_stem = filename_stem.replace("_data_augmented", "").replace("_cleaned", "").replace("_processed", "")  # Remove common suffixes from stem
+    
+    # Use filename as attack label
+    attack_label = clean_stem  # Set attack label to cleaned filename stem
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Extracted attack label: {BackgroundColors.CYAN}{attack_label}{Style.RESET_ALL}"
+    )  # Output extracted label
+    
+    return attack_label  # Return attack type label string
+
+
 def find_data_augmentation_file(original_file_path, config=None):
     """
     Find the corresponding data augmentation file for an original CSV file.
