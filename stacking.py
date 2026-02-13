@@ -129,6 +129,45 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def combine_and_label_augmentation_data(original_df, augmented_df=None, label_col=None):
+    """
+    Combine original and augmented data with source labels for t-SNE visualization.
+
+    :param original_df: DataFrame with original data
+    :param augmented_df: DataFrame with augmented data (None for original-only)
+    :param label_col: Name of the label/class column
+    :return: Combined DataFrame with composite labels for visualization
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Combining and labeling data for t-SNE visualization...{Style.RESET_ALL}"
+    )  # Output verbose message for data combination
+
+    if label_col is None:  # No label column specified
+        label_col = original_df.columns[-1]  # Use last column as label
+
+    df_orig = original_df.copy()  # Copy original DataFrame to avoid modifying input
+
+    if label_col in df_orig.columns:  # If label column exists
+        df_orig['tsne_label'] = df_orig[label_col].astype(str) + "_original"  # Create composite label
+    else:  # No label column found
+        df_orig['tsne_label'] = "original"  # Use simple source label
+
+    if augmented_df is not None:  # If augmented data provided
+        df_aug = augmented_df.copy()  # Copy augmented DataFrame to avoid modifying input
+
+        if label_col in df_aug.columns:  # If label column exists
+            df_aug['tsne_label'] = df_aug[label_col].astype(str) + "_augmented"  # Create composite label
+        else:  # No label column found
+            df_aug['tsne_label'] = "augmented"  # Use simple source label
+
+        combined_df = pd.concat([df_orig, df_aug], ignore_index=True)  # Concatenate DataFrames
+    else:  # Original only
+        combined_df = df_orig  # Use original DataFrame only
+
+    return combined_df  # Return combined DataFrame with composite labels
+
+
 def prepare_numeric_features_for_tsne(df, exclude_col='tsne_label'):
     """
     Extract and prepare numeric features from DataFrame for t-SNE.
