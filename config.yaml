@@ -3,6 +3,7 @@
 # ================================================================================
 # Central configuration for ALL project scripts:
 #   - genetic_algorithm.py  (Genetic Algorithm Feature Selection)
+#   - stacking.py           (Stacking Classifier Evaluation)
 #   - wgangp.py             (WGAN-GP Data Augmentation)
 #
 # Configuration priority (highest → lowest):
@@ -15,6 +16,7 @@
 #   [GA-specific]  genetic_algorithm, early_stop, cross_validation,
 #                  multiprocessing, resource_monitor, model, caching,
 #                  progress, export
+#   [Stacking]     stacking, evaluation, models, automl, tsne
 #   [WGAN-GP]      wgangp, training, generator, discriminator,
 #                  gradient_penalty, generation, dataloader
 # ================================================================================
@@ -33,6 +35,10 @@ execution:
   runs: 5                             # Number of GA runs per population size
   resume_progress: true               # Resume from saved state files
   progress_save_interval: 10          # Save progress every N generations
+  # stacking.py specific:
+  csv_file: null                      # Optional single CSV file to process
+  process_entire_dataset: false       # Process all files in dataset (true) or single file (false)
+  test_data_augmentation: true        # Enable data augmentation testing
   # wgangp.py specific:
   results_suffix: "_data_augmented"   # Suffix to add to generated filenames
   match_filenames_to_process: [""]    # List of specific filenames to match
@@ -179,6 +185,113 @@ export:
     - hardware
     - best_features
     - rfe_ranking
+
+
+# ==============================================================================
+# STACKING SECTIONS — Used by stacking.py
+# ==============================================================================
+
+stacking:
+  results_filename: "Stacking_Classifiers_Results.csv"  # Main results CSV filename
+  augmentation_comparison_filename: "Data_Augmentation_Comparison_Results.csv"  # Augmentation test results CSV
+  data_augmentation_suffix: "_data_augmented"  # Suffix for augmented files (matches wgangp output)
+  augmentation_ratios: [0.10, 0.25, 0.50, 0.75, 1.00]  # Augmented-to-original sample ratios for experiments
+  hyperparameters_filename: "Hyperparameter_Optimization_Results.csv"  # Hyperparameter results filename
+  cache_prefix: "Cache_"              # Prefix for cached file artifacts
+  model_export_base: "Feature_Analysis/Stacking/Models/"  # Base path for model export
+  match_filenames_to_process: [""]    # List of specific filenames to match (empty = all)
+  ignore_files:                       # List of filenames to ignore during processing
+    - "Stacking_Classifiers_Results.csv"
+    - "Hyperparameter_Optimization_Results.csv"
+  ignore_dirs:                        # List of directories to ignore during processing
+    - "Classifiers"
+    - "Classifiers_Hyperparameters"
+    - "Dataset_Description"
+    - "Data_Separability"
+    - "Feature_Analysis"
+  results_csv_columns:                # CSV column ordering for results export
+    - "model"
+    - "dataset"
+    - "feature_set"
+    - "classifier_type"
+    - "model_name"
+    - "data_source"
+    - "experiment_id"
+    - "experiment_mode"
+    - "augmentation_ratio"
+    - "n_features"
+    - "n_samples_train"
+    - "n_samples_test"
+    - "accuracy"
+    - "precision"
+    - "recall"
+    - "f1_score"
+    - "fpr"
+    - "fnr"
+    - "elapsed_time_s"
+    - "cv_method"
+    - "top_features"
+    - "rfe_ranking"
+    - "hyperparameters"
+    - "features_list"
+    - "Hardware"
+
+evaluation:
+  n_jobs: -1                          # Number of parallel jobs for model training (-1 = all CPUs)
+  threads_limit: 2                    # Thread limit for parallel classifier evaluation
+  cv_folds: 10                        # Number of cross-validation folds
+  random_state: 42                    # Random seed for reproducibility
+  ram_threshold_gb: 128               # RAM threshold (GB) to trigger threads_limit=1
+
+models:
+  random_forest:
+    n_estimators: 100
+    random_state: 42
+  svm:
+    kernel: "rbf"
+    probability: true
+    random_state: 42
+  xgboost:
+    eval_metric: "mlogloss"
+    random_state: 42
+  logistic_regression:
+    max_iter: 1000
+    random_state: 42
+  knn:
+    n_neighbors: 5
+  gradient_boosting:
+    random_state: 42
+  lightgbm:
+    force_row_wise: true
+    min_gain_to_split: 0.01
+    random_state: 42
+    verbosity: -1
+  mlp:
+    hidden_layer_sizes: [100]
+    max_iter: 500
+    random_state: 42
+  stacking_meta:                      # Meta-estimator for stacking classifier
+    n_estimators: 50
+    random_state: 42
+
+automl:
+  enabled: false                      # Enable AutoML Optuna pipeline
+  n_trials: 50                        # Number of Optuna trials for model search
+  stacking_trials: 20                 # Number of Optuna trials for stacking search
+  timeout: 3600                       # Timeout in seconds per search phase
+  cv_folds: 5                         # Cross-validation folds for AutoML evaluation
+  random_state: 42                    # Random seed for AutoML reproducibility
+  stacking_top_n: 5                   # Number of top models to consider for stacking
+  results_filename: "AutoML_Results.csv"  # AutoML results export filename
+
+tsne:
+  perplexity: 30                      # t-SNE perplexity parameter
+  random_state: 42                    # Random seed for t-SNE
+  n_iter: 1000                        # Number of t-SNE iterations
+  figsize: [12, 10]                   # Figure size for t-SNE plots
+  dpi: 300                            # DPI for t-SNE plots
+  alpha: 0.6                          # Marker transparency
+  marker_size: 50                     # Marker size for scatter plots
 
 
 # ==============================================================================
