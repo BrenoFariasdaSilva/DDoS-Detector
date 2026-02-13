@@ -129,6 +129,40 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def process_single_file(f, config=None):
+    """
+    Process a single dataset file: load, preprocess, and extract target and features.
+
+    :param f: Path to the dataset CSV file
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Tuple (df_clean, target_col, feat_cols) or None if invalid
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{f}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    df = load_dataset(f, config=config)  # Load the dataset from the file
+    if df is None:  # If loading failed
+        return None  # Return None
+    
+    remove_zero_variance = config.get("dataset", {}).get("remove_zero_variance", True)  # Get remove zero variance flag from config
+    df_clean = preprocess_dataframe(df, remove_zero_variance=remove_zero_variance, config=config)  # Preprocess the dataframe
+    if df_clean is None or df_clean.empty:  # If preprocessing failed or dataframe is empty
+        return None  # Return None
+
+    target_col = df_clean.columns[-1]  # Get the last column as target
+    feat_cols = [c for c in df_clean.columns[:-1] if pd.api.types.is_numeric_dtype(df_clean[c])]  # Get numeric feature columns
+    if not feat_cols:  # If no numeric features
+        return None  # Return None
+
+    return (df_clean, target_col, feat_cols)  # Return the processed data
+
+
 def handle_target_column_consistency(target_col_name, this_target, f, df_clean, config=None):
     """
     Handle target column consistency by renaming if necessary.
