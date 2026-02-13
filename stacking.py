@@ -129,6 +129,91 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def get_automl_search_spaces():
+    """
+    Returns hyperparameter search space definitions for all AutoML candidate models.
+
+    :param: None
+    :return: Dictionary mapping model names to their search space configurations
+    """
+
+    return {  # Dictionary of model search spaces
+        "Random Forest": {  # Random Forest search space
+            "n_estimators": ("int", 50, 500),  # Number of trees range
+            "max_depth": ("int_or_none", 3, 50),  # Max depth range or None
+            "min_samples_split": ("int", 2, 20),  # Min samples to split
+            "min_samples_leaf": ("int", 1, 10),  # Min samples per leaf
+            "max_features": ("categorical", ["sqrt", "log2", None]),  # Feature selection method
+        },
+        "XGBoost": {  # XGBoost search space
+            "n_estimators": ("int", 50, 500),  # Number of boosting rounds
+            "max_depth": ("int", 3, 15),  # Max tree depth
+            "learning_rate": ("float_log", 0.01, 0.3),  # Learning rate (log scale)
+            "subsample": ("float", 0.5, 1.0),  # Row subsampling ratio
+            "colsample_bytree": ("float", 0.5, 1.0),  # Column subsampling ratio
+            "min_child_weight": ("int", 1, 10),  # Min child weight
+            "reg_alpha": ("float_log", 1e-8, 10.0),  # L1 regularization
+            "reg_lambda": ("float_log", 1e-8, 10.0),  # L2 regularization
+        },
+        "LightGBM": {  # LightGBM search space
+            "n_estimators": ("int", 50, 500),  # Number of boosting rounds
+            "max_depth": ("int", 3, 15),  # Max tree depth
+            "learning_rate": ("float_log", 0.01, 0.3),  # Learning rate (log scale)
+            "num_leaves": ("int", 15, 127),  # Number of leaves
+            "min_child_samples": ("int", 5, 100),  # Min samples in leaf
+            "subsample": ("float", 0.5, 1.0),  # Row subsampling ratio
+            "colsample_bytree": ("float", 0.5, 1.0),  # Column subsampling ratio
+            "reg_alpha": ("float_log", 1e-8, 10.0),  # L1 regularization
+            "reg_lambda": ("float_log", 1e-8, 10.0),  # L2 regularization
+        },
+        "Logistic Regression": {  # Logistic Regression search space
+            "C": ("float_log", 0.001, 100.0),  # Regularization parameter
+            "solver": ("categorical", ["lbfgs", "saga"]),  # Optimization algorithm
+            "max_iter": ("int", 500, 5000),  # Max iterations
+        },
+        "SVM": {  # SVM search space
+            "C": ("float_log", 0.01, 100.0),  # Regularization parameter
+            "kernel": ("categorical", ["rbf", "linear", "poly"]),  # Kernel function
+            "gamma": ("categorical", ["scale", "auto"]),  # Kernel coefficient
+        },
+        "Extra Trees": {  # Extra Trees search space
+            "n_estimators": ("int", 50, 500),  # Number of trees
+            "max_depth": ("int_or_none", 3, 50),  # Max depth or None
+            "min_samples_split": ("int", 2, 20),  # Min samples to split
+            "min_samples_leaf": ("int", 1, 10),  # Min samples per leaf
+            "max_features": ("categorical", ["sqrt", "log2", None]),  # Feature selection method
+        },
+        "Gradient Boosting": {  # Gradient Boosting search space
+            "n_estimators": ("int", 50, 300),  # Number of boosting rounds
+            "max_depth": ("int", 3, 10),  # Max tree depth
+            "learning_rate": ("float_log", 0.01, 0.3),  # Learning rate
+            "subsample": ("float", 0.5, 1.0),  # Row subsampling ratio
+            "min_samples_split": ("int", 2, 20),  # Min samples to split
+            "min_samples_leaf": ("int", 1, 10),  # Min samples per leaf
+        },
+        "MLP (Neural Net)": {  # MLP Neural Network search space
+            "hidden_layer_sizes_0": ("int", 32, 256),  # First hidden layer size
+            "hidden_layer_sizes_1": ("int", 0, 128),  # Second hidden layer size (0 means single layer)
+            "learning_rate_init": ("float_log", 0.0001, 0.01),  # Initial learning rate
+            "alpha": ("float_log", 1e-6, 0.01),  # L2 penalty (regularization)
+            "max_iter": ("int", 200, 1000),  # Max iterations
+            "activation": ("categorical", ["relu", "tanh"]),  # Activation function
+        },
+        "Decision Tree": {  # Decision Tree search space
+            "max_depth": ("int_or_none", 3, 50),  # Max depth or None
+            "min_samples_split": ("int", 2, 20),  # Min samples to split
+            "min_samples_leaf": ("int", 1, 10),  # Min samples per leaf
+            "criterion": ("categorical", ["gini", "entropy"]),  # Split criterion
+            "max_features": ("categorical", ["sqrt", "log2", None]),  # Feature selection method
+        },
+        "KNN": {  # K-Nearest Neighbors search space
+            "n_neighbors": ("int", 3, 25),  # Number of neighbors
+            "weights": ("categorical", ["uniform", "distance"]),  # Weight function
+            "metric": ("categorical", ["euclidean", "manhattan", "minkowski"]),  # Distance metric
+        },
+    }  # Return full search space dictionary
+
+
 def suggest_hyperparameters_for_model(trial, model_name, search_spaces):
     """
     Suggests hyperparameters for a given model using an Optuna trial.
