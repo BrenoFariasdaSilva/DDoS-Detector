@@ -1660,8 +1660,10 @@ def evaluate_individual(
         f"{BackgroundColors.GREEN}Evaluating individual: {BackgroundColors.CYAN}{individual}{Style.RESET_ALL}"
     )  # Output the verbose message
 
-    if sum(individual) == 0:  # If no features are selected
-        return 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1  # Return worst possible scores for CV and test
+    num_features_selected = sum(individual)  # Count number of selected features for multi-objective optimization
+
+    if num_features_selected == 0:  # If no features are selected
+        return 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, num_features_selected  # Return worst possible scores for CV and test, with feature count
 
     mask_tuple = tuple(individual)  # Convert individual to tuple for hashing
     
@@ -1707,7 +1709,7 @@ def evaluate_individual(
         fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # False positive rate
         fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # False negative rate
 
-        result = acc, prec, rec, f1, fpr, fnr, 0, 0, 0, 0, 0, 0  # Return validation metrics as CV, placeholder for test
+        result = acc, prec, rec, f1, fpr, fnr, 0, 0, 0, 0, 0, 0, num_features_selected  # Return validation metrics as CV, placeholder for test, with feature count
         with fitness_cache_lock:  # Thread-safe cache write
             fitness_cache[mask_tuple] = result  # Cache the result for this mask
         return result  # Return the result for holdout validation
@@ -1746,7 +1748,7 @@ def evaluate_individual(
             break  # Stop evaluating further folds for this individual
 
     if early_stop_triggered:  # When early stopping triggers, return worst-case fitness
-        result = 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1  # Worst possible scores
+        result = 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, num_features_selected  # Worst possible scores with feature count
         with fitness_cache_lock:  # Thread-safe cache write
             fitness_cache[mask_tuple] = result  # Cache the worst-case result for this mask
         return result  # Return the worst-case result due to early stopping
@@ -1756,12 +1758,12 @@ def evaluate_individual(
 
     test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr = 0, 0, 0, 0, 0, 0  # Placeholder test metrics
 
-    result = acc, prec, rec, f1, fpr, fnr, test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr  # Prepare result tuple
+    result = acc, prec, rec, f1, fpr, fnr, test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr, num_features_selected  # Prepare result tuple with feature count
     
     with fitness_cache_lock:  # Thread-safe cache write
         fitness_cache[mask_tuple] = result  # Cache the result
     
-    return result  # Return vectorized average metrics
+    return result  # Return vectorized average metrics with feature count for multi-objective optimization
 
 
 def ga_fitness(ind, fitness_func):
