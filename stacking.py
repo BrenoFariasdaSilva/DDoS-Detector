@@ -129,6 +129,89 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def generate_ratio_comparison_report(results_original, all_ratio_results):
+    """
+    Generates and prints comparison report for ratio-based data augmentation evaluation.
+    Compares the original baseline against each augmentation ratio experiment.
+
+    :param results_original: Dictionary of results from original data evaluation
+    :param all_ratio_results: Dictionary mapping ratio (float) to results dictionary
+    :return: List of comparison result entries for CSV export
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Generating ratio-based data augmentation comparison report...{Style.RESET_ALL}"
+    )  # Output the verbose message
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
+    )  # Print separator line for visual clarity
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}DATA AUGMENTATION RATIO-BASED COMPARISON REPORT{Style.RESET_ALL}"
+    )  # Print report header title
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
+    )  # Print closing separator line
+
+    comparison_results = []  # Initialize list for comparison result entries
+    no_improvements = {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1_score": 0.0, "fpr": 0.0, "fnr": 0.0, "training_time": 0.0}  # Zero improvements dict for original baseline entries
+
+    for key in results_original.keys():  # Iterate through each feature_set/model combination from original results
+        orig_result = results_original[key]  # Get the original baseline result entry
+        feature_set = orig_result["feature_set"]  # Extract feature set name from result
+        model_name = orig_result["model_name"]  # Extract model name from result
+        classifier_type = orig_result["classifier_type"]  # Extract classifier type from result
+        orig_metrics = extract_metrics_from_result(orig_result)  # Extract metrics list from original result
+        orig_experiment_id = orig_result.get("experiment_id", None)  # Get experiment ID from original result
+
+        comparison_results.append(
+            build_comparison_result_entry(
+                orig_result, feature_set, classifier_type, model_name, "Original",
+                orig_metrics, no_improvements,
+                experiment_id=orig_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
+            )
+        )  # Add original baseline entry to comparison results
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Feature Set: {BackgroundColors.CYAN}{feature_set}{BackgroundColors.GREEN} | Model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
+        )  # Print header with feature set and model name
+        print(
+            f"  {BackgroundColors.GREEN}Original baseline - Acc: {BackgroundColors.CYAN}{truncate_value(orig_metrics[0])}{BackgroundColors.GREEN}, F1: {BackgroundColors.CYAN}{truncate_value(orig_metrics[3])}{Style.RESET_ALL}"
+        )  # Print original baseline metrics summary
+
+        for ratio in sorted(all_ratio_results.keys()):  # Iterate over each ratio in sorted order
+            ratio_results = all_ratio_results[ratio]  # Get results dict for this ratio
+            ratio_result = ratio_results.get(key)  # Get the matching result for this feature_set/model key
+
+            if ratio_result is None:  # If no matching result exists for this ratio
+                continue  # Skip this ratio for this model/feature_set combination
+
+            ratio_metrics = extract_metrics_from_result(ratio_result)  # Extract metrics list from ratio result
+            improvements = calculate_all_improvements(orig_metrics, ratio_metrics)  # Calculate improvements vs original
+            ratio_pct = int(ratio * 100)  # Convert float ratio to integer percentage for display
+            ratio_experiment_id = ratio_result.get("experiment_id", None)  # Get experiment ID from ratio result
+
+            comparison_results.append(
+                build_comparison_result_entry(
+                    orig_result, feature_set, classifier_type, model_name,
+                    f"Original+Augmented@{ratio_pct}%", ratio_metrics, improvements,
+                    n_features_override=ratio_result.get("n_features"),
+                    n_samples_train_override=ratio_result.get("n_samples_train"),
+                    n_samples_test_override=ratio_result.get("n_samples_test"),
+                    experiment_id=ratio_experiment_id, experiment_mode="original_plus_augmented",
+                    augmentation_ratio=ratio,
+                )
+            )  # Add ratio experiment entry with improvements to comparison results
+
+            f1_improvement = improvements.get("f1_score", 0.0)  # Extract F1 improvement for display
+            improvement_color = BackgroundColors.GREEN if f1_improvement >= 0 else BackgroundColors.RED  # Choose color based on improvement direction
+            print(
+                f"  {BackgroundColors.YELLOW}@{ratio_pct}%:{Style.RESET_ALL} Acc: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[0])}{Style.RESET_ALL}, F1: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[3])}{Style.RESET_ALL}, F1 change: {improvement_color}{f1_improvement:+.2f}%{Style.RESET_ALL}"
+            )  # Print ratio result metrics with F1 improvement indicator
+
+    return comparison_results  # Return list of all comparison result entries for CSV export
+
+
 def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, results_original):
     """
     Handles complete augmented data evaluation workflow with ratio-based experiments.
