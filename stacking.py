@@ -129,6 +129,58 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def prepare_numeric_features_for_tsne(df, exclude_col='tsne_label'):
+    """
+    Extract and prepare numeric features from DataFrame for t-SNE.
+
+    :param df: DataFrame with mixed features
+    :param exclude_col: Column name to exclude from numeric extraction
+    :return: Tuple (numeric_array, labels_array, success_flag)
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Preparing numeric features for t-SNE...{Style.RESET_ALL}"
+    )  # Output verbose message for feature preparation
+
+    if exclude_col in df.columns:  # If label column exists
+        labels = df[exclude_col].values  # Extract labels as numpy array
+        df_work = df.drop(columns=[exclude_col])  # Remove label column for numeric extraction
+    else:  # No label column
+        labels = np.array(['unknown'] * len(df))  # Create default labels
+        df_work = df.copy()  # Use full DataFrame
+
+    numeric_df = df_work.select_dtypes(include=np.number)  # Select only numeric columns
+
+    if numeric_df.empty:  # No numeric columns found
+        print(
+            f"{BackgroundColors.YELLOW}Warning: No numeric features found for t-SNE generation.{Style.RESET_ALL}"
+        )  # Print warning message
+        return (None, None, False)  # Return failure tuple
+
+    numeric_df = numeric_df.replace([np.inf, -np.inf], np.nan)  # Replace infinities with NaN
+    numeric_df = numeric_df.fillna(numeric_df.median())  # Fill NaN with column median
+    numeric_df = numeric_df.fillna(0)  # Fill remaining NaN with zero
+
+    if numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0:  # Empty result after cleaning
+        print(
+            f"{BackgroundColors.YELLOW}Warning: No valid numeric data remaining after cleaning.{Style.RESET_ALL}"
+        )  # Print warning message
+        return (None, None, False)  # Return failure tuple
+
+    X = numeric_df.values  # Extract values as numpy array
+
+    try:  # Attempt feature scaling
+        scaler = StandardScaler()  # Initialize standard scaler
+        X_scaled = scaler.fit_transform(X)  # Scale features to zero mean and unit variance
+    except Exception as e:  # Scaling failed
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Feature scaling failed: {e}. Using unscaled data.{Style.RESET_ALL}"
+        )  # Print warning message
+        X_scaled = X  # Use unscaled data as fallback
+
+    return (X_scaled, labels, True)  # Return scaled features, labels, and success flag
+
+
 def compute_and_save_tsne_plot(X_scaled, labels, output_path, title, perplexity=30, random_state=42):
     """
     Compute t-SNE embedding and save visualization plot.
