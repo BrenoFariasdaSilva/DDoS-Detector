@@ -129,6 +129,62 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_names, best_params=None, feature_set=None, dataset_csv_path=None, config=None):
+    """
+    Export model, scaler and metadata for stacking evaluations.
+    
+    :param model: Trained model to export
+    :param scaler: Fitted scaler to export
+    :param dataset_name: Name of dataset
+    :param model_name: Name of model
+    :param feature_names: List of feature names
+    :param best_params: Best parameters from hyperparameter optimization
+    :param feature_set: Feature set name (GA, RFE, PCA, etc.)
+    :param dataset_csv_path: Path to dataset CSV file
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    model_export_base = config.get("stacking", {}).get("model_export_base", "Feature_Analysis/Stacking/Models/")  # Get model export base from config
+    
+    def safe_filename(name):
+        return re.sub(r'[\\/*?:"<>|]', "_", str(name))
+
+    # Prefer dataset-local export directory when a CSV path is provided
+    if dataset_csv_path:
+        file_path_obj = Path(dataset_csv_path)
+        export_dir = file_path_obj.parent / "Classifiers" / "Models"
+    else:
+        export_dir = Path(model_export_base) / safe_filename(dataset_name)
+    os.makedirs(export_dir, exist_ok=True)
+    param_str = "_".join(f"{k}-{v}" for k, v in sorted(best_params.items())) if best_params else ""
+    param_str = safe_filename(param_str)[:64]
+    features_str = safe_filename("_".join(feature_names))[:64] if feature_names else "all_features"
+    fs = safe_filename(feature_set) if feature_set else "all"
+    base_name = f"{safe_filename(model_name)}__{fs}__{features_str}__{param_str}"
+    model_path = os.path.join(str(export_dir), f"{base_name}_model.joblib")
+    scaler_path = os.path.join(str(export_dir), f"{base_name}_scaler.joblib")
+    try:
+        dump(model, model_path)
+        if scaler is not None:
+            dump(scaler, scaler_path)
+        meta = {
+            "model_name": model_name,
+            "feature_set": feature_set,
+            "features": feature_names,
+            "params": best_params,
+        }
+        meta_path = os.path.join(str(export_dir), f"{base_name}_meta.json")
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+        verbose_output(f"Exported model to {model_path} and scaler to {scaler_path}")
+    except Exception as e:
+        print(f"{BackgroundColors.YELLOW}Warning: Failed to export model {model_name}: {e}{Style.RESET_ALL}")
+
+
 def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None):
     """
     Trains an individual classifier and evaluates its performance on the test set.
