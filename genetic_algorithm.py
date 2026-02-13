@@ -2928,6 +2928,66 @@ def compute_convergence_generation(history_f1, threshold_pct=0.95):
         return len(history_f1) if history_f1 else 0  # Return length or 0
 
 
+def aggregate_run_metrics(run_result):
+    """
+    Extract and aggregate metrics from a single run result for comparison table.
+
+    :param run_result: Dict containing run results (best_ind, metrics, best_features, history_data, gens_ran)
+    :return: Dict with aggregated metrics or None if data unavailable
+    """
+
+    if not run_result:  # If no result provided
+        return None  # Return None
+
+    try:  # Attempt to extract and compute metrics
+        metrics = run_result.get("metrics", [])  # Get metrics tuple
+        history_data = run_result.get("history_data", {})  # Get history data dict
+        gens_ran = run_result.get("gens_ran", 0)  # Get generations executed
+
+        # Extract final metrics from last evaluation
+        best_f1_final = metrics[3] if len(metrics) > 3 else 0.0  # Final F1 score from test evaluation
+        features_final = len(run_result.get("best_features", []))  # Final feature count
+
+        # Extract history-based metrics (handle both dict and missing data gracefully)
+        if isinstance(history_data, dict):  # If history data is available as dict
+            best_f1_history = history_data.get("best_f1", [])  # Best F1 per generation
+            best_features_history = history_data.get("best_features", [])  # Best features per generation
+            avg_f1_history = history_data.get("avg_f1", [])  # Population avg F1 per generation
+            avg_features_history = history_data.get("avg_features", [])  # Population avg features per generation
+            pareto_size_history = history_data.get("pareto_size", [])  # Pareto front size per generation
+            hypervolume_history = history_data.get("hypervolume", [])  # Hypervolume per generation
+            diversity_history = history_data.get("diversity", [])  # Diversity per generation
+        else:  # If history data not available or wrong format
+            best_f1_history = []  # Empty list
+            best_features_history = []  # Empty list
+            avg_f1_history = []  # Empty list
+            avg_features_history = []  # Empty list
+            pareto_size_history = []  # Empty list
+            hypervolume_history = []  # Empty list
+            diversity_history = []  # Empty list
+
+        # Compute aggregated metrics from history
+        avg_population_f1 = np.mean(avg_f1_history) if avg_f1_history else 0.0  # Mean of population averages
+        avg_feature_count = np.mean(avg_features_history) if avg_features_history else 0.0  # Mean of feature counts
+        pareto_size_final = pareto_size_history[-1] if pareto_size_history else 0  # Final Pareto front size
+        hypervolume_final = hypervolume_history[-1] if hypervolume_history else 0.0  # Final hypervolume
+        convergence_gen = compute_convergence_generation(best_f1_history, threshold_pct=0.95)  # Generation reaching 95% of best
+
+        return {
+            "best_f1_final": float(best_f1_final),  # Final best F1 score
+            "features_final": int(features_final),  # Final feature count
+            "avg_population_f1": float(avg_population_f1),  # Average population F1 across generations
+            "avg_feature_count": float(avg_feature_count),  # Average feature count across generations
+            "pareto_size_final": int(pareto_size_final),  # Final Pareto front size
+            "hypervolume_final": float(hypervolume_final),  # Final hypervolume metric
+            "convergence_gen": int(convergence_gen),  # Generation reaching convergence
+            "gens_executed": int(gens_ran),  # Total generations actually executed
+        }  # Return aggregated metrics dict
+
+    except Exception:  # If any processing fails
+        return None  # Return None
+
+
 def print_metrics(metrics):
     """
     Print performance metrics including multi-objective fitness values.
