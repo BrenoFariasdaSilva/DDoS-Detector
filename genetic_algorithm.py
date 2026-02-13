@@ -2177,6 +2177,36 @@ def safe_filename(name):
     
     return sanitized if sanitized else "unnamed"  # Ensure we don't return an empty string
 
+def extract_pareto_front(population):
+    """
+    Extract the Pareto front (non-dominated individuals) from a population.
+
+    :param population: List of DEAP individuals with multi-objective fitness values
+    :return: List of non-dominated individuals forming the Pareto front
+    """
+
+    if not population:  # If population is empty
+        return []  # Return empty list
+
+    pareto_front = []  # Initialize Pareto front as empty list
+    try:  # Attempt to extract Pareto front
+        for candidate in population:  # Iterate over each individual in population
+            if not candidate.fitness.valid:  # Skip individuals without valid fitness
+                continue  # Move to next individual
+            is_dominated = False  # Flag to check if candidate is dominated
+            for other in population:  # Compare candidate with all other individuals
+                if not other.fitness.valid or candidate is other:  # Skip invalid or same individual
+                    continue  # Move to next individual
+                if tools.emo.isDominated(candidate.fitness.values, other.fitness.values):  # Check if candidate is dominated by other
+                    is_dominated = True  # Set dominated flag
+                    break  # Stop checking
+            if not is_dominated:  # If candidate is not dominated
+                pareto_front.append(candidate)  # Add to Pareto front
+    except Exception:  # If any error occurs
+        return []  # Return empty list
+
+    return pareto_front  # Return the Pareto front
+
 
 def plot_ga_convergence(
     csv_path, pop_size, run, fitness_history, dataset_name=None, n_generations=None, cxpb=0.5, mutpb=0.2
