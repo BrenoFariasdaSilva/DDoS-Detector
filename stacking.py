@@ -2029,10 +2029,10 @@ def preprocess_dataframe(df, remove_zero_variance=True, config=None):
     return df_clean  # Return the cleaned DataFrame
 
 
-def scale_and_split(X, y, test_size=0.2, random_state=42, config=None):
+def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, X_augmented=None, y_augmented=None):
     """
     Scales the numeric features using StandardScaler and splits the data
-    into training and testing sets.
+    into training and testing sets. If augmented data is provided, it is merged ONLY into the training set AFTER splitting to ensure test set contains exclusively original samples.
 
     Note: The target variable 'y' is label-encoded before splitting.
 
@@ -2041,6 +2041,8 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None):
     :param test_size: Fraction of the data to reserve for the test set.
     :param random_state: Seed for the random split for reproducibility.
     :param config: Configuration dictionary (uses global CONFIG if None)
+    :param X_augmented: Optional augmented features DataFrame to merge into training set only
+    :param y_augmented: Optional augmented target Series/array to merge into training set only
     :return: Tuple (X_train_scaled, X_test_scaled, y_train, y_test, scaler)
     """
     
@@ -2076,11 +2078,33 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None):
         numeric_X, y_encoded, test_size=test_size, random_state=random_state, stratify=y_encoded
     )  # Split the data into training and testing sets with stratification
 
+    if X_augmented is not None and y_augmented is not None:  # If augmented data is provided for training enhancement
+        verbose_output(
+            f"{BackgroundColors.GREEN}Merging augmented data into training set ({len(X_augmented)} augmented samples)...{Style.RESET_ALL}",
+            config=config
+        )  # Output augmentation merge message
+        
+        y_augmented_series = pd.Series(y_augmented)  # Normalize augmented target to pandas Series
+        le_augmented = LabelEncoder()  # Initialize LabelEncoder for augmented target
+        le_augmented.classes_ = le.classes_  # Use same classes as original encoder for consistency
+        encoded_augmented_values = np.asarray(le_augmented.transform(y_augmented_series.to_numpy()), dtype=int)  # Encode augmented target labels as integers
+        y_augmented_encoded = pd.Series(encoded_augmented_values, index=y_augmented_series.index)  # Create Series for encoded augmented target
+        
+        numeric_X_augmented = X_augmented.select_dtypes(include=np.number)  # Select only numeric columns from augmented features
+        
+        X_train = pd.concat([X_train, numeric_X_augmented], ignore_index=True)  # Concatenate augmented features into training set
+        y_train = pd.concat([y_train, y_augmented_encoded], ignore_index=True)  # Concatenate augmented target into training labels
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Training set expanded to {BackgroundColors.CYAN}{len(X_train)}{BackgroundColors.GREEN} samples (original + augmented){Style.RESET_ALL}",
+            config=config
+        )  # Output expanded training set size
+
     scaler = StandardScaler()  # Initialize the StandardScaler
 
-    X_train_scaled = scaler.fit_transform(X_train)  # Fit and transform the training features
+    X_train_scaled = scaler.fit_transform(X_train)  # Fit and transform the training features (including augmented if provided)
 
-    X_test_scaled = scaler.transform(X_test)  # Transform the testing features
+    X_test_scaled = scaler.transform(X_test)  # Transform the testing features (original data only)
 
     verbose_output(
         f"{BackgroundColors.GREEN}Data split successful. Training set shape: {BackgroundColors.CYAN}{X_train_scaled.shape}{BackgroundColors.GREEN}. Testing set shape: {BackgroundColors.CYAN}{X_test_scaled.shape}{Style.RESET_ALL}",
