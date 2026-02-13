@@ -2776,6 +2776,9 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
         "classifier_type": "AutoML_Individual",  # Classifier type
         "model_name": f"AutoML_{best_model_name}",  # Prefixed model name
         "data_source": "Original",  # Data source label
+        "experiment_id": None,  # No experiment ID for standalone AutoML runs
+        "experiment_mode": "original_only",  # AutoML runs on original data only
+        "augmentation_ratio": None,  # No augmentation ratio for AutoML
         "n_features": len(feature_names),  # Number of features
         "n_samples_train": n_train,  # Training sample count
         "n_samples_test": n_test,  # Test sample count
@@ -2802,6 +2805,9 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
             "classifier_type": "AutoML_Stacking",  # Classifier type
             "model_name": "AutoML_StackingClassifier",  # Prefixed model name
             "data_source": "Original",  # Data source label
+            "experiment_id": None,  # No experiment ID for standalone AutoML runs
+            "experiment_mode": "original_only",  # AutoML runs on original data only
+            "augmentation_ratio": None,  # No augmentation ratio for AutoML
             "n_features": len(feature_names),  # Number of features
             "n_samples_train": n_train,  # Training sample count
             "n_samples_test": n_test,  # Test sample count
