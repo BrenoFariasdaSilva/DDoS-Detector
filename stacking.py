@@ -120,6 +120,8 @@ THREADS_LIMIT = 2  # Number of threads for parallel evaluation of individual cla
 TEST_DATA_AUGMENTATION = True  # Set to True to compare original vs augmented data performance
 RESULTS_FILENAME = "Stacking_Classifiers_Results.csv"  # Filename for saving stacking results
 AUGMENTATION_COMPARISON_FILENAME = "Data_Augmentation_Comparison_Results.csv"  # Filename for augmentation comparison results
+DATA_AUGMENTATION_SUFFIX = "_data_augmented"  # Suffix appended by wgangp.py to generated augmented filenames
+AUGMENTATION_RATIOS = [0.10, 0.25, 0.50, 0.75, 1.00]  # Augmented-to-original sample ratios for ratio-based experiments
 RESULTS_CSV_COLUMNS = [  # Columns for the results CSV
     "model",
     "dataset",
@@ -127,6 +129,9 @@ RESULTS_CSV_COLUMNS = [  # Columns for the results CSV
     "classifier_type",
     "model_name",
     "data_source",
+    "experiment_id",
+    "experiment_mode",
+    "augmentation_ratio",
     "n_features",
     "n_samples_train",
     "n_samples_test",
