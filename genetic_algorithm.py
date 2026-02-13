@@ -3975,6 +3975,16 @@ def run_population_sweep(
         results, min_pop, max_pop, dataset_name
     )  # Aggregate results and find best
 
+    # Generate multi-run comparison table after all runs complete
+    try:  # Attempt to generate comparison table
+        generate_run_comparison_table(
+            results, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb
+        )  # Generate CSV comparison table with aggregated metrics
+    except Exception as e:  # If table generation fails
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Skipping comparison table generation due to error: {e}{Style.RESET_ALL}"
+        )  # Log warning but continue
+
     elapsed_run_time = time.time() - start_run_time  # Calculate elapsed time for the entire run process
     
     if best_result:  # If a best result was found
