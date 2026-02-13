@@ -129,6 +129,32 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def load_config_file(config_path=None):
+    """
+    Load configuration from YAML file.
+    
+    :param config_path: Path to config.yaml file (None for default config.yaml)
+    :return: Dictionary with loaded configuration or empty dict if not found
+    """
+    
+    if config_path is None:  # If no path specified
+        config_path = Path(__file__).parent / "config.yaml"  # Use default config.yaml
+    else:  # Path was specified
+        config_path = Path(config_path)  # Convert to Path object
+    
+    if not config_path.exists():  # If config file doesn't exist
+        return {}  # Return empty dict
+    
+    try:  # Try to load YAML file
+        import yaml  # Import YAML library
+        with open(config_path, "r", encoding="utf-8") as f:  # Open config file
+            config = yaml.safe_load(f)  # Load YAML safely
+        return config or {}  # Return loaded config or empty dict
+    except Exception as e:  # If loading fails
+        print(f"{BackgroundColors.YELLOW}Warning: Failed to load config file {config_path}: {e}{Style.RESET_ALL}")
+        return {}  # Return empty dict on error
+
+
 def deep_merge_dicts(base, override):
     """Recursively merge override dict into base dict.
     
