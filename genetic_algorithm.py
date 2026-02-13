@@ -2474,7 +2474,7 @@ def aggregate_sweep_results(results, min_pop, max_pop, dataset_name):
 
 def print_metrics(metrics):
     """
-    Print performance metrics.
+    Print performance metrics including multi-objective fitness values.
 
     :param metrics: Dictionary or tuple containing evaluation metrics.
     :return: None
@@ -2483,9 +2483,10 @@ def print_metrics(metrics):
     if not metrics:  # If metrics is None or empty
         return  # Do nothing
 
-    cv_acc, cv_prec, cv_rec, cv_f1, cv_fpr, cv_fnr, test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr = metrics
+    cv_acc, cv_prec, cv_rec, cv_f1, cv_fpr, cv_fnr, test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr = metrics[:12] if len(metrics) >= 12 else metrics  # Unpack first 12 metrics (backward compatible)
+    num_features = metrics[12] if len(metrics) > 12 else 0  # Extract number of selected features if present
     print(
-        f"\n{BackgroundColors.GREEN}CV Performance Metrics for the Random Forest Classifier using the best feature subset:{Style.RESET_ALL}"
+        f"\n{BackgroundColors.GREEN}CV Performance Metrics for the Random Forest Classifier using the best feature subset ({int(num_features)} features):{Style.RESET_ALL}"
     )
     print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{truncate_value(cv_acc)}{Style.RESET_ALL}")
     print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{truncate_value(cv_prec)}{Style.RESET_ALL}")
@@ -2494,7 +2495,7 @@ def print_metrics(metrics):
     print(f"   {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{truncate_value(cv_fpr)}{Style.RESET_ALL}")
     print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{truncate_value(cv_fnr)}{Style.RESET_ALL}")
     print(
-        f"\n{BackgroundColors.GREEN}Test Performance Metrics for the Random Forest Classifier using the best feature subset:{Style.RESET_ALL}"
+        f"\n{BackgroundColors.GREEN}Test Performance Metrics for the Random Forest Classifier using the best feature subset ({int(num_features)} features):{Style.RESET_ALL}"
     )
     print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{truncate_value(test_acc)}{Style.RESET_ALL}")
     print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{truncate_value(test_prec)}{Style.RESET_ALL}")
