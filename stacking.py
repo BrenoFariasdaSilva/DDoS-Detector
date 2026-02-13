@@ -3233,6 +3233,99 @@ def generate_combined_importance_report(shap_result, lime_result, perm_result, m
         return None  # Return None
 
 
+def run_explainability_pipeline(model, model_name, X_test, y_test, feature_names, dataset_file, feature_set, execution_mode, config=None):
+    """
+    Run comprehensive explainability pipeline for a trained model.
+
+    Generates SHAP, LIME, permutation importance, and combined reports.
+    Only runs on ORIGINAL test data, never on augmented samples.
+
+    :param model: Trained model object
+    :param model_name: Name of the model for labeling
+    :param X_test: Original test features (numpy array, NOT augmented)
+    :param y_test: Original test labels (NOT augmented)
+    :param feature_names: List of feature names
+    :param dataset_file: Path to dataset file for output directory construction
+    :param feature_set: Feature set name (e.g., "Full Features", "GA Features")
+    :param execution_mode: Execution mode string ('binary' or 'multi-class')
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Dictionary with all explainability results or None if disabled
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    explainability_config = config.get("explainability", {})  # Get explainability config
+    if not explainability_config.get("enabled", False):  # If explainability is disabled
+        return None  # Return None immediately
+
+    verbose_output(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Running explainability pipeline for {BackgroundColors.CYAN}{model_name} - {feature_set}{Style.RESET_ALL}",
+        config=config
+    )  # Log pipeline start
+
+    # Build output directory path
+    dataset_name = Path(dataset_file).stem  # Get dataset name from file path
+    output_subdir = explainability_config.get("output_subdir", "explainability")  # Get output subdirectory name
+    base_output_dir = Path(dataset_file).parent / output_subdir / execution_mode / dataset_name  # Build base output directory
+    output_dir = base_output_dir / feature_set.replace(" ", "_") / model_name.replace(" ", "_")  # Build full output directory
+    output_dir = str(output_dir)  # Convert Path to string
+
+    # Initialize results dictionary
+    all_results = {}  # Dictionary to store all explainability results
+
+    # Generate SHAP explanations if enabled
+    if explainability_config.get("shap", True):  # If SHAP is enabled
+        shap_result = generate_shap_explanations(
+            model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config
+        )  # Generate SHAP explanations
+        if shap_result:  # If SHAP results available
+            all_results.update(shap_result)  # Add SHAP results to all results
+
+    # Generate LIME explanations if enabled
+    if explainability_config.get("lime", True):  # If LIME is enabled
+        lime_result = generate_lime_explanations(
+            model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config
+        )  # Generate LIME explanations
+        if lime_result:  # If LIME results available
+            all_results.update(lime_result)  # Add LIME results to all results
+
+    # Generate permutation importance if enabled
+    if explainability_config.get("permutation_importance", True):  # If permutation importance is enabled
+        perm_result = generate_permutation_importance(
+            model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, config
+        )  # Generate permutation importance
+        if perm_result:  # If permutation results available
+            all_results.update(perm_result)  # Add permutation results to all results
+
+    # Extract model feature importance if enabled
+    if explainability_config.get("feature_importance", True):  # If feature importance extraction is enabled
+        model_result = extract_model_feature_importance(
+            model, feature_names, output_dir, model_name, dataset_name, config
+        )  # Extract model feature importance
+        if model_result:  # If model importance available
+            all_results.update(model_result)  # Add model importance to all results
+
+    # Generate combined importance report
+    shap_res = all_results if "shap_importance" in all_results else None  # Get SHAP results or None
+    lime_res = all_results if "lime_explanations" in all_results else None  # Get LIME results or None
+    perm_res = all_results if "permutation_importance" in all_results else None  # Get permutation results or None
+    model_res = all_results if "model_importance" in all_results else None  # Get model importance or None
+
+    report_path = generate_combined_importance_report(
+        shap_res, lime_res, perm_res, model_res, feature_names, output_dir, model_name, dataset_name, config
+    )  # Generate combined report
+    if report_path:  # If report generated successfully
+        all_results["combined_report_path"] = report_path  # Add report path to results
+
+    verbose_output(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Explainability pipeline completed for {BackgroundColors.CYAN}{model_name} - {feature_set}{Style.RESET_ALL}",
+        config=config
+    )  # Log pipeline completion
+
+    return all_results  # Return all explainability results
+
+
 def get_hardware_specifications():
     """
     Returns system specs: real CPU model (Windows/Linux/macOS), physical cores,
