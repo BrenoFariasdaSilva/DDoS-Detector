@@ -129,6 +129,30 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def initialize_logger(config=None):
+    """
+    Initialize logger using configuration.
+    
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    global logger  # Access global logger
+    
+    logs_dir = config.get("paths", {}).get("logs_dir", "./Logs")  # Get logs directory
+    clean = config.get("logging", {}).get("clean", True)  # Get clean flag
+    
+    os.makedirs(logs_dir, exist_ok=True)  # Ensure logs directory exists
+    log_path = Path(logs_dir) / f"{Path(__file__).stem}.log"  # Build log file path
+    
+    logger = Logger(str(log_path), clean=clean)  # Create Logger instance
+    sys.stdout = logger  # Redirect stdout to logger
+    sys.stderr = logger  # Redirect stderr to logger
+
+
 def verbose_output(true_string="", false_string="", config=None):
     """
     Outputs a message if verbose mode is enabled in configuration.
