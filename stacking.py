@@ -129,6 +129,84 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def build_automl_results_list(best_model_name, best_params, individual_metrics, stacking_metrics, stacking_config, file_path, feature_names, n_train, n_test):
+    """
+    Builds the results list for AutoML CSV export matching existing results format.
+
+    :param best_model_name: Name of the best individual model
+    :param best_params: Best hyperparameters for the individual model
+    :param individual_metrics: Metrics from individual model test evaluation
+    :param stacking_metrics: Metrics from stacking model test evaluation (or None)
+    :param stacking_config: Best stacking configuration (or None)
+    :param file_path: Path to the dataset file
+    :param feature_names: List of feature names
+    :param n_train: Number of training samples
+    :param n_test: Number of test samples
+    :return: List of result dictionaries for CSV export
+    """
+
+    results = []  # Initialize results list
+
+    individual_entry = {  # Build individual model result entry
+        "model": best_model_name,  # Model class name
+        "dataset": os.path.relpath(file_path),  # Dataset relative path
+        "feature_set": "AutoML",  # Feature set label
+        "classifier_type": "AutoML_Individual",  # Classifier type
+        "model_name": f"AutoML_{best_model_name}",  # Prefixed model name
+        "data_source": "Original",  # Data source label
+        "experiment_id": None,  # No experiment ID for standalone AutoML runs
+        "experiment_mode": "original_only",  # AutoML runs on original data only
+        "augmentation_ratio": None,  # No augmentation ratio for AutoML
+        "n_features": len(feature_names),  # Number of features
+        "n_samples_train": n_train,  # Training sample count
+        "n_samples_test": n_test,  # Test sample count
+        "accuracy": truncate_value(individual_metrics["accuracy"]),  # Accuracy
+        "precision": truncate_value(individual_metrics["precision"]),  # Precision
+        "recall": truncate_value(individual_metrics["recall"]),  # Recall
+        "f1_score": truncate_value(individual_metrics["f1_score"]),  # F1 score
+        "fpr": truncate_value(individual_metrics["fpr"]),  # False positive rate
+        "fnr": truncate_value(individual_metrics["fnr"]),  # False negative rate
+        "elapsed_time_s": individual_metrics["elapsed_time_s"],  # Elapsed time
+        "cv_method": f"Optuna({config.get("automl", {}).get("n_trials", 50)} trials, {config.get("automl", {}).get("cv_folds", 5)}-fold CV)",  # CV method description
+        "top_features": json.dumps(feature_names),  # Feature names as JSON
+        "rfe_ranking": None,  # No RFE ranking for AutoML
+        "hyperparameters": json.dumps(best_params),  # Hyperparameters as JSON
+        "features_list": feature_names,  # Feature names list
+    }  # Individual model result entry
+    results.append(individual_entry)  # Add to results list
+
+    if stacking_metrics is not None and stacking_config is not None:  # If stacking results are available
+        stacking_entry = {  # Build stacking result entry
+            "model": "StackingClassifier",  # Model class name
+            "dataset": os.path.relpath(file_path),  # Dataset relative path
+            "feature_set": "AutoML",  # Feature set label
+            "classifier_type": "AutoML_Stacking",  # Classifier type
+            "model_name": "AutoML_StackingClassifier",  # Prefixed model name
+            "data_source": "Original",  # Data source label
+            "experiment_id": None,  # No experiment ID for standalone AutoML runs
+            "experiment_mode": "original_only",  # AutoML runs on original data only
+            "augmentation_ratio": None,  # No augmentation ratio for AutoML
+            "n_features": len(feature_names),  # Number of features
+            "n_samples_train": n_train,  # Training sample count
+            "n_samples_test": n_test,  # Test sample count
+            "accuracy": truncate_value(stacking_metrics["accuracy"]),  # Accuracy
+            "precision": truncate_value(stacking_metrics["precision"]),  # Precision
+            "recall": truncate_value(stacking_metrics["recall"]),  # Recall
+            "f1_score": truncate_value(stacking_metrics["f1_score"]),  # F1 score
+            "fpr": truncate_value(stacking_metrics["fpr"]),  # False positive rate
+            "fnr": truncate_value(stacking_metrics["fnr"]),  # False negative rate
+            "elapsed_time_s": stacking_metrics["elapsed_time_s"],  # Elapsed time
+            "cv_method": f"Optuna({config.get("automl", {}).get("stacking_trials", 20)} trials, {config.get("automl", {}).get("cv_folds", 5)}-fold CV)",  # CV method description
+            "top_features": json.dumps(feature_names),  # Feature names as JSON
+            "rfe_ranking": None,  # No RFE ranking for AutoML
+            "hyperparameters": json.dumps(stacking_config, default=str),  # Stacking config as JSON
+            "features_list": feature_names,  # Feature names list
+        }  # Stacking result entry
+        results.append(stacking_entry)  # Add stacking to results list
+
+    return results  # Return results list
+
+
 def save_automl_results(csv_path, results_list):
     """
     Saves AutoML results to a dedicated CSV file in the Feature_Analysis/AutoML directory.
