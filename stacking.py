@@ -2149,7 +2149,7 @@ def automl_cross_validate_model(model, X_train, y_train, cv_folds, trial=None):
             if trial.should_prune():  # Check if trial should be pruned
                 raise optuna.exceptions.TrialPruned()  # Prune this trial
 
-    return np.mean(f1_scores)  # Return mean F1 score across folds
+    return float(np.mean(f1_scores))  # Return mean F1 score across folds as Python float
 
 
 def automl_objective(trial, X_train, y_train, cv_folds):
