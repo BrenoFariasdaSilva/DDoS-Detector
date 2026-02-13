@@ -151,6 +151,7 @@ def parse_cli_args():
     parser.add_argument("--no-test-augmentation", dest="test_augmentation", action="store_false", help="Disable data augmentation testing")
     parser.add_argument("--multi-class", action="store_true", help="Enable multi-class classification mode (combine all attacks)")
     parser.add_argument("--binary", dest="multi_class", action="store_false", help="Enable binary classification mode (default)")
+    parser.add_argument("--both", action="store_true", help="Run both binary and multi-class pipelines sequentially")
     
     return parser.parse_args()  # Return parsed arguments
 
@@ -347,7 +348,9 @@ def merge_configs(defaults, file_config, cli_args):
         config["automl"]["timeout"] = cli_args.automl_timeout
     if hasattr(cli_args, "test_augmentation"):  # Test augmentation flag (explicit True or False)
         config["execution"]["test_data_augmentation"] = cli_args.test_augmentation
-    if hasattr(cli_args, "multi_class"):  # Multi-class mode flag
+    if hasattr(cli_args, "both") and cli_args.both:  # Both mode flag takes precedence
+        config["execution"]["execution_mode"] = "both"
+    elif hasattr(cli_args, "multi_class"):  # Multi-class mode flag
         config["execution"]["execution_mode"] = "multi-class" if cli_args.multi_class else "binary"
     
     return config  # Return final merged configuration
@@ -5069,13 +5072,88 @@ def process_files_in_path(input_path, dataset_name, config=None):
         return  # Exit function early
     
     csv_file = config.get("execution", {}).get("csv_file", None)  # Get CSV file override from config
-    execution_mode = config.get("execution", {}).get("execution_mode", "binary")  # Get execution mode from config (binary/multi-class)
+    execution_mode = config.get("execution", {}).get("execution_mode", "binary")  # Get execution mode from config (binary/multi-class/both)
 
     files_to_process = determine_files_to_process(csv_file, input_path, config=config)  # Determine which files to process
 
     local_dataset_name = dataset_name or get_dataset_name(input_path)  # Use provided dataset name or infer from path
 
-    if execution_mode == "multi-class":  # If multi-class execution mode is enabled
+    if execution_mode == "both":  # If BOTH execution modes are enabled (run binary first, then multi-class)
+        verbose_output(
+            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: BOTH (Binary + Multi-Class){Style.RESET_ALL}",
+            config=config
+        )  # Output execution mode
+        
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+        )  # Print separator line
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}BOTH MODE: Running Binary and Multi-Class pipelines sequentially{Style.RESET_ALL}"
+        )  # Print mode header
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+        )  # Print closing separator
+        
+        # STEP 1: Execute Binary Pipeline
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[STEP 1/2] Executing BINARY Classification Pipeline{Style.RESET_ALL}\n"
+        )  # Print binary step header
+        
+        combined_df, combined_file_for_features, files_for_binary = combine_dataset_if_needed(files_to_process, config=config)  # Combine dataset files if needed
+
+        for file in files_for_binary:  # For each file to process in binary mode
+            process_single_file_evaluation(file, combined_df, combined_file_for_features, config=config)  # Process the single file evaluation
+        
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Binary pipeline complete{Style.RESET_ALL}\n"
+        )  # Print binary completion message
+        
+        # STEP 2: Execute Multi-Class Pipeline
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[STEP 2/2] Executing MULTI-CLASS Classification Pipeline{Style.RESET_ALL}\n"
+        )  # Print multi-class step header
+        
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+        )  # Print separator line
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}MULTI-CLASS CLASSIFICATION MODE{Style.RESET_ALL}"
+        )  # Print mode header
+        print(
+            f"{BackgroundColors.GREEN}Combining {BackgroundColors.CYAN}{len(files_to_process)}{BackgroundColors.GREEN} files into single multi-class dataset{Style.RESET_ALL}"
+        )  # Print files count
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+        )  # Print closing separator
+
+        # Combine all files into multi-class dataset
+        combined_multiclass_df, attack_types_list, target_col_name = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for multi-class
+        
+        if combined_multiclass_df is None:  # If combination failed
+            print(
+                f"{BackgroundColors.RED}Failed to create multi-class dataset. Skipping multi-class evaluation.{Style.RESET_ALL}"
+            )  # Print error
+        else:  # If combination succeeded
+            # Process multi-class dataset evaluation
+            process_multiclass_evaluation(
+                files_to_process, combined_multiclass_df, attack_types_list, local_dataset_name, config=config
+            )  # Process multi-class evaluation workflow
+            
+            print(
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Multi-class pipeline complete{Style.RESET_ALL}\n"
+            )  # Print multi-class completion message
+        
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+        )  # Print final separator
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ BOTH MODE COMPLETE: Binary and Multi-Class pipelines finished{Style.RESET_ALL}"
+        )  # Print both mode completion message
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+        )  # Print final separator
+        
+    elif execution_mode == "multi-class":  # If multi-class execution mode is enabled
         verbose_output(
             f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: MULTI-CLASS{Style.RESET_ALL}",
             config=config
