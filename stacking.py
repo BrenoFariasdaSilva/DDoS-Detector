@@ -129,6 +129,32 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def find_local_feature_file(file_dir, filename, config=None):
+    """
+    Attempt to locate <file_dir>/Feature_Analysis/<filename>.
+
+    :param file_dir: Directory to search within
+    :param filename: Filename to search for
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: The matching path or None
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Checking local Feature_Analysis in directory: {BackgroundColors.CYAN}{file_dir}{BackgroundColors.GREEN} for file: {BackgroundColors.CYAN}{filename}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    candidate = os.path.join(file_dir, "Feature_Analysis", filename)  # Construct candidate path
+
+    if os.path.exists(candidate):  # If the candidate file exists
+        return candidate  # Return the candidate path
+
+    return None  # Not found
+
+
 def find_parent_feature_file(file_dir, filename, config=None):
     """
     Ascend parent directories searching for <parent>/Feature_Analysis/<filename>.
