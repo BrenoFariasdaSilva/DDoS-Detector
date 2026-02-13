@@ -270,6 +270,22 @@ def get_default_config():
             "enabled": True,
             "verify_env": True,
         },
+        "explainability": {
+            "enabled": True,
+            "shap": True,
+            "lime": True,
+            "permutation_importance": True,
+            "feature_importance": True,
+            "pdp": False,
+            "ice": False,
+            "surrogate": False,
+            "max_display_features": 20,
+            "lime_num_samples": 1000,
+            "lime_num_features": 10,
+            "shap_max_samples": 100,
+            "random_state": 42,
+            "output_subdir": "explainability",
+        },
     }  # Return default configuration
 
 
