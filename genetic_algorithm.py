@@ -1896,7 +1896,16 @@ def load_and_apply_generation_state(toolbox, population, output_dir, state_id, r
                     recreated = recreate_population_from_lists(toolbox, pop_lists)  # Recreate population from lists
                     if recreated:  # If recreation succeeded
                         population[:] = recreated  # Replace the population with recreated one
-                    fitness_history = payload.get("fitness_history", [])  # Get fitness history from payload
+
+                    # Load fitness history with backward compatibility (handle both list and dict formats)
+                    fitness_history_raw = payload.get("fitness_history", [])  # Get fitness history from payload
+                    if isinstance(fitness_history_raw, dict):  # If new format (dict with extended history)
+                        fitness_history = fitness_history_raw  # Use as-is
+                    elif isinstance(fitness_history_raw, list):  # If old format (list of F1 scores only)
+                        fitness_history = {"best_f1": fitness_history_raw}  # Convert to dict format for backward compatibility
+                    else:  # If unexpected format
+                        fitness_history = {}  # Initialize as empty dict
+
                 loaded_gen = int(payload.get("gen", 0))  # Get the loaded generation number
                 start_gen = loaded_gen + 1 if loaded_gen >= 1 else 1  # Set start_gen to loaded_gen + 1 or 1
                 try:  # Try to log the resume message
@@ -1908,7 +1917,7 @@ def load_and_apply_generation_state(toolbox, population, output_dir, state_id, r
         except Exception:  # If any error occurs during loading/applying
             pass  # Do nothing
 
-    return start_gen, fitness_history  # Return the starting generation and fitness history
+    return start_gen, fitness_history  # Return the starting generation and fitness history (dict or empty)
 
 
 def save_generation_state(output_dir, state_id, gen, population, hof_best, fitness_history):
