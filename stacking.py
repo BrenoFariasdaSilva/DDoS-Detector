@@ -129,6 +129,90 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def run_automl_stacking_search(X_train, y_train, model_study, file_path):
+    """
+    Runs Optuna-based optimization to find the best stacking ensemble configuration.
+
+    :param X_train: Scaled training features (numpy array)
+    :param y_train: Training target labels (numpy array)
+    :param model_study: Completed Optuna study from model search
+    :param file_path: Path to the dataset file for logging
+    :return: Tuple (best_stacking_config, stacking_study) or (None, None) on failure
+    """
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Starting AutoML stacking search with {BackgroundColors.CYAN}{config.get("automl", {}).get("stacking_trials", 20)}{BackgroundColors.GREEN} trials...{Style.RESET_ALL}"
+    )  # Output search start message
+
+    candidate_models = extract_top_automl_models(model_study, top_n=config.get("automl", {}).get("stacking_top_n", 5))  # Get top models from model search
+
+    if len(candidate_models) < 2:  # If not enough candidate models
+        print(
+            f"{BackgroundColors.YELLOW}Not enough candidate models for stacking search. Need at least 2, got {len(candidate_models)}.{Style.RESET_ALL}"
+        )  # Output warning
+        return (None, None)  # Return None tuple
+
+    print(
+        f"{BackgroundColors.GREEN}Candidate base learners: {BackgroundColors.CYAN}{list(candidate_models.keys())}{Style.RESET_ALL}"
+    )  # Output candidate models
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)  # Suppress verbose Optuna logging
+
+    sampler = optuna.samplers.TPESampler(seed=config.get("automl", {}).get("random_state", 42) + 1)  # Create sampler with different seed
+    pruner = optuna.pruners.MedianPruner(n_startup_trials=3, n_warmup_steps=1)  # Create pruner
+
+    stacking_study = optuna.create_study(
+        direction="maximize", sampler=sampler, pruner=pruner, study_name="automl_stacking_search"
+    )  # Create Optuna study for stacking optimization
+
+    objective_fn = lambda trial: automl_stacking_objective(
+        trial, X_train, y_train, config.get("automl", {}).get("cv_folds", 5), candidate_models
+    )  # Create stacking objective wrapper
+    stacking_study.optimize(
+        objective_fn, n_trials=config.get("automl", {}).get("stacking_trials", 20), timeout=config.get("automl", {}).get("timeout", 3600), n_jobs=1
+    )  # Run stacking optimization
+
+    completed = [
+        t for t in stacking_study.trials if t.state == optuna.trial.TrialState.COMPLETE
+    ]  # Get completed trials
+
+    if not completed:  # If no stacking trials completed
+        print(
+            f"{BackgroundColors.YELLOW}AutoML stacking search: no successful trials.{Style.RESET_ALL}"
+        )  # Output warning
+        return (None, None)  # Return None tuple
+
+    best_trial = stacking_study.best_trial  # Get best stacking trial
+    best_config = {
+        "meta_learner": best_trial.params.get("meta_learner"),  # Best meta-learner choice
+        "stacking_cv_splits": best_trial.params.get("stacking_cv_splits"),  # Best CV splits
+        "base_learners": [
+            name for name in candidate_models.keys()
+            if best_trial.params.get(f"use_{name.replace(' ', '_').replace('(', '').replace(')', '')}", False)
+        ],  # Selected base learner names
+        "base_learner_params": candidate_models,  # Parameters for each base learner
+        "best_cv_f1": stacking_study.best_value,  # Best CV F1 score
+    }  # Build best configuration dictionary
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}AutoML Best Stacking Config:{Style.RESET_ALL}"
+    )  # Output header
+    print(
+        f"{BackgroundColors.GREEN}  Meta-learner: {BackgroundColors.CYAN}{best_config['meta_learner']}{Style.RESET_ALL}"
+    )  # Output meta-learner
+    print(
+        f"{BackgroundColors.GREEN}  Base learners: {BackgroundColors.CYAN}{best_config['base_learners']}{Style.RESET_ALL}"
+    )  # Output base learners
+    print(
+        f"{BackgroundColors.GREEN}  CV splits: {BackgroundColors.CYAN}{best_config['stacking_cv_splits']}{Style.RESET_ALL}"
+    )  # Output CV splits
+    print(
+        f"{BackgroundColors.GREEN}  Best CV F1: {BackgroundColors.CYAN}{truncate_value(best_config['best_cv_f1'])}{Style.RESET_ALL}"
+    )  # Output best F1
+
+    return (best_config, stacking_study)  # Return best config and study
+
+
 def build_automl_stacking_model(best_config):
     """
     Builds a StackingClassifier from the best AutoML stacking configuration.
