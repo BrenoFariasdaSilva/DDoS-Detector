@@ -2261,6 +2261,243 @@ def plot_ga_convergence(
         raise  # Reraise the original exception
 
 
+def generate_convergence_plots(
+    history_data,
+    csv_path,
+    pop_size,
+    run,
+    dataset_name=None,
+    n_generations=None,
+    cxpb=0.5,
+    mutpb=0.2,
+):
+    """
+    Generate comprehensive convergence and progress visualization plots for a single GA run.
+
+    :param history_data: Dict containing all tracking histories (best_f1, best_features, avg_f1, avg_features, pareto_size, hypervolume, diversity)
+    :param csv_path: Path to the dataset CSV (used to determine output directory)
+    :param pop_size: Population size used in this run
+    :param run: Run index (1-based)
+    :param dataset_name: Optional dataset name for title/filename
+    :param n_generations: Number of generations configured
+    :param cxpb: Crossover probability
+    :param mutpb: Mutation probability
+    :return: List of paths to all saved plots
+    """
+
+    output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis"  # Base directory for outputs
+    os.makedirs(output_dir, exist_ok=True)  # Ensure base directory exists
+
+    base_dataset_name = (
+        safe_filename(os.path.splitext(os.path.basename(csv_path))[0])
+        if not dataset_name
+        else safe_filename(dataset_name)
+    )  # Sanitized base name of the dataset
+
+    gens_part = f"gens{int(n_generations)}" if n_generations is not None else "gensNA"  # Format generations for filename
+    cx_part = f"cx{int(cxpb*100)}"  # Format crossover probability as percentage
+    mut_part = f"mut{int(mutpb*100)}"  # Format mutation probability as percentage
+    run_id = f"{base_dataset_name}_run{run}_pop{pop_size}_{gens_part}_{cx_part}_{mut_part}"  # Unique run identifier
+
+    plot_output_dir = os.path.join(output_dir, "ga_progress_plots", run_id)  # Subdirectory for this run's plots
+    os.makedirs(plot_output_dir, exist_ok=True)  # Ensure plot output directory exists
+
+    saved_plots = []  # List to track all saved plot paths
+
+    try:  # Attempt to generate all convergence plots
+        # Extract history data with backward compatibility
+        best_f1_history = history_data.get("best_f1", [])  # Best F1 score per generation
+        best_features_history = history_data.get("best_features", [])  # Best feature count per generation
+        avg_f1_history = history_data.get("avg_f1", [])  # Average F1 score per generation
+        avg_features_history = history_data.get("avg_features", [])  # Average feature count per generation
+        pareto_size_history = history_data.get("pareto_size", [])  # Pareto front size per generation
+        hypervolume_history = history_data.get("hypervolume", [])  # Hypervolume per generation
+        diversity_history = history_data.get("diversity", [])  # Diversity per generation
+
+        n_gens = max(
+            len(best_f1_history),
+            len(best_features_history),
+            len(avg_f1_history),
+            len(avg_features_history),
+            len(pareto_size_history),
+            len(hypervolume_history),
+            len(diversity_history),
+        )  # Determine actual number of generations from available data
+
+        if n_gens == 0:  # If no history data available
+            verbose_output(
+                f"{BackgroundColors.YELLOW}No history data available for convergence plots{Style.RESET_ALL}"
+            )  # Log warning
+            return []  # Return empty list
+
+        generations = list(range(1, n_gens + 1))  # Generate list of generation numbers starting from 1
+
+        # Plot 1: Generation vs Best F1-score
+        if best_f1_history:  # If best F1 history exists
+            try:  # Try to create plot
+                plt.figure(figsize=(10, 6))  # Create figure with 10x6 dimensions
+                plt.plot(generations[: len(best_f1_history)], best_f1_history, marker="o", linestyle="-", color="#1f77b4", linewidth=2, markersize=4)  # Plot best F1 with blue line
+                plt.xlabel("Generation", fontsize=12)  # Set X-axis label
+                plt.ylabel("Best F1-Score", fontsize=12)  # Set Y-axis label
+                plt.title(f"Best F1-Score Convergence\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                plt.grid(True, linestyle="--", alpha=0.5)  # Add grid with 50% transparency
+                plt.tight_layout()  # Adjust layout
+                plot_path = os.path.join(plot_output_dir, "01_best_f1_convergence.png")  # Define plot path
+                plt.savefig(plot_path, dpi=150)  # Save figure with 150 DPI
+                plt.close()  # Close plot to free memory
+                saved_plots.append(plot_path)  # Add to saved plots list
+            except Exception:  # If plotting fails
+                plt.close()  # Close plot to free memory
+
+        # Plot 2: Generation vs Number of Selected Features
+        if best_features_history:  # If best features history exists
+            try:  # Try to create plot
+                plt.figure(figsize=(10, 6))  # Create figure with 10x6 dimensions
+                plt.plot(generations[: len(best_features_history)], best_features_history, marker="s", linestyle="-", color="#ff7f0e", linewidth=2, markersize=4)  # Plot feature count with orange line
+                plt.xlabel("Generation", fontsize=12)  # Set X-axis label
+                plt.ylabel("Number of Selected Features", fontsize=12)  # Set Y-axis label
+                plt.title(f"Feature Count Evolution\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
+                plt.tight_layout()  # Adjust layout
+                plot_path = os.path.join(plot_output_dir, "02_feature_count_evolution.png")  # Define plot path
+                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.close()  # Close plot
+                saved_plots.append(plot_path)  # Add to saved plots list
+            except Exception:  # If plotting fails
+                plt.close()  # Close plot
+
+        # Plot 3: Generation vs Pareto Front Size
+        if pareto_size_history:  # If Pareto size history exists
+            try:  # Try to create plot
+                plt.figure(figsize=(10, 6))  # Create figure
+                plt.plot(generations[: len(pareto_size_history)], pareto_size_history, marker="^", linestyle="-", color="#2ca02c", linewidth=2, markersize=4)  # Plot Pareto size with green line
+                plt.xlabel("Generation", fontsize=12)  # Set X-axis label
+                plt.ylabel("Pareto Front Size", fontsize=12)  # Set Y-axis label
+                plt.title(f"Pareto Front Size Evolution\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
+                plt.tight_layout()  # Adjust layout
+                plot_path = os.path.join(plot_output_dir, "03_pareto_front_size.png")  # Define plot path
+                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.close()  # Close plot
+                saved_plots.append(plot_path)  # Add to saved plots list
+            except Exception:  # If plotting fails
+                plt.close()  # Close plot
+
+        # Plot 4: Generation vs Population Average F1-score
+        if avg_f1_history:  # If average F1 history exists
+            try:  # Try to create plot
+                plt.figure(figsize=(10, 6))  # Create figure
+                plt.plot(generations[: len(avg_f1_history)], avg_f1_history, marker="d", linestyle="-", color="#d62728", linewidth=2, markersize=4)  # Plot average F1 with red line
+                plt.xlabel("Generation", fontsize=12)  # Set X-axis label
+                plt.ylabel("Population Average F1-Score", fontsize=12)  # Set Y-axis label
+                plt.title(f"Population Average F1-Score\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
+                plt.tight_layout()  # Adjust layout
+                plot_path = os.path.join(plot_output_dir, "04_avg_f1_evolution.png")  # Define plot path
+                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.close()  # Close plot
+                saved_plots.append(plot_path)  # Add to saved plots list
+            except Exception:  # If plotting fails
+                plt.close()  # Close plot
+
+        # Plot 5: Generation vs Population Average Feature Count
+        if avg_features_history:  # If average features history exists
+            try:  # Try to create plot
+                plt.figure(figsize=(10, 6))  # Create figure
+                plt.plot(generations[: len(avg_features_history)], avg_features_history, marker="v", linestyle="-", color="#9467bd", linewidth=2, markersize=4)  # Plot average features with purple line
+                plt.xlabel("Generation", fontsize=12)  # Set X-axis label
+                plt.ylabel("Population Average Feature Count", fontsize=12)  # Set Y-axis label
+                plt.title(f"Population Average Feature Count\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
+                plt.tight_layout()  # Adjust layout
+                plot_path = os.path.join(plot_output_dir, "05_avg_feature_count_evolution.png")  # Define plot path
+                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.close()  # Close plot
+                saved_plots.append(plot_path)  # Add to saved plots list
+            except Exception:  # If plotting fails
+                plt.close()  # Close plot
+
+        # Plot 6: Hypervolume / Pareto Quality Indicator
+        if hypervolume_history:  # If hypervolume history exists
+            try:  # Try to create plot
+                plt.figure(figsize=(10, 6))  # Create figure
+                plt.plot(generations[: len(hypervolume_history)], hypervolume_history, marker="*", linestyle="-", color="#8c564b", linewidth=2, markersize=6)  # Plot hypervolume with brown line
+                plt.xlabel("Generation", fontsize=12)  # Set X-axis label
+                plt.ylabel("Hypervolume", fontsize=12)  # Set Y-axis label
+                plt.title(f"Hypervolume Evolution (Pareto Quality)\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
+                plt.tight_layout()  # Adjust layout
+                plot_path = os.path.join(plot_output_dir, "06_hypervolume_evolution.png")  # Define plot path
+                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.close()  # Close plot
+                saved_plots.append(plot_path)  # Add to saved plots list
+            except Exception:  # If plotting fails
+                plt.close()  # Close plot
+
+        # Plot 7: Diversity Metric
+        if diversity_history:  # If diversity history exists
+            try:  # Try to create plot
+                plt.figure(figsize=(10, 6))  # Create figure
+                plt.plot(generations[: len(diversity_history)], diversity_history, marker="p", linestyle="-", color="#e377c2", linewidth=2, markersize=4)  # Plot diversity with pink line
+                plt.xlabel("Generation", fontsize=12)  # Set X-axis label
+                plt.ylabel("Population Diversity (Avg Hamming Distance)", fontsize=12)  # Set Y-axis label
+                plt.title(f"Population Diversity Evolution\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
+                plt.tight_layout()  # Adjust layout
+                plot_path = os.path.join(plot_output_dir, "07_diversity_evolution.png")  # Define plot path
+                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.close()  # Close plot
+                saved_plots.append(plot_path)  # Add to saved plots list
+            except Exception:  # If plotting fails
+                plt.close()  # Close plot
+
+        # Plot 8: Combined Multi-Objective View (Best F1 vs Best Features)
+        if best_f1_history and best_features_history:  # If both histories exist
+            try:  # Try to create plot
+                fig, ax1 = plt.subplots(figsize=(10, 6))  # Create figure with primary axis
+                ax2 = ax1.twinx()  # Create secondary Y-axis
+
+                line1 = ax1.plot(generations[: len(best_f1_history)], best_f1_history, marker="o", linestyle="-", color="#1f77b4", linewidth=2, markersize=4, label="Best F1-Score")  # Plot F1 on primary axis
+                line2 = ax2.plot(generations[: len(best_features_history)], best_features_history, marker="s", linestyle="--", color="#ff7f0e", linewidth=2, markersize=4, label="Feature Count")  # Plot features on secondary axis
+
+                ax1.set_xlabel("Generation", fontsize=12)  # Set X-axis label
+                ax1.set_ylabel("Best F1-Score", fontsize=12, color="#1f77b4")  # Set primary Y-axis label
+                ax2.set_ylabel("Number of Selected Features", fontsize=12, color="#ff7f0e")  # Set secondary Y-axis label
+                ax1.tick_params(axis="y", labelcolor="#1f77b4")  # Color primary Y-axis ticks
+                ax2.tick_params(axis="y", labelcolor="#ff7f0e")  # Color secondary Y-axis ticks
+
+                lines = line1 + line2  # Combine lines for legend
+                labels = [str(l.get_label()) for l in lines]  # Extract labels as strings
+                ax1.legend(lines, labels, loc="best")  # Add legend
+
+                plt.title(f"Multi-Objective Convergence\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                ax1.grid(True, linestyle="--", alpha=0.5)  # Add grid
+                plt.tight_layout()  # Adjust layout
+                plot_path = os.path.join(plot_output_dir, "08_multi_objective_convergence.png")  # Define plot path
+                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.close()  # Close plot
+                saved_plots.append(plot_path)  # Add to saved plots list
+            except Exception:  # If plotting fails
+                plt.close()  # Close plot
+
+        if saved_plots:  # If any plots were saved
+            verbose_output(
+                f"{BackgroundColors.GREEN}Generated {len(saved_plots)} convergence plots in {BackgroundColors.CYAN}{plot_output_dir}{Style.RESET_ALL}"
+            )  # Notify user
+
+        return saved_plots  # Return list of saved plot paths
+
+    except Exception as e:  # If any error occurs during plotting
+        try:  # Try to close any open plots
+            plt.close("all")  # Close all plots
+        except Exception:  # Ignore errors during cleanup
+            pass  # Do nothing
+        verbose_output(
+            f"{BackgroundColors.YELLOW}Failed to generate convergence plots: {e}{Style.RESET_ALL}"
+        )  # Log warning
+        return []  # Return empty list
+
+
 def save_run_result(output_dir, state_id, result):
     """
     Save a completed run result so future identical runs can be skipped.
