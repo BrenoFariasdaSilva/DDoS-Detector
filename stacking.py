@@ -129,6 +129,35 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def handle_target_column_consistency(target_col_name, this_target, f, df_clean, config=None):
+    """
+    Handle target column consistency by renaming if necessary.
+
+    :param target_col_name: Current target column name (or None)
+    :param this_target: Target column name in this file
+    :param f: File path for warning message
+    :param df_clean: DataFrame to rename if needed
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Tuple (updated_target_col_name, updated_df_clean)
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+    
+    verbose_output(
+        f"{BackgroundColors.GREEN}Checking target column consistency for: {BackgroundColors.CYAN}{f}{Style.RESET_ALL} (target: {BackgroundColors.CYAN}{this_target}{Style.RESET_ALL})...{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    if target_col_name is None:  # If target column not set yet
+        target_col_name = this_target  # Set it to this target
+    elif this_target != target_col_name:  # If target column name differs
+        print(f"{BackgroundColors.YELLOW}Warning: target column name mismatch: {f} uses {this_target} while others use {target_col_name}. Trying to proceed by renaming.{Style.RESET_ALL}")  # Print warning
+        df_clean = df_clean.rename(columns={this_target: target_col_name})  # Rename the column
+
+    return (target_col_name, df_clean)  # Return updated values
+
+
 def intersect_features(common_features, feat_cols, config=None):
     """
     Intersect features with common features set.
