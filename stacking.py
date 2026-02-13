@@ -129,6 +129,45 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+def combine_dataset_files(files_list, config=None):
+    """
+    Load, preprocess and combine multiple dataset CSVs into a single DataFrame.
+
+    :param files_list: List of dataset CSV file paths to combine
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Combined DataFrame with aligned features and target, or None if no compatible files found
+    """
+    
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Combining dataset files: {BackgroundColors.CYAN}{files_list}{Style.RESET_ALL}",
+        config=config
+    )  # Output the verbose message
+
+    processed_files = []  # Initialize list for processed file data
+    for f in files_list:  # Iterate over each file in the list
+        result = process_single_file(f, config=config)  # Process the single file
+        if result is not None:  # If processing succeeded
+            df_clean, target_col, feat_cols = result  # Unpack the result
+            processed_files.append((f, df_clean, target_col, feat_cols))  # Add to processed list
+
+    if not processed_files:  # If no files were processed successfully
+        print(f"{BackgroundColors.RED}No compatible files found to combine for dataset: {files_list}.{Style.RESET_ALL}")  # Print error
+        return None  # Return None
+
+    common_features, target_col_name, dfs = find_common_features_and_target(processed_files, config=config)  # Find common features and target
+    if common_features is None:  # If finding common features failed
+        print(f"{BackgroundColors.RED}No valid target column found.{Style.RESET_ALL}")  # Print error
+        return None  # Return None
+
+    reduced_dfs = create_reduced_dataframes(dfs, common_features, target_col_name, config=config)  # Create reduced dataframes
+    combined = combine_and_clean_dataframes(reduced_dfs, config=config)  # Combine and clean the dataframes
+
+    return combined, target_col_name  # Return the combined dataframe and target column name
+
+
 def find_data_augmentation_file(original_file_path, config=None):
     """
     Find the corresponding data augmentation file for an original CSV file.
