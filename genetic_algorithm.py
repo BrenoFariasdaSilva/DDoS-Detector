@@ -2245,6 +2245,38 @@ def calculate_hypervolume(pareto_front, reference_point=(0.0, -100.0)):
         return 0.0  # Return zero hypervolume
 
 
+def calculate_population_diversity(population):
+    """
+    Calculate population diversity using average pairwise Hamming distance.
+
+    :param population: List of DEAP individuals (binary feature masks)
+    :return: Average Hamming distance as float, or 0.0 if calculation fails
+    """
+
+    if not population or len(population) < 2:  # If population too small
+        return 0.0  # Return zero diversity
+
+    try:  # Attempt diversity calculation
+        total_distance = 0.0  # Initialize total distance accumulator
+        comparisons = 0  # Initialize comparison counter
+
+        for i in range(len(population)):  # Iterate over first individual
+            for j in range(i + 1, len(population)):  # Iterate over second individual (avoid duplicates)
+                ind1, ind2 = population[i], population[j]  # Get pair of individuals
+                if len(ind1) != len(ind2):  # Skip if different lengths
+                    continue  # Move to next pair
+                hamming_dist = sum(g1 != g2 for g1, g2 in zip(ind1, ind2))  # Calculate Hamming distance
+                total_distance += hamming_dist  # Add to total
+                comparisons += 1  # Increment comparison counter
+
+        if comparisons > 0:  # If valid comparisons made
+            return total_distance / comparisons  # Return average Hamming distance
+        else:  # If no valid comparisons
+            return 0.0  # Return zero diversity
+    except Exception:  # If any error occurs
+        return 0.0  # Return zero diversity
+
+
 def plot_ga_convergence(
     csv_path, pop_size, run, fitness_history, dataset_name=None, n_generations=None, cxpb=0.5, mutpb=0.2
 ):
