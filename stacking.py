@@ -3901,7 +3901,7 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
         )  # Output error
         return None  # Return None
 
-    X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X_full, y)  # Scale and split data
+    X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X_full, y, config=config)  # Scale and split data
 
     y_train_arr = np.asarray(y_train)  # Convert training target to numpy array
     y_test_arr = np.asarray(y_test)  # Convert test target to numpy array
