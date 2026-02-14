@@ -786,24 +786,19 @@ def parse_args():
 
     p = argparse.ArgumentParser(description="DRCGAN-like WGAN-GP for CICDDoS2019 features")  # Create argument parser
     
-    # Configuration file
     p.add_argument("--config", type=str, default=None, help="Path to configuration YAML file (default: config.yaml)")  # Add config file argument
     
-    # Execution control
     p.add_argument("--verbose", action="store_true", help="Enable verbose output messages")  # Add verbose argument
     p.add_argument("--no_sound", action="store_true", help="Disable sound notification")  # Add no sound argument
     
-    # Mode and data
     p.add_argument("--mode", choices=["train", "gen", "both"], default=None, help="Mode: train, gen, or both")  # Add mode argument
     p.add_argument("--csv_path", type=str, default=None, help="Path to CSV training data")  # Add CSV path argument
     p.add_argument("--label_col", type=str, default=None, help="Column name for class label")  # Add label column argument
     p.add_argument("--feature_cols", nargs="+", default=None, help="List of feature column names")  # Add feature columns argument
     
-    # Paths
     p.add_argument("--out_dir", type=str, default=None, help="Output directory for models/logs")  # Add output directory argument
     p.add_argument("--logs_dir", type=str, default=None, help="Directory for log files")  # Add logs directory argument
     
-    # Training hyperparameters
     p.add_argument("--epochs", type=int, default=None, help="Number of training epochs")  # Add epochs argument
     p.add_argument("--batch_size", type=int, default=None, help="Training batch size")  # Add batch size argument
     p.add_argument("--critic_steps", type=int, default=None, help="Discriminator updates per generator update")  # Add critic steps argument
@@ -820,19 +815,16 @@ def parse_args():
     p.add_argument("--compile", action="store_true", help="Use torch.compile()")  # Add compile argument
     p.add_argument("--from_scratch", action="store_true", help="Train from scratch")  # Add from_scratch argument
     
-    # Generator architecture
     p.add_argument("--latent_dim", type=int, default=None, help="Noise vector dimensionality")  # Add latent_dim argument
     p.add_argument("--g_hidden", nargs="+", type=int, default=None, help="Generator hidden layer sizes")  # Add g_hidden argument
     p.add_argument("--g_embed_dim", type=int, default=None, help="Generator label embedding dim")  # Add g_embed_dim argument
     p.add_argument("--n_resblocks", type=int, default=None, help="Number of residual blocks")  # Add n_resblocks argument
     p.add_argument("--g_leaky_relu_alpha", type=float, default=None, help="Generator LeakyReLU alpha")  # Add g_leaky_relu_alpha argument
     
-    # Discriminator architecture
     p.add_argument("--d_hidden", nargs="+", type=int, default=None, help="Discriminator hidden layer sizes")  # Add d_hidden argument
     p.add_argument("--d_embed_dim", type=int, default=None, help="Discriminator label embedding dim")  # Add d_embed_dim argument
     p.add_argument("--d_leaky_relu_alpha", type=float, default=None, help="Discriminator LeakyReLU alpha")  # Add d_leaky_relu_alpha argument
     
-    # Generation
     p.add_argument("--checkpoint", type=str, default=None, help="Generator checkpoint path")  # Add checkpoint argument
     p.add_argument("--n_samples", type=float, default=None, help="Number/percentage of samples to generate")  # Add n_samples argument
     p.add_argument("--gen_label", type=int, default=None, help="Specific class ID to generate")  # Add gen_label argument
@@ -840,10 +832,8 @@ def parse_args():
     p.add_argument("--gen_batch_size", type=int, default=None, help="Generation batch size")  # Add gen_batch_size argument
     p.add_argument("--feature_dim", type=int, default=None, help="Feature dimensionality")  # Add feature_dim argument
     
-    # DataLoader
     p.add_argument("--num_workers", type=int, default=None, help="Number of DataLoader workers")  # Add num_workers argument
     
-    # Dataset preprocessing
     p.add_argument("--remove_zero_variance", action="store_true", help="Remove zero-variance features")  # Add remove_zero_variance argument
     p.add_argument("--no_remove_zero_variance", action="store_true", help="Don't remove zero-variance features")  # Add no_remove_zero_variance argument
     
@@ -860,13 +850,11 @@ def args_to_config_overrides(args):
 
     overrides = {}  # Initialize overrides dictionary
     
-    # Execution
     if args.verbose:  # If verbose flag set
         overrides.setdefault("execution", {})["verbose"] = True  # Enable verbose
     if args.no_sound:  # If no_sound flag set
         overrides.setdefault("sound", {})["enabled"] = False  # Disable sound
     
-    # WGAN-GP core
     if args.mode is not None:  # If mode specified
         overrides.setdefault("wgangp", {})["mode"] = args.mode  # Set mode
     if args.csv_path is not None:  # If csv_path specified
@@ -882,13 +870,11 @@ def args_to_config_overrides(args):
     if args.from_scratch:  # If from_scratch flag set
         overrides.setdefault("wgangp", {})["from_scratch"] = True  # Enable from_scratch
     
-    # Paths
     if args.out_dir is not None:  # If out_dir specified
         overrides.setdefault("paths", {})["out_dir"] = args.out_dir  # Set out_dir
     if args.logs_dir is not None:  # If logs_dir specified
         overrides.setdefault("paths", {})["logs_dir"] = args.logs_dir  # Set logs_dir
     
-    # Training
     if args.epochs is not None:  # If epochs specified
         overrides.setdefault("training", {})["epochs"] = args.epochs  # Set epochs
     if args.batch_size is not None:  # If batch_size specified
@@ -914,7 +900,6 @@ def args_to_config_overrides(args):
     if args.compile:  # If compile flag set
         overrides.setdefault("training", {})["compile"] = True  # Enable compile
     
-    # Generator
     if args.latent_dim is not None:  # If latent_dim specified
         overrides.setdefault("generator", {})["latent_dim"] = args.latent_dim  # Set latent_dim
     if args.g_hidden is not None:  # If g_hidden specified
@@ -926,7 +911,6 @@ def args_to_config_overrides(args):
     if args.g_leaky_relu_alpha is not None:  # If g_leaky_relu_alpha specified
         overrides.setdefault("generator", {})["leaky_relu_alpha"] = args.g_leaky_relu_alpha  # Set leaky_relu_alpha
     
-    # Discriminator
     if args.d_hidden is not None:  # If d_hidden specified
         overrides.setdefault("discriminator", {})["hidden_dims"] = args.d_hidden  # Set hidden_dims
     if args.d_embed_dim is not None:  # If d_embed_dim specified
@@ -934,7 +918,6 @@ def args_to_config_overrides(args):
     if args.d_leaky_relu_alpha is not None:  # If d_leaky_relu_alpha specified
         overrides.setdefault("discriminator", {})["leaky_relu_alpha"] = args.d_leaky_relu_alpha  # Set leaky_relu_alpha
     
-    # Generation
     if args.checkpoint is not None:  # If checkpoint specified
         overrides.setdefault("generation", {})["checkpoint"] = args.checkpoint  # Set checkpoint
     if args.n_samples is not None:  # If n_samples specified
@@ -948,11 +931,9 @@ def args_to_config_overrides(args):
     if args.feature_dim is not None:  # If feature_dim specified
         overrides.setdefault("generation", {})["feature_dim"] = args.feature_dim  # Set feature_dim
     
-    # DataLoader
     if args.num_workers is not None:  # If num_workers specified
         overrides.setdefault("dataloader", {})["num_workers"] = args.num_workers  # Set num_workers
     
-    # Dataset
     if args.remove_zero_variance:  # If remove_zero_variance flag set
         overrides.setdefault("dataset", {})["remove_zero_variance"] = True  # Enable remove_zero_variance
     if args.no_remove_zero_variance:  # If no_remove_zero_variance flag set
