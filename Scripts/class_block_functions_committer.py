@@ -353,20 +353,20 @@ def extract_methods_between(text, classname, start_name, end_name):
 def normalize_method_separators(content):
     """
     Normalizes spacing between method definitions to exactly 2 empty lines (3 newlines).
-    
+
     :param content: The file content to normalize
     :return: Content with standardized method separators
     """
-    
+
     verbose_output(f"{BackgroundColors.GREEN}Normalizing method separators to exactly 2 empty lines...{Style.RESET_ALL}")
+
+    pattern = re.compile(
+        r"\n(?:[ \t]*\n)+(?=[ \t]*(?:async\s+)?def\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\()"
+    )  # Pattern to match 2 or more newlines before a method definition, allowing for optional whitespace and async
+
+    normalized = pattern.sub(FUNCTION_SEPARATOR, content)  # Replace with the standardized separator
     
-    pattern = r"\n{2,}([ \t]+def\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\()"  # Pattern to find method definitions preceded by 2 or more newlines
-    
-    normalized = re.sub(pattern, FUNCTION_SEPARATOR + r"\1", content)  # Replace with standardized separator followed by the method definition
-    
-    verbose_output(f"{BackgroundColors.GREEN}Method separators normalized successfully{Style.RESET_ALL}")
-    
-    return normalized  # Return the content with normalized method separators
+    return normalized  # Return the normalized content
 
 
 def write_file(path, content):
