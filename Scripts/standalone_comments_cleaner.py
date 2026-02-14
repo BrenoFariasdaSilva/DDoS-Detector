@@ -96,6 +96,7 @@ FILES = [
     "Scripts/functions_committer.py",
     "Scripts/function_order_validator.py",
     "Scripts/imports_placement.py",
+    "Scripts/main-template.py",
     "Scripts/readme_sections_committer.py",
     "Scripts/unused_functions_finder.py",
 ]  # List of Python files to clean (e.g., ["main.py", "logger.py"])
