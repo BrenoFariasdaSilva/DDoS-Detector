@@ -146,91 +146,38 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
-def validate_markers(start_name, end_name, text):
+def extract_methods_between(text, classname, start_name, end_name):
     """
-    Validate that START_FUNCTION and END_FUNCTION are provided and exist in the file.
-
-    :param start_name: The name of the first function to include
-    :param end_name: The name of the last function to include
-    :param text: The full text content of the Python file
-    :return: True if validation passes, False otherwise
-    """
-    
-    verbose_output(f"{BackgroundColors.GREEN}Validating START_FUNCTION and END_FUNCTION markers...{Style.RESET_ALL}")
-
-    problems = []  # List to collect validation problems
-    if not start_name or not end_name:  # If either marker is not set
-        problems.append("Both START_FUNCTION and END_FUNCTION must be set to function names.")  # Add problem if markers are not set
-
-    pattern = r"^def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\("  # Regex pattern to find top-level function names
-    found_names = [m.group(1) for m in re.finditer(pattern, text, flags=re.MULTILINE)]  # Extract all top-level function names from the file
-
-    if start_name and start_name not in found_names:  # If START_FUNCTION is set but not found in the file
-        problems.append(f"START_FUNCTION '{start_name}' not found in {FILE_PATH.name}.")  # Add problem if START_FUNCTION is not found
-    if end_name and end_name not in found_names:  # If END_FUNCTION is set but not found in the file
-        problems.append(f"END_FUNCTION '{end_name}' not found in {FILE_PATH.name}.")  # Add problem if END_FUNCTION is not found
-
-    if problems:  # If there are any validation problems, print them and return False
-        print(f"{BackgroundColors.RED}Validation error with START/END function markers:{Style.RESET_ALL}")
-        for p in problems:  # Print each problem in the validation
-            print(f"{BackgroundColors.YELLOW}- {p}{Style.RESET_ALL}")
-
-        if found_names:  # If there are any top-level functions found, list them to help the user
-            print(f"{BackgroundColors.GREEN}Available top-level functions in the file:{BackgroundColors.CYAN} {', '.join(found_names)}{Style.RESET_ALL}")
-        else:  # If no top-level functions were found, inform the user
-            print(f"{BackgroundColors.YELLOW}No top-level functions were detected in {FILE_PATH.name}.{Style.RESET_ALL}")
-
-        print(f"{BackgroundColors.GREEN}Please set `START_FUNCTION` and `END_FUNCTION` to valid function names before running the script.{Style.RESET_ALL}")
-        return False  # Validation failed
-
-    return True  # Validation passed
-
-
-def run_git_commit(function_name: str):
-    """
-    Executes Git add and commit commands for the target file.
-
-    :param function_name: The name of the function being committed
-    :return: None
-    """
-
-    commit_msg = f"{COMMIT_PREFIX} {function_name} function to {FILE_PATH.name}"  # Create the commit message
-
-    verbose_output(f"{BackgroundColors.GREEN}Running Git add for: {BackgroundColors.CYAN}{FILE_PATH}{Style.RESET_ALL}")
-
-    absolute_file_path = FILE_PATH.resolve()  # Resolve FILE_PATH to an absolute path
-    git_dir = absolute_file_path.parent  # Get the directory containing the file
-
-    subprocess.run(["git", "-C", str(git_dir), "add", str(absolute_file_path)], check=True)  # Stage the file
-
-    verbose_output(f"{BackgroundColors.GREEN}Running Git commit with message: {BackgroundColors.CYAN}{commit_msg}{Style.RESET_ALL}")
-
-    subprocess.run(["git", "-C", str(git_dir), "commit", "-m", commit_msg], check=True)  # Commit the changes
-
-
-def extract_functions_between(text, start_name, end_name):
-    """
-    Extracts all top-level functions between two specified function names.
+    Extracts all methods between two specified method names within a class.
 
     :param text: The full text content of the Python file
-    :param start_name: The name of the first function to include
-    :param end_name: The name of the last function to include
-    :return: Tuple of (prefix_text, suffix_text, list_of_functions)
-             Each function in the list is a tuple: (name, code, start_pos, end_pos)
+    :param classname: The name of the class containing the methods
+    :param start_name: The name of the first method to include
+    :param end_name: The name of the last method to include
+    :return: Tuple of (prefix_text, suffix_text, list_of_methods)
+             Each method in the list is a tuple: (name, code, start_pos, end_pos)
     """
 
-    verbose_output(f"{BackgroundColors.GREEN}Extracting functions between {BackgroundColors.CYAN}{start_name}{BackgroundColors.GREEN} and {BackgroundColors.CYAN}{end_name}{Style.RESET_ALL}")
+    verbose_output(f"{BackgroundColors.GREEN}Extracting methods from class {BackgroundColors.CYAN}{classname}{BackgroundColors.GREEN} between {BackgroundColors.CYAN}{start_name}{BackgroundColors.GREEN} and {BackgroundColors.CYAN}{end_name}{Style.RESET_ALL}")
     
-    pattern = r"^def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(.*?\):.*?(?=^def\s|\Z)"  # Regex pattern for top-level defs
-    matches = list(re.finditer(pattern, text, flags=re.DOTALL | re.MULTILINE))  # Find all matches
-    funcs = [(m.group(1), m.group(0), m.start(), m.end()) for m in matches]  # Extract function details
-    start_idx = next(i for i, f in enumerate(funcs) if f[0] == start_name)  # Find start function index
-    end_idx = next(i for i, f in enumerate(funcs) if f[0] == end_name)  # Find end function index
-    selected = funcs[start_idx:end_idx + 1]  # Get all functions in range (inclusive)
-    prefix = text[:selected[0][2]]  # Text before the first selected function
-    suffix = text[selected[-1][3]:]  # Text after the last selected function
+    methods = extract_class_methods(text, classname)  # Extract all methods from the class
     
-    verbose_output(f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{len(selected)}{BackgroundColors.GREEN} functions between markers{Style.RESET_ALL}")
+    if not methods:  # If no methods were found
+        verbose_output(f"{BackgroundColors.RED}No methods found in class '{classname}'{Style.RESET_ALL}")
+        return text, "", []  # Return original text with no methods to process
+    
+    start_idx = next((i for i, m in enumerate(methods) if m[0] == start_name), None)  # Find start method index
+    end_idx = next((i for i, m in enumerate(methods) if m[0] == end_name), None)  # Find end method index
+    
+    if start_idx is None or end_idx is None:  # If either marker was not found
+        verbose_output(f"{BackgroundColors.RED}Could not find START_FUNCTION or END_FUNCTION in class methods{Style.RESET_ALL}")
+        return text, "", []  # Return original text with no methods to process
+    
+    selected = methods[start_idx:end_idx + 1]  # Get all methods in range (inclusive)
+    prefix = text[:selected[0][2]]  # Text before the first selected method
+    suffix = text[selected[-1][3]:]  # Text after the last selected method
+    
+    verbose_output(f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{len(selected)}{BackgroundColors.GREEN} methods between markers{Style.RESET_ALL}")
     
     return prefix, suffix, selected  # Return the components
 
