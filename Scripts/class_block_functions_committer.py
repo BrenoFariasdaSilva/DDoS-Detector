@@ -504,6 +504,12 @@ def main():
         print(f"{BackgroundColors.RED}No methods found to process. Exiting.{Style.RESET_ALL}")  # Output error message
         return  # Exit the function
     
+    prefix = prefix.rstrip('\n')  # Remove all trailing newlines from prefix
+    if prefix:  # If prefix has content
+        prefix += '\n\n\n'  # Add exactly 2 empty lines before first method
+    
+    suffix = suffix.lstrip('\n')  # Remove all leading newlines from suffix
+    
     verbose_output(f"{BackgroundColors.YELLOW}Removing {BackgroundColors.CYAN}{len(methods)}{BackgroundColors.YELLOW} methods from the file...{Style.RESET_ALL}")  # Output removal message
     
     write_file(FILE_PATH, prefix + suffix)  # Write the file without the target methods
@@ -517,8 +523,8 @@ def main():
         code = code.strip("\n")  # Remove all surrounding blank lines safely
         
         if current_body:  # If there is already content in the body
-            current_body = code + FUNCTION_SEPARATOR + current_body.lstrip("\n")  # Add method with separator
-        else:  # If this is the first method being added
+            current_body = code + FUNCTION_SEPARATOR + current_body  # Add method with exactly 2 empty lines separator
+        else:  # If this is the first method being added (last in file order)
             current_body = code + FUNCTION_SEPARATOR  # Add method with separator at the end
             
         new_content = prefix + current_body + suffix  # Construct the new file content
