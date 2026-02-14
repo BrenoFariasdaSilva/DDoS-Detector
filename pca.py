@@ -318,13 +318,11 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
     :return: X_train, X_test, y_train, y_test, scaler
     """
 
-    # Perform the train/test split first to avoid data leakage
     stratify_param = y if len(np.unique(y)) > 1 else None
     X_train_df, X_test_df, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=random_state, stratify=stratify_param
     )
 
-    # Fit the scaler on the training data only, then transform both partitions
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train_df)
     X_test = scaler.transform(X_test_df)
@@ -431,7 +429,6 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
         fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # Calculate False Positive Rate
         fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # Calculate False Negative Rate
 
-    # Attach scaler and trained classifier for export
     scaler_export = StandardScaler().fit(np.vstack([X_train, X_test]))
     
     try:  # Try to get trained classifier parameters
@@ -625,11 +622,9 @@ def save_pca_results(csv_path, all_results):
 
     rows = []  # List to store one normalized row per result
     
-    # Fallback evaluator hyperparameters (used only if trained classifier params unavailable)
     evaluator_fallback = {"model": "RandomForestClassifier", "n_estimators": 100, "random_state": 42, "n_jobs": -1}
     cv_method = "StratifiedKFold(n_splits=10)"
     for results in all_results:
-        # Prefer hyperparameters from the trained classifier attached to `results`.
         eval_params = None
         trained_clf = results.get("trained_classifier")
         if trained_clf is not None:
@@ -638,7 +633,6 @@ def save_pca_results(csv_path, all_results):
             except Exception:
                 eval_params = None
 
-        # Build a single normalized row with canonical fields
         row = {
             "timestamp": datetime.datetime.now().strftime("%Y-%m-%d_%H_%M_%S"),
             "tool": "PCA",
@@ -668,30 +662,25 @@ def save_pca_results(csv_path, all_results):
     comparison_df = pd.DataFrame(rows)  # Create DataFrame from rows
     csv_output = f"{output_dir}/PCA_Results.csv"  # Output CSV path
 
-    # If existing file present, read and backfill timestamp if missing, then concat
     if os.path.exists(csv_output):
         try:
             df_existing = pd.read_csv(csv_output, dtype=str)
-            # Backfill timestamp for legacy files without timestamp column
             if "timestamp" not in df_existing.columns:
                 mtime = os.path.getmtime(csv_output)
                 back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")
                 df_existing["timestamp"] = back_ts
 
-            # Ensure all expected columns exist in existing dataframe
             for c in PCA_RESULTS_CSV_COLUMNS:
                 if c not in df_existing.columns:
                     df_existing[c] = None
 
             df_combined = pd.concat([df_existing[PCA_RESULTS_CSV_COLUMNS], comparison_df], ignore_index=True, sort=False)
 
-            # Sort newest -> oldest by timestamp and reindex to canonical order
             try:
                 df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")
                 df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)
                 df_combined = df_combined.drop(columns=["timestamp_dt"])
             except Exception:
-                # Fallback: string-sort (format chosen is lexicographically sortable)
                 df_combined = df_combined.sort_values(by="timestamp", ascending=False)
 
             df_out = df_combined.reset_index(drop=True)
@@ -758,7 +747,6 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
     :return: None
     """
 
-    # --- SKIP_TRAIN_IF_MODEL_EXISTS logic ---
     global SKIP_TRAIN_IF_MODEL_EXISTS
     models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/PCA/Models/"
     base_name = Path(csv_path).stem
