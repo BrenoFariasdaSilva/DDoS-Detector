@@ -150,42 +150,34 @@ def parse_cli_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )  # Create argument parser
 
-    # Dataset arguments:
     parser.add_argument("--csv-path", type=str, help="Path to CSV dataset file or directory")  # CSV path argument
     parser.add_argument("--files-to-ignore", type=str, nargs="*", help="List of files to ignore")  # Files to ignore
     parser.add_argument("--test-size", type=float, help="Test set size (0.0-1.0)")  # Test size argument
 
-    # Execution arguments:
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")  # Verbose flag
     parser.add_argument("--runs", type=int, help="Number of GA runs")  # Number of runs
     parser.add_argument("--skip-train", action="store_true", help="Skip training if model exists")  # Skip training flag
     parser.add_argument("--no-resume", action="store_true", help="Disable progress resumption")  # Disable resume flag
     parser.add_argument("--no-sound", action="store_true", help="Disable sound notification")  # Disable sound flag
 
-    # GA hyperparameters:
     parser.add_argument("--n-generations", type=int, help="Number of GA generations")  # Generations argument
     parser.add_argument("--min-pop", type=int, help="Minimum population size")  # Minimum population
     parser.add_argument("--max-pop", type=int, help="Maximum population size")  # Maximum population
     parser.add_argument("--cxpb", type=float, help="Crossover probability")  # Crossover probability
     parser.add_argument("--mutpb", type=float, help="Mutation probability")  # Mutation probability
 
-    # Cross-validation arguments:
     parser.add_argument("--cv-folds", type=int, help="Number of cross-validation folds")  # CV folds argument
 
-    # Early stopping arguments:
     parser.add_argument("--early-stop-acc", type=float, help="Early stop accuracy threshold")  # Early stop threshold
     parser.add_argument("--early-stop-folds", type=int, help="Early stop folds")  # Early stop folds
     parser.add_argument("--early-stop-gens", type=int, help="Early stop generations")  # Early stop generations
 
-    # Multiprocessing arguments:
     parser.add_argument("--n-jobs", type=int, help="Number of parallel jobs (-1 for all)")  # N jobs argument
     parser.add_argument("--cpu-processes", type=int, help="Initial CPU processes")  # CPU processes argument
 
-    # Resource monitor arguments:
     parser.add_argument("--no-monitor", action="store_true", help="Disable resource monitoring")  # Disable monitor
     parser.add_argument("--monitor-interval", type=int, help="Monitor interval in seconds")  # Monitor interval
 
-    # Config file argument:
     parser.add_argument("--config", type=str, help="Path to configuration file (YAML or .env)")  # Config file path
 
     return parser.parse_args()  # Parse and return arguments
@@ -933,7 +925,6 @@ def update_progress_bar(
     if progress_bar is None:  # If no progress bar is provided
         return  # Do nothing
     try:  # Try to update the progress bar
-        # Build run info as part of description (not postfix)
         run_str = (
             f"{BackgroundColors.GREEN}Run {BackgroundColors.CYAN}{run}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{runs}{BackgroundColors.GREEN}"
             if run is not None and runs is not None
@@ -1897,7 +1888,6 @@ def load_and_apply_generation_state(toolbox, population, output_dir, state_id, r
                     if recreated:  # If recreation succeeded
                         population[:] = recreated  # Replace the population with recreated one
 
-                    # Load fitness history with backward compatibility (handle both list and dict formats)
                     fitness_history_raw = payload.get("fitness_history", [])  # Get fitness history from payload
                     if isinstance(fitness_history_raw, dict):  # If new format (dict with extended history)
                         fitness_history = fitness_history_raw  # Use as-is
@@ -1936,7 +1926,6 @@ def save_generation_state(output_dir, state_id, gen, population, hof_best, histo
     try:  # Attempt to save the generation state
         gen_path, _ = state_file_paths(output_dir, state_id)  # Get the path for the generation state file
 
-        # Handle both old (list) and new (dict) formats for history_data
         if isinstance(history_data, dict):  # If new format (extended history)
             fitness_history_to_save = history_data  # Save the full dict
         elif isinstance(history_data, list):  # If old format (just F1 scores)
@@ -2026,7 +2015,6 @@ def run_genetic_algorithm_loop(
         toolbox, population, output_dir, state_id, run=run
     )  # Load and apply saved generation state if available, updating start generation and history
 
-    # Initialize history tracking from loaded state or start fresh
     fitness_history = loaded_history.get("best_f1", []) if isinstance(loaded_history, dict) else []  # Best F1 scores
     best_features_history = loaded_history.get("best_features", []) if isinstance(loaded_history, dict) else []  # Best feature counts
     avg_f1_history = loaded_history.get("avg_f1", []) if isinstance(loaded_history, dict) else []  # Population avg F1
@@ -2110,7 +2098,6 @@ def run_genetic_algorithm_loop(
         except Exception:  # If conversion fails
             fitness_history.append(np.nan)  # Record NaN
 
-        # Track extended metrics for comprehensive convergence plots
         try:  # Track number of features in best individual
             best_features_history.append(
                 int(current_best_num_features) if current_best_num_features is not None else 0
@@ -2178,7 +2165,6 @@ def run_genetic_algorithm_loop(
 
         try:  # Persist per-generation progress so runs can be resumed (every N gens to reduce I/O)
             if CONFIG["execution"]["resume_progress"] and state_id is not None and (gen % CONFIG["execution"]["progress_save_interval"] == 0 or gen == n_generations):  # Use configured interval
-                # Build current history data dict for state persistence
                 current_history_data = {
                     "best_f1": fitness_history,  # Best F1 scores up to current generation
                     "best_features": best_features_history,  # Best feature counts up to current generation
@@ -2194,7 +2180,6 @@ def run_genetic_algorithm_loop(
         except Exception:  # If saving fails
             pass  # Do nothing
 
-    # Prepare comprehensive history data for convergence plots
     history_data = {
         "best_f1": fitness_history,  # Best F1 score per generation (backward compatible)
         "best_features": best_features_history,  # Best feature count per generation
@@ -2464,7 +2449,6 @@ def generate_convergence_plots(
     saved_plots = []  # List to track all saved plot paths
 
     try:  # Attempt to generate all convergence plots
-        # Extract history data with backward compatibility
         best_f1_history = history_data.get("best_f1", [])  # Best F1 score per generation
         best_features_history = history_data.get("best_features", [])  # Best feature count per generation
         avg_f1_history = history_data.get("avg_f1", [])  # Average F1 score per generation
@@ -2491,7 +2475,6 @@ def generate_convergence_plots(
 
         generations = list(range(1, n_gens + 1))  # Generate list of generation numbers starting from 1
 
-        # Plot 1: Generation vs Best F1-score
         if best_f1_history:  # If best F1 history exists
             try:  # Try to create plot
                 plt.figure(figsize=(10, 6))  # Create figure with 10x6 dimensions
@@ -2508,7 +2491,6 @@ def generate_convergence_plots(
             except Exception:  # If plotting fails
                 plt.close()  # Close plot to free memory
 
-        # Plot 2: Generation vs Number of Selected Features
         if best_features_history:  # If best features history exists
             try:  # Try to create plot
                 plt.figure(figsize=(10, 6))  # Create figure with 10x6 dimensions
@@ -2525,7 +2507,6 @@ def generate_convergence_plots(
             except Exception:  # If plotting fails
                 plt.close()  # Close plot
 
-        # Plot 3: Generation vs Pareto Front Size
         if pareto_size_history:  # If Pareto size history exists
             try:  # Try to create plot
                 plt.figure(figsize=(10, 6))  # Create figure
@@ -2542,7 +2523,6 @@ def generate_convergence_plots(
             except Exception:  # If plotting fails
                 plt.close()  # Close plot
 
-        # Plot 4: Generation vs Population Average F1-score
         if avg_f1_history:  # If average F1 history exists
             try:  # Try to create plot
                 plt.figure(figsize=(10, 6))  # Create figure
@@ -2559,7 +2539,6 @@ def generate_convergence_plots(
             except Exception:  # If plotting fails
                 plt.close()  # Close plot
 
-        # Plot 5: Generation vs Population Average Feature Count
         if avg_features_history:  # If average features history exists
             try:  # Try to create plot
                 plt.figure(figsize=(10, 6))  # Create figure
@@ -2576,7 +2555,6 @@ def generate_convergence_plots(
             except Exception:  # If plotting fails
                 plt.close()  # Close plot
 
-        # Plot 6: Hypervolume / Pareto Quality Indicator
         if hypervolume_history:  # If hypervolume history exists
             try:  # Try to create plot
                 plt.figure(figsize=(10, 6))  # Create figure
@@ -2593,7 +2571,6 @@ def generate_convergence_plots(
             except Exception:  # If plotting fails
                 plt.close()  # Close plot
 
-        # Plot 7: Diversity Metric
         if diversity_history:  # If diversity history exists
             try:  # Try to create plot
                 plt.figure(figsize=(10, 6))  # Create figure
@@ -2610,7 +2587,6 @@ def generate_convergence_plots(
             except Exception:  # If plotting fails
                 plt.close()  # Close plot
 
-        # Plot 8: Combined Multi-Objective View (Best F1 vs Best Features)
         if best_f1_history and best_features_history:  # If both histories exist
             try:  # Try to create plot
                 fig, ax1 = plt.subplots(figsize=(10, 6))  # Create figure with primary axis
@@ -2944,11 +2920,9 @@ def aggregate_run_metrics(run_result):
         history_data = run_result.get("history_data", {})  # Get history data dict
         gens_ran = run_result.get("gens_ran", 0)  # Get generations executed
 
-        # Extract final metrics from last evaluation
         best_f1_final = metrics[3] if len(metrics) > 3 else 0.0  # Final F1 score from test evaluation
         features_final = len(run_result.get("best_features", []))  # Final feature count
 
-        # Extract history-based metrics (handle both dict and missing data gracefully)
         if isinstance(history_data, dict):  # If history data is available as dict
             best_f1_history = history_data.get("best_f1", [])  # Best F1 per generation
             best_features_history = history_data.get("best_features", [])  # Best features per generation
@@ -2966,7 +2940,6 @@ def aggregate_run_metrics(run_result):
             hypervolume_history = []  # Empty list
             diversity_history = []  # Empty list
 
-        # Compute aggregated metrics from history
         avg_population_f1 = np.mean(avg_f1_history) if avg_f1_history else 0.0  # Mean of population averages
         avg_feature_count = np.mean(avg_features_history) if avg_features_history else 0.0  # Mean of feature counts
         pareto_size_final = pareto_size_history[-1] if pareto_size_history else 0  # Final Pareto front size
@@ -3012,7 +2985,6 @@ def generate_run_comparison_table(results_dict, csv_path, dataset_name, min_pop,
         comparison_dir = os.path.join(output_dir, "ga_run_comparisons")  # Subdirectory for comparison tables
         os.makedirs(comparison_dir, exist_ok=True)  # Ensure directory exists
 
-        # Build comparison data rows
         comparison_rows = []  # List to store comparison data rows
         for pop_size in range(min_pop, max_pop + 1):  # For each population size
             if pop_size not in results_dict:  # If no results for this population size
@@ -3048,25 +3020,20 @@ def generate_run_comparison_table(results_dict, csv_path, dataset_name, min_pop,
             )  # Log warning
             return None  # Return None
 
-        # Convert to DataFrame for easy CSV export
         df_comparison = pd.DataFrame(comparison_rows)  # Create DataFrame from rows
 
-        # Sort by population size and run_id for consistent ordering
         df_comparison = df_comparison.sort_values(["pop_size", "run_id"]).reset_index(drop=True)  # Sort and reset index
 
-        # Generate deterministic filename
         base_dataset_name = safe_filename(os.path.splitext(os.path.basename(csv_path))[0])  # Sanitized dataset name
         comparison_filename = f"{base_dataset_name}_multi_run_comparison.csv"  # Deterministic filename
         comparison_path = os.path.join(comparison_dir, comparison_filename)  # Full path
 
-        # Write to CSV
         df_comparison.to_csv(comparison_path, index=False)  # Save DataFrame to CSV without index
 
         verbose_output(
             f"{BackgroundColors.GREEN}Saved multi-run comparison table to {BackgroundColors.CYAN}{comparison_path}{Style.RESET_ALL}"
         )  # Log success
 
-        # Print summary statistics
         print(f"\n{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}")
         print(f"{BackgroundColors.GREEN}Multi-Run Comparison Summary for {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")
         print(f"{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}")
@@ -3117,7 +3084,6 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         base_dataset_name = safe_filename(os.path.splitext(os.path.basename(csv_path))[0])  # Sanitized dataset name
         saved_plots = []  # List to track all saved plot paths
 
-        # Extract all run data with history for plotting
         all_runs_data = []  # List to store all runs data for comparison
         for pop_size in range(min_pop, max_pop + 1):  # For each population size
             if pop_size not in results_dict:  # If no results for this population size
@@ -3151,7 +3117,6 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
             f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{total_runs}{BackgroundColors.GREEN} runs for comparison visualization{Style.RESET_ALL}"
         )  # Log run count
 
-        # PLOT A: Overlay Plot - Generation vs Best F1-score (one line per run)
         try:  # Try to create overlay plot
             plt.figure(figsize=(12, 7))  # Create figure with larger dimensions
             cmap = plt.cm.get_cmap('tab10' if total_runs <= 10 else 'tab20')  # Get colormap based on number of runs
@@ -3182,7 +3147,6 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         except Exception:  # If plotting fails
             plt.close()  # Close plot
 
-        # PLOT B1: Distribution Plot - Final Best F1-score
         try:  # Try to create distribution plot
             final_f1_scores = [run["final_f1"] for run in all_runs_data]  # Extract final F1 scores
             
@@ -3203,7 +3167,6 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         except Exception:  # If plotting fails
             plt.close()  # Close plot
 
-        # PLOT B2: Distribution Plot - Final Feature Count
         try:  # Try to create distribution plot
             final_features = [run["final_features"] for run in all_runs_data]  # Extract final feature counts
             
@@ -3224,7 +3187,6 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         except Exception:  # If plotting fails
             plt.close()  # Close plot
 
-        # PLOT B3: Distribution Plot - Final Hypervolume (if available)
         try:  # Try to create distribution plot
             final_hypervolumes = []  # List to store hypervolume values
             for run in all_runs_data:  # For each run
@@ -3250,7 +3212,6 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         except Exception:  # If plotting fails
             plt.close()  # Close plot
 
-        # PLOT C1: Bar Chart - Final Best F1 per run
         try:  # Try to create bar chart
             run_labels = [f"P{run['pop_size']}_R{run['run_id']}" for run in all_runs_data]  # Create run labels
             final_f1_scores = [run["final_f1"] for run in all_runs_data]  # Extract final F1 scores
@@ -3258,7 +3219,6 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
             plt.figure(figsize=(max(12, total_runs * 0.4), 6))  # Create figure with width scaled to number of runs
             bars = plt.bar(range(len(run_labels)), final_f1_scores, color="#1f77b4", alpha=0.7, edgecolor="black")  # Create bar chart
             
-            # Color bars by performance (top 25% green, bottom 25% red)
             sorted_f1 = sorted(final_f1_scores)  # Sort F1 scores
             threshold_high = sorted_f1[int(0.75 * len(sorted_f1))] if len(sorted_f1) > 4 else max(sorted_f1)  # Top 25% threshold
             threshold_low = sorted_f1[int(0.25 * len(sorted_f1))] if len(sorted_f1) > 4 else min(sorted_f1)  # Bottom 25% threshold
@@ -3282,7 +3242,6 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         except Exception:  # If plotting fails
             plt.close()  # Close plot
 
-        # PLOT C2: Bar Chart - Final Feature Count per run
         try:  # Try to create bar chart
             run_labels = [f"P{run['pop_size']}_R{run['run_id']}" for run in all_runs_data]  # Create run labels
             final_features = [run["final_features"] for run in all_runs_data]  # Extract final feature counts
@@ -3302,7 +3261,6 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         except Exception:  # If plotting fails
             plt.close()  # Close plot
 
-        # PLOT C3: Bar Chart - Final Hypervolume per run (if available)
         try:  # Try to create bar chart
             run_info_with_hv = []  # List to store runs with hypervolume data
             for run in all_runs_data:  # For each run
@@ -3332,9 +3290,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         except Exception:  # If plotting fails
             plt.close()  # Close plot
 
-        # PLOT D: Aggregated Convergence Plot - Mean ± Std Dev Best F1-score per generation
         try:  # Try to create aggregated convergence plot
-            # Collect all best F1 histories and align by generation
             all_f1_histories = []  # List to store all F1 histories
             max_gens = 0  # Track maximum generation count
             
@@ -3345,7 +3301,6 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                     max_gens = max(max_gens, len(best_f1_history))  # Update max generations
 
             if all_f1_histories and max_gens > 0:  # If any F1 histories collected
-                # Align all histories to same length (pad shorter ones with their last value)
                 aligned_histories = []  # List to store aligned histories
                 for history in all_f1_histories:  # For each history
                     if len(history) < max_gens:  # If shorter than max
@@ -3354,7 +3309,6 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                     else:  # If already at max length
                         aligned_histories.append(history)  # Add as is
 
-                # Compute mean and std dev per generation
                 histories_array = np.array(aligned_histories)  # Convert to numpy array
                 mean_f1 = np.mean(histories_array, axis=0)  # Compute mean per generation
                 std_f1 = np.std(histories_array, axis=0)  # Compute std dev per generation
@@ -3376,7 +3330,6 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         except Exception:  # If plotting fails
             plt.close()  # Close plot
 
-        # PLOT E1: Scatter Plot - Best F1 vs Feature Count
         try:  # Try to create scatter plot
             final_f1_scores = [run["final_f1"] for run in all_runs_data]  # Extract final F1 scores
             final_features = [run["final_features"] for run in all_runs_data]  # Extract final feature counts
@@ -3397,9 +3350,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         except Exception:  # If plotting fails
             plt.close()  # Close plot
 
-        # PLOT E2: Correlation Heatmap of Metrics
         try:  # Try to create correlation heatmap
-            # Build metrics dataframe for correlation analysis
             metrics_data = []  # List to store metrics for each run
             for run in all_runs_data:  # For each run
                 history = run["history_data"]  # Get history data
@@ -3431,7 +3382,6 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         except Exception:  # If plotting fails
             plt.close()  # Close plot
 
-        # PLOT E3: Boxplot - F1 Score Distribution by Population Size
         try:  # Try to create boxplot
             if max_pop > min_pop:  # If multiple population sizes tested
                 pop_sizes = sorted(set(run["pop_size"] for run in all_runs_data))  # Get unique population sizes
@@ -4557,7 +4507,6 @@ def run_population_sweep(
         results, min_pop, max_pop, dataset_name
     )  # Aggregate results and find best
 
-    # Generate multi-run comparison table after all runs complete
     try:  # Attempt to generate comparison table
         generate_run_comparison_table(
             results, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb
@@ -4567,7 +4516,6 @@ def run_population_sweep(
             f"{BackgroundColors.YELLOW}Skipping comparison table generation due to error: {e}{Style.RESET_ALL}"
         )  # Log warning but continue
 
-    # Generate multi-run comparison visualization plots
     try:  # Attempt to generate comparison plots
         generate_multi_run_comparison_plots(
             results, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb
