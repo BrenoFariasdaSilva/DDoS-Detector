@@ -1031,7 +1031,6 @@ def save_tsne_3d_plot(X_emb, labels, output_path, title):
         unique = list(labels_ser.unique())  # Unique class labels (preserve order)
         for cls in unique:  # Plot each class separately
             mask = labels_ser == cls  # Boolean mask for class
-            # Cast to Any to avoid 2D Axes type stub complaints; Axes3D accepts 3 positional arrays
             cast(Any, ax).scatter(
                 X_emb[mask, 0],
                 X_emb[mask, 1],
@@ -1102,7 +1101,6 @@ def generate_tsne_plot(
 
         base = os.path.splitext(os.path.basename(filepath))[0]  # Base filename
         
-        # Generate 2D t-SNE plot
         verbose_output(
             f"{BackgroundColors.GREEN}Computing 2D t-SNE embedding for: {BackgroundColors.CYAN}{base}{Style.RESET_ALL}"
         )  # Output 2D t-SNE message
@@ -1114,7 +1112,6 @@ def generate_tsne_plot(
             f"{BackgroundColors.GREEN}Saved 2D t-SNE plot to: {BackgroundColors.CYAN}{out_path_2d}{Style.RESET_ALL}"
         )  # Output success message
         
-        # Generate 3D t-SNE plot
         verbose_output(
             f"{BackgroundColors.GREEN}Computing 3D t-SNE embedding for: {BackgroundColors.CYAN}{base}{Style.RESET_ALL}"
         )  # Output 3D t-SNE message
