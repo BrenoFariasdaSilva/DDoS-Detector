@@ -51,12 +51,17 @@ Assumptions & Notes:
 import atexit  # For playing a sound when the program finishes
 import datetime  # For getting the current date and time
 import os  # For running a command in the terminal
+import sys  # For system-specific parameters and functions
 import platform  # For getting the operating system name
 import re  # For regular expressions
 import sys  # For system-specific parameters and functions
 from colorama import Style  # For coloring the terminal
-from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
+
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)  # Project root directory
+if PROJECT_ROOT not in sys.path:  # Ensure project root is in sys.path
+    sys.path.insert(0, PROJECT_ROOT)  # Insert at the beginning
+from Logger import Logger  # For logging output to both terminal and file
 
 
 # Macros:
