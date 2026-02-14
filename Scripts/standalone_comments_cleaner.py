@@ -295,12 +295,34 @@ def main():
     """
 
     print(
-        f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Main Template Python{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
+        f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Standalone Comments Cleaner{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
         end="\n\n",
     )  # Output the welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
-    
-    # Implement logic here
+
+    if not FILES:  # Verify if FILES list is empty
+        print(
+            f"{BackgroundColors.YELLOW}No files specified in the FILES list. Please add Python files to process.{Style.RESET_ALL}"
+        )  # Output warning message
+    else:  # Process the files
+        print(
+            f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{len(FILES)}{BackgroundColors.GREEN} file(s)...{Style.RESET_ALL}",
+            end="\n\n",
+        )  # Output processing message
+
+        success_count = 0  # Initialize success counter
+        for file in FILES:  # Iterate through each file in the list
+            if verify_filepath_exists(file):  # Verify if the file exists
+                if clean_standalone_comments(file):  # Clean the file
+                    success_count += 1  # Increment success counter
+            else:  # If the file does not exist
+                print(
+                    f"{BackgroundColors.YELLOW}Skipping missing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
+                )  # Output warning message
+
+        print(
+            f"\n{BackgroundColors.GREEN}Successfully processed {BackgroundColors.CYAN}{success_count}{BackgroundColors.GREEN} out of {BackgroundColors.CYAN}{len(FILES)}{BackgroundColors.GREEN} file(s).{Style.RESET_ALL}"
+        )  # Output summary
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
