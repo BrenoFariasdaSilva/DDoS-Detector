@@ -564,7 +564,6 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
 
     le = LabelEncoder()  # Initialize a LabelEncoder
     
-    # Encode the target variable and preserve index for stratification
     encoded = le.fit_transform(y)
     y_index = getattr(y, "index", None)
     encoded_arr = np.asarray(encoded, dtype=int)
@@ -675,23 +674,18 @@ def _is_valid_combination(model_name_local, params_local):
     penalty = params_local.get("penalty")  # Get penalty parameter
     l1_ratio = params_local.get("l1_ratio", 0.0)  # Get l1_ratio parameter (default to 0.0)
 
-    # Lbfgs doesn't support l1 or elasticnet penalties
     if solver == "lbfgs" and penalty in ("l1", "elasticnet"):
         return False
     
-    # Elasticnet penalty requires saga solver
     if penalty == "elasticnet" and solver != "saga":
         return False
     
-    # L1 penalty only works with saga and liblinear solvers
     if penalty == "l1" and solver not in ("saga", "liblinear"):
         return False
     
-    # L1_ratio is only used with elasticnet penalty - filter out if used with other penalties
     if l1_ratio not in (None, 0.0) and penalty != "elasticnet":
         return False
     
-    # When penalty is None, l1_ratio should not be specified
     if penalty is None and l1_ratio not in (None, 0.0):
         return False
 
@@ -931,7 +925,6 @@ def get_thundersvm_estimator():
 
     if gpu_available and ThunderSVC is not None:  # If GPU and ThunderSVC available
         try:
-            # Cast to Any to avoid static type checking on ThunderSVC constructor
             clf = cast(Any, ThunderSVC)(random_state=42, probability=True, gpu_id=0)
             verbose_output(f"{BackgroundColors.GREEN}Using ThunderSVM on GPU (gpu_id=0).{Style.RESET_ALL}")
             return clf
@@ -944,7 +937,6 @@ def get_thundersvm_estimator():
                 pass
 
     cpu_threads = max(1, (os.cpu_count() or 2) - 1)  # Use all but one CPU core if no GPU is available
-    # Try ThunderSVC CPU-thread params only if ThunderSVC is available
     if ThunderSVC is not None:
         for param in ("n_jobs", "nthread", "nthreads", "nproc", "threads"):
             try:
@@ -958,7 +950,6 @@ def get_thundersvm_estimator():
         f"{BackgroundColors.YELLOW}Using ThunderSVM default CPU instantiation.{Style.RESET_ALL}"
     )  # Verbose message
 
-    # Fallback: ThunderSVC if available, otherwise sklearn SVC
     if ThunderSVC is not None:
         return cast(Any, ThunderSVC)(random_state=42, probability=True)
     return SVC(random_state=42, probability=True)
@@ -1227,8 +1218,6 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
     start_time = time.time()  # Start timing
     metrics = None  # Initialize metrics as None
     try:
-        # Apply hyperparameters
-        # Use stratified K-fold cross-validation with 10 splits
         cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
         fold_metrics_list = []
         fold_elapsed = []
@@ -1249,7 +1238,6 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
         if len(fold_metrics_list) == 0:
             metrics = None
         else:
-            # Aggregate metrics by averaging across folds for numeric values
             aggregated = {}
             keys_all = set().union(*(d.keys() for d in fold_metrics_list))
             for k in keys_all:
@@ -1262,7 +1250,6 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
                     except Exception:
                         aggregated[k] = vals[0]
             metrics = aggregated
-            # Add averaged f1_score alias if present
             if "f1_score" in metrics:
                 metrics["f1_score"] = metrics.get("f1_score")
 
@@ -1509,7 +1496,6 @@ def run_parallel_evaluation(
 
         result_entry = OrderedDict([("params", json.dumps(current_params)), ("execution_time", int(round(float(elapsed))))])  # Build result entry with formatted time
         if metrics is not None:
-            # Format all metrics to 4 decimal places
             formatted_metrics = {k: truncate_value(v) for k, v in metrics.items()}
             result_entry.update(formatted_metrics)  # Include formatted metrics
         all_results.append(result_entry)  # Append to list
@@ -1526,7 +1512,6 @@ def run_parallel_evaluation(
                 best_params = current_params
                 best_elapsed = elapsed
                 verbose_output(f"{BackgroundColors.GREEN}New best F1 score: {BackgroundColors.CYAN}{truncate_value(best_score)}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}")
-                # Log new best
 
     return best_params, best_score, best_elapsed, all_results, global_counter  # Return updated results
 
@@ -1560,7 +1545,6 @@ def process_cached_combinations(
     combinations_to_test = []  # Accumulate combinations to test
     cached_count = 0  # Count cached combinations
     
-    # Process cached results and filter combinations
     for combo in param_combinations:  # Iterate all combos
         params_dict = dict(zip(keys, combo))  # Build params dict
         params_json = json.dumps(params_dict, sort_keys=True)  # Serialize params
@@ -1570,23 +1554,18 @@ def process_cached_combinations(
             cached_count += 1  # Increment cached count
             cached_row = cache_dict[cache_key]  # Get cached result
 
-            # Ensure cached_row is a mapping
             if not isinstance(cached_row, dict):
-                # Defensive: skip invalid cached entries
                 verbose_output(f"{BackgroundColors.YELLOW}Warning: Invalid cache row for key {cache_key}, skipping.{Style.RESET_ALL}")
                 continue
 
-            # Normalize elapsed time field: prefer 'execution_time', fall back to 'elapsed_time_s'
             if "execution_time" not in cached_row and "elapsed_time_s" in cached_row:
                 cached_row["execution_time"] = cached_row.get("elapsed_time_s")
 
-            # Reconstruct result entry from cache
             result_entry: Dict[str, Any] = OrderedDict([
                 ("params", params_json),
                 ("execution_time", cached_row.get("execution_time", 0.0)),
             ])
 
-            # Add all metrics from cache (safely handle missing / NaN values)
             for metric in [
                 "f1_score",
                 "accuracy",
@@ -1601,13 +1580,11 @@ def process_cached_combinations(
                 "cohen_kappa",
             ]:
                 value = cached_row.get(metric)
-                # Only include the metric if present and not NaN
                 if value is not None and not (isinstance(value, float) and pd.isna(value)):
                     result_entry[metric] = value
 
             all_results.append(result_entry)  # Add to results
 
-            # Update best from cache
             cached_f1 = cached_row.get("f1_score") or result_entry.get("f1_score")
             if cached_f1 is not None and cached_f1 > best_score:
                 best_score = cached_f1
@@ -1677,7 +1654,6 @@ def manual_grid_search(
     all_results = []  # List to collect results
     global_counter = global_counter_start  # Start global counter
     
-    # Process cached results and filter combinations to test
     combinations_to_test, best_score, best_params, best_elapsed, all_results, global_counter, cached_count = process_cached_combinations(
         model_name,
         param_combinations,
@@ -1790,7 +1766,6 @@ def build_result_entry_from_best(csv_path, model_name, best_params, best_score, 
         ]:
             if metric_key in best_result:
                 result_dict[metric_key] = truncate_value(best_result[metric_key])
-    # Export model and scaler if provided
     if best_estimator is not None and scaler is not None and dataset_name is not None and feature_names is not None:
         export_model_and_scaler(best_estimator, scaler, dataset_name, model_name, feature_names, best_params)
     save_to_cache(csv_path, result_dict)
@@ -1851,7 +1826,6 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
 
             best_estimator = None
             if best_params is not None:
-                # Refit best estimator on all GA-selected data
                 clf = clone(model)
                 clf.set_params(**best_params)
                 clf.fit(X_train_ga, y_train)
@@ -1881,7 +1855,6 @@ def process_single_csv_file(csv_path, dir_results_list):
         f"{BackgroundColors.GREEN}\nProcessing file: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}"
     )  # Output the file being processed
 
-    # Early skip: if user requested to skip training when exported models exist
     dataset_name = os.path.basename(os.path.dirname(csv_path))
     export_dir = os.path.join(MODEL_EXPORT_BASE, dataset_name)
     if SKIP_TRAIN_IF_MODEL_EXISTS and os.path.isdir(export_dir):
@@ -1936,7 +1909,6 @@ def process_single_csv_file(csv_path, dir_results_list):
 
     models = list(models_and_grids.items())  # Convert dict to list
 
-    # Extract dataset name for export directory
     dataset_name = os.path.basename(os.path.dirname(csv_path))
     run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=scaler, dataset_name=dataset_name, feature_names=ga_selected_features)  # Run optimizations
 
@@ -2057,7 +2029,6 @@ def save_optimization_results(csv_path, results_list):
         df_results.to_csv(output_path, index=False, encoding="utf-8")  # Save to CSV
         print(f"{BackgroundColors.GREEN}Results saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Print success message
 
-        # Remove cache file after successful save
         remove_cache_file(csv_path)  # Clean up cache
 
     except Exception as e:  # Catch any errors during saving
@@ -2274,11 +2245,9 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Apply CLI overrides
     SKIP_TRAIN_IF_MODEL_EXISTS = bool(args.skip_train)
     VERBOSE = bool(args.verbose)
     if args.csv:
-        # Restrict processing to the directory containing the provided CSV
         DATASETS = {"SingleCSV": [os.path.dirname(args.csv)]}
 
     main()  # Call the main function
