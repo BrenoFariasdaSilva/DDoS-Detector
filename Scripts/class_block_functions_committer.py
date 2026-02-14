@@ -362,7 +362,7 @@ def main():
     :return: None
     """
 
-    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Functions Committer{BackgroundColors.GREEN} program!{Style.RESET_ALL}", end="\n\n")  # Output the welcome message
+    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Class Block Functions Committer{BackgroundColors.GREEN} program!{Style.RESET_ALL}", end="\n\n")  # Output the welcome message
     
     start_time = datetime.datetime.now()  # Get the start time of the program
     
@@ -372,35 +372,39 @@ def main():
     
     original_text = FILE_PATH.read_text(encoding="utf-8")  # Read the original file content
 
-    if not validate_markers(START_FUNCTION, END_FUNCTION, original_text):  # If the markers are not valid, exit the function
+    if not validate_markers(CLASSNAME, START_FUNCTION, END_FUNCTION, original_text):  # If the markers are not valid, exit the function
         return  # Exit the function if validation fails
 
-    print(f"{BackgroundColors.GREEN}Extracting functions between {BackgroundColors.CYAN}{START_FUNCTION}{BackgroundColors.GREEN} and {BackgroundColors.CYAN}{END_FUNCTION}{Style.RESET_ALL}")  # Output extraction message
+    print(f"{BackgroundColors.GREEN}Extracting methods from class {BackgroundColors.CYAN}{CLASSNAME}{BackgroundColors.GREEN} between {BackgroundColors.CYAN}{START_FUNCTION}{BackgroundColors.GREEN} and {BackgroundColors.CYAN}{END_FUNCTION}{Style.RESET_ALL}")  # Output extraction message
     
-    prefix, suffix, functions = extract_functions_between(original_text, START_FUNCTION, END_FUNCTION)  # Extract the functions between markers
+    prefix, suffix, methods = extract_methods_between(original_text, CLASSNAME, START_FUNCTION, END_FUNCTION)  # Extract the methods between markers
     
-    verbose_output(f"{BackgroundColors.YELLOW}Removing {BackgroundColors.CYAN}{len(functions)}{BackgroundColors.YELLOW} functions from the file...{Style.RESET_ALL}")  # Output removal message
+    if not methods:  # If no methods were extracted
+        print(f"{BackgroundColors.RED}No methods found to process. Exiting.{Style.RESET_ALL}")  # Output error message
+        return  # Exit the function
     
-    write_file(FILE_PATH, prefix + suffix)  # Write the file without the target functions
+    verbose_output(f"{BackgroundColors.YELLOW}Removing {BackgroundColors.CYAN}{len(methods)}{BackgroundColors.YELLOW} methods from the file...{Style.RESET_ALL}")  # Output removal message
     
-    verbose_output(f"{BackgroundColors.GREEN}Functions removed. Starting staged commits...{Style.RESET_ALL}")  # Output staged commits start message
+    write_file(FILE_PATH, prefix + suffix)  # Write the file without the target methods
+    
+    verbose_output(f"{BackgroundColors.GREEN}Methods removed. Starting staged commits...{Style.RESET_ALL}")  # Output staged commits start message
     
     current_body = ""  # Initialize the current body content
-    total_functions = len(functions)  # Get the total number of functions
+    total_methods = len(methods)  # Get the total number of methods
     
-    for index, (name, code, *_) in enumerate(reversed(functions), start=1):  # Iterate through functions in reverse order with index
+    for index, (name, code, *_) in enumerate(reversed(methods), start=1):  # Iterate through methods in reverse order with index
         code = code.strip("\n")  # Remove all surrounding blank lines safely
         
         if current_body:  # If there is already content in the body
-            current_body = code + FUNCTION_SEPARATOR + current_body.lstrip("\n")  # Add function with separator
-        else:  # If this is the first function being added
-            current_body = code + FUNCTION_SEPARATOR  # Add function with separator at the end
+            current_body = code + FUNCTION_SEPARATOR + current_body.lstrip("\n")  # Add method with separator
+        else:  # If this is the first method being added
+            current_body = code + FUNCTION_SEPARATOR  # Add method with separator at the end
             
         new_content = prefix + current_body + suffix  # Construct the new file content
         
         write_file(FILE_PATH, new_content)  # Write the updated content to the file
         
-        verbose_output(f"{BackgroundColors.BOLD}[{BackgroundColors.YELLOW}{index}{BackgroundColors.CYAN}/{BackgroundColors.YELLOW}{total_functions}{BackgroundColors.BOLD}]{Style.RESET_ALL} {BackgroundColors.GREEN}Committing function: {BackgroundColors.CYAN}{name}{Style.RESET_ALL}")  # Output commit message with progress indicator
+        verbose_output(f"{BackgroundColors.BOLD}[{BackgroundColors.YELLOW}{index}{BackgroundColors.CYAN}/{BackgroundColors.YELLOW}{total_methods}{BackgroundColors.BOLD}]{Style.RESET_ALL} {BackgroundColors.GREEN}Committing method: {BackgroundColors.CYAN}{name}{Style.RESET_ALL}")  # Output commit message with progress indicator
         
         run_git_commit(name)  # Run Git add and commit
         
@@ -409,7 +413,7 @@ def main():
     git_dir = FILE_PATH.resolve().parent  # Get the directory containing the file
     subprocess.run(["git", "-C", str(git_dir), "push"], check=True)  # Push all commits to the remote repository
     
-    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}All functions committed successfully!{Style.RESET_ALL}", end="\n\n")  # Output success message
+    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}All methods committed successfully!{Style.RESET_ALL}", end="\n\n")  # Output success message
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(

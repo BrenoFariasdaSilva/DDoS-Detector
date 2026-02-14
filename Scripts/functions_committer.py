@@ -83,9 +83,9 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
-FILE_PATH = Path("./main.py")  # Path to the target Python file
-START_FUNCTION = ""  # Name of the first function to include
-END_FUNCTION = ""  # Name of the last function to include
+FILE_PATH = Path("./class_block_functions_committer.py")  # Path to the target Python file
+START_FUNCTION = "validate_markers"  # Name of the first function to include
+END_FUNCTION = "extract_methods_between"  # Name of the last function to include
 COMMIT_PREFIX = "FEAT: Adding the"  # Prefix for Git commit messages
 FUNCTION_SEPARATOR = "\n\n\n"  # Standardized separator between top-level functions (3 newlines -> 2 empty lines)
 
