@@ -1,39 +1,41 @@
 """
 ================================================================================
-Auto-Committer for Python Functions
+Auto-Committer for Python Class Methods
 ================================================================================
 Author      : Breno Farias da Silva
 Created     : 2026-02-07
 Description :
-    Automates staged commits for functions between two markers inside a Python file.
-    This script reads a target Python file, extracts all functions between specified
-    start and end function names, removes them temporarily, and then re-adds them
-    one-by-one in reverse order (bottom to top), creating a Git commit for each.
+    Automates staged commits for methods within a specific class inside a Python file.
+    This script reads a target Python file, locates a specific class, extracts all
+    methods between specified start and end method names, removes them temporarily,
+    and then re-adds them one-by-one in reverse order (bottom to top), creating a
+    Git commit for each.
 
     Key features include:
-        - Reads and parses Python files to extract top-level function definitions
-        - Identifies functions between configurable start and end markers
-        - Removes all target functions and re-adds them incrementally
-        - Automates Git add, commit, and optionally push operations per function
-        - Standardizes function separators for consistent code formatting
+        - Reads and parses Python files to locate specific class definitions
+        - Extracts methods from within a target class using indentation-aware parsing
+        - Identifies methods between configurable start and end markers
+        - Removes all target methods and re-adds them incrementally
+        - Automates Git add, commit, and optionally push operations per method
+        - Preserves original indentation for valid Python class structures
+        - Ignores standalone functions and methods from other classes
 
 Usage:
-    1. Configure the constants in the CONFIG section (FILE_PATH, START_FUNCTION, END_FUNCTION, COMMIT_PREFIX).
+    1. Configure the constants in the CONFIG section (FILE_PATH, CLASSNAME, START_FUNCTION, END_FUNCTION, COMMIT_PREFIX).
     2. IMPORTANT: Make a backup or work on a test branch first.
     3. Execute the script via Makefile or Python:
-        $ make run   or   $ python functions_committer.py
-    4. The script will create one Git commit per function with descriptive messages.
+        $ make run   or   $ python class_block_functions_committer.py
+    4. The script will create one Git commit per method with descriptive messages.
 
 Outputs:
-    - Modified Python file with reformatted function separators
-    - Individual Git commits for each function between the markers
-    - Execution log in ./Logs/functions_committer.log
+    - Modified Python file with reformatted method separators
+    - Individual Git commits for each method between the markers
+    - Execution log in ./Logs/class_block_functions_committer.log
 
 TODOs:
     - Add CLI argument parsing for dynamic configuration
-    - Implement support for nested function definitions
     - Add dry-run mode to preview changes without committing
-    - Extend to support multiple file processing in batch
+    - Extend to support multiple class processing in batch
 
 Dependencies:
     - Python >= 3.7
@@ -47,11 +49,14 @@ Dependencies:
     - sys (built-in)
 
 Assumptions & Notes:
-    - Assumes functions are top-level definitions (no nested defs)
+    - Assumes methods are defined within a single target class
+    - Uses indentation-aware parsing to detect class scope boundaries
     - Requires a working Git repository with proper configuration
-    - Functions are identified using regex pattern matching
-    - Separator between functions is standardized to 3 newlines (2 empty lines)
+    - Methods are identified using indentation-aware regex pattern matching
+    - Separator between methods is standardized to 3 newlines (2 empty lines)
     - Sound notification disabled on Windows platform
+    - Standalone functions outside the target class are ignored
+    - Methods from other classes are ignored
 """
 
 import atexit  # For playing a sound when the program finishes
