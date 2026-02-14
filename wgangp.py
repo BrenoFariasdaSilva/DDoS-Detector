@@ -1671,6 +1671,10 @@ def generate(args, config: Optional[Dict] = None):
             labels = np.random.randint(0, n_classes, size=(n,), dtype=np.int64)  # Sample labels uniformly
 
     batch_size = args.gen_batch_size  # Set generation batch size
+    try:
+        send_telegram_message(TELEGRAM_BOT, f"Starting generation: producing {n} samples to {Path(args.out_file).name}")
+    except Exception:
+        pass
     all_fake = []  # List to store generated feature batches
     all_labels = []  # List to store corresponding labels
     with torch.no_grad():  # Disable gradient computation for generation
