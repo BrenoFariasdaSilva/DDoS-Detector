@@ -1,49 +1,51 @@
 """
 ================================================================================
-<PROJECT OR SCRIPT TITLE>
+Standalone Comments Cleaner
 ================================================================================
 Author      : Breno Farias da Silva
-Created     : <YYYY-MM-DD>
+Created     : 2026-02-14
 Description :
-    <Provide a concise and complete overview of what this script does.>
-    <Mention its purpose, scope, and relevance to the larger project.>
+    This script removes standalone comments from Python source files while
+    preserving important section headers and structured comments.
+    It processes specified files and cleans unnecessary inline comments.
 
     Key features include:
-        - <Feature 1 — e.g., automatic data loading and preprocessing>
-        - <Feature 2 — e.g., model training and evaluation>
-        - <Feature 3 — e.g., visualization or report generation>
-        - <Feature 4 — e.g., logging or notification system>
-        - <Feature 5 — e.g., integration with other modules or datasets>
+        - Automatic detection and removal of standalone comments
+        - Preservation of important section headers (Functions, Classes, etc.)
+        - Batch processing of multiple Python files
+        - UTF-8 encoding support for international characters
+        - Logging of all operations to both terminal and file
 
 Usage:
-    1. <Explain any configuration steps before running, such as editing variables or paths.>
-    2. <Describe how to execute the script — typically via Makefile or Python.>
-        $ make <target>   or   $ python <script_name>.py
-    3. <List what outputs are expected or where results are saved.>
+    1. Add the Python files you want to clean to the FILES list constant.
+    2. Run the script using the Makefile or directly with Python:
+        $ make run   or   $ python main.py
+    3. Cleaned files will be written back in place (original files are overwritten).
 
 Outputs:
-    - <Output file or directory 1 — e.g., results.csv>
-    - <Output file or directory 2 — e.g., Feature_Analysis/plots/>
-    - <Output file or directory 3 — e.g., logs/output.txt>
+    - Modified Python source files (in place)
+    - Log file in ./Logs/ directory with execution details
+    - Terminal output showing processing status for each file
 
 TODOs:
-    - <Add a task or improvement — e.g., implement CLI argument parsing.>
-    - <Add another improvement — e.g., extend support to Parquet files.>
-    - <Add optimization — e.g., parallelize evaluation loop.>
-    - <Add robustness — e.g., error handling or data validation.>
+    - Add backup functionality before overwriting files
+    - Implement dry-run mode to preview changes
+    - Add command-line argument support for file selection
+    - Support for processing entire directories recursively
 
 Dependencies:
-    - Python >= <version>
-    - <Library 1 — e.g., pandas>
-    - <Library 2 — e.g., numpy>
-    - <Library 3 — e.g., scikit-learn>
-    - <Library 4 — e.g., matplotlib, seaborn, tqdm, colorama>
+    - Python >= 3.6
+    - re (built-in)
+    - pathlib (built-in)
+    - colorama
+    - datetime, os, platform, sys, atexit (built-in)
 
 Assumptions & Notes:
-    - <List any key assumptions — e.g., last column is the target variable.>
-    - <Mention data format — e.g., CSV files only.>
-    - <Mention platform or OS-specific notes — e.g., sound disabled on Windows.>
-    - <Note on output structure or reusability.>
+    - Files must be UTF-8 encoded
+    - Original files are overwritten without backup
+    - Section headers like "Functions Definitions:", "Classes Definitions:", etc. are preserved
+    - Only processes files listed in the FILES constant
+    - Sound notification disabled on Windows
 """
 
 import atexit  # For playing a sound when the program finishes
