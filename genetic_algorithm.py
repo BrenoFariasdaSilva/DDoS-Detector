@@ -135,7 +135,7 @@ fitness_cache_lock = threading.Lock()  # Thread lock for fitness cache
 global_state_lock = threading.Lock()  # Lock for CPU_PROCESSES, GA_GENERATIONS_COMPLETED, etc.
 csv_write_lock = threading.Lock()  # Lock for CSV write operations to prevent race conditions
 
-# Functions Definition:
+# Functions Definitions:
 
 
 def parse_cli_args():
