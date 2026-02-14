@@ -152,6 +152,37 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def clean_standalone_comments(filepath):
+    """
+    Removes standalone comments from a Python file while preserving section headers.
+
+    :param filepath: Path to the Python file to clean
+    :return: True if successful, False otherwise
+    """
+
+    path = Path(filepath)  # Convert to Path object
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Reading file: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
+    )  # Output verbose message
+
+    try:  # Attempt to read and process the file
+        content = path.read_text(encoding="utf-8")  # Read the file content
+        cleaned = re.sub(COMMENT_PATTERN, "", content)  # Remove standalone comments using regex
+
+        path.write_text(cleaned, encoding="utf-8")  # Write the cleaned content back to the file
+        print(
+            f"{BackgroundColors.GREEN}Processed: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
+        )  # Output success message
+        return True  # Return success
+
+    except Exception as e:  # Catch any exceptions
+        print(
+            f"{BackgroundColors.RED}Error processing {BackgroundColors.CYAN}{filepath}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
+        )  # Output error message
+        return False  # Return failure
+
+
 def to_seconds(obj):
     """
     Converts various time-like objects to seconds.
