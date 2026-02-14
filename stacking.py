@@ -347,7 +347,6 @@ def merge_configs(defaults, file_config, cli_args):
     if cli_args is None:  # If no CLI args
         return config  # Return merged config
     
-    # Apply CLI overrides with highest priority
     if hasattr(cli_args, "verbose") and cli_args.verbose:  # Verbose flag
         config["execution"]["verbose"] = True
     if hasattr(cli_args, "skip_train") and cli_args.skip_train:  # Skip train flag
@@ -869,10 +868,8 @@ def extract_attack_label_from_path(file_path):
     file_path_obj = Path(file_path)  # Create Path object from file path string
     filename_stem = file_path_obj.stem  # Extract filename without extension
     
-    # Remove common suffixes to get clean attack name
     clean_stem = filename_stem.replace("_data_augmented", "").replace("_cleaned", "").replace("_processed", "")  # Remove common suffixes from stem
     
-    # Use filename as attack label
     attack_label = clean_stem  # Set attack label to cleaned filename stem
     
     verbose_output(
@@ -928,7 +925,6 @@ def combine_files_for_multiclass(files_list, config=None):
         f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{len(attack_types_set)}{BackgroundColors.GREEN} unique attack types for multi-class: {BackgroundColors.CYAN}{sorted(attack_types_set)}{Style.RESET_ALL}"
     )  # Print attack types summary
     
-    # Find common features across all files
     common_features = None  # Initialize common features set
     target_col_name = None  # Initialize target column name
     
@@ -952,7 +948,6 @@ def combine_files_for_multiclass(files_list, config=None):
         config=config
     )  # Output common features count
     
-    # Build combined dataframe with attack type labels
     combined_parts = []  # Initialize list to accumulate dataframe parts
     
     for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # Iterate over processed files
@@ -1074,7 +1069,6 @@ def load_augmented_files_for_multiclass(original_files_list, config=None):
             f"{BackgroundColors.GREEN}Found augmented files for all {BackgroundColors.CYAN}{found_count}{BackgroundColors.GREEN} original files.{Style.RESET_ALL}"
         )  # Print success message
     
-    # Filter out None entries to return only valid augmented file paths
     valid_augmented_files = [f for f in augmented_files if f is not None]  # Filter out None entries
     
     return valid_augmented_files  # Return list of valid augmented file paths
@@ -1514,7 +1508,6 @@ def save_augmentation_comparison_results(file_path, comparison_results, config=N
 
     df = pd.DataFrame(comparison_results)  # Convert results to DataFrame
 
-    # Define column order for better readability
     column_order = [
         "dataset",
         "feature_set",
@@ -1545,7 +1538,6 @@ def save_augmentation_comparison_results(file_path, comparison_results, config=N
         "Hardware",
     ]  # Define desired column order with experiment traceability columns
 
-    # Reorder columns (only include columns that exist)
     existing_columns = [col for col in column_order if col in df.columns]  # Filter to existing columns
     df = df[existing_columns]  # Reorder DataFrame columns
 
@@ -2152,11 +2144,9 @@ def get_models(config=None):
         config=config
     )  # Output the verbose message
     
-    # Get configuration values
     n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Get n_jobs from config
     random_state = config.get("evaluation", {}).get("random_state", 42)  # Get random_state from config
     
-    # Get model-specific parameters from config
     rf_params = config.get("models", {}).get("random_forest", {})  # Random Forest params
     svm_params = config.get("models", {}).get("svm", {})  # SVM params
     xgb_params = config.get("models", {}).get("xgboost", {})  # XGBoost params
@@ -2561,7 +2551,6 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_nam
     def safe_filename(name):
         return re.sub(r'[\\/*?:"<>|]', "_", str(name))
 
-    # Prefer dataset-local export directory when a CSV path is provided
     if dataset_csv_path:
         file_path_obj = Path(dataset_csv_path)
         export_dir = file_path_obj.parent / "Classifiers" / "Models"
@@ -2623,7 +2612,6 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
 
     start_time = time.time()  # Record the start time
 
-    # If requested, attempt to load an existing exported model instead of retraining
     if dataset_file is not None and skip_train_if_model_exists:
         try:
             models_dir = Path(dataset_file).parent / "Classifiers" / "Models"
@@ -2638,12 +2626,10 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
                     try:
                         loaded = load(str(matches[0]))
                         model = loaded
-                        # Try load scaler with same base name
                         scaler_path = str(matches[0]).replace("_model.joblib", "_scaler.joblib")
                         if os.path.exists(scaler_path):
                             scaler = load(scaler_path)
                         verbose_output(f"Loaded existing model from {matches[0]}")
-                        # Compute predictions and metrics without retraining
                         y_pred = model.predict(X_test)
                         elapsed_time = 0.0
                         acc = accuracy_score(y_test, y_pred)
@@ -2659,7 +2645,6 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
                             fnr = 0.0
                         return (acc, prec, rec, f1, fpr, fnr, elapsed_time)
                     except Exception:
-                        # Fallback to training if loading fails
                         verbose_output(f"Failed to load existing model for {model_name}; retraining.")
         except Exception:
             pass
@@ -2687,7 +2672,6 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         f"{BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed_time))}s{Style.RESET_ALL}"
     )  # Output result
 
-    # Export trained model and scaler if dataset info is available
     try:
         if dataset_file is not None:
             dataset_name = os.path.basename(os.path.dirname(dataset_file))
@@ -2779,7 +2763,6 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
 
         os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
-        # Sample subset for computational efficiency if dataset is large
         if len(X_test) > max_samples:  # If test set is large
             np.random.seed(random_state)  # Set random seed for reproducibility
             sample_indices = np.random.choice(len(X_test), size=max_samples, replace=False)  # Sample indices
@@ -2789,7 +2772,6 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
             X_test_sampled = X_test  # Use full test set
             y_test_sampled = y_test  # Use full test labels
 
-        # Determine appropriate explainer based on model type
         model_type = model.__class__.__name__  # Get model class name
 
         if model_type in ["RandomForestClassifier", "GradientBoostingClassifier", "XGBClassifier", "LightGBMClassifier", "ExtraTreesClassifier"]:  # Tree-based models
@@ -2801,13 +2783,11 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
 
         shap_values = explainer.shap_values(X_test_sampled)  # Compute SHAP values
 
-        # Handle multi-class SHAP values (list of arrays, one per class)
         if isinstance(shap_values, list):  # Multi-class case
             shap_values_summary = shap_values[0] if len(shap_values) > 0 else shap_values  # Use first class for summary
         else:  # Binary or regression case
             shap_values_summary = shap_values  # Use SHAP values directly
 
-        # Generate summary plot
         try:  # Try to create summary plot
             plt.figure()  # Create new figure
             shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, show=False)  # Create summary plot
@@ -2818,7 +2798,6 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
         except Exception:  # If summary plot fails
             plt.close()  # Close plot
 
-        # Generate feature importance bar plot
         try:  # Try to create bar plot
             plt.figure()  # Create new figure
             shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, plot_type="bar", show=False)  # Create bar plot
@@ -2829,7 +2808,6 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
         except Exception:  # If bar plot fails
             plt.close()  # Close plot
 
-        # Compute mean absolute SHAP values for feature importance ranking
         shap_array = np.array(shap_values_summary)  # Convert to numpy array for type safety
         mean_shap_values = np.mean(np.abs(shap_array), axis=0)  # Compute mean absolute SHAP values
         mean_shap_list = mean_shap_values.tolist() if hasattr(mean_shap_values, 'tolist') else list(mean_shap_values)  # Convert to list
@@ -2887,11 +2865,9 @@ def generate_lime_explanations(model, X_test, y_test, feature_names, output_dir,
 
         os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
-        # Determine mode for LIME
         mode = "classification"  # Default mode
         class_names = [str(c) for c in np.unique(y_test)]  # Get class names
 
-        # Create LIME explainer
         explainer = LimeTabularExplainer(
             X_test,
             feature_names=feature_names[:X_test.shape[1]],
@@ -2900,7 +2876,6 @@ def generate_lime_explanations(model, X_test, y_test, feature_names, output_dir,
             random_state=random_state
         )  # Initialize LIME explainer
 
-        # Select a few test instances to explain (use fixed indices for reproducibility)
         np.random.seed(random_state)  # Set random seed
         num_instances_to_explain = min(5, len(X_test))  # Explain up to 5 instances
         instance_indices = np.random.choice(len(X_test), size=num_instances_to_explain, replace=False)  # Sample indices
@@ -2916,7 +2891,6 @@ def generate_lime_explanations(model, X_test, y_test, feature_names, output_dir,
                 num_samples=num_samples
             )  # Generate LIME explanation
 
-            # Save explanation as figure
             try:  # Try to save explanation figure
                 fig = explanation.as_pyplot_figure()  # Get matplotlib figure
                 explanation_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_lime_instance_{idx}.png")  # Build plot path
@@ -2978,7 +2952,6 @@ def generate_permutation_importance(model, X_test, y_test, feature_names, output
 
         os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
-        # Compute permutation importance
         perm_importance = permutation_importance(
             model,
             X_test,
@@ -2988,7 +2961,6 @@ def generate_permutation_importance(model, X_test, y_test, feature_names, output
             n_jobs=n_jobs
         )  # Compute permutation importance
 
-        # Sort features by importance
         importances_mean = perm_importance['importances_mean']  # Extract mean importances from Bunch
         importances_std = perm_importance['importances_std']  # Extract std importances from Bunch
         sorted_indices = importances_mean.argsort()[::-1]  # Sort indices by descending importance
@@ -2996,12 +2968,10 @@ def generate_permutation_importance(model, X_test, y_test, feature_names, output
         sorted_importances = importances_mean[sorted_indices]  # Get sorted importances
         sorted_std = importances_std[sorted_indices]  # Get sorted standard deviations
 
-        # Create importance dictionary
         importance_dict = {}  # Initialize importance dictionary
         for feat, imp, std in zip(sorted_features, sorted_importances, sorted_std):  # For each feature
             importance_dict[feat] = {"mean": float(imp), "std": float(std)}  # Store importance and std
 
-        # Generate bar plot
         try:  # Try to create bar plot
             max_display = explainer_config.get("max_display_features", 20)  # Max features to display
             display_count = min(max_display, len(sorted_features))  # Number of features to display
@@ -3055,7 +3025,6 @@ def extract_model_feature_importance(model, feature_names, output_dir, model_nam
     try:  # Attempt to extract feature importance
         model_type = model.__class__.__name__  # Get model class name
 
-        # Check if model has feature_importances_ attribute
         if hasattr(model, 'feature_importances_'):  # If model has built-in feature importance
             verbose_output(
                 f"{BackgroundColors.GREEN}Extracting built-in feature importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
@@ -3069,10 +3038,8 @@ def extract_model_feature_importance(model, feature_names, output_dir, model_nam
             sorted_features = [feature_names[i] for i in sorted_indices]  # Get sorted feature names
             sorted_importances = importances[sorted_indices]  # Get sorted importances
 
-            # Create importance dictionary
             importance_dict = dict(zip(sorted_features, sorted_importances.tolist()))  # Create importance dict
 
-            # Generate bar plot
             try:  # Try to create bar plot
                 explainer_config = config.get("explainability", {})  # Get explainability config
                 max_display = explainer_config.get("max_display_features", 20)  # Max features to display
@@ -3118,7 +3085,6 @@ def extract_model_feature_importance(model, feature_names, output_dir, model_nam
             sorted_features = [feature_names[i] for i in sorted_indices]  # Get sorted feature names
             sorted_importances = importances[sorted_indices]  # Get sorted importances
 
-            # Create importance dictionary
             importance_dict = dict(zip(sorted_features, sorted_importances.tolist()))  # Create importance dict
 
             verbose_output(
@@ -3170,19 +3136,16 @@ def generate_combined_importance_report(shap_result, lime_result, perm_result, m
 
         os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
-        # Build combined dataframe
         report_data = []  # List to store report rows
 
         for feature in feature_names:  # For each feature
             row = {"feature": feature}  # Initialize row with feature name
 
-            # Add SHAP importance if available
             if shap_result and "shap_importance" in shap_result:  # If SHAP results available
                 row["shap_importance"] = shap_result["shap_importance"].get(feature, 0.0)  # Get SHAP importance
             else:  # If SHAP not available
                 row["shap_importance"] = np.nan  # Set to NaN
 
-            # Add permutation importance if available
             if perm_result and "permutation_importance" in perm_result:  # If permutation results available
                 perm_dict = perm_result["permutation_importance"].get(feature, {})  # Get permutation dict for feature
                 row["permutation_importance_mean"] = perm_dict.get("mean", np.nan)  # Get mean importance
@@ -3192,7 +3155,6 @@ def generate_combined_importance_report(shap_result, lime_result, perm_result, m
                 row["permutation_importance_mean"] = np.nan  # Set to NaN
                 row["permutation_importance_std"] = np.nan  # Set to NaN
 
-            # Add model importance if available
             if model_result and "model_importance" in model_result:  # If model importance available
                 row["model_importance"] = model_result["model_importance"].get(feature, 0.0)  # Get model importance
             else:  # If model importance not available
@@ -3200,13 +3162,10 @@ def generate_combined_importance_report(shap_result, lime_result, perm_result, m
 
             report_data.append(row)  # Add row to report data
 
-        # Create DataFrame
         report_df = pd.DataFrame(report_data)  # Create DataFrame from report data
 
-        # Compute consistency score (correlation between methods)
         importance_cols = [col for col in report_df.columns if col != "feature" and "std" not in col]  # Get importance columns
         if len(importance_cols) >= 2:  # If at least 2 importance methods available
-            # Compute average rank across methods (lower rank = more important)
             for col in importance_cols:  # For each importance column
                 report_df[f"{col}_rank"] = report_df[col].rank(ascending=False, na_option='bottom')  # Compute rank
 
@@ -3215,10 +3174,8 @@ def generate_combined_importance_report(shap_result, lime_result, perm_result, m
             report_df["rank_std"] = report_df[rank_cols].std(axis=1)  # Compute rank standard deviation
             report_df["consistency_score"] = 1.0 / (1.0 + report_df["rank_std"])  # Compute consistency score (higher = more consistent)
 
-            # Sort by average rank (most important first)
             report_df = report_df.sort_values("average_rank")  # Sort by average rank
 
-        # Save combined report to CSV
         report_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_combined_importance.csv")  # Build report path
         report_df.to_csv(report_path, index=False)  # Save report to CSV
 
@@ -3268,17 +3225,14 @@ def run_explainability_pipeline(model, model_name, X_test, y_test, feature_names
         config=config
     )  # Log pipeline start
 
-    # Build output directory path
     dataset_name = Path(dataset_file).stem  # Get dataset name from file path
     output_subdir = explainability_config.get("output_subdir", "explainability")  # Get output subdirectory name
     base_output_dir = Path(dataset_file).parent / output_subdir / execution_mode / dataset_name  # Build base output directory
     output_dir = base_output_dir / feature_set.replace(" ", "_") / model_name.replace(" ", "_")  # Build full output directory
     output_dir = str(output_dir)  # Convert Path to string
 
-    # Initialize results dictionary
     all_results = {}  # Dictionary to store all explainability results
 
-    # Generate SHAP explanations if enabled
     if explainability_config.get("shap", True):  # If SHAP is enabled
         shap_result = generate_shap_explanations(
             model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config
@@ -3286,7 +3240,6 @@ def run_explainability_pipeline(model, model_name, X_test, y_test, feature_names
         if shap_result:  # If SHAP results available
             all_results.update(shap_result)  # Add SHAP results to all results
 
-    # Generate LIME explanations if enabled
     if explainability_config.get("lime", True):  # If LIME is enabled
         lime_result = generate_lime_explanations(
             model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config
@@ -3294,7 +3247,6 @@ def run_explainability_pipeline(model, model_name, X_test, y_test, feature_names
         if lime_result:  # If LIME results available
             all_results.update(lime_result)  # Add LIME results to all results
 
-    # Generate permutation importance if enabled
     if explainability_config.get("permutation_importance", True):  # If permutation importance is enabled
         perm_result = generate_permutation_importance(
             model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, config
@@ -3302,7 +3254,6 @@ def run_explainability_pipeline(model, model_name, X_test, y_test, feature_names
         if perm_result:  # If permutation results available
             all_results.update(perm_result)  # Add permutation results to all results
 
-    # Extract model feature importance if enabled
     if explainability_config.get("feature_importance", True):  # If feature importance extraction is enabled
         model_result = extract_model_feature_importance(
             model, feature_names, output_dir, model_name, dataset_name, config
@@ -3310,7 +3261,6 @@ def run_explainability_pipeline(model, model_name, X_test, y_test, feature_names
         if model_result:  # If model importance available
             all_results.update(model_result)  # Add model importance to all results
 
-    # Generate combined importance report
     shap_res = all_results if "shap_importance" in all_results else None  # Get SHAP results or None
     lime_res = all_results if "lime_explanations" in all_results else None  # Get LIME results or None
     perm_res = all_results if "permutation_importance" in all_results else None  # Get permutation results or None
@@ -3445,12 +3395,10 @@ def save_stacking_results(csv_path, results_list, config=None):
     for res in results_list:
         row = dict(res)
 
-        # Truncate metrics to 4 decimal places
         for metric in ["accuracy", "precision", "recall", "f1_score", "fpr", "fnr"]:
             if metric in row and row[metric] is not None:
                 row[metric] = truncate_value(row[metric])
 
-        # Serialize list-like fields into JSON strings for CSV stability
         if "features_list" in row and not isinstance(row["features_list"], str):
             row["features_list"] = json.dumps(row["features_list"])
         if "top_features" in row and not isinstance(row["top_features"], str):
@@ -3468,7 +3416,6 @@ def save_stacking_results(csv_path, results_list, config=None):
 
     df = pd.DataFrame(flat_rows)
 
-    # Use the canonical header constant for results CSV column ordering
     results_csv_columns = config.get("stacking", {}).get("results_csv_columns", [])  # Get columns from config
     column_order = list(results_csv_columns) if results_csv_columns else list(config.get("stacking", {}).get("results_csv_columns", []))  # Use config or fallback to global
 
@@ -4636,7 +4583,6 @@ def evaluate_on_dataset(
     :return: Dictionary mapping (feature_set, model_name) to results
     """
 
-    # Sanitize GA and RFE feature names to match the sanitized feature_names in the DataFrame
     if ga_selected_features:
         ga_selected_features = sanitize_feature_names(ga_selected_features)
     if rfe_selected_features:
@@ -4688,7 +4634,6 @@ def evaluate_on_dataset(
         X_train_scaled, X_test_scaled, pca_n_components, file
     )  # Apply PCA transformation if applicable
 
-    # Get feature subsets with actual selected feature names
     X_train_ga, ga_actual_features = get_feature_subset(X_train_scaled, ga_selected_features, feature_names)
     X_test_ga, _ = get_feature_subset(X_test_scaled, ga_selected_features, feature_names)
     
@@ -4772,14 +4717,12 @@ def evaluate_on_dataset(
                     subset_feature_names,
                     name,
                 )  # Submit evaluation task to thread pool (using .values for numpy arrays)
-                # Store both the model name and its class name for richer metadata
                 future_to_model[future] = (model_name, model.__class__.__name__, current_combination)
                 current_combination += 1
             
             for future in concurrent.futures.as_completed(future_to_model):  # As each evaluation completes
                 model_name, model_class, comb_idx = future_to_model[future]  # Get metadata from mapping
                 metrics = future.result()  # Get the metrics from the completed future
-                # Flatten metrics into named fields and include extra metadata similar to rfe.py
                 acc, prec, rec, f1, fpr, fnr, elapsed = metrics
                 result_entry = {
                     "model": model_class,
@@ -4816,7 +4759,6 @@ def evaluate_on_dataset(
                 )  # Output accuracy
                 progress_bar.update(1)  # Update progress after each model
                 
-                # Run explainability for this individual model (only on original test data)
                 if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run on original data
                     try:  # Attempt explainability
                         trained_model = individual_models[model_name]  # Get trained model object
@@ -4850,14 +4792,12 @@ def evaluate_on_dataset(
             stacking_model, X_train_df, y_train, X_test_df, y_test
         )  # Evaluate stacking model with DataFrames
 
-        # Export stacking model and scaler
         try:
             dataset_name = os.path.basename(os.path.dirname(file))
             export_model_and_scaler(stacking_model, scaler, dataset_name, "StackingClassifier", subset_feature_names, best_params=None, feature_set=name, dataset_csv_path=file)
         except Exception:
             pass
 
-        # Flatten stacking metrics and include richer metadata
         s_acc, s_prec, s_rec, s_f1, s_fpr, s_fnr, s_elapsed = stacking_metrics
         stacking_result_entry = {
             "model": stacking_model.__class__.__name__,
@@ -4895,7 +4835,6 @@ def evaluate_on_dataset(
         progress_bar.update(1)  # Update progress after stacking
         current_combination += 1
         
-        # Run explainability for stacking model (only on original test data)
         if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run on original data
             try:  # Attempt explainability
                 run_explainability_pipeline(
@@ -5448,7 +5387,6 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
         config=config
     )  # Output the verbose message
     
-    # Use first file for feature selection metadata discovery
     reference_file = original_files_list[0] if original_files_list else "multiclass_combined"  # Get reference file for feature metadata
     
     print(
@@ -5464,12 +5402,10 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
         f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
     )  # Print closing separator
     
-    # Load feature selection results from reference file
     ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
         reference_file, config=config
     )  # Load feature selection results
     
-    # Extract feature names from combined dataframe (excluding attack_type target)
     feature_names = [col for col in combined_multiclass_df.columns if col != 'attack_type']  # Get feature column names
     
     verbose_output(
@@ -5477,10 +5413,8 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
         config=config
     )  # Output feature count
     
-    # Prepare base models with hyperparameters
     base_models, hp_params_map = prepare_models_with_hyperparameters(reference_file, config=config)  # Prepare base models
     
-    # Generate experiment ID for multi-class original evaluation
     original_experiment_id = generate_experiment_id(reference_file, "multiclass_original_only")  # Generate unique experiment ID
     
     test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", False)  # Get test data augmentation flag from config
@@ -5492,7 +5426,6 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
         f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[1/{total_steps}] Evaluating on ORIGINAL MULTI-CLASS data{Style.RESET_ALL}"
     )  # Print progress message with total step count
     
-    # Evaluate on original multi-class dataset
     results_original = evaluate_on_dataset(
         reference_file, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components,
         rfe_selected_features, base_models, data_source_label="Original_MultiClass", hyperparams_map=hp_params_map,
@@ -5502,7 +5435,6 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
     
     original_results_list = list(results_original.values())  # Convert results dict to list
     
-    # Save multi-class results to separate CSV file
     multiclass_results_filename = config.get("stacking", {}).get("multiclass_results_filename", "Stacking_Classifiers_MultiClass_Results.csv")  # Get multi-class results filename
     reference_file_path = Path(reference_file)  # Create Path object
     feature_analysis_dir = reference_file_path.parent / "Feature_Analysis"  # Feature_Analysis directory
@@ -5521,12 +5453,10 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
             config=config
         )  # Output the verbose message
         
-        # Generate t-SNE visualization for original multi-class data
         generate_augmentation_tsne_visualization(
             reference_file, combined_multiclass_df, None, None, "original_only"
         )  # Generate t-SNE visualization for original multi-class data only
         
-        # Load augmented files for all original files
         augmented_files_list = load_augmented_files_for_multiclass(original_files_list, config=config)  # Load augmented files
         
         if not augmented_files_list:  # If no augmented files found
@@ -5535,7 +5465,6 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
             )  # Print warning
             return  # Exit function
         
-        # Combine augmented files for multi-class
         combined_augmented_df, augmented_attack_types, augmented_target_col = combine_files_for_multiclass(augmented_files_list, config=config)  # Combine augmented files
         
         if combined_augmented_df is None:  # If augmented combination failed
@@ -5566,7 +5495,6 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
                 f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx + 1}/{total_steps}] Evaluating with {ratio_pct}% augmented data (Multi-Class){Style.RESET_ALL}"
             )  # Print experiment step progress
             
-            # Sample augmented data by ratio
             df_sampled = sample_augmented_by_ratio(combined_augmented_df, combined_multiclass_df, ratio)  # Sample augmented data proportionally
             
             if df_sampled is None:  # If sampling failed
@@ -5582,7 +5510,6 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
                 f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
             )  # Print sampled dataset size for transparency
             
-            # Generate t-SNE visualization for this augmentation ratio
             generate_augmentation_tsne_visualization(
                 reference_file, combined_multiclass_df, df_sampled, ratio, "original_plus_augmented"
             )  # Generate t-SNE visualization for multi-class augmented experiment
@@ -5591,7 +5518,6 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
                 TELEGRAM_BOT, f"Starting multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
             )  # Send Telegram notification
             
-            # Evaluate on dataset with augmented data in training only
             results_ratio = evaluate_on_dataset(
                 reference_file, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components,
                 rfe_selected_features, base_models, data_source_label=data_source_label,
@@ -5613,7 +5539,6 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
             )  # Print warning
             return  # Exit function
         
-        # Generate and save comparison results
         comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate the comparison report across all ratios
         
         augmentation_comparison_filename = config.get("stacking", {}).get("augmentation_comparison_filename", "Data_Augmentation_Comparison_Results.csv")  # Get comparison filename
@@ -5771,7 +5696,6 @@ def process_files_in_path(input_path, dataset_name, config=None):
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
         )  # Print closing separator
         
-        # STEP 1: Execute Binary Pipeline
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[STEP 1/2] Executing BINARY Classification Pipeline{Style.RESET_ALL}\n"
         )  # Print binary step header
@@ -5785,7 +5709,6 @@ def process_files_in_path(input_path, dataset_name, config=None):
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Binary pipeline complete{Style.RESET_ALL}\n"
         )  # Print binary completion message
         
-        # STEP 2: Execute Multi-Class Pipeline
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[STEP 2/2] Executing MULTI-CLASS Classification Pipeline{Style.RESET_ALL}\n"
         )  # Print multi-class step header
@@ -5803,7 +5726,6 @@ def process_files_in_path(input_path, dataset_name, config=None):
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
         )  # Print closing separator
 
-        # Combine all files into multi-class dataset
         combined_multiclass_df, attack_types_list, target_col_name = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for multi-class
         
         if combined_multiclass_df is None:  # If combination failed
@@ -5811,7 +5733,6 @@ def process_files_in_path(input_path, dataset_name, config=None):
                 f"{BackgroundColors.RED}Failed to create multi-class dataset. Skipping multi-class evaluation.{Style.RESET_ALL}"
             )  # Print error
         else:  # If combination succeeded
-            # Process multi-class dataset evaluation
             process_multiclass_evaluation(
                 files_to_process, combined_multiclass_df, attack_types_list, local_dataset_name, config=config
             )  # Process multi-class evaluation workflow
@@ -5849,7 +5770,6 @@ def process_files_in_path(input_path, dataset_name, config=None):
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
         )  # Print closing separator
 
-        # Combine all files into multi-class dataset
         combined_multiclass_df, attack_types_list, target_col_name = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for multi-class
         
         if combined_multiclass_df is None:  # If combination failed
@@ -5858,7 +5778,6 @@ def process_files_in_path(input_path, dataset_name, config=None):
             )  # Print error
             return  # Exit function
         
-        # Process multi-class dataset evaluation
         process_multiclass_evaluation(
             files_to_process, combined_multiclass_df, attack_types_list, local_dataset_name, config=config
         )  # Process multi-class evaluation workflow
@@ -5924,20 +5843,16 @@ def run_stacking_pipeline(config_path=None, **config_overrides):
     :return: None
     """
     
-    # Initialize configuration
     config = initialize_config(config_path=config_path, cli_args=None)  # Load base config
     
-    # Apply programmatic overrides
     for key, value in config_overrides.items():  # Iterate over provided overrides
         if isinstance(value, dict) and key in config:  # If override is dict and key exists
             config[key] = deep_merge_dicts(config[key], value)  # Deep merge override
         else:  # Direct override
             config[key] = value  # Set value directly
     
-    # Initialize logger
     initialize_logger(config=config)  # Setup logging
     
-    # Run main pipeline
     main(config=config)  # Execute stacking pipeline
 
 
@@ -6111,14 +6026,10 @@ def main(config=None):
 
 
 if __name__ == "__main__":
-    # Parse CLI arguments
     cli_args = parse_cli_args()  # Parse command-line arguments
     
-    # Initialize configuration with CLI overrides
     config = initialize_config(config_path=cli_args.config, cli_args=cli_args)  # Initialize config with file and CLI args
     
-    # Initialize logger
     initialize_logger(config=config)  # Initialize logger with config
     
-    # Run main function with config
     main(config=config)  # Run main with configuration
