@@ -146,6 +146,90 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def extract_class_methods(text, classname):
+    """
+    Extracts all methods from a specific class using indentation-aware parsing.
+
+    :param text: The full text content of the Python file
+    :param classname: The name of the class to extract methods from
+    :return: List of tuples: (method_name, method_code, start_pos, end_pos)
+    """
+    
+    verbose_output(f"{BackgroundColors.GREEN}Extracting methods from class: {BackgroundColors.CYAN}{classname}{Style.RESET_ALL}")
+    
+    lines = text.split('\n')  # Split text into lines
+    class_pattern = rf"^class\s+{re.escape(classname)}\s*[\(:]"  # Pattern to find the specific class
+    
+    class_start_line = None  # Line number where the class starts
+    class_indent = None  # Indentation level of the class definition
+    
+    for i, line in enumerate(lines):  # Iterate through all lines
+        if re.match(class_pattern, line):  # If this line matches the class definition
+            class_start_line = i  # Store the line number
+            class_indent = len(line) - len(line.lstrip())  # Calculate the indentation level
+            break  # Stop searching
+    
+    if class_start_line is None:  # If the class was not found
+        verbose_output(f"{BackgroundColors.RED}Class '{classname}' not found in file{Style.RESET_ALL}")
+        return []  # Return empty list
+    
+    verbose_output(f"{BackgroundColors.GREEN}Found class '{classname}' at line {class_start_line + 1} with indent level {class_indent}{Style.RESET_ALL}")
+    
+    methods = []  # List to store extracted methods
+    i = class_start_line + 1  # Start scanning after the class definition line
+    
+    while i < len(lines):  # Iterate through remaining lines
+        line = lines[i]  # Current line
+        
+        if not line.strip() or line.strip().startswith('#'):  # If line is empty or a comment
+            i += 1  # Move to next line
+            continue  # Skip to next iteration
+        
+        current_indent = len(line) - len(line.lstrip())  # Calculate current line indentation
+        
+        if line.strip() and class_indent is not None and current_indent <= class_indent:  # If we're back at or before class indent
+            verbose_output(f"{BackgroundColors.GREEN}Class scope ended at line {i + 1}{Style.RESET_ALL}")
+            break  # Exit the loop - class scope has ended
+        
+        method_match = re.match(r'^(\s+)def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', line)  # Pattern for method definition
+        if method_match:  # If this line is a method definition
+            method_indent = len(method_match.group(1))  # Get the method's indentation
+            method_name = method_match.group(2)  # Extract the method name
+            method_start = i  # Mark the start line of this method
+            
+            verbose_output(f"{BackgroundColors.CYAN}Found method: {method_name} at line {method_start + 1}{Style.RESET_ALL}")
+            
+            j = i + 1  # Start scanning from next line
+            while j < len(lines):  # Scan until end of file
+                next_line = lines[j]  # Get the next line
+                
+                if not next_line.strip():  # If line is empty
+                    j += 1  # Move to next line
+                    continue  # Keep scanning
+                
+                next_indent = len(next_line) - len(next_line.lstrip())  # Calculate next line's indentation
+                
+                if next_indent <= method_indent and next_line.strip():  # If indentation is same or less
+                    break  # Method ends here
+                
+                j += 1  # Continue scanning
+            
+            method_end = j  # Mark the end line of this method
+            method_code = '\n'.join(lines[method_start:method_end])  # Extract the method's code
+            
+            start_pos = sum(len(lines[k]) + 1 for k in range(method_start))  # Calculate start position
+            end_pos = sum(len(lines[k]) + 1 for k in range(method_end))  # Calculate end position
+            
+            methods.append((method_name, method_code, start_pos, end_pos))  # Add method to list
+            i = method_end  # Jump to end of this method
+        else:  # Not a method definition
+            i += 1  # Move to next line
+    
+    verbose_output(f"{BackgroundColors.GREEN}Extracted {BackgroundColors.CYAN}{len(methods)}{BackgroundColors.GREEN} methods from class '{classname}'{Style.RESET_ALL}")
+    
+    return methods  # Return the list of extracted methods
+
+
 def extract_methods_between(text, classname, start_name, end_name):
     """
     Extracts all methods between two specified method names within a class.
