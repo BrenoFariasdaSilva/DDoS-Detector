@@ -350,6 +350,39 @@ def extract_methods_between(text, classname, start_name, end_name):
     return prefix, suffix, selected  # Return the components
 
 
+def normalize_method_separators(content):
+    """
+    Normalizes spacing between method definitions to exactly 2 empty lines (3 newlines).
+    
+    :param content: The file content to normalize
+    :return: Content with standardized method separators
+    """
+    
+    verbose_output(f"{BackgroundColors.GREEN}Normalizing method separators to exactly 2 empty lines...{Style.RESET_ALL}")
+    
+    method_pattern = r"(\n)([ \t]+def\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\([^)]*\):)"  # Pattern to find method definitions with their leading newline and indentation
+    
+    parts = re.split(method_pattern, content)  # Split the content by method definitions, keeping the delimiters
+    
+    if len(parts) <= 1:  # No methods found or only one part
+        return content  # Return original content
+    
+    normalized = parts[0]  # Start with content before first method
+    
+    i = 1  # Start from the first method definition part
+    while i < len(parts):  # Iterate through the parts
+        if i + 1 < len(parts) and parts[i] == "\n" and parts[i + 1].strip().startswith("def "):
+            normalized += FUNCTION_SEPARATOR + parts[i + 1]  # Add standardized separator before method definition
+            i += 2  # Skip the newline and method definition parts
+        else:  # If this part is not a method definition, just add it as is
+            normalized += parts[i]  # Add the non-method part without modification
+            i += 1  # Move to the next part
+    
+    verbose_output(f"{BackgroundColors.GREEN}Method separators normalized successfully{Style.RESET_ALL}")
+    
+    return normalized  # Return the content with normalized method separators
+
+
 def write_file(path, content):
     """
     Writes content to a file with UTF-8 encoding and ensures it ends with exactly one empty line.
@@ -529,7 +562,9 @@ def main():
             
         new_content = prefix + current_body + suffix  # Construct the new file content
         
-        write_file(FILE_PATH, new_content)  # Write the updated content to the file
+        normalized_content = normalize_method_separators(new_content)  # Normalize method separators in the new content
+        
+        write_file(FILE_PATH, normalized_content)  # Write the updated content to the file
         
         verbose_output(f"{BackgroundColors.BOLD}[{BackgroundColors.YELLOW}{index}{BackgroundColors.CYAN}/{BackgroundColors.YELLOW}{total_methods}{BackgroundColors.BOLD}]{Style.RESET_ALL} {BackgroundColors.GREEN}Committing method: {BackgroundColors.CYAN}{name}{Style.RESET_ALL}")  # Output commit message with progress indicator
         
