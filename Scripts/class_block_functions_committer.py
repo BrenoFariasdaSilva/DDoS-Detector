@@ -241,7 +241,7 @@ def extract_class_methods(text, classname):
     
     verbose_output(f"{BackgroundColors.GREEN}Extracting methods from class: {BackgroundColors.CYAN}{classname}{Style.RESET_ALL}")
     
-    lines = text.split('\n')  # Split text into lines
+    lines = text.split("\n")  # Split text into lines
     class_pattern = rf"^class\s+{re.escape(classname)}\s*[\(:]"  # Pattern to find the specific class
     
     class_start_line = None  # Line number where the class starts
@@ -265,7 +265,7 @@ def extract_class_methods(text, classname):
     while i < len(lines):  # Iterate through remaining lines
         line = lines[i]  # Current line
         
-        if not line.strip() or line.strip().startswith('#'):  # If line is empty or a comment
+        if not line.strip() or line.strip().startswith("#"):  # If line is empty or a comment
             i += 1  # Move to next line
             continue  # Skip to next iteration
         
@@ -275,7 +275,7 @@ def extract_class_methods(text, classname):
             verbose_output(f"{BackgroundColors.GREEN}Class scope ended at line {i + 1}{Style.RESET_ALL}")
             break  # Exit the loop - class scope has ended
         
-        method_match = re.match(r'^(\s+)def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', line)  # Pattern for method definition
+        method_match = re.match(r"^(\s+)def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", line)  # Pattern for method definition
         if method_match:  # If this line is a method definition
             method_indent = len(method_match.group(1))  # Get the method's indentation
             method_name = method_match.group(2)  # Extract the method name
@@ -299,7 +299,7 @@ def extract_class_methods(text, classname):
                 j += 1  # Continue scanning
             
             method_end = j  # Mark the end line of this method
-            method_code = '\n'.join(lines[method_start:method_end])  # Extract the method's code
+            method_code = "\n".join(lines[method_start:method_end])  # Extract the method's code
             
             start_pos = sum(len(lines[k]) + 1 for k in range(method_start))  # Calculate start position
             end_pos = sum(len(lines[k]) + 1 for k in range(method_end))  # Calculate end position
@@ -504,11 +504,11 @@ def main():
         print(f"{BackgroundColors.RED}No methods found to process. Exiting.{Style.RESET_ALL}")  # Output error message
         return  # Exit the function
     
-    prefix = prefix.rstrip('\n')  # Remove all trailing newlines from prefix
+    prefix = prefix.rstrip("\n")  # Remove all trailing newlines from prefix
     if prefix:  # If prefix has content
-        prefix += '\n\n\n'  # Add exactly 2 empty lines before first method
+        prefix += "\n\n\n"  # Add exactly 2 empty lines before first method
     
-    suffix = suffix.lstrip('\n')  # Remove all leading newlines from suffix
+    suffix = suffix.lstrip("\n")  # Remove all leading newlines from suffix
     
     verbose_output(f"{BackgroundColors.YELLOW}Removing {BackgroundColors.CYAN}{len(methods)}{BackgroundColors.YELLOW} methods from the file...{Style.RESET_ALL}")  # Output removal message
     
