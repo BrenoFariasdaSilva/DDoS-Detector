@@ -637,7 +637,6 @@ def export_final_model(X_numeric, feature_columns, top_features, y_array, csv_pa
     with open(features_path, "w", encoding="utf-8") as fh:  # Write selected features to json
         fh.write(json.dumps(top_features))  # Save feature list as JSON
         
-    # Save model hyperparameters (so we can reproduce training configuration)
     model_params = final_model.get_params()  # Get hyperparameters from trained estimator
     with open(params_path, "w", encoding="utf-8") as ph:  # Write params to json
         ph.write(json.dumps(model_params, default=str))  # Save params as JSON (default=str for non-serializable)
@@ -682,7 +681,6 @@ def save_rfe_results(csv_path, run_results):
     rows = []
     for r in runs:
         data: Dict[str, Optional[Any]] = {c: None for c in RFE_RESULTS_CSV_COLUMNS}
-        # Timestamp for this row (YYYY-MM-DD_HH_MM_SS)
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
         data["timestamp"] = ts
         data["tool"] = "RFE"
@@ -768,36 +766,30 @@ def save_rfe_results(csv_path, run_results):
 
         rows.append(data)
 
-    # Build DataFrame and save to CSV
     df_new = pd.DataFrame(rows, columns=RFE_RESULTS_CSV_COLUMNS)
     output_dir = os.path.join(os.path.dirname(csv_path), "Feature_Analysis", "RFE")
     os.makedirs(output_dir, exist_ok=True)
     run_csv_path = os.path.join(output_dir, "RFE_Run_Results.csv")
 
-    # If existing file present, read and backfill timestamp if missing, then concat
     if os.path.exists(run_csv_path):
         try:
             df_existing = pd.read_csv(run_csv_path, dtype=str)
-            # Backfill timestamp for legacy files without timestamp column
             if "timestamp" not in df_existing.columns:
                 mtime = os.path.getmtime(run_csv_path)
                 back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")
                 df_existing["timestamp"] = back_ts
 
-            # Ensure all expected columns exist in existing dataframe
             for c in RFE_RESULTS_CSV_COLUMNS:
                 if c not in df_existing.columns:
                     df_existing[c] = None
 
             df_combined = pd.concat([df_existing[RFE_RESULTS_CSV_COLUMNS], df_new], ignore_index=True, sort=False)
 
-            # Sort newest -> oldest by timestamp and reindex to canonical order
             try:
                 df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")
                 df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)
                 df_combined = df_combined.drop(columns=["timestamp_dt"])
             except Exception:
-                # Fallback: string-sort (format chosen is lexicographically sortable)
                 df_combined = df_combined.sort_values(by="timestamp", ascending=False)
 
             df_out = df_combined.reset_index(drop=True)
@@ -806,7 +798,6 @@ def save_rfe_results(csv_path, run_results):
     else:
         df_out = df_new
 
-    # Populate hardware metadata and enforce ordering
     df_out = populate_hardware_column_and_order(df_out, column_name="hardware")
 
     try:
@@ -864,7 +855,6 @@ def load_exported_artifacts(csv_path):
     if not candidates:
         return None  # No exported models found
 
-    # Pick latest by modification time
     latest_model = max(candidates, key=os.path.getmtime)  # Select most recent model file
     scaler_path = latest_model.replace("-model.joblib", "-scaler.joblib")  # Infer scaler path
     features_path = latest_model.replace("-model.joblib", "-features.json")  # Infer features path
@@ -907,7 +897,6 @@ def evaluate_exported_model(model, scaler, X_numeric, feature_columns, top_featu
     rec = recall_score(y_array, y_pred, average="weighted", zero_division=0)  # Recall
     f1 = f1_score(y_array, y_pred, average="weighted", zero_division=0)  # F1 score
 
-    # Compute FPR/FNR similarly to compute_rfe_metrics
     if len(np.unique(y_array)) == 2:
         cm = confusion_matrix(y_array, y_pred)
         if cm.shape == (2, 2):
@@ -1144,12 +1133,10 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
         X_numeric, y_array, test_size=0.2, random_state=42, stratify=stratify_param
     )
 
-    # Fit a scaler on the training portion and transform both train/test.
     scaler_for_run = StandardScaler()
     X_train_scaled = scaler_for_run.fit_transform(X_train_df.values)
     X_test_scaled = scaler_for_run.transform(X_test_df.values)
 
-    # Determine CV splits based on the training portion
     unique_tr, counts_tr = np.unique(y_train_array, return_counts=True)
     min_class_count_tr = counts_tr.min() if counts_tr.size > 0 else 0
     n_splits = min(10, len(y_train_array), min_class_count_tr)  # Up to 10 splits but not more than samples or smallest class in train
@@ -1178,22 +1165,18 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
         fold_supports.append(selector.support_.astype(int))  # Append per-fold support mask as integers
         total_elapsed += metrics_tuple[6]  # Accumulate elapsed time from this fold
 
-        # Send Telegram message with fold timing
         send_telegram_message(
             TELEGRAM_BOT,
             f"RFE: Finished fold {fold_idx}/{n_splits} for dataset {Path(csv_path).stem} with F1: {truncate_value(metrics_tuple[3])} in {calculate_execution_time(0, metrics_tuple[6])}"
         )
 
-    # Aggregate metrics (mean across folds)
     metrics_arr = np.array(fold_metrics)  # Convert list of tuples to numpy array
     mean_metrics = metrics_arr.mean(axis=0)  # Compute mean metric values across folds
 
-    # Aggregate rankings: mean rank per feature across folds
     rankings_arr = np.vstack(fold_rankings)  # Shape: (n_folds, n_features) stack rankings
     mean_rankings = rankings_arr.mean(axis=0)  # Mean ranking per feature
     avg_rfe_ranking = {f: float(r) for f, r in zip(feature_columns, mean_rankings)}  # Map feature->avg rank
 
-    # Aggregate supports to decide top features (selected in majority of folds)
     supports_arr = np.vstack(fold_supports)  # Shape: (n_folds, n_features) stack support masks
     support_counts = supports_arr.sum(axis=0)  # Count how many folds selected each feature
     majority_threshold = (n_splits // 2) + 1  # Require strict majority to consider a feature selected
@@ -1201,10 +1184,8 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
 
     sorted_rfe_ranking = sorted(avg_rfe_ranking.items(), key=lambda x: x[1])  # Sort averaged rankings ascending
 
-    # Get final model, scaler, and parameters
     final_model, scaler_full, top_features, loaded_hyperparams = get_final_model(csv_path, X_train_df, y_train_array, top_features, feature_columns)
 
-    # Evaluate final_model (loaded or newly trained) on the held-out test set
     eval_metrics = evaluate_exported_model(final_model, scaler_full, X_test_df, feature_columns, top_features, y_test_array)
 
     run_results = build_results_with_hyperparams(
@@ -1443,7 +1424,6 @@ if __name__ == "__main__":
     )  # Optional CSV override
     args = parser.parse_args()  # Parse CLI args
 
-    # Override module-level constant based on CLI flag
     SKIP_TRAIN_IF_MODEL_EXISTS = bool(args.skip_train)  # Respect the user's CLI choice
     VERBOSE = bool(args.verbose)  # Respect the user's request to print verbose output
     CSV_FILE = args.csv if args.csv else CSV_FILE  # Use provided CSV or default
