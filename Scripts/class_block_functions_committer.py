@@ -487,12 +487,18 @@ def main():
     
     original_text = FILE_PATH.read_text(encoding="utf-8")  # Read the original file content
 
-    if not validate_markers(CLASSNAME, START_FUNCTION, END_FUNCTION, original_text):  # If the markers are not valid, exit the function
+    classname_to_use = CLASSNAME  # Use the configured class name
+    if not classname_to_use:  # If CLASSNAME is empty or None
+        derived_name = FILE_PATH.stem[0].upper() + FILE_PATH.stem[1:] if len(FILE_PATH.stem) > 0 else ""  # Derive from filename with first letter capitalized
+        print(f"{BackgroundColors.YELLOW}CLASSNAME not set. Deriving from filename: {BackgroundColors.CYAN}{derived_name}{Style.RESET_ALL}")  # Output the derived class name
+        classname_to_use = derived_name  # Use the derived name
+
+    if not validate_markers(classname_to_use, START_FUNCTION, END_FUNCTION, original_text):  # If the markers are not valid, exit the function
         return  # Exit the function if validation fails
 
-    print(f"{BackgroundColors.GREEN}Extracting methods from class {BackgroundColors.CYAN}{CLASSNAME}{BackgroundColors.GREEN} between {BackgroundColors.CYAN}{START_FUNCTION}{BackgroundColors.GREEN} and {BackgroundColors.CYAN}{END_FUNCTION}{Style.RESET_ALL}")  # Output extraction message
+    print(f"{BackgroundColors.GREEN}Extracting methods from class {BackgroundColors.CYAN}{classname_to_use}{BackgroundColors.GREEN} between {BackgroundColors.CYAN}{START_FUNCTION}{BackgroundColors.GREEN} and {BackgroundColors.CYAN}{END_FUNCTION}{Style.RESET_ALL}")  # Output extraction message
     
-    prefix, suffix, methods = extract_methods_between(original_text, CLASSNAME, START_FUNCTION, END_FUNCTION)  # Extract the methods between markers
+    prefix, suffix, methods = extract_methods_between(original_text, classname_to_use, START_FUNCTION, END_FUNCTION)  # Extract the methods between markers
     
     if not methods:  # If no methods were extracted
         print(f"{BackgroundColors.RED}No methods found to process. Exiting.{Style.RESET_ALL}")  # Output error message
