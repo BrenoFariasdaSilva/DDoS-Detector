@@ -542,7 +542,7 @@ def main():
         code = code.strip("\n")  # Remove all surrounding blank lines safely
         
         if current_body:  # If there is already content in the body
-            current_body = code + FUNCTION_SEPARATOR + current_body  # Add method with exactly 2 empty lines separator
+            current_body = current_body + code + FUNCTION_SEPARATOR  # Add method with exactly 2 empty lines separator
         else:  # If this is the first method being added (last in file order)
             current_body = code + FUNCTION_SEPARATOR  # Add method with separator at the end
             
