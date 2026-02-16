@@ -8,7 +8,7 @@ Description :
     Automates staged commits for methods within a specific class inside a Python file.
     This script reads a target Python file, locates a specific class, extracts all
     methods between specified start and end method names, removes them temporarily,
-    and then re-adds them one-by-one in reverse order (bottom to top), creating a
+    and then re-adds them one-by-one from top to bottom, creating a
     Git commit for each.
 
     Key features include:
@@ -538,7 +538,7 @@ def main():
     current_body = ""  # Initialize the current body content
     total_methods = len(methods)  # Get the total number of methods
     
-    for index, (name, code, *_) in enumerate(reversed(methods), start=1):  # Iterate through methods in reverse order with index
+    for index, (name, code, *_) in enumerate(methods, start=1):  # Iterate through methods in with index
         code = code.strip("\n")  # Remove all surrounding blank lines safely
         
         if current_body:  # If there is already content in the body
