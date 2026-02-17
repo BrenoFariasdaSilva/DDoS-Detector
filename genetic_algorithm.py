@@ -268,6 +268,7 @@ def get_default_config():
                 "test_f1_score",
                 "test_fpr",
                 "test_fnr",
+                "feature_extraction_time_s",
                 "training_time_s",
                 "testing_time_s",
                 "elapsed_run_time",
@@ -1089,7 +1090,11 @@ def prepare_test_data_for_loaded_model(csv_path, features):
     if split_data is None or split_data[0] is None:  # Verify if splitting failed
         return None  # Exit early on split failure
 
-    X_train, X_test, y_train, y_test, feature_names = split_data  # Unpack split results
+    if isinstance(split_data, (list, tuple)) and len(split_data) == 6:
+        X_train, X_test, y_train, y_test, feature_names, _scaling_time = split_data
+    else:
+        print(f"{BackgroundColors.RED}Unexpected split_dataset output format. Expected 6 elements but got {len(split_data) if isinstance(split_data, (list, tuple)) else 'non-list/tuple'}{Style.RESET_ALL}")
+        return None  # Exit early on unexpected split format
     
     sel_indices = [i for i, f in enumerate(feature_names) if f in features]  # Map loaded feature names to column indices
     if not sel_indices:  # Verify if no matching features were found
@@ -1312,13 +1317,19 @@ def split_dataset(df, csv_path, test_size=0.2):
     )  # Split the dataset (stratified to preserve class proportions)
 
     scaler = StandardScaler()  # Initialize the scaler
+    start_scale = time.perf_counter()  # High-resolution start for scaling
     X_train_scaled = scaler.fit_transform(X_train)  # Fit scaler on training set and transform
     X_test_scaled = scaler.transform(X_test)  # Transform test set with the same scaler
+    scaling_time = time.perf_counter() - start_scale  # Calculate scaling duration
+    try:
+        scaler._scaling_time = round(float(scaling_time), 6)
+    except Exception:
+        pass
 
     y_train_np = np.array(y_train)  # Convert y_train and y_test to numpy arrays for fast indexing
     y_test_np = np.array(y_test)  # Convert y_train and y_test to numpy arrays for fast indexing
 
-    result = X_train_scaled, X_test_scaled, y_train_np, y_test_np, X.columns  # Prepare result tuple
+    result = X_train_scaled, X_test_scaled, y_train_np, y_test_np, X.columns, round(float(scaling_time), 6)  # Prepare result tuple (include scaling time)
     cache_preprocessed_data(result, cache_file, csv_path)  # Cache the preprocessed data with size comparison
     return result  # Return the splits and feature names
 
@@ -1377,7 +1388,14 @@ def prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations):
         print(f"{BackgroundColors.RED}Dataset empty after preprocessing. Exiting.{Style.RESET_ALL}")
         return None  # Exit early
 
-    X_train, X_test, y_train, y_test, feature_names = split_dataset(cleaned_df, csv_path, test_size=CONFIG["dataset"]["test_size"])  # Split dataset
+    split_res = split_dataset(cleaned_df, csv_path, test_size=CONFIG["dataset"]["test_size"])  # Split dataset (may include scaling time)
+    if split_res is None or split_res[0] is None:  # If splitting failed
+        return None  # Exit early
+    if isinstance(split_res, (list, tuple)) and len(split_res) == 6:
+        X_train, X_test, y_train, y_test, feature_names, split_scaling_time = split_res
+    else:
+        X_train, X_test, y_train, y_test, feature_names = split_res
+        split_scaling_time = None
     if X_train is None:  # If splitting failed
         return None  # Exit early
 
@@ -2716,7 +2734,7 @@ def run_single_ga_iteration(
     :return: Dict with best_ind, metrics, best_features or None if failed.
     """
 
-    iteration_start_time = time.time()  # Start tracking total iteration time
+    iteration_start_time = time.perf_counter()  # Start tracking total iteration time
 
     feature_count = len(feature_names) if feature_names is not None else 0  # Count of features
 
@@ -2794,7 +2812,7 @@ def run_single_ga_iteration(
         f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1
     ]  # Extract best features
 
-    iteration_elapsed_time = time.time() - iteration_start_time  # Calculate total iteration time
+    iteration_elapsed_time = time.perf_counter() - iteration_start_time  # Calculate total iteration time
     metrics_with_iteration_time = metrics + (iteration_elapsed_time,)  # Add total iteration time as 7th element
 
     try:  # Try to generate comprehensive convergence plots (if function exists)
@@ -4026,14 +4044,20 @@ def train_and_save_final_model(best_feats_local, X, y, feature_names, X_test, mo
 
     df_features_local = prepare_feature_dataframe(X, feature_names)  # Convert feature matrix to DataFrame with column names
     scaler_local = StandardScaler()  # Initialize standard scaler for feature normalization
+    start_scale_local = time.perf_counter()
     X_scaled_local = scaler_local.fit_transform(df_features_local.values)  # Fit scaler on features and transform to normalized values
+    scaling_time_local = time.perf_counter() - start_scale_local
+    try:
+        scaler_local._scaling_time = round(float(scaling_time_local), 6)
+    except Exception:
+        pass
     sel_indices_local = [i for i, f in enumerate(feature_names) if f in best_feats_local]  # Get indices of selected features
     X_final_local = X_scaled_local[:, sel_indices_local] if sel_indices_local else X_scaled_local  # Select only chosen feature columns from scaled data
     X_test_selected_local = X_test[:, sel_indices_local] if sel_indices_local and X_test is not None else X_test  # Select same feature columns from test data
     model_local = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=CONFIG["multiprocessing"]["n_jobs"])  # Instantiate Random Forest classifier with 100 trees
-    start_train_local = time.time()  # Record training start time
+    start_train_local = time.perf_counter()  # Record training start time
     model_local.fit(X_final_local, y)  # Train model on selected features
-    training_time_local = time.time() - start_train_local  # Calculate training duration
+    training_time_local = time.perf_counter() - start_train_local  # Calculate training duration
 
     dump(model_local, model_path_local)  # Serialize and save trained model to disk
     dump(scaler_local, scaler_path_local)  # Serialize and save fitted scaler to disk
@@ -4047,7 +4071,7 @@ def train_and_save_final_model(best_feats_local, X, y, feature_names, X_test, mo
     print(f"{BackgroundColors.GREEN}Saved scaler to {BackgroundColors.CYAN}{scaler_path_local}{Style.RESET_ALL}")
     print(f"{BackgroundColors.GREEN}Saved params to {BackgroundColors.CYAN}{params_path_local}{Style.RESET_ALL}")
 
-    return model_local, model_params_local, training_time_local, X_test_selected_local
+    return model_local, model_params_local, training_time_local, X_test_selected_local, round(float(scaling_time_local), 6)
 
 
 def evaluate_final_on_test(model_local, X_test_selected_local, y_test):
@@ -4066,7 +4090,7 @@ def evaluate_final_on_test(model_local, X_test_selected_local, y_test):
     eval_m = None  # Initialize evaluation metrics as None
     testing_time_local = None  # Initialize testing time as None
     try:  # Attempt to evaluate model on test set
-        start_test_local = time.time()  # Record testing start time
+        start_test_local = time.perf_counter()  # Record testing start time
         y_pred_local = model_local.predict(X_test_selected_local)  # Generate predictions on test set
         acc_local = accuracy_score(y_test, y_pred_local)  # Calculate accuracy metric
         prec_local = precision_score(y_test, y_pred_local, average="weighted", zero_division=0)  # Calculate weighted precision metric
@@ -4101,7 +4125,7 @@ def evaluate_final_on_test(model_local, X_test_selected_local, y_test):
             total_support_local = float(supports_local.sum()) if supports_local.sum() > 0 else 1.0  # Calculate total support across all classes
             fpr_local = float(sum(v * s for v, s in fprs_local) / total_support_local)  # Calculate weighted average FPR
             fnr_local = float(sum(v * s for v, s in fnrs_local) / total_support_local)  # Calculate weighted average FNR
-        testing_time_local = time.time() - start_test_local  # Calculate testing duration
+        testing_time_local = time.perf_counter() - start_test_local  # Calculate testing duration
         eval_m = (acc_local, prec_local, rec_local, f1_local, fpr_local, fnr_local, testing_time_local)  # Package all metrics into tuple
     except Exception:  # Catch any evaluation errors
         eval_m = (None, None, None, None, None, None, None)  # Return tuple of None values on error
@@ -4123,6 +4147,7 @@ def build_and_write_run_results(
     rfe_ranking,
     output_dir,
     csv_path,
+    feature_extraction_time_s=None,
 ):
     """
     Build the consolidated run row dictionary for the best GA individual and
@@ -4169,9 +4194,10 @@ def build_and_write_run_results(
         "test_f1_score": truncate_value(rf_metrics_local[9]) if rf_metrics_local and len(rf_metrics_local) > 9 else None,
         "test_fpr": truncate_value(rf_metrics_local[10]) if rf_metrics_local and len(rf_metrics_local) > 10 else None,
         "test_fnr": truncate_value(rf_metrics_local[11]) if rf_metrics_local and len(rf_metrics_local) > 11 else None,
-        "training_time_s": int(round(training_time_local)) if training_time_local is not None else None,
-        "testing_time_s": int(round(testing_time_local)) if testing_time_local is not None else None,
-        "elapsed_run_time": int(round(elapsed_run_time)) if elapsed_run_time is not None else None,
+        "feature_extraction_time_s": round(float(feature_extraction_time_s), 6) if feature_extraction_time_s is not None else None,
+        "training_time_s": round(float(training_time_local), 6) if training_time_local is not None else None,
+        "testing_time_s": round(float(testing_time_local), 6) if testing_time_local is not None else None,
+        "elapsed_run_time": round(float(elapsed_run_time), 6) if elapsed_run_time is not None else None,
         "hardware": json.dumps(get_hardware_specifications()),
         "best_features": json.dumps(best_features),
         "rfe_ranking": json.dumps(rfe_ranking),
@@ -4249,7 +4275,7 @@ def save_results(
         params_path,
     ) = prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generations, rfe_ranking, y, y_test, cxpb, mutpb)
 
-    model_local, model_params, training_time_s, X_test_selected = train_and_save_final_model(
+    model_local, model_params, training_time_s, X_test_selected, final_scaling_time = train_and_save_final_model(
         best_features, X, y, feature_names, X_test, model_path, scaler_path, features_path, params_path
     )
     
@@ -4257,6 +4283,11 @@ def save_results(
     
     output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/"  # Directory to save outputs
     os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
+
+    try:
+        feature_extraction_time_s = round(float(final_scaling_time), 6) if final_scaling_time is not None else None
+    except Exception:
+        feature_extraction_time_s = None
 
     build_and_write_run_results(
         ts,
@@ -4273,6 +4304,7 @@ def save_results(
         rfe_ranking,
         output_dir,
         csv_path,
+        feature_extraction_time_s,
     )
 
     return {
@@ -4459,13 +4491,13 @@ def run_population_sweep(
         cpu_procs = CPU_PROCESSES  # Read CPU_PROCESSES value
     shared_pool = multiprocessing.Pool(processes=cpu_procs if cpu_procs else None)  # Create a shared multiprocessing pool for parallel GA runs
 
-    start_run_time = time.time()  # Start timing the entire run process
+    start_run_time = time.perf_counter()  # Start timing the entire run process
     for run in range(runs):  # For each run
         for pop_size in range(min_pop, max_pop + 1):  # For each population size
             send_telegram_message(TELEGRAM_BOT, [
                 f"Run {run + 1}/{runs} - population size {pop_size}/{max_pop}"
             ])  # Send start message for this run and population size
-            start_pop_time = time.time()  # Start timing this population size iteration
+            start_pop_time = time.perf_counter()  # Start timing this population size iteration
             result = run_single_ga_iteration(
                 X_train,
                 y_train,
@@ -4486,7 +4518,7 @@ def run_population_sweep(
                 folds,
                 shared_pool=shared_pool,
             )  # Run GA iteration
-            elapsed_pop_time = time.time() - start_pop_time  # Calculate elapsed time for this population size
+            elapsed_pop_time = time.perf_counter() - start_pop_time  # Calculate elapsed time for this population size
             if result:  # If result is valid
                 results[pop_size]["runs"].append(result)  # Append result to runs list
 
@@ -4525,7 +4557,7 @@ def run_population_sweep(
             f"{BackgroundColors.YELLOW}Skipping multi-run comparison plots due to error: {e}{Style.RESET_ALL}"
         )  # Log warning but continue
 
-    elapsed_run_time = time.time() - start_run_time  # Calculate elapsed time for the entire run process
+    elapsed_run_time = time.perf_counter() - start_run_time  # Calculate elapsed time for the entire run process
     
     if best_result:  # If a best result was found
         best_pop_size, runs_list, common_features = best_result  # Unpack the best result
