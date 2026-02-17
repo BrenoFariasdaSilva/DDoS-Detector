@@ -2403,7 +2403,13 @@ def run_genetic_algorithm_loop(
             try:  # Track hypervolume metric
                 pareto_front = extract_pareto_front(population)  # Extract Pareto front (recompute if needed or reuse from above)
                 hv = calculate_hypervolume(pareto_front)  # Calculate hypervolume for Pareto front
-                hypervolume_history.append(float(hv))  # Record hypervolume
+                if hv is None:  # If hypervolume calculation returns None, record zero
+                    hypervolume_history.append(0.0)  # Record zero
+                else:  # If hypervolume is valid, record the value
+                    try:  # Try to convert hypervolume to float for recording
+                        hypervolume_history.append(float(hv))  # Record hypervolume
+                    except Exception:  # If conversion fails
+                        hypervolume_history.append(0.0)
             except Exception:  # If calculation fails
                 hypervolume_history.append(0.0)  # Record zero
 
