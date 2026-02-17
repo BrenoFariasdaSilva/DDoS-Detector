@@ -92,7 +92,7 @@ from sklearn.metrics import (  # For model evaluation
 )
 from sklearn.model_selection import StratifiedKFold, train_test_split  # For splitting the dataset and cross-validation
 from sklearn.preprocessing import StandardScaler  # For feature scaling
-from telegram_bot import TelegramBot, send_telegram_message, send_exception_via_telegram, setup_global_exception_hook  # For Telegram notifications
+from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For Telegram notifications
 from tqdm import tqdm  # For progress bars
 from typing import Any, Callable  # For type hints
 
