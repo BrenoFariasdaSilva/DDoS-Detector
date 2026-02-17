@@ -54,12 +54,13 @@ import platform  # For getting the operating system name
 import shutil  # For checking disk usage
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
+import traceback  # For printing tracebacks on exceptions
 from colorama import Style  # For coloring the terminal output
 from fastparquet import ParquetFile  # For handling Parquet file format
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from scipy.io import arff as scipy_arff  # Used to read ARFF files
-from telegram_bot import TelegramBot, send_telegram_message  # For sending progress messages to Telegram
+from telegram_bot import TelegramBot, send_telegram_message, send_exception_via_telegram, setup_global_exception_hook  # For Telegram utilities and global exception hook
 from tqdm import tqdm  # For showing a progress bar
 
 
@@ -100,6 +101,9 @@ RUN_FUNCTIONS = {
 }
 
 
+setup_global_exception_hook()  # Set global exception hook to shared Telegram handler
+
+
 def verbose_output(true_string="", false_string=""):
     """
     Outputs a message if the VERBOSE constant is set to True.
@@ -109,10 +113,15 @@ def verbose_output(true_string="", false_string=""):
     :return: None
     """
 
-    if VERBOSE and true_string != "":  # If VERBOSE is True and a true_string was provided
-        print(true_string)  # Output the true statement string
-    elif false_string != "":  # If a false_string was provided
-        print(false_string)  # Output the false statement string
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        if VERBOSE and true_string != "":  # If VERBOSE is True and a true_string was provided
+            print(true_string)  # Output the true statement string
+        elif false_string != "":  # If a false_string was provided
+            print(false_string)  # Output the false statement string
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def verify_dot_env_file():
@@ -122,12 +131,17 @@ def verify_dot_env_file():
     :return: True if the .env file exists, False otherwise
     """
 
-    env_path = Path(__file__).parent / ".env"  # Path to the .env file
-    if not env_path.exists():  # If the .env file does not exist
-        print(f"{BackgroundColors.CYAN}.env{BackgroundColors.YELLOW} file not found at {BackgroundColors.CYAN}{env_path}{BackgroundColors.YELLOW}. Telegram messages may not be sent.{Style.RESET_ALL}")
-        return False  # Return False
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        env_path = Path(__file__).parent / ".env"  # Path to the .env file
+        if not env_path.exists():  # If the .env file does not exist
+            print(f"{BackgroundColors.CYAN}.env{BackgroundColors.YELLOW} file not found at {BackgroundColors.CYAN}{env_path}{BackgroundColors.YELLOW}. Telegram messages may not be sent.{Style.RESET_ALL}")
+            return False  # Return False
 
-    return True  # Return True if the .env file exists
+        return True  # Return True if the .env file exists
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def setup_telegram_bot():
@@ -137,21 +151,26 @@ def setup_telegram_bot():
     :return: None
     """
     
-    verbose_output(
-        f"{BackgroundColors.GREEN}Setting up Telegram bot for messages...{Style.RESET_ALL}"
-    )  # Output the verbose message
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Setting up Telegram bot for messages...{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    verify_dot_env_file()  # Verify if the .env file exists
+        verify_dot_env_file()  # Verify if the .env file exists
 
-    global TELEGRAM_BOT  # Declare the module-global telegram_bot variable
+        global TELEGRAM_BOT  # Declare the module-global telegram_bot variable
 
-    try:  # Try to initialize the Telegram bot
-        TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
-        telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
-        telegram_module.RUNNING_CODE = os.path.basename(__file__)
-    except Exception as e:
-        print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
-        TELEGRAM_BOT = None  # Set to None if initialization fails
+        try:  # Try to initialize the Telegram bot
+            TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
+            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
+            telegram_module.RUNNING_CODE = os.path.basename(__file__)
+        except Exception as e:
+            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+            TELEGRAM_BOT = None  # Set to None if initialization fails
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def parse_cli_arguments():
@@ -161,29 +180,34 @@ def parse_cli_arguments():
     :return: Parsed ArgumentParser namespace.
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Parsing command-line arguments...{Style.RESET_ALL}"
-    )  # Output the verbose message
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Parsing command-line arguments...{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    parser = argparse.ArgumentParser(
-        description="Multi-Format Dataset Converter: convert ARFF/CSV/Parquet/TXT datasets"
-    )  # Create the argument parser
+        parser = argparse.ArgumentParser(
+            description="Multi-Format Dataset Converter: convert ARFF/CSV/Parquet/TXT datasets"
+        )  # Create the argument parser
 
-    parser.add_argument(
-        "-i", "--input", type=str, help="Input path (file or directory). If not provided, uses ./Input"
-    )  # Input path argument
-    parser.add_argument(
-        "-o", "--output", type=str, help="Output directory. If not provided, uses ./Output"
-    )  # Output directory argument
-    parser.add_argument(
-        "-f",
-        "--formats",
-        type=str,
-        help="Comma-separated output formats to produce (arff,csv,parquet,txt). If not provided, all formats are produced",
-    )  # Output formats argument
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")  # Verbose mode flag
+        parser.add_argument(
+            "-i", "--input", type=str, help="Input path (file or directory). If not provided, uses ./Input"
+        )  # Input path argument
+        parser.add_argument(
+            "-o", "--output", type=str, help="Output directory. If not provided, uses ./Output"
+        )  # Output directory argument
+        parser.add_argument(
+            "-f",
+            "--formats",
+            type=str,
+            help="Comma-separated output formats to produce (arff,csv,parquet,txt). If not provided, all formats are produced",
+        )  # Output formats argument
+        parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")  # Verbose mode flag
 
-    return parser.parse_args()  # Return parsed CLI arguments
+        return parser.parse_args()  # Return parsed CLI arguments
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def verify_filepath_exists(filepath):
@@ -194,11 +218,16 @@ def verify_filepath_exists(filepath):
     :return: True if the file or folder exists, False otherwise
     """
 
-    verbose_output(
-        true_string=f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
-    )  # Output the verbose message
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            true_string=f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
+        return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def resolve_io_paths(args):
@@ -209,31 +238,36 @@ def resolve_io_paths(args):
     :return: Tuple (input_path, output_path).
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Resolving input/output paths...{Style.RESET_ALL}"
-    )  # Output the verbose message
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Resolving input/output paths...{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    input_path = args.input if args.input else INPUT_DIRECTORY  # Resolve input path
-    output_path = args.output if args.output else OUTPUT_DIRECTORY  # Resolve output path
+        input_path = args.input if args.input else INPUT_DIRECTORY  # Resolve input path
+        output_path = args.output if args.output else OUTPUT_DIRECTORY  # Resolve output path
 
-    if args.input:  # If a custom input path was provided
-        if not verify_filepath_exists(input_path):  # Check if it exists
-            print(
-                f"{BackgroundColors.RED}Specified input path does not exist: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
-            )  # Output error message
-            return None, None  # Invalid path, exit early
-    else:  # No custom input path
-        if not verify_filepath_exists(INPUT_DIRECTORY):  # Check default folder
-            create_directories(INPUT_DIRECTORY)  # Create default folder
-            print(
-                f"{BackgroundColors.RED}Input folder does not exist: {INPUT_DIRECTORY}{Style.RESET_ALL}"
-            )  # Output error message
-            return None, None  # Invalid input directory
+        if args.input:  # If a custom input path was provided
+            if not verify_filepath_exists(input_path):  # Check if it exists
+                print(
+                    f"{BackgroundColors.RED}Specified input path does not exist: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
+                )  # Output error message
+                return None, None  # Invalid path, exit early
+        else:  # No custom input path
+            if not verify_filepath_exists(INPUT_DIRECTORY):  # Check default folder
+                create_directories(INPUT_DIRECTORY)  # Create default folder
+                print(
+                    f"{BackgroundColors.RED}Input folder does not exist: {INPUT_DIRECTORY}{Style.RESET_ALL}"
+                )  # Output error message
+                return None, None  # Invalid input directory
 
-    if not verify_filepath_exists(output_path):  # If output directory does not exist
-        create_directories(output_path)  # Create output directory
+        if not verify_filepath_exists(output_path):  # If output directory does not exist
+            create_directories(output_path)  # Create output directory
 
-    return input_path, output_path  # Return validated paths
+        return input_path, output_path  # Return validated paths
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def configure_verbose_mode(args):
@@ -244,9 +278,14 @@ def configure_verbose_mode(args):
     :return: None
     """
 
-    if args.verbose:  # If verbose mode requested
-        global VERBOSE  # Use global variable
-        VERBOSE = True  # Enable verbose mode
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        if args.verbose:  # If verbose mode requested
+            global VERBOSE  # Use global variable
+            VERBOSE = True  # Enable verbose mode
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def create_directories(directory_name):
@@ -257,12 +296,17 @@ def create_directories(directory_name):
     :return: None
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Creating directory: {BackgroundColors.CYAN}{directory_name}{Style.RESET_ALL}"
-    )  # Output the verbose message
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Creating directory: {BackgroundColors.CYAN}{directory_name}{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    if not os.path.exists(directory_name):  # If the directory does not exist
-        os.makedirs(directory_name)  # Create the directory
+        if not os.path.exists(directory_name):  # If the directory does not exist
+            os.makedirs(directory_name)  # Create the directory
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def get_dataset_files(directory=INPUT_DIRECTORY):
@@ -273,27 +317,32 @@ def get_dataset_files(directory=INPUT_DIRECTORY):
     :return: List of paths to dataset files.
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Searching for dataset files in: {BackgroundColors.CYAN}{directory}{Style.RESET_ALL}"
-    )  # Output the verbose message
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Searching for dataset files in: {BackgroundColors.CYAN}{directory}{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    dataset_files = []  # List to store paths of dataset files
-    for root, dirs, files in os.walk(directory):  # Walk through the directory and its subdirectories
-        if any(
-            ignore_word.lower() in root.lower() for ignore_word in IGNORE_DIRECTORY_NAMED_WITH
-        ):  # Verify if the current directory contains any of the ignore words
-            continue  # If the current directory contains any of the ignore words, skip it
+        dataset_files = []  # List to store paths of dataset files
+        for root, dirs, files in os.walk(directory):  # Walk through the directory and its subdirectories
+            if any(
+                ignore_word.lower() in root.lower() for ignore_word in IGNORE_DIRECTORY_NAMED_WITH
+            ):  # Verify if the current directory contains any of the ignore words
+                continue  # If the current directory contains any of the ignore words, skip it
 
-        for file in files:  # Iterate through files in the current directory
-            if os.path.splitext(file)[1].lower() in [
-                ".arff",
-                ".csv",
-                ".txt",
-                ".parquet",
-            ]:  # Verify if the file has a valid extension
-                dataset_files.append(os.path.join(root, file))  # Append the full path of the file to the list
+            for file in files:  # Iterate through files in the current directory
+                if os.path.splitext(file)[1].lower() in [
+                    ".arff",
+                    ".csv",
+                    ".txt",
+                    ".parquet",
+                ]:  # Verify if the file has a valid extension
+                    dataset_files.append(os.path.join(root, file))  # Append the full path of the file to the list
 
-    return dataset_files  # Return the list of dataset files
+        return dataset_files  # Return the list of dataset files
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def resolve_dataset_files(input_directory):
@@ -304,10 +353,15 @@ def resolve_dataset_files(input_directory):
     :return: List of dataset file paths.
     """
 
-    if os.path.isfile(input_directory):  # If the input directory is actually a file
-        return [input_directory]  # Process only that one file
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        if os.path.isfile(input_directory):  # If the input directory is actually a file
+            return [input_directory]  # Process only that one file
 
-    return get_dataset_files(input_directory)  # Otherwise, scan directory recursively
+        return get_dataset_files(input_directory)  # Otherwise, scan directory recursively
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def resolve_formats(formats):
@@ -318,13 +372,18 @@ def resolve_formats(formats):
     :return: Cleaned list of formats.
     """
 
-    if formats is None:  # If no specific formats were provided
-        return ["arff", "csv", "parquet", "txt"]  # Default to all supported formats
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        if formats is None:  # If no specific formats were provided
+            return ["arff", "csv", "parquet", "txt"]  # Default to all supported formats
 
-    if isinstance(formats, str):  # If provided as CSV string
-        return [f.strip().lower().lstrip(".") for f in formats.split(",") if f.strip()]  # Split and clean
+        if isinstance(formats, str):  # If provided as CSV string
+            return [f.strip().lower().lstrip(".") for f in formats.split(",") if f.strip()]  # Split and clean
 
-    return [f.strip().lower().lstrip(".") for f in formats if isinstance(f, str)]  # Clean list
+        return [f.strip().lower().lstrip(".") for f in formats if isinstance(f, str)]  # Clean list
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def resolve_destination_directory(input_directory, input_path, output_directory):
@@ -337,11 +396,16 @@ def resolve_destination_directory(input_directory, input_path, output_directory)
     :return: Destination directory path.
     """
 
-    if os.path.isfile(input_directory):  # If converting a single file
-        return output_directory  # Save directly
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        if os.path.isfile(input_directory):  # If converting a single file
+            return output_directory  # Save directly
 
-    rel_dir = os.path.relpath(os.path.dirname(input_path), input_directory)  # Subdir path
-    return os.path.join(output_directory, rel_dir) if rel_dir != "." else output_directory  # Preserve structure
+        rel_dir = os.path.relpath(os.path.dirname(input_path), input_directory)  # Subdir path
+        return os.path.join(output_directory, rel_dir) if rel_dir != "." else output_directory  # Preserve structure
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def get_free_space_bytes(path):
@@ -353,20 +417,25 @@ def get_free_space_bytes(path):
     :return: Free space in bytes.
     """
 
-    target = path if os.path.isdir(path) else os.path.dirname(path) or "."  # Resolve target directory
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        target = path if os.path.isdir(path) else os.path.dirname(path) or "."  # Resolve target directory
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Verifying free space at: {BackgroundColors.CYAN}{target}{Style.RESET_ALL}"
-    )  # Output verbose message
-
-    try:  # Try to retrieve disk usage
-        usage = shutil.disk_usage(target)  # Get disk usage statistics
-        return usage.free  # Return free space
-    except Exception as e:  # Catch any errors
         verbose_output(
-            f"{BackgroundColors.RED}Failed to retrieve disk usage for {target}: {e}{Style.RESET_ALL}"
-        )  # Log error
-        return 0  # Fallback to zero
+            f"{BackgroundColors.GREEN}Verifying free space at: {BackgroundColors.CYAN}{target}{Style.RESET_ALL}"
+        )  # Output verbose message
+
+        try:  # Try to retrieve disk usage
+            usage = shutil.disk_usage(target)  # Get disk usage statistics
+            return usage.free  # Return free space
+        except Exception as e:  # Catch any errors
+            verbose_output(
+                f"{BackgroundColors.RED}Failed to retrieve disk usage for {target}: {e}{Style.RESET_ALL}"
+            )  # Log error
+            return 0  # Fallback to zero
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def format_size_units(size_bytes):
@@ -377,25 +446,30 @@ def format_size_units(size_bytes):
     :return: Formatted size string.
     """
 
-    if size_bytes is None:  # If size_bytes is None
-        return "0 Bytes"  # Return 0 Bytes
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        if size_bytes is None:  # If size_bytes is None
+            return "0 Bytes"  # Return 0 Bytes
 
-    try:  # Try to convert to float
-        size = float(size_bytes)  # Convert to float
-    except Exception:  # Catch conversion errors
-        return str(size_bytes)  # Return original value as string
+        try:  # Try to convert to float
+            size = float(size_bytes)  # Convert to float
+        except Exception:  # Catch conversion errors
+            return str(size_bytes)  # Return original value as string
 
-    for unit in ("TB", "GB", "MB", "KB"):  # Iterate through units
-        if size >= 1024**4 and unit == "TB":  # Terabytes
-            return f"{size / (1024 ** 4):.2f} TB"  # Return formatted string
-        if size >= 1024**3 and unit == "GB":  # Gigabytes
-            return f"{size / (1024 ** 3):.2f} GB"  # Return formatted string
-        if size >= 1024**2 and unit == "MB":  # Megabytes
-            return f"{size / (1024 ** 2):.2f} MB"  # Return formatted string
-        if size >= 1024**1 and unit == "KB":  # Kilobytes
-            return f"{size / 1024:.2f} KB"  # Return formatted string
+        for unit in ("TB", "GB", "MB", "KB"):  # Iterate through units
+            if size >= 1024**4 and unit == "TB":  # Terabytes
+                return f"{size / (1024 ** 4):.2f} TB"  # Return formatted string
+            if size >= 1024**3 and unit == "GB":  # Gigabytes
+                return f"{size / (1024 ** 3):.2f} GB"  # Return formatted string
+            if size >= 1024**2 and unit == "MB":  # Megabytes
+                return f"{size / (1024 ** 2):.2f} MB"  # Return formatted string
+            if size >= 1024**1 and unit == "KB":  # Kilobytes
+                return f"{size / 1024:.2f} KB"  # Return formatted string
 
-    return f"{int(size)} Bytes"  # Return bytes if less than 1 KB
+        return f"{int(size)} Bytes"  # Return bytes if less than 1 KB
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def has_enough_space_for_path(path, required_bytes):
@@ -408,20 +482,25 @@ def has_enough_space_for_path(path, required_bytes):
     :return: True if there is enough free space, otherwise False.
     """
 
-    parent = os.path.dirname(path) or "."  # Determine the directory to inspect
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        parent = os.path.dirname(path) or "."  # Determine the directory to inspect
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Evaluating free space for: {BackgroundColors.CYAN}{parent}{Style.RESET_ALL}"
-    )  # Output verbose message
+        verbose_output(
+            f"{BackgroundColors.GREEN}Evaluating free space for: {BackgroundColors.CYAN}{parent}{Style.RESET_ALL}"
+        )  # Output verbose message
 
-    free = get_free_space_bytes(parent)  # Retrieve free space
-    free_str = format_size_units(free)  # Format free space
-    req_str = format_size_units(required_bytes)  # Format required space
-    verbose_output(
-        f"{BackgroundColors.GREEN}Free space: {BackgroundColors.CYAN}{free_str}{BackgroundColors.GREEN}; required: {BackgroundColors.CYAN}{req_str}{Style.RESET_ALL}"
-    )  # Log details
+        free = get_free_space_bytes(parent)  # Retrieve free space
+        free_str = format_size_units(free)  # Format free space
+        req_str = format_size_units(required_bytes)  # Format required space
+        verbose_output(
+            f"{BackgroundColors.GREEN}Free space: {BackgroundColors.CYAN}{free_str}{BackgroundColors.GREEN}; required: {BackgroundColors.CYAN}{req_str}{Style.RESET_ALL}"
+        )  # Log details
 
-    return free >= required_bytes  # Return comparison result
+        return free >= required_bytes  # Return comparison result
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def ensure_enough_space(path, required_bytes):
@@ -433,11 +512,16 @@ def ensure_enough_space(path, required_bytes):
     :return: None
     """
 
-    if not has_enough_space_for_path(path, required_bytes):  # Verify free space for the write operation
-        free = get_free_space_bytes(os.path.dirname(path) or ".")
-        raise OSError(
-            f"Not enough disk space to write {path}. Free: {format_size_units(free)}; required: {format_size_units(required_bytes)}"
-        )
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        if not has_enough_space_for_path(path, required_bytes):  # Verify free space for the write operation
+            free = get_free_space_bytes(os.path.dirname(path) or ".")
+            raise OSError(
+                f"Not enough disk space to write {path}. Free: {format_size_units(free)}; required: {format_size_units(required_bytes)}"
+            )
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def estimate_bytes_arff(df, overhead, attributes):
@@ -450,21 +534,26 @@ def estimate_bytes_arff(df, overhead, attributes):
     :return: Integer number of required bytes.
     """
 
-    try:  # Attempt ARFF serialization
-        buf = io.StringIO()  # In-memory text buffer
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        try:  # Attempt ARFF serialization
+            buf = io.StringIO()  # In-memory text buffer
 
-        arff_dict = {  # Create a dictionary to hold the ARFF data
-            "description": "",  # Description of the dataset (can be left empty)
-            "relation": "converted_data",  # Name of the relation (dataset)
-            "attributes": attributes,  # List of attributes with their names and types
-            "data": df.values.tolist(),  # Convert the DataFrame values to a list of lists for ARFF data
-        }
+            arff_dict = {  # Create a dictionary to hold the ARFF data
+                "description": "",  # Description of the dataset (can be left empty)
+                "relation": "converted_data",  # Name of the relation (dataset)
+                "attributes": attributes,  # List of attributes with their names and types
+                "data": df.values.tolist(),  # Convert the DataFrame values to a list of lists for ARFF data
+            }
 
-        arff.dump(arff_dict, buf)  # Dump ARFF data into the buffer
+            arff.dump(arff_dict, buf)  # Dump ARFF data into the buffer
 
-        return max(1024, len(buf.getvalue().encode("utf-8")) + overhead)  # Return estimated size with overhead
-    except Exception:  # Fallback: estimate via CSV
-        return max(1024, int(df.memory_usage(deep=True).sum()))  # Estimate size based on DataFrame memory usage
+            return max(1024, len(buf.getvalue().encode("utf-8")) + overhead)  # Return estimated size with overhead
+        except Exception:  # Fallback: estimate via CSV
+            return max(1024, int(df.memory_usage(deep=True).sum()))  # Estimate size based on DataFrame memory usage
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def estimate_bytes_csv(df, overhead):
@@ -476,13 +565,18 @@ def estimate_bytes_csv(df, overhead):
     :return: Integer number of required bytes.
     """
 
-    try:  # Attempt CSV serialization
-        buf = io.StringIO()  # In-memory text buffer
-        df.to_csv(buf, index=False)  # Serialize DataFrame to CSV
-        return max(1024, len(buf.getvalue().encode("utf-8")) + overhead)  # Return estimated size with overhead
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        try:  # Attempt CSV serialization
+            buf = io.StringIO()  # In-memory text buffer
+            df.to_csv(buf, index=False)  # Serialize DataFrame to CSV
+            return max(1024, len(buf.getvalue().encode("utf-8")) + overhead)  # Return estimated size with overhead
 
-    except Exception:  # Fallback to memory usage
-        return max(1024, int(df.memory_usage(deep=True).sum()))  # Estimate size based on DataFrame memory usage
+        except Exception:  # Fallback to memory usage
+            return max(1024, int(df.memory_usage(deep=True).sum()))  # Estimate size based on DataFrame memory usage
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def estimate_bytes_parquet(df):
@@ -493,7 +587,12 @@ def estimate_bytes_parquet(df):
     :return: Integer number of required bytes.
     """
 
-    return max(1024, int(df.memory_usage(deep=True).sum()))  # Estimate size based on DataFrame memory usage
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        return max(1024, int(df.memory_usage(deep=True).sum()))  # Estimate size based on DataFrame memory usage
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def estimate_bytes_from_lines(lines, overhead):
@@ -505,7 +604,12 @@ def estimate_bytes_from_lines(lines, overhead):
     :return: Integer number of required bytes.
     """
 
-    return max(1024, sum(len((ln or "").encode("utf-8")) for ln in lines) + overhead)  # Estimate byte size
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        return max(1024, sum(len((ln or "").encode("utf-8")) for ln in lines) + overhead)  # Estimate byte size
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def clean_parquet_file(input_path, cleaned_path):
@@ -517,12 +621,17 @@ def clean_parquet_file(input_path, cleaned_path):
     :return: None
     """
 
-    df = pd.read_parquet(input_path, engine="fastparquet")  # Read parquet into DataFrame
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        df = pd.read_parquet(input_path, engine="fastparquet")  # Read parquet into DataFrame
 
-    required_bytes = estimate_bytes_parquet(df)  # Estimate bytes needed for cleaned Parquet
-    ensure_enough_space(cleaned_path, required_bytes)  # Ensure enough space to write the cleaned file
+        required_bytes = estimate_bytes_parquet(df)  # Estimate bytes needed for cleaned Parquet
+        ensure_enough_space(cleaned_path, required_bytes)  # Ensure enough space to write the cleaned file
 
-    df.to_parquet(cleaned_path, index=False)  # Write DataFrame back to parquet at destination
+        df.to_parquet(cleaned_path, index=False)  # Write DataFrame back to parquet at destination
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def clean_arff_lines(lines):
@@ -533,24 +642,29 @@ def clean_arff_lines(lines):
     :return: List of cleaned lines with sanitized domain values.
     """
 
-    cleaned_lines = []  # List to store cleaned lines
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        cleaned_lines = []  # List to store cleaned lines
 
-    for line in lines:  # Iterate through each line of the ARFF file
-        if (
-            line.strip().lower().startswith("@attribute") and "{" in line and "}" in line
-        ):  # Verify if the line defines a domain list
-            parts = line.split("{")  # Split before domain
-            before = parts[0]  # Content before the domain
-            domain = parts[1].split("}")[0]  # Extract domain content
-            after = line.split("}")[1]  # Content after domain
+        for line in lines:  # Iterate through each line of the ARFF file
+            if (
+                line.strip().lower().startswith("@attribute") and "{" in line and "}" in line
+            ):  # Verify if the line defines a domain list
+                parts = line.split("{")  # Split before domain
+                before = parts[0]  # Content before the domain
+                domain = parts[1].split("}")[0]  # Extract domain content
+                after = line.split("}")[1]  # Content after domain
 
-            cleaned_domain = ",".join([val.strip() for val in domain.split(",")])  # Strip spaces inside domain list
-            cleaned_line = f"{before}{{{cleaned_domain}}}{after}"  # Construct cleaned line
-            cleaned_lines.append(cleaned_line)  # Add cleaned attribute line
-        else:  # If the line is not an attribute definition
-            cleaned_lines.append(line)  # Keep non-attribute lines unchanged
+                cleaned_domain = ",".join([val.strip() for val in domain.split(",")])  # Strip spaces inside domain list
+                cleaned_line = f"{before}{{{cleaned_domain}}}{after}"  # Construct cleaned line
+                cleaned_lines.append(cleaned_line)  # Add cleaned attribute line
+            else:  # If the line is not an attribute definition
+                cleaned_lines.append(line)  # Keep non-attribute lines unchanged
 
-    return cleaned_lines  # Return the list of cleaned lines
+        return cleaned_lines  # Return the list of cleaned lines
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def clean_csv_or_txt_lines(lines):
@@ -561,15 +675,20 @@ def clean_csv_or_txt_lines(lines):
     :return: List of cleaned lines with sanitized comma-separated values.
     """
 
-    cleaned_lines = []  # List to store cleaned lines
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        cleaned_lines = []  # List to store cleaned lines
 
-    for line in lines:  # Iterate through each line
-        values = line.strip().split(",")  # Split the line on commas
-        cleaned_values = [val.strip() for val in values]  # Strip whitespace
-        cleaned_line = ",".join(cleaned_values) + "\n"  # Join cleaned values and add newline
-        cleaned_lines.append(cleaned_line)  # Add cleaned line
+        for line in lines:  # Iterate through each line
+            values = line.strip().split(",")  # Split the line on commas
+            cleaned_values = [val.strip() for val in values]  # Strip whitespace
+            cleaned_line = ",".join(cleaned_values) + "\n"  # Join cleaned values and add newline
+            cleaned_lines.append(cleaned_line)  # Add cleaned line
 
-    return cleaned_lines  # Return the list of cleaned lines
+        return cleaned_lines  # Return the list of cleaned lines
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def estimate_bytes_for_lines(lines):
@@ -581,11 +700,16 @@ def estimate_bytes_for_lines(lines):
     :return: Estimated byte size.
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Estimating UTF-8 byte size for provided lines...{Style.RESET_ALL}"
-    )  # Output verbose message
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Estimating UTF-8 byte size for provided lines...{Style.RESET_ALL}"
+        )  # Output verbose message
 
-    return sum(len((ln or "").encode("utf-8")) for ln in lines)  # Compute and return byte size
+        return sum(len((ln or "").encode("utf-8")) for ln in lines)  # Compute and return byte size
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def write_cleaned_lines_to_file(cleaned_path, cleaned_lines):
@@ -597,11 +721,16 @@ def write_cleaned_lines_to_file(cleaned_path, cleaned_lines):
     :return: None
     """
 
-    required_bytes = estimate_bytes_for_lines(cleaned_lines)  # Estimate bytes needed for cleaned lines
-    ensure_enough_space(cleaned_path, required_bytes)  # Ensure enough space to write the cleaned file
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        required_bytes = estimate_bytes_for_lines(cleaned_lines)  # Estimate bytes needed for cleaned lines
+        ensure_enough_space(cleaned_path, required_bytes)  # Ensure enough space to write the cleaned file
 
-    with open(cleaned_path, "w", encoding="utf-8") as f:  # Open the cleaned file path for writing
-        f.writelines(cleaned_lines)  # Write all cleaned lines to the output file
+        with open(cleaned_path, "w", encoding="utf-8") as f:  # Open the cleaned file path for writing
+            f.writelines(cleaned_lines)  # Write all cleaned lines to the output file
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def clean_file(input_path, cleaned_path):
@@ -615,29 +744,34 @@ def clean_file(input_path, cleaned_path):
     :return: None
     """
 
-    file_extension = os.path.splitext(input_path)[1].lower()  # Get the file extension of the input file
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        file_extension = os.path.splitext(input_path)[1].lower()  # Get the file extension of the input file
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Cleaning file: {BackgroundColors.CYAN}{input_path}{BackgroundColors.GREEN} and saving to {BackgroundColors.CYAN}{cleaned_path}{Style.RESET_ALL}"
-    )  # Output the verbose message
+        verbose_output(
+            f"{BackgroundColors.GREEN}Cleaning file: {BackgroundColors.CYAN}{input_path}{BackgroundColors.GREEN} and saving to {BackgroundColors.CYAN}{cleaned_path}{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    if file_extension == ".parquet":  # Handle parquet files separately (binary format)
-        clean_parquet_file(input_path, cleaned_path)  # Clean parquet file
-        return  # Exit early after handling parquet
+        if file_extension == ".parquet":  # Handle parquet files separately (binary format)
+            clean_parquet_file(input_path, cleaned_path)  # Clean parquet file
+            return  # Exit early after handling parquet
 
-    with open(input_path, "r", encoding="utf-8") as f:  # Open the input file for reading
-        lines = f.readlines()  # Read all lines from the file
+        with open(input_path, "r", encoding="utf-8") as f:  # Open the input file for reading
+            lines = f.readlines()  # Read all lines from the file
 
-    if file_extension == ".arff":  # Cleaning logic for ARFF files
-        cleaned_lines = clean_arff_lines(lines)  # Clean ARFF lines
-    elif file_extension in [".txt", ".csv"]:  # Cleaning logic for TXT and CSV files
-        cleaned_lines = clean_csv_or_txt_lines(lines)  # Clean TXT/CSV lines
-    else:  # If the file extension is not supported
-        raise ValueError(
-            f"{BackgroundColors.RED}Unsupported file extension: {BackgroundColors.CYAN}{file_extension}{Style.RESET_ALL}"
-        )  # Raise error for unsupported formats
+        if file_extension == ".arff":  # Cleaning logic for ARFF files
+            cleaned_lines = clean_arff_lines(lines)  # Clean ARFF lines
+        elif file_extension in [".txt", ".csv"]:  # Cleaning logic for TXT and CSV files
+            cleaned_lines = clean_csv_or_txt_lines(lines)  # Clean TXT/CSV lines
+        else:  # If the file extension is not supported
+            raise ValueError(
+                f"{BackgroundColors.RED}Unsupported file extension: {BackgroundColors.CYAN}{file_extension}{Style.RESET_ALL}"
+            )  # Raise error for unsupported formats
 
-    write_cleaned_lines_to_file(cleaned_path, cleaned_lines)  # Write cleaned lines to the cleaned file path
+        write_cleaned_lines_to_file(cleaned_path, cleaned_lines)  # Write cleaned lines to the cleaned file path
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def load_arff_with_scipy(input_path):
@@ -648,16 +782,21 @@ def load_arff_with_scipy(input_path):
     :return: pandas DataFrame loaded from the ARFF file.
     """
 
-    data, meta = scipy_arff.loadarff(input_path)  # Load the ARFF file using scipy
-    df = pd.DataFrame(data)  # Convert the loaded data to a DataFrame
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        data, meta = scipy_arff.loadarff(input_path)  # Load the ARFF file using scipy
+        df = pd.DataFrame(data)  # Convert the loaded data to a DataFrame
 
-    for col in df.columns:  # Iterate through each column in the DataFrame
-        if df[col].dtype == object:  # If column contains byte/string data
-            df[col] = df[col].apply(
-                lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
-            )  # Decode bytes to strings
+        for col in df.columns:  # Iterate through each column in the DataFrame
+            if df[col].dtype == object:  # If column contains byte/string data
+                df[col] = df[col].apply(
+                    lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
+                )  # Decode bytes to strings
 
-    return df  # Return the DataFrame with decoded strings
+        return df  # Return the DataFrame with decoded strings
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def load_arff_with_liac(input_path):
@@ -668,10 +807,15 @@ def load_arff_with_liac(input_path):
     :return: pandas DataFrame loaded from the ARFF file.
     """
 
-    with open(input_path, "r", encoding="utf-8") as f:  # Open the ARFF file for reading
-        data = arff.load(f)  # Load using liac-arff
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        with open(input_path, "r", encoding="utf-8") as f:  # Open the ARFF file for reading
+            data = arff.load(f)  # Load using liac-arff
 
-    return pd.DataFrame(data["data"], columns=[attr[0] for attr in data["attributes"]])  # Convert to DataFrame
+        return pd.DataFrame(data["data"], columns=[attr[0] for attr in data["attributes"]])  # Convert to DataFrame
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def load_arff_file(input_path):
@@ -682,17 +826,22 @@ def load_arff_file(input_path):
     :return: pandas DataFrame loaded from the ARFF file.
     """
 
-    try:  # Try loading using scipy
-        return load_arff_with_scipy(input_path)
-    except Exception as e:  # If scipy fails, warn and try liac-arff
-        verbose_output(
-            f"{BackgroundColors.YELLOW}Warning: Failed to load ARFF with scipy ({e}). Trying with liac-arff...{Style.RESET_ALL}"
-        )
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        try:  # Try loading using scipy
+            return load_arff_with_scipy(input_path)
+        except Exception as e:  # If scipy fails, warn and try liac-arff
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Warning: Failed to load ARFF with scipy ({e}). Trying with liac-arff...{Style.RESET_ALL}"
+            )
 
-        try:  # Try loading using liac-arff
-            return load_arff_with_liac(input_path)
-        except Exception as e2:  # If both fail, raise an error
-            raise RuntimeError(f"Failed to load ARFF file with both scipy and liac-arff: {e2}")
+            try:  # Try loading using liac-arff
+                return load_arff_with_liac(input_path)
+            except Exception as e2:  # If both fail, raise an error
+                raise RuntimeError(f"Failed to load ARFF file with both scipy and liac-arff: {e2}")
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def load_csv_file(input_path):
@@ -703,9 +852,14 @@ def load_csv_file(input_path):
     :return: pandas DataFrame containing the loaded dataset.
     """
 
-    df = pd.read_csv(input_path)  # Load the CSV file
-    df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
-    return df  # Return the DataFrame
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        df = pd.read_csv(input_path)  # Load the CSV file
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+        return df  # Return the DataFrame
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def load_parquet_file(input_path):
@@ -716,8 +870,13 @@ def load_parquet_file(input_path):
     :return: pandas DataFrame loaded from the Parquet file.
     """
 
-    pf = ParquetFile(input_path)  # Load the Parquet file using fastparquet
-    return pf.to_pandas()  # Convert the Parquet file to a pandas DataFrame
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        pf = ParquetFile(input_path)  # Load the Parquet file using fastparquet
+        return pf.to_pandas()  # Convert the Parquet file to a pandas DataFrame
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def load_txt_file(input_path):
@@ -728,9 +887,14 @@ def load_txt_file(input_path):
     :return: pandas DataFrame containing the loaded dataset.
     """
 
-    df = pd.read_csv(input_path, sep="\t")  # Load TXT file using tab separator
-    df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
-    return df  # Return the DataFrame
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        df = pd.read_csv(input_path, sep="\t")  # Load TXT file using tab separator
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+        return df  # Return the DataFrame
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def load_dataset(input_path):
@@ -741,25 +905,30 @@ def load_dataset(input_path):
     :return: pandas DataFrame containing the dataset.
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
-    )  # Output the verbose message
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    _, ext = os.path.splitext(input_path)  # Get the file extension of the input file
-    ext = ext.lower()  # Convert the file extension to lowercase
+        _, ext = os.path.splitext(input_path)  # Get the file extension of the input file
+        ext = ext.lower()  # Convert the file extension to lowercase
 
-    if ext == ".arff":  # If the file is in ARFF format
-        df = load_arff_file(input_path)
-    elif ext == ".csv":  # If the file is in CSV format
-        df = load_csv_file(input_path)
-    elif ext == ".parquet":  # If the file is in Parquet format
-        df = load_parquet_file(input_path)
-    elif ext == ".txt":  # If the file is in TXT format
-        df = load_txt_file(input_path)
-    else:  # Unsupported file format
-        raise ValueError(f"Unsupported file format: {ext}")
+        if ext == ".arff":  # If the file is in ARFF format
+            df = load_arff_file(input_path)
+        elif ext == ".csv":  # If the file is in CSV format
+            df = load_csv_file(input_path)
+        elif ext == ".parquet":  # If the file is in Parquet format
+            df = load_parquet_file(input_path)
+        elif ext == ".txt":  # If the file is in TXT format
+            df = load_txt_file(input_path)
+        else:  # Unsupported file format
+            raise ValueError(f"Unsupported file format: {ext}")
 
-    return df  # Return the loaded DataFrame
+        return df  # Return the loaded DataFrame
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def convert_to_arff(df, output_path):
@@ -771,26 +940,31 @@ def convert_to_arff(df, output_path):
     :return: None
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Converting DataFrame to ARFF format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
-    )  # Output the verbose message
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Converting DataFrame to ARFF format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    attributes = [(col, "STRING") for col in df.columns]  # Define all attributes as strings
-    df = df.astype(str)  # Ensure all values are strings
+        attributes = [(col, "STRING") for col in df.columns]  # Define all attributes as strings
+        df = df.astype(str)  # Ensure all values are strings
 
-    arff_dict = {  # Create a dictionary to hold the ARFF data
-        "description": "",  # Description of the dataset (can be left empty)
-        "relation": "converted_data",  # Name of the relation (dataset)
-        "attributes": attributes,  # List of attributes with their names and types
-        "data": df.values.tolist(),  # Convert the DataFrame values to a list of lists for ARFF data
-    }
+        arff_dict = {  # Create a dictionary to hold the ARFF data
+            "description": "",  # Description of the dataset (can be left empty)
+            "relation": "converted_data",  # Name of the relation (dataset)
+            "attributes": attributes,  # List of attributes with their names and types
+            "data": df.values.tolist(),  # Convert the DataFrame values to a list of lists for ARFF data
+        }
 
-    bytes_needed = estimate_bytes_arff(df, 512, attributes)  # Estimate size needed for ARFF output
+        bytes_needed = estimate_bytes_arff(df, 512, attributes)  # Estimate size needed for ARFF output
 
-    ensure_enough_space(output_path, bytes_needed)  # Ensure enough space to write the ARFF file
+        ensure_enough_space(output_path, bytes_needed)  # Ensure enough space to write the ARFF file
 
-    with open(output_path, "w") as f:  # Open the output file for writing
-        arff.dump(arff_dict, f)  # Dump the ARFF data into the file using liac-arff
+        with open(output_path, "w") as f:  # Open the output file for writing
+            arff.dump(arff_dict, f)  # Dump the ARFF data into the file using liac-arff
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def convert_to_csv(df, output_path):
@@ -802,16 +976,21 @@ def convert_to_csv(df, output_path):
     :return: None
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Converting DataFrame to CSV format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
-    )  # Output the verbose message
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Converting DataFrame to CSV format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    bytes_needed = estimate_bytes_csv(df, overhead=512)  # Estimate size needed for CSV output
-    ensure_enough_space(output_path, bytes_needed)  # Ensure enough space to write the CSV file
+        bytes_needed = estimate_bytes_csv(df, overhead=512)  # Estimate size needed for CSV output
+        ensure_enough_space(output_path, bytes_needed)  # Ensure enough space to write the CSV file
 
-    df.to_csv(
-        output_path, index=False
-    )  # Save the DataFrame to the specified output path in CSV format, without the index
+        df.to_csv(
+            output_path, index=False
+        )  # Save the DataFrame to the specified output path in CSV format, without the index
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def convert_to_parquet(df, output_path):
@@ -823,16 +1002,21 @@ def convert_to_parquet(df, output_path):
     :return: None
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Converting DataFrame to PARQUET format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
-    )
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Converting DataFrame to PARQUET format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+        )
 
-    bytes_needed = estimate_bytes_parquet(df)  # Estimate size needed for PARQUET output
-    ensure_enough_space(output_path, bytes_needed)  # Ensure enough space to write the PARQUET file
+        bytes_needed = estimate_bytes_parquet(df)  # Estimate size needed for PARQUET output
+        ensure_enough_space(output_path, bytes_needed)  # Ensure enough space to write the PARQUET file
 
-    df.to_parquet(
-        output_path, index=False
-    )  # Save the DataFrame to the specified output path in PARQUET format, without the index
+        df.to_parquet(
+            output_path, index=False
+        )  # Save the DataFrame to the specified output path in PARQUET format, without the index
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def convert_to_txt(df, output_path):
@@ -844,27 +1028,32 @@ def convert_to_txt(df, output_path):
     :return: None
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Converting DataFrame to TXT format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
-    )  # Output the verbose message
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Converting DataFrame to TXT format and saving to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    try:  # Try to estimate size by dumping to a string buffer
-        buf = io.StringIO()  # Create an in-memory string buffer
-        df.to_csv(buf, sep="\t", index=False)  # Dump DataFrame to TXT in the buffer using tab as separator
-        lines = buf.getvalue().splitlines()  # Get lines from the buffer
-    except Exception:  # Fallback if dumping fails
-        lines = None  # Set lines to None to use memory usage estimation
+        try:  # Try to estimate size by dumping to a string buffer
+            buf = io.StringIO()  # Create an in-memory string buffer
+            df.to_csv(buf, sep="\t", index=False)  # Dump DataFrame to TXT in the buffer using tab as separator
+            lines = buf.getvalue().splitlines()  # Get lines from the buffer
+        except Exception:  # Fallback if dumping fails
+            lines = None  # Set lines to None to use memory usage estimation
 
-    if lines is not None:  # If lines were successfully obtained
-        bytes_needed = estimate_bytes_from_lines(lines, overhead=512)  # Estimate size based on lines
-    else:  # Fallback to memory usage estimation
-        bytes_needed = estimate_bytes_parquet(df)  # Estimate size based on DataFrame memory usage
+        if lines is not None:  # If lines were successfully obtained
+            bytes_needed = estimate_bytes_from_lines(lines, overhead=512)  # Estimate size based on lines
+        else:  # Fallback to memory usage estimation
+            bytes_needed = estimate_bytes_parquet(df)  # Estimate size based on DataFrame memory usage
 
-    ensure_enough_space(output_path, bytes_needed)  # Ensure enough space to write the TXT file
+        ensure_enough_space(output_path, bytes_needed)  # Ensure enough space to write the TXT file
 
-    df.to_csv(
-        output_path, sep="\t", index=False
-    )  # Save the DataFrame to the specified output path in TXT format, using tab as the separator and without the index
+        df.to_csv(
+            output_path, sep="\t", index=False
+        )  # Save the DataFrame to the specified output path in TXT format, using tab as the separator and without the index
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIRECTORY, formats=None):
@@ -879,61 +1068,66 @@ def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIREC
     :return: None
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Batch converting dataset files from {BackgroundColors.CYAN}{input_directory}{BackgroundColors.GREEN} to {BackgroundColors.CYAN}{output_directory}{Style.RESET_ALL}"
-    )  # Output the verbose message
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Batch converting dataset files from {BackgroundColors.CYAN}{input_directory}{BackgroundColors.GREEN} to {BackgroundColors.CYAN}{output_directory}{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    dataset_files = resolve_dataset_files(input_directory)  # Get all dataset files from the input directory
-    len_dataset_files = len(dataset_files)  # Get the number of dataset files found
+        dataset_files = resolve_dataset_files(input_directory)  # Get all dataset files from the input directory
+        len_dataset_files = len(dataset_files)  # Get the number of dataset files found
 
-    if not dataset_files:  # If no dataset files were found
-        print(
-            f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}"
-        )  # Print error message
-        return  # Exit early if there are no files to convert
+        if not dataset_files:  # If no dataset files were found
+            print(
+                f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}"
+            )  # Print error message
+            return  # Exit early if there are no files to convert
 
-    formats_list = resolve_formats(formats)  # Normalize and validate output formats
+        formats_list = resolve_formats(formats)  # Normalize and validate output formats
 
-    pbar = tqdm(
-        dataset_files,
-        desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}",
-        unit="file",
-        colour="green",
-        total=len_dataset_files,
-    )  # Create a progress bar for the conversion process
-    for idx, input_path in enumerate(pbar, start=1):  # Iterate through each dataset file with index
-        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path}")  # Notify progress via Telegram
-        
-        file = os.path.basename(input_path)  # Extract the file name from the full path
-        name, ext = os.path.splitext(file)  # Split file name into base name and extension
-        ext = ext.lower()  # Normalize extension to lowercase
+        pbar = tqdm(
+            dataset_files,
+            desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}",
+            unit="file",
+            colour="green",
+            total=len_dataset_files,
+        )  # Create a progress bar for the conversion process
+        for idx, input_path in enumerate(pbar, start=1):  # Iterate through each dataset file with index
+            send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path}")  # Notify progress via Telegram
+            
+            file = os.path.basename(input_path)  # Extract the file name from the full path
+            name, ext = os.path.splitext(file)  # Split file name into base name and extension
+            ext = ext.lower()  # Normalize extension to lowercase
 
-        pbar.set_postfix_str(
-            f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}"
-        )  # Display current file in progress bar
+            pbar.set_postfix_str(
+                f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}"
+            )  # Display current file in progress bar
 
-        if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Skip unsupported file types
-            continue  # Move to the next file
+            if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Skip unsupported file types
+                continue  # Move to the next file
 
-        dest_dir = resolve_destination_directory(
-            input_directory, input_path, output_directory
-        )  # Determine destination directory for converted files
-        create_directories(dest_dir)  # Ensure destination directory exists
+            dest_dir = resolve_destination_directory(
+                input_directory, input_path, output_directory
+            )  # Determine destination directory for converted files
+            create_directories(dest_dir)  # Ensure destination directory exists
 
-        cleaned_path = os.path.join(dest_dir, f"{name}{ext}")  # Path for saving the cleaned file
-        clean_file(input_path, cleaned_path)  # Clean the file before conversion
+            cleaned_path = os.path.join(dest_dir, f"{name}{ext}")  # Path for saving the cleaned file
+            clean_file(input_path, cleaned_path)  # Clean the file before conversion
 
-        df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame
-        if "arff" in formats_list:  # If ARFF format is requested
-            convert_to_arff(df, os.path.join(dest_dir, f"{name}.arff"))  # Convert and save as ARFF
-        if "csv" in formats_list:  # If CSV format is requested
-            convert_to_csv(df, os.path.join(dest_dir, f"{name}.csv"))  # Convert and save as CSV
-        if "parquet" in formats_list:  # If Parquet format is requested
-            convert_to_parquet(df, os.path.join(dest_dir, f"{name}.parquet"))  # Convert and save as Parquet
-        if "txt" in formats_list:  # If TXT format is requested
-            convert_to_txt(df, os.path.join(dest_dir, f"{name}.txt"))  # Convert and save as TXT
+            df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame
+            if "arff" in formats_list:  # If ARFF format is requested
+                convert_to_arff(df, os.path.join(dest_dir, f"{name}.arff"))  # Convert and save as ARFF
+            if "csv" in formats_list:  # If CSV format is requested
+                convert_to_csv(df, os.path.join(dest_dir, f"{name}.csv"))  # Convert and save as CSV
+            if "parquet" in formats_list:  # If Parquet format is requested
+                convert_to_parquet(df, os.path.join(dest_dir, f"{name}.parquet"))  # Convert and save as Parquet
+            if "txt" in formats_list:  # If TXT format is requested
+                convert_to_txt(df, os.path.join(dest_dir, f"{name}.txt"))  # Convert and save as TXT
 
-        print()  # Print a newline for better readability between files
+            print()  # Print a newline for better readability between files
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def to_seconds(obj):
@@ -944,21 +1138,26 @@ def to_seconds(obj):
     :return: The equivalent time in seconds as a float, or None if conversion fails
     """
     
-    if obj is None:  # None can't be converted
-        return None  # Signal failure to convert
-    if isinstance(obj, (int, float)):  # Already numeric (seconds or timestamp)
-        return float(obj)  # Return as float seconds
-    if hasattr(obj, "total_seconds"):  # Timedelta-like objects
-        try:  # Attempt to call total_seconds()
-            return float(obj.total_seconds())  # Use the total_seconds() method
-        except Exception:
-            pass  # Fallthrough on error
-    if hasattr(obj, "timestamp"):  # Datetime-like objects
-        try:  # Attempt to call timestamp()
-            return float(obj.timestamp())  # Use timestamp() to get seconds since epoch
-        except Exception:
-            pass  # Fallthrough on error
-    return None  # Couldn't convert
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        if obj is None:  # None can't be converted
+            return None  # Signal failure to convert
+        if isinstance(obj, (int, float)):  # Already numeric (seconds or timestamp)
+            return float(obj)  # Return as float seconds
+        if hasattr(obj, "total_seconds"):  # Timedelta-like objects
+            try:  # Attempt to call total_seconds()
+                return float(obj.total_seconds())  # Use the total_seconds() method
+            except Exception:
+                pass  # Fallthrough on error
+        if hasattr(obj, "timestamp"):  # Datetime-like objects
+            try:  # Attempt to call timestamp()
+                return float(obj.timestamp())  # Use timestamp() to get seconds since epoch
+            except Exception:
+                pass  # Fallthrough on error
+        return None  # Couldn't convert
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def calculate_execution_time(start_time, finish_time=None):
@@ -973,45 +1172,50 @@ def calculate_execution_time(start_time, finish_time=None):
     Returns a string like "1h 2m 3s".
     """
 
-    if finish_time is None:  # Single-argument mode: start_time already represents duration or seconds
-        total_seconds = to_seconds(start_time)  # Try to convert provided value to seconds
-        if total_seconds is None:  # Conversion failed
-            try:  # Attempt numeric coercion
-                total_seconds = float(start_time)  # Attempt numeric coercion
-            except Exception:
-                total_seconds = 0.0  # Fallback to zero
-    else:  # Two-argument mode: Compute difference finish_time - start_time
-        st = to_seconds(start_time)  # Convert start to seconds if possible
-        ft = to_seconds(finish_time)  # Convert finish to seconds if possible
-        if st is not None and ft is not None:  # Both converted successfully
-            total_seconds = ft - st  # Direct numeric subtraction
-        else:  # Fallback to other methods
-            try:  # Attempt to subtract (works for datetimes/timedeltas)
-                delta = finish_time - start_time  # Try subtracting (works for datetimes/timedeltas)
-                total_seconds = float(delta.total_seconds())  # Get seconds from the resulting timedelta
-            except Exception:  # Subtraction failed
-                try:  # Final attempt: Numeric coercion
-                    total_seconds = float(finish_time) - float(start_time)  # Final numeric coercion attempt
-                except Exception:  # Numeric coercion failed
-                    total_seconds = 0.0  # Fallback to zero on failure
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        if finish_time is None:  # Single-argument mode: start_time already represents duration or seconds
+            total_seconds = to_seconds(start_time)  # Try to convert provided value to seconds
+            if total_seconds is None:  # Conversion failed
+                try:  # Attempt numeric coercion
+                    total_seconds = float(start_time)  # Attempt numeric coercion
+                except Exception:
+                    total_seconds = 0.0  # Fallback to zero
+        else:  # Two-argument mode: Compute difference finish_time - start_time
+            st = to_seconds(start_time)  # Convert start to seconds if possible
+            ft = to_seconds(finish_time)  # Convert finish to seconds if possible
+            if st is not None and ft is not None:  # Both converted successfully
+                total_seconds = ft - st  # Direct numeric subtraction
+            else:  # Fallback to other methods
+                try:  # Attempt to subtract (works for datetimes/timedeltas)
+                    delta = finish_time - start_time  # Try subtracting (works for datetimes/timedeltas)
+                    total_seconds = float(delta.total_seconds())  # Get seconds from the resulting timedelta
+                except Exception:  # Subtraction failed
+                    try:  # Final attempt: Numeric coercion
+                        total_seconds = float(finish_time) - float(start_time)  # Final numeric coercion attempt
+                    except Exception:  # Numeric coercion failed
+                        total_seconds = 0.0  # Fallback to zero on failure
 
-    if total_seconds is None:  # Ensure a numeric value
-        total_seconds = 0.0  # Default to zero
-    if total_seconds < 0:  # Normalize negative durations
-        total_seconds = abs(total_seconds)  # Use absolute value
+        if total_seconds is None:  # Ensure a numeric value
+            total_seconds = 0.0  # Default to zero
+        if total_seconds < 0:  # Normalize negative durations
+            total_seconds = abs(total_seconds)  # Use absolute value
 
-    days = int(total_seconds // 86400)  # Compute full days
-    hours = int((total_seconds % 86400) // 3600)  # Compute remaining hours
-    minutes = int((total_seconds % 3600) // 60)  # Compute remaining minutes
-    seconds = int(total_seconds % 60)  # Compute remaining seconds
+        days = int(total_seconds // 86400)  # Compute full days
+        hours = int((total_seconds % 86400) // 3600)  # Compute remaining hours
+        minutes = int((total_seconds % 3600) // 60)  # Compute remaining minutes
+        seconds = int(total_seconds % 60)  # Compute remaining seconds
 
-    if days > 0:  # Include days when present
-        return f"{days}d {hours}h {minutes}m {seconds}s"  # Return formatted days+hours+minutes+seconds
-    if hours > 0:  # Include hours when present
-        return f"{hours}h {minutes}m {seconds}s"  # Return formatted hours+minutes+seconds
-    if minutes > 0:  # Include minutes when present
-        return f"{minutes}m {seconds}s"  # Return formatted minutes+seconds
-    return f"{seconds}s"  # Fallback: only seconds
+        if days > 0:  # Include days when present
+            return f"{days}d {hours}h {minutes}m {seconds}s"  # Return formatted days+hours+minutes+seconds
+        if hours > 0:  # Include hours when present
+            return f"{hours}h {minutes}m {seconds}s"  # Return formatted hours+minutes+seconds
+        if minutes > 0:  # Include minutes when present
+            return f"{minutes}m {seconds}s"  # Return formatted minutes+seconds
+        return f"{seconds}s"  # Fallback: only seconds
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def play_sound():
@@ -1020,21 +1224,26 @@ def play_sound():
     :return: None
     """
 
-    current_os = platform.system()  # Get the current operating system
-    if current_os == "Windows":  # If the current operating system is Windows
-        return  # Do nothing
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        current_os = platform.system()  # Get the current operating system
+        if current_os == "Windows":  # If the current operating system is Windows
+            return  # Do nothing
 
-    if verify_filepath_exists(SOUND_FILE):  # If the sound file exists
-        if current_os in SOUND_COMMANDS:  # If the platform.system() is in the SOUND_COMMANDS dictionary
-            os.system(f"{SOUND_COMMANDS[current_os]} {SOUND_FILE}")  # Play the sound
-        else:  # If the platform.system() is not in the SOUND_COMMANDS dictionary
+        if verify_filepath_exists(SOUND_FILE):  # If the sound file exists
+            if current_os in SOUND_COMMANDS:  # If the platform.system() is in the SOUND_COMMANDS dictionary
+                os.system(f"{SOUND_COMMANDS[current_os]} {SOUND_FILE}")  # Play the sound
+            else:  # If the platform.system() is not in the SOUND_COMMANDS dictionary
+                print(
+                    f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not in the {BackgroundColors.CYAN}SOUND_COMMANDS dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}"
+                )
+        else:  # If the sound file does not exist
             print(
-                f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not in the {BackgroundColors.CYAN}SOUND_COMMANDS dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}"
+                f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{SOUND_FILE}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}"
             )
-    else:  # If the sound file does not exist
-        print(
-            f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{SOUND_FILE}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}"
-        )
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def main():
@@ -1044,40 +1253,45 @@ def main():
     :return: None
     """
 
-    print(
-        f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Multi-Format Dataset Converter{BackgroundColors.GREEN}!{Style.RESET_ALL}\n"
-    )  # Output the Welcome message
-    start_time = datetime.datetime.now()  # Get the start time of the program
-    
-    setup_telegram_bot()  # Setup Telegram bot if configured
-    
-    args = parse_cli_arguments()  # Parse CLI arguments
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        print(
+            f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Multi-Format Dataset Converter{BackgroundColors.GREEN}!{Style.RESET_ALL}\n"
+        )  # Output the Welcome message
+        start_time = datetime.datetime.now()  # Get the start time of the program
+        
+        setup_telegram_bot()  # Setup Telegram bot if configured
+        
+        args = parse_cli_arguments()  # Parse CLI arguments
 
-    input_path, output_path = resolve_io_paths(args)  # Resolve and validate paths
-    if input_path is None or output_path is None:  # If either path is invalid
-        return  # Exit early if input/output paths are invalid
-    
-    send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter started for input: {input_path} and output: {output_path} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")  # Notify start via Telegram
+        input_path, output_path = resolve_io_paths(args)  # Resolve and validate paths
+        if input_path is None or output_path is None:  # If either path is invalid
+            return  # Exit early if input/output paths are invalid
+        
+        send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter started for input: {input_path} and output: {output_path} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")  # Notify start via Telegram
 
-    configure_verbose_mode(args)  # Enable verbose mode if requested
+        configure_verbose_mode(args)  # Enable verbose mode if requested
 
-    batch_convert(
-        input_path, output_path, formats=args.formats if args.formats else None
-    )  # Perform batch conversion of dataset files
+        batch_convert(
+            input_path, output_path, formats=args.formats if args.formats else None
+        )  # Perform batch conversion of dataset files
 
-    finish_time = datetime.datetime.now()  # Get the finish time of the program
-    print(
-        f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
-    )  # Output the start and finish times
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
-    )  # Output the end of the program message
-    
-    send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter started for input: {input_path} and output: {output_path} finished. Execution time: {calculate_execution_time(start_time, finish_time)}.")  # Notify finish via Telegram
+        finish_time = datetime.datetime.now()  # Get the finish time of the program
+        print(
+            f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
+        )  # Output the start and finish times
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
+        )  # Output the end of the program message
+        
+        send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter started for input: {input_path} and output: {output_path} finished. Execution time: {calculate_execution_time(start_time, finish_time)}.")  # Notify finish via Telegram
 
-    (
-        atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
-    )  # Register the play_sound function to be called when the program exits if RUN_FUNCTIONS["Play Sound"] is True
+        (
+            atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
+        )  # Register the play_sound function to be called when the program exits if RUN_FUNCTIONS["Play Sound"] is True
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 if __name__ == "__main__":
@@ -1087,4 +1301,12 @@ if __name__ == "__main__":
     :return: None
     """
 
-    main()  # Call the main function
+    try:  # Protect main execution to ensure errors are reported and notified
+        main()  # Call the main function
+    except Exception as e:  # Catch any unhandled exception from main
+        print(str(e))  # Print the exception message to terminal for logs
+        try:  # Attempt to send full exception via Telegram
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback and message
+        except Exception:  # If sending the notification fails, print traceback to stderr
+            traceback.print_exc()  # Print full traceback to stderr as final fallback
+        raise  # Re-raise to avoid silent failure and preserve original crash behavior
