@@ -180,6 +180,7 @@ export:
     - test_f1_score
     - test_fpr
     - test_fnr
+    - feature_extraction_time_s
     - training_time_s
     - testing_time_s
     - elapsed_run_time
