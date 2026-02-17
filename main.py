@@ -93,7 +93,7 @@ from sklearn.neighbors import KNeighborsClassifier, NearestCentroid  # For k-nea
 from sklearn.neural_network import MLPClassifier  # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For preprocessing data
 from sklearn.svm import SVC  # For Support Vector Machine model
-from telegram_bot import TelegramBot, send_telegram_message, send_exception_via_telegram, setup_global_exception_hook  # For sending progress messages to Telegram
+from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
 from xgboost import XGBClassifier  # For XGBoost classifier
 
