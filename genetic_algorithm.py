@@ -3290,6 +3290,7 @@ def aggregate_run_metrics(run_result):
             pareto_size_final = pareto_size_history[-1] if pareto_size_history else 0  # Final Pareto front size
             hypervolume_final = hypervolume_history[-1] if hypervolume_history else 0.0  # Final hypervolume
             convergence_gen = compute_convergence_generation(best_f1_history, threshold_pct=0.95)  # Generation reaching 95% of best
+            convergence_gen_safe = int(convergence_gen) if convergence_gen is not None else 0  # Ensure int type; default 0 when None
 
             return {
                 "best_f1_final": float(best_f1_final),  # Final best F1 score
@@ -3298,7 +3299,7 @@ def aggregate_run_metrics(run_result):
                 "avg_feature_count": float(avg_feature_count),  # Average feature count across generations
                 "pareto_size_final": int(pareto_size_final),  # Final Pareto front size
                 "hypervolume_final": float(hypervolume_final),  # Final hypervolume metric
-                "convergence_gen": int(convergence_gen),  # Generation reaching convergence
+                "convergence_gen": int(convergence_gen_safe),  # Generation reaching convergence (0 if unknown)
                 "gens_executed": int(gens_ran),  # Total generations actually executed
                 }  # Return aggregated metrics dict
 
