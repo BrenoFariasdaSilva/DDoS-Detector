@@ -1783,12 +1783,16 @@ def setup_genetic_algorithm(n_features, population_size=None, pool=None):
         )  # Output the verbose message
 
         if not hasattr(creator, "FitnessMulti"):  # If FitnessMulti class doesn't exist in creator
-            creator.create("FitnessMulti", base.Fitness, weights=(1.0, 1.0))  # Create FitnessMulti with 2 objectives: maximize F1-score (1.0) and maximize negative feature count (1.0, which minimizes feature count)
-        FitnessMulti = creator.FitnessMulti  # Get FitnessMulti from creator namespace
+            creator.create(
+                "FitnessMulti",
+                base.Fitness,
+                weights=(1.0, 1.0),
+            )  # Create FitnessMulti with 2 objectives: maximize F1-score and minimize feature count
+        FitnessMulti = getattr(creator, "FitnessMulti")  # Get FitnessMulti from creator namespace safely
 
         if not hasattr(creator, "Individual"):  # If Individual class doesn't exist in creator
-            creator.create("Individual", list, fitness=creator.FitnessMulti)  # Create Individual as list with FitnessMulti attribute
-        Individual = creator.Individual  # Get Individual from creator namespace
+            creator.create("Individual", list, fitness=FitnessMulti)  # Create Individual as list with FitnessMulti attribute
+        Individual = getattr(creator, "Individual")  # Get Individual from creator namespace safely
 
         toolbox: Any = base.Toolbox()  # Toolbox (typed Any to avoid analyzer confusion)
 
