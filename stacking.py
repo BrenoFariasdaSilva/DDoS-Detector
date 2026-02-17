@@ -101,7 +101,7 @@ from sklearn.neural_network import MLPClassifier  # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For label encoding and feature scaling
 from sklearn.svm import SVC  # For Support Vector Machine model
 from sklearn.tree import DecisionTreeClassifier  # For Decision Tree classifier model
-from telegram_bot import TelegramBot, send_telegram_message  # For sending progress messages to Telegram
+from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
 from xgboost import XGBClassifier  # For XGBoost classifier
 
@@ -129,31 +129,39 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
+setup_global_exception_hook()  # Set up global exception hook to send exceptions via Telegram
+
+
 def parse_cli_args():
     """
     Parse command-line arguments for stacking pipeline.
     
     :return: Namespace object containing parsed arguments
     """
-    
-    parser = argparse.ArgumentParser(
-        description="Run stacking classifier evaluation pipeline with optional AutoML and data augmentation testing."
-    )  # Create argument parser
-    parser.add_argument("--config", type=str, default=None, help="Path to config.yaml file")
-    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-    parser.add_argument("--skip-train-if-model-exists", dest="skip_train", action="store_true", help="Load existing models instead of retraining")
-    parser.add_argument("--csv", type=str, default=None, help="Path to specific CSV file to process")
-    parser.add_argument("--automl", action="store_true", help="Enable AutoML pipeline")
-    parser.add_argument("--automl-trials", type=int, default=None, help="Number of AutoML trials")
-    parser.add_argument("--automl-stacking-trials", type=int, default=None, help="Number of stacking trials")
-    parser.add_argument("--automl-timeout", type=int, default=None, help="AutoML timeout in seconds")
-    parser.add_argument("--test-augmentation", action="store_true", help="Enable data augmentation testing")
-    parser.add_argument("--no-test-augmentation", dest="test_augmentation", action="store_false", help="Disable data augmentation testing")
-    parser.add_argument("--multi-class", action="store_true", help="Enable multi-class classification mode (combine all attacks)")
-    parser.add_argument("--binary", dest="multi_class", action="store_false", help="Enable binary classification mode (default)")
-    parser.add_argument("--both", action="store_true", help="Run both binary and multi-class pipelines sequentially")
-    
-    return parser.parse_args()  # Return parsed arguments
+
+    try:
+        parser = argparse.ArgumentParser(
+            description="Run stacking classifier evaluation pipeline with optional AutoML and data augmentation testing."
+        )  # Create argument parser
+        parser.add_argument("--config", type=str, default=None, help="Path to config.yaml file")
+        parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+        parser.add_argument("--skip-train-if-model-exists", dest="skip_train", action="store_true", help="Load existing models instead of retraining")
+        parser.add_argument("--csv", type=str, default=None, help="Path to specific CSV file to process")
+        parser.add_argument("--automl", action="store_true", help="Enable AutoML pipeline")
+        parser.add_argument("--automl-trials", type=int, default=None, help="Number of AutoML trials")
+        parser.add_argument("--automl-stacking-trials", type=int, default=None, help="Number of stacking trials")
+        parser.add_argument("--automl-timeout", type=int, default=None, help="AutoML timeout in seconds")
+        parser.add_argument("--test-augmentation", action="store_true", help="Enable data augmentation testing")
+        parser.add_argument("--no-test-augmentation", dest="test_augmentation", action="store_false", help="Disable data augmentation testing")
+        parser.add_argument("--multi-class", action="store_true", help="Enable multi-class classification mode (combine all attacks)")
+        parser.add_argument("--binary", dest="multi_class", action="store_false", help="Enable binary classification mode (default)")
+        parser.add_argument("--both", action="store_true", help="Run both binary and multi-class pipelines sequentially")
+        
+        return parser.parse_args()  # Return parsed arguments
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def get_default_config():
@@ -165,8 +173,9 @@ def get_default_config():
     
     :return: Dictionary containing default configuration values
     """
-    
-    return {
+
+    try:
+        return {
         "execution": {
             "verbose": False,
             "play_sound": True,
@@ -287,6 +296,10 @@ def get_default_config():
             "output_subdir": "explainability",
         },
     }  # Return default configuration
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def load_config_file(config_path=None):
@@ -296,23 +309,28 @@ def load_config_file(config_path=None):
     :param config_path: Path to config.yaml file (None for default config.yaml)
     :return: Dictionary with loaded configuration or empty dict if not found
     """
-    
-    if config_path is None:  # If no path specified
-        config_path = Path(__file__).parent / "config.yaml"  # Use default config.yaml
-    else:  # Path was specified
-        config_path = Path(config_path)  # Convert to Path object
-    
-    if not config_path.exists():  # If config file doesn't exist
-        return {}  # Return empty dict
-    
-    try:  # Try to load YAML file
-        import yaml  # Import YAML library
-        with open(config_path, "r", encoding="utf-8") as f:  # Open config file
-            config = yaml.safe_load(f)  # Load YAML safely
-        return config or {}  # Return loaded config or empty dict
-    except Exception as e:  # If loading fails
-        print(f"{BackgroundColors.YELLOW}Warning: Failed to load config file {config_path}: {e}{Style.RESET_ALL}")
-        return {}  # Return empty dict on error
+
+    try:
+        if config_path is None:  # If no path specified
+            config_path = Path(__file__).parent / "config.yaml"  # Use default config.yaml
+        else:  # Path was specified
+            config_path = Path(config_path)  # Convert to Path object
+        
+        if not config_path.exists():  # If config file doesn't exist
+            return {}  # Return empty dict
+        
+        try:  # Try to load YAML file
+            import yaml  # Import YAML library
+            with open(config_path, "r", encoding="utf-8") as f:  # Open config file
+                config = yaml.safe_load(f)  # Load YAML safely
+            return config or {}  # Return loaded config or empty dict
+        except Exception as e:  # If loading fails
+            print(f"{BackgroundColors.YELLOW}Warning: Failed to load config file {config_path}: {e}{Style.RESET_ALL}")
+            return {}  # Return empty dict on error
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def deep_merge_dicts(base, override):
@@ -322,14 +340,19 @@ def deep_merge_dicts(base, override):
     :param override: Override dictionary
     :return: Merged dictionary
     """
-    
-    result = dict(base)  # Copy base dictionary
-    for key, value in override.items():  # Iterate override items
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):  # Both are dicts
-            result[key] = deep_merge_dicts(result[key], value)  # Recursive merge
-        else:  # Not both dicts
-            result[key] = value  # Override value
-    return result  # Return merged dictionary
+
+    try:
+        result = dict(base)  # Copy base dictionary
+        for key, value in override.items():  # Iterate override items
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):  # Both are dicts
+                result[key] = deep_merge_dicts(result[key], value)  # Recursive merge
+            else:  # Not both dicts
+                result[key] = value  # Override value
+        return result  # Return merged dictionary
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def merge_configs(defaults, file_config, cli_args):
@@ -341,34 +364,39 @@ def merge_configs(defaults, file_config, cli_args):
     :param cli_args: Parsed CLI arguments
     :return: Merged configuration dictionary
     """
-    
-    config = deep_merge_dicts(defaults, file_config)  # Merge file config into defaults
-    
-    if cli_args is None:  # If no CLI args
-        return config  # Return merged config
-    
-    if hasattr(cli_args, "verbose") and cli_args.verbose:  # Verbose flag
-        config["execution"]["verbose"] = True
-    if hasattr(cli_args, "skip_train") and cli_args.skip_train:  # Skip train flag
-        config["execution"]["skip_train_if_model_exists"] = True
-    if hasattr(cli_args, "csv") and cli_args.csv:  # CSV file override
-        config["execution"]["csv_file"] = cli_args.csv
-    if hasattr(cli_args, "automl") and cli_args.automl:  # AutoML flag
-        config["automl"]["enabled"] = True
-    if hasattr(cli_args, "automl_trials") and cli_args.automl_trials is not None:  # AutoML trials
-        config["automl"]["n_trials"] = cli_args.automl_trials
-    if hasattr(cli_args, "automl_stacking_trials") and cli_args.automl_stacking_trials is not None:  # Stacking trials
-        config["automl"]["stacking_trials"] = cli_args.automl_stacking_trials
-    if hasattr(cli_args, "automl_timeout") and cli_args.automl_timeout is not None:  # AutoML timeout
-        config["automl"]["timeout"] = cli_args.automl_timeout
-    if hasattr(cli_args, "test_augmentation"):  # Test augmentation flag (explicit True or False)
-        config["execution"]["test_data_augmentation"] = cli_args.test_augmentation
-    if hasattr(cli_args, "both") and cli_args.both:  # Both mode flag takes precedence
-        config["execution"]["execution_mode"] = "both"
-    elif hasattr(cli_args, "multi_class"):  # Multi-class mode flag
-        config["execution"]["execution_mode"] = "multi-class" if cli_args.multi_class else "binary"
-    
-    return config  # Return final merged configuration
+
+    try:
+        config = deep_merge_dicts(defaults, file_config)  # Merge file config into defaults
+        
+        if cli_args is None:  # If no CLI args
+            return config  # Return merged config
+        
+        if hasattr(cli_args, "verbose") and cli_args.verbose:  # Verbose flag
+            config["execution"]["verbose"] = True
+        if hasattr(cli_args, "skip_train") and cli_args.skip_train:  # Skip train flag
+            config["execution"]["skip_train_if_model_exists"] = True
+        if hasattr(cli_args, "csv") and cli_args.csv:  # CSV file override
+            config["execution"]["csv_file"] = cli_args.csv
+        if hasattr(cli_args, "automl") and cli_args.automl:  # AutoML flag
+            config["automl"]["enabled"] = True
+        if hasattr(cli_args, "automl_trials") and cli_args.automl_trials is not None:  # AutoML trials
+            config["automl"]["n_trials"] = cli_args.automl_trials
+        if hasattr(cli_args, "automl_stacking_trials") and cli_args.automl_stacking_trials is not None:  # Stacking trials
+            config["automl"]["stacking_trials"] = cli_args.automl_stacking_trials
+        if hasattr(cli_args, "automl_timeout") and cli_args.automl_timeout is not None:  # AutoML timeout
+            config["automl"]["timeout"] = cli_args.automl_timeout
+        if hasattr(cli_args, "test_augmentation"):  # Test augmentation flag (explicit True or False)
+            config["execution"]["test_data_augmentation"] = cli_args.test_augmentation
+        if hasattr(cli_args, "both") and cli_args.both:  # Both mode flag takes precedence
+            config["execution"]["execution_mode"] = "both"
+        elif hasattr(cli_args, "multi_class"):  # Multi-class mode flag
+            config["execution"]["execution_mode"] = "multi-class" if cli_args.multi_class else "binary"
+        
+        return config  # Return final merged configuration
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def initialize_config(config_path=None, cli_args=None):
@@ -379,15 +407,20 @@ def initialize_config(config_path=None, cli_args=None):
     :param cli_args: Parsed CLI arguments (None for no CLI overrides)
     :return: Merged configuration dictionary
     """
-    
-    defaults = get_default_config()  # Get default configuration
-    file_config = load_config_file(config_path)  # Load file configuration
-    config = merge_configs(defaults, file_config, cli_args)  # Merge all configurations
-    
-    global CONFIG  # Access global CONFIG
-    CONFIG = config  # Set global CONFIG
-    
-    return config  # Return merged configuration
+
+    try:
+        defaults = get_default_config()  # Get default configuration
+        file_config = load_config_file(config_path)  # Load file configuration
+        config = merge_configs(defaults, file_config, cli_args)  # Merge all configurations
+        
+        global CONFIG  # Access global CONFIG
+        CONFIG = config  # Set global CONFIG
+        
+        return config  # Return merged configuration
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def initialize_logger(config=None):
@@ -397,21 +430,26 @@ def initialize_logger(config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: None
     """
-    
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
-    
-    global logger  # Access global logger
-    
-    logs_dir = config.get("paths", {}).get("logs_dir", "./Logs")  # Get logs directory
-    clean = config.get("logging", {}).get("clean", True)  # Get clean flag
-    
-    os.makedirs(logs_dir, exist_ok=True)  # Ensure logs directory exists
-    log_path = Path(logs_dir) / f"{Path(__file__).stem}.log"  # Build log file path
-    
-    logger = Logger(str(log_path), clean=clean)  # Create Logger instance
-    sys.stdout = logger  # Redirect stdout to logger
-    sys.stderr = logger  # Redirect stderr to logger
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        global logger  # Access global logger
+        
+        logs_dir = config.get("paths", {}).get("logs_dir", "./Logs")  # Get logs directory
+        clean = config.get("logging", {}).get("clean", True)  # Get clean flag
+        
+        os.makedirs(logs_dir, exist_ok=True)  # Ensure logs directory exists
+        log_path = Path(logs_dir) / f"{Path(__file__).stem}.log"  # Build log file path
+        
+        logger = Logger(str(log_path), clean=clean)  # Create Logger instance
+        sys.stdout = logger  # Redirect stdout to logger
+        sys.stderr = logger  # Redirect stderr to logger
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def verbose_output(true_string="", false_string="", config=None):
@@ -424,15 +462,20 @@ def verbose_output(true_string="", false_string="", config=None):
     :return: None
     """
 
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
-    
-    verbose = config.get("execution", {}).get("verbose", False)  # Get verbose flag
-    
-    if verbose and true_string != "":  # If verbose is True and a true_string was provided
-        print(true_string)  # Output the true statement string
-    elif false_string != "":  # If a false_string was provided
-        print(false_string)  # Output the false statement string
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        verbose = config.get("execution", {}).get("verbose", False)  # Get verbose flag
+        
+        if verbose and true_string != "":  # If verbose is True and a true_string was provided
+            print(true_string)  # Output the true statement string
+        elif false_string != "":  # If a false_string was provided
+            print(false_string)  # Output the false statement string
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def verify_dot_env_file(config=None):
@@ -443,20 +486,25 @@ def verify_dot_env_file(config=None):
     :return: True if the .env file exists, False otherwise
     """
 
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
-    
-    verify_env = config.get("telegram", {}).get("verify_env", True)  # Get verify_env flag
-    
-    if not verify_env:  # If verification is disabled
-        return True  # Skip verification
-    
-    env_path = Path(__file__).parent / ".env"  # Path to the .env file
-    if not env_path.exists():  # If the .env file does not exist
-        print(f"{BackgroundColors.CYAN}.env{BackgroundColors.YELLOW} file not found at {BackgroundColors.CYAN}{env_path}{BackgroundColors.YELLOW}. Telegram messages may not be sent.{Style.RESET_ALL}")
-        return False  # Return False
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        verify_env = config.get("telegram", {}).get("verify_env", True)  # Get verify_env flag
+        
+        if not verify_env:  # If verification is disabled
+            return True  # Skip verification
+        
+        env_path = Path(__file__).parent / ".env"  # Path to the .env file
+        if not env_path.exists():  # If the .env file does not exist
+            print(f"{BackgroundColors.CYAN}.env{BackgroundColors.YELLOW} file not found at {BackgroundColors.CYAN}{env_path}{BackgroundColors.YELLOW}. Telegram messages may not be sent.{Style.RESET_ALL}")
+            return False  # Return False
 
-    return True  # Return True if the .env file exists
+        return True  # Return True if the .env file exists
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def setup_telegram_bot(config=None):
@@ -466,30 +514,35 @@ def setup_telegram_bot(config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: None
     """
-    
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
-    
-    telegram_enabled = config.get("telegram", {}).get("enabled", True)  # Get telegram enabled flag
-    
-    if not telegram_enabled:  # If Telegram is disabled
-        return  # Skip setup
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Setting up Telegram bot for messages...{Style.RESET_ALL}", config=config
-    )  # Output the verbose message
 
-    verify_dot_env_file(config)  # Verify if the .env file exists
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        telegram_enabled = config.get("telegram", {}).get("enabled", True)  # Get telegram enabled flag
+        
+        if not telegram_enabled:  # If Telegram is disabled
+            return  # Skip setup
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Setting up Telegram bot for messages...{Style.RESET_ALL}", config=config
+        )  # Output the verbose message
 
-    global TELEGRAM_BOT  # Declare the module-global telegram_bot variable
+        verify_dot_env_file(config)  # Verify if the .env file exists
 
-    try:  # Try to initialize the Telegram bot
-        TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
-        telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
-        telegram_module.RUNNING_CODE = os.path.basename(__file__)
-    except Exception as e:
-        print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
-        TELEGRAM_BOT = None  # Set to None if initialization fails
+        global TELEGRAM_BOT  # Declare the module-global telegram_bot variable
+
+        try:  # Try to initialize the Telegram bot
+            TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
+            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
+            telegram_module.RUNNING_CODE = os.path.basename(__file__)
+        except Exception as e:
+            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+            TELEGRAM_BOT = None  # Set to None if initialization fails
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def set_threads_limit_based_on_ram(config=None):
@@ -499,27 +552,32 @@ def set_threads_limit_based_on_ram(config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Threads limit value
     """
-    
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Verifying system RAM to set threads_limit...{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    threads_limit = config.get("evaluation", {}).get("threads_limit", 2)  # Get threads limit from config
-    ram_threshold = config.get("evaluation", {}).get("ram_threshold_gb", 128)  # Get RAM threshold from config
-    ram_gb = psutil.virtual_memory().total / (1024**3)  # Get total system RAM in GB
-
-    if ram_gb <= ram_threshold:  # If RAM is less than or equal to threshold
-        threads_limit = 1  # Set threads_limit to 1
         verbose_output(
-            f"{BackgroundColors.YELLOW}System RAM is {ram_gb:.1f}GB (<={ram_threshold}GB). Setting threads_limit to 1.{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Verifying system RAM to set threads_limit...{Style.RESET_ALL}",
             config=config
-        )
-    
-    return threads_limit  # Return the threads limit value
+        )  # Output the verbose message
+
+        threads_limit = config.get("evaluation", {}).get("threads_limit", 2)  # Get threads limit from config
+        ram_threshold = config.get("evaluation", {}).get("ram_threshold_gb", 128)  # Get RAM threshold from config
+        ram_gb = psutil.virtual_memory().total / (1024**3)  # Get total system RAM in GB
+
+        if ram_gb <= ram_threshold:  # If RAM is less than or equal to threshold
+            threads_limit = 1  # Set threads_limit to 1
+            verbose_output(
+                f"{BackgroundColors.YELLOW}System RAM is {ram_gb:.1f}GB (<={ram_threshold}GB). Setting threads_limit to 1.{Style.RESET_ALL}",
+                config=config
+            )
+        
+        return threads_limit  # Return the threads limit value
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def verify_filepath_exists(filepath):
@@ -530,11 +588,16 @@ def verify_filepath_exists(filepath):
     :return: True if the file or folder exists, False otherwise
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
-    )  # Output the verbose message
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
+        return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def get_files_to_process(directory_path, file_extension=".csv", config=None):
@@ -549,60 +612,65 @@ def get_files_to_process(directory_path, file_extension=".csv", config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Sorted list of matching file paths
     """
-    
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Getting all {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files in: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}",
-        config=config
-    )  # Verbose: starting file collection
-    verify_filepath_exists(directory_path)  # Validate directory path exists
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    if not os.path.isdir(directory_path):  # Check if path is a valid directory
         verbose_output(
-            f"{BackgroundColors.RED}Not a directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Getting all {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files in: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}",
             config=config
-        )  # Verbose: invalid directory
-        return []  # Return empty list for invalid paths
+        )  # Verbose: starting file collection
+        verify_filepath_exists(directory_path)  # Validate directory path exists
 
-    match_filenames = config.get("stacking", {}).get("match_filenames_to_process", [""])  # Get match filenames from config
-    ignore_files = config.get("stacking", {}).get("ignore_files", [])  # Get ignore files from config
-    
-    match_names = (
-        set(match_filenames) if match_filenames not in ([], [""], [" "]) else None
-    )  # Load match list or None
-    if match_names:
-        verbose_output(
-            f"{BackgroundColors.GREEN}Filtering to filenames: {BackgroundColors.CYAN}{match_names}{Style.RESET_ALL}",
-            config=config
-        )  # Verbose: applying filename filter
-
-    files = []  # Accumulator for valid files
-
-    for item in os.listdir(directory_path):  # Iterate directory entries
-        item_path = os.path.join(directory_path, item)  # Absolute path
-        filename = os.path.basename(item_path)  # Extract just the filename
-
-        if any(ignore == filename or ignore == item_path for ignore in ignore_files):  # Check if file is in ignore list
+        if not os.path.isdir(directory_path):  # Check if path is a valid directory
             verbose_output(
-                f"{BackgroundColors.YELLOW}Ignoring {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} (listed in IGNORE_FILES){Style.RESET_ALL}",
+                f"{BackgroundColors.RED}Not a directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}",
                 config=config
-            )  # Verbose: ignoring file
-            continue  # Skip ignored file
+            )  # Verbose: invalid directory
+            return []  # Return empty list for invalid paths
 
-        if os.path.isfile(item_path) and item.lower().endswith(file_extension):  # File matches extension requirement
-            if (
-                match_names is not None and filename not in match_names
-            ):  # Filename not included in MATCH_FILENAMES_TO_PROCESS
+        match_filenames = config.get("stacking", {}).get("match_filenames_to_process", [""])  # Get match filenames from config
+        ignore_files = config.get("stacking", {}).get("ignore_files", [])  # Get ignore files from config
+        
+        match_names = (
+            set(match_filenames) if match_filenames not in ([], [""], [" "]) else None
+        )  # Load match list or None
+        if match_names:
+            verbose_output(
+                f"{BackgroundColors.GREEN}Filtering to filenames: {BackgroundColors.CYAN}{match_names}{Style.RESET_ALL}",
+                config=config
+            )  # Verbose: applying filename filter
+
+        files = []  # Accumulator for valid files
+
+        for item in os.listdir(directory_path):  # Iterate directory entries
+            item_path = os.path.join(directory_path, item)  # Absolute path
+            filename = os.path.basename(item_path)  # Extract just the filename
+
+            if any(ignore == filename or ignore == item_path for ignore in ignore_files):  # Check if file is in ignore list
                 verbose_output(
-                    f"{BackgroundColors.YELLOW}Skipping {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} (not in MATCH_FILENAMES_TO_PROCESS){Style.RESET_ALL}",
+                    f"{BackgroundColors.YELLOW}Ignoring {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} (listed in IGNORE_FILES){Style.RESET_ALL}",
                     config=config
-                )  # Verbose: skipping non-matching file
-                continue  # Skip this file
-            files.append(item_path)  # Add file to result list
+                )  # Verbose: ignoring file
+                continue  # Skip ignored file
 
-    return sorted(files)  # Return sorted list for deterministic output
+            if os.path.isfile(item_path) and item.lower().endswith(file_extension):  # File matches extension requirement
+                if (
+                    match_names is not None and filename not in match_names
+                ):  # Filename not included in MATCH_FILENAMES_TO_PROCESS
+                    verbose_output(
+                        f"{BackgroundColors.YELLOW}Skipping {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} (not in MATCH_FILENAMES_TO_PROCESS){Style.RESET_ALL}",
+                        config=config
+                    )  # Verbose: skipping non-matching file
+                    continue  # Skip this file
+                files.append(item_path)  # Add file to result list
+
+        return sorted(files)  # Return sorted list for deterministic output
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def get_dataset_name(input_path):
@@ -613,24 +681,29 @@ def get_dataset_name(input_path):
     :return: Dataset name
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Extracting dataset name from CSV path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
-    )  # Output the verbose message
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Extracting dataset name from CSV path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    datasets_pos = input_path.find("/Datasets/")  # Find the position of "/Datasets/" in the path
-    if datasets_pos != -1:  # If "/Datasets/" is found in the path
-        after_datasets = input_path[datasets_pos + len("/Datasets/") :]  # Get the substring after "/Datasets/"
-        next_slash = after_datasets.find("/")  # Find the next "/"
-        if next_slash != -1:  # If there is another "/"
-            dataset_name = after_datasets[:next_slash]  # Take until the next "/"
-        else:  # If there is no other "/"
-            dataset_name = (
-                after_datasets.split("/")[0] if "/" in after_datasets else after_datasets
-            )  # No more "/", take the first part if any
-    else:  # If "/Datasets/" is not found in the path
-        dataset_name = os.path.basename(input_path)  # Fallback to basename if "Datasets" not in path
+        datasets_pos = input_path.find("/Datasets/")  # Find the position of "/Datasets/" in the path
+        if datasets_pos != -1:  # If "/Datasets/" is found in the path
+            after_datasets = input_path[datasets_pos + len("/Datasets/") :]  # Get the substring after "/Datasets/"
+            next_slash = after_datasets.find("/")  # Find the next "/"
+            if next_slash != -1:  # If there is another "/"
+                dataset_name = after_datasets[:next_slash]  # Take until the next "/"
+            else:  # If there is no other "/"
+                dataset_name = (
+                    after_datasets.split("/")[0] if "/" in after_datasets else after_datasets
+                )  # No more "/", take the first part if any
+        else:  # If "/Datasets/" is not found in the path
+            dataset_name = os.path.basename(input_path)  # Fallback to basename if "Datasets" not in path
 
-    return dataset_name  # Return the dataset name
+        return dataset_name  # Return the dataset name
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def process_single_file(f, config=None):
@@ -641,30 +714,35 @@ def process_single_file(f, config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Tuple (df_clean, target_col, feat_cols) or None if invalid
     """
-    
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{f}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
 
-    df = load_dataset(f, config=config)  # Load the dataset from the file
-    if df is None:  # If loading failed
-        return None  # Return None
-    
-    remove_zero_variance = config.get("dataset", {}).get("remove_zero_variance", True)  # Get remove zero variance flag from config
-    df_clean = preprocess_dataframe(df, remove_zero_variance=remove_zero_variance, config=config)  # Preprocess the dataframe
-    if df_clean is None or df_clean.empty:  # If preprocessing failed or dataframe is empty
-        return None  # Return None
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{f}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    target_col = df_clean.columns[-1]  # Get the last column as target
-    feat_cols = [c for c in df_clean.columns[:-1] if pd.api.types.is_numeric_dtype(df_clean[c])]  # Get numeric feature columns
-    if not feat_cols:  # If no numeric features
-        return None  # Return None
+        df = load_dataset(f, config=config)  # Load the dataset from the file
+        if df is None:  # If loading failed
+            return None  # Return None
+        
+        remove_zero_variance = config.get("dataset", {}).get("remove_zero_variance", True)  # Get remove zero variance flag from config
+        df_clean = preprocess_dataframe(df, remove_zero_variance=remove_zero_variance, config=config)  # Preprocess the dataframe
+        if df_clean is None or df_clean.empty:  # If preprocessing failed or dataframe is empty
+            return None  # Return None
 
-    return (df_clean, target_col, feat_cols)  # Return the processed data
+        target_col = df_clean.columns[-1]  # Get the last column as target
+        feat_cols = [c for c in df_clean.columns[:-1] if pd.api.types.is_numeric_dtype(df_clean[c])]  # Get numeric feature columns
+        if not feat_cols:  # If no numeric features
+            return None  # Return None
+
+        return (df_clean, target_col, feat_cols)  # Return the processed data
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def handle_target_column_consistency(target_col_name, this_target, f, df_clean, config=None):
@@ -678,22 +756,27 @@ def handle_target_column_consistency(target_col_name, this_target, f, df_clean, 
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Tuple (updated_target_col_name, updated_df_clean)
     """
-    
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Checking target column consistency for: {BackgroundColors.CYAN}{f}{Style.RESET_ALL} (target: {BackgroundColors.CYAN}{this_target}{Style.RESET_ALL})...{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
 
-    if target_col_name is None:  # If target column not set yet
-        target_col_name = this_target  # Set it to this target
-    elif this_target != target_col_name:  # If target column name differs
-        print(f"{BackgroundColors.YELLOW}Warning: target column name mismatch: {f} uses {this_target} while others use {target_col_name}. Trying to proceed by renaming.{Style.RESET_ALL}")  # Print warning
-        df_clean = df_clean.rename(columns={this_target: target_col_name})  # Rename the column
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Checking target column consistency for: {BackgroundColors.CYAN}{f}{Style.RESET_ALL} (target: {BackgroundColors.CYAN}{this_target}{Style.RESET_ALL})...{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    return (target_col_name, df_clean)  # Return updated values
+        if target_col_name is None:  # If target column not set yet
+            target_col_name = this_target  # Set it to this target
+        elif this_target != target_col_name:  # If target column name differs
+            print(f"{BackgroundColors.YELLOW}Warning: target column name mismatch: {f} uses {this_target} while others use {target_col_name}. Trying to proceed by renaming.{Style.RESET_ALL}")  # Print warning
+            df_clean = df_clean.rename(columns={this_target: target_col_name})  # Rename the column
+
+        return (target_col_name, df_clean)  # Return updated values
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def intersect_features(common_features, feat_cols, config=None):
@@ -705,21 +788,26 @@ def intersect_features(common_features, feat_cols, config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Updated common features set
     """
-    
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Intersecting features for current file...{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
 
-    if common_features is None:  # If common features not set yet
-        common_features = set(feat_cols)  # Initialize with this file's features
-    else:  # Otherwise, intersect with existing common features
-        common_features &= set(feat_cols)  # Update common features
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Intersecting features for current file...{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    return common_features  # Return updated common features
+        if common_features is None:  # If common features not set yet
+            common_features = set(feat_cols)  # Initialize with this file's features
+        else:  # Otherwise, intersect with existing common features
+            common_features &= set(feat_cols)  # Update common features
+
+        return common_features  # Return updated common features
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def find_common_features_and_target(processed_files, config=None):
@@ -730,32 +818,37 @@ def find_common_features_and_target(processed_files, config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Tuple (common_features, target_col_name, dfs) or (None, None, []) if invalid
     """
-    
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Finding common features and target column among processed files...{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    dfs = []  # Initialize list to store valid dataframes
-    common_features = None  # Initialize set for common features
-    target_col_name = None  # Initialize target column name
+        verbose_output(
+            f"{BackgroundColors.GREEN}Finding common features and target column among processed files...{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    for f, df_clean, this_target, feat_cols in processed_files:  # Iterate over processed files
-        target_col_name, df_clean = handle_target_column_consistency(target_col_name, this_target, f, df_clean, config=config)  # Handle target consistency
-        common_features = intersect_features(common_features, feat_cols, config=config)  # Intersect features
-        dfs.append((f, df_clean))  # Add the file and cleaned dataframe to the list
+        dfs = []  # Initialize list to store valid dataframes
+        common_features = None  # Initialize set for common features
+        target_col_name = None  # Initialize target column name
 
-    if not dfs or not common_features:  # If no valid dataframes or no common features
-        return (None, None, [])  # Return invalid
+        for f, df_clean, this_target, feat_cols in processed_files:  # Iterate over processed files
+            target_col_name, df_clean = handle_target_column_consistency(target_col_name, this_target, f, df_clean, config=config)  # Handle target consistency
+            common_features = intersect_features(common_features, feat_cols, config=config)  # Intersect features
+            dfs.append((f, df_clean))  # Add the file and cleaned dataframe to the list
 
-    if target_col_name is None:  # If no target column was found
-        return (None, None, [])  # Return invalid
+        if not dfs or not common_features:  # If no valid dataframes or no common features
+            return (None, None, [])  # Return invalid
 
-    common_features = sorted(list(common_features))  # Sort the common features list
-    return (common_features, target_col_name, dfs)  # Return the results
+        if target_col_name is None:  # If no target column was found
+            return (None, None, [])  # Return invalid
+
+        common_features = sorted(list(common_features))  # Sort the common features list
+        return (common_features, target_col_name, dfs)  # Return the results
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def create_reduced_dataframes(dfs, common_features, target_col_name, config=None):
@@ -768,23 +861,28 @@ def create_reduced_dataframes(dfs, common_features, target_col_name, config=None
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: List of reduced dataframes
     """
-    
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Creating reduced dataframes with common features and target...{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
 
-    reduced_dfs = []  # Initialize list for reduced dataframes
-    for f, df_clean in dfs:  # Iterate over valid dataframes
-        cols_to_keep = [c for c in common_features if c in df_clean.columns]  # Get common features present in this df
-        cols_to_keep.append(target_col_name)  # Add the target column
-        reduced = df_clean.loc[:, cols_to_keep].copy()  # Create reduced dataframe
-        reduced_dfs.append(reduced)  # Add to list
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Creating reduced dataframes with common features and target...{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    return reduced_dfs  # Return the reduced dataframes
+        reduced_dfs = []  # Initialize list for reduced dataframes
+        for f, df_clean in dfs:  # Iterate over valid dataframes
+            cols_to_keep = [c for c in common_features if c in df_clean.columns]  # Get common features present in this df
+            cols_to_keep.append(target_col_name)  # Add the target column
+            reduced = df_clean.loc[:, cols_to_keep].copy()  # Create reduced dataframe
+            reduced_dfs.append(reduced)  # Add to list
+
+        return reduced_dfs  # Return the reduced dataframes
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def combine_and_clean_dataframes(reduced_dfs, config=None):
@@ -795,23 +893,28 @@ def combine_and_clean_dataframes(reduced_dfs, config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Combined dataframe or None if empty
     """
-    
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Combining reduced dataframes and cleaning...{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
 
-    combined = pd.concat(reduced_dfs, ignore_index=True)  # Concatenate all reduced dataframes
-    combined = combined.replace([np.inf, -np.inf], np.nan).dropna()  # Replace inf with nan and drop na
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Combining reduced dataframes and cleaning...{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    if combined.empty:  # If combined dataframe is empty
-        print(f"{BackgroundColors.RED}Combined dataset is empty after alignment and NaN removal.{Style.RESET_ALL}")  # Print error
-        return None  # Return None
+        combined = pd.concat(reduced_dfs, ignore_index=True)  # Concatenate all reduced dataframes
+        combined = combined.replace([np.inf, -np.inf], np.nan).dropna()  # Replace inf with nan and drop na
 
-    return combined  # Return the combined dataframe
+        if combined.empty:  # If combined dataframe is empty
+            print(f"{BackgroundColors.RED}Combined dataset is empty after alignment and NaN removal.{Style.RESET_ALL}")  # Print error
+            return None  # Return None
+
+        return combined  # Return the combined dataframe
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def combine_dataset_files(files_list, config=None):
@@ -822,35 +925,40 @@ def combine_dataset_files(files_list, config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Combined DataFrame with aligned features and target, or None if no compatible files found
     """
-    
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Combining dataset files: {BackgroundColors.CYAN}{files_list}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    processed_files = []  # Initialize list for processed file data
-    for f in files_list:  # Iterate over each file in the list
-        result = process_single_file(f, config=config)  # Process the single file
-        if result is not None:  # If processing succeeded
-            df_clean, target_col, feat_cols = result  # Unpack the result
-            processed_files.append((f, df_clean, target_col, feat_cols))  # Add to processed list
+        verbose_output(
+            f"{BackgroundColors.GREEN}Combining dataset files: {BackgroundColors.CYAN}{files_list}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    if not processed_files:  # If no files were processed successfully
-        print(f"{BackgroundColors.RED}No compatible files found to combine for dataset: {files_list}.{Style.RESET_ALL}")  # Print error
-        return None  # Return None
+        processed_files = []  # Initialize list for processed file data
+        for f in files_list:  # Iterate over each file in the list
+            result = process_single_file(f, config=config)  # Process the single file
+            if result is not None:  # If processing succeeded
+                df_clean, target_col, feat_cols = result  # Unpack the result
+                processed_files.append((f, df_clean, target_col, feat_cols))  # Add to processed list
 
-    common_features, target_col_name, dfs = find_common_features_and_target(processed_files, config=config)  # Find common features and target
-    if common_features is None:  # If finding common features failed
-        print(f"{BackgroundColors.RED}No valid target column found.{Style.RESET_ALL}")  # Print error
-        return None  # Return None
+        if not processed_files:  # If no files were processed successfully
+            print(f"{BackgroundColors.RED}No compatible files found to combine for dataset: {files_list}.{Style.RESET_ALL}")  # Print error
+            return None  # Return None
 
-    reduced_dfs = create_reduced_dataframes(dfs, common_features, target_col_name, config=config)  # Create reduced dataframes
-    combined = combine_and_clean_dataframes(reduced_dfs, config=config)  # Combine and clean the dataframes
+        common_features, target_col_name, dfs = find_common_features_and_target(processed_files, config=config)  # Find common features and target
+        if common_features is None:  # If finding common features failed
+            print(f"{BackgroundColors.RED}No valid target column found.{Style.RESET_ALL}")  # Print error
+            return None  # Return None
 
-    return combined, target_col_name  # Return the combined dataframe and target column name
+        reduced_dfs = create_reduced_dataframes(dfs, common_features, target_col_name, config=config)  # Create reduced dataframes
+        combined = combine_and_clean_dataframes(reduced_dfs, config=config)  # Combine and clean the dataframes
+
+        return combined, target_col_name  # Return the combined dataframe and target column name
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def extract_attack_label_from_path(file_path):
@@ -860,23 +968,28 @@ def extract_attack_label_from_path(file_path):
     :param file_path: Path to the dataset CSV file
     :return: Attack type string extracted from filename or path
     """
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Extracting attack label from path: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}"
-    )  # Output the verbose message
-    
-    file_path_obj = Path(file_path)  # Create Path object from file path string
-    filename_stem = file_path_obj.stem  # Extract filename without extension
-    
-    clean_stem = filename_stem.replace("_data_augmented", "").replace("_cleaned", "").replace("_processed", "")  # Remove common suffixes from stem
-    
-    attack_label = clean_stem  # Set attack label to cleaned filename stem
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Extracted attack label: {BackgroundColors.CYAN}{attack_label}{Style.RESET_ALL}"
-    )  # Output extracted label
-    
-    return attack_label  # Return attack type label string
+
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Extracting attack label from path: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}"
+        )  # Output the verbose message
+        
+        file_path_obj = Path(file_path)  # Create Path object from file path string
+        filename_stem = file_path_obj.stem  # Extract filename without extension
+        
+        clean_stem = filename_stem.replace("_data_augmented", "").replace("_cleaned", "").replace("_processed", "")  # Remove common suffixes from stem
+        
+        attack_label = clean_stem  # Set attack label to cleaned filename stem
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Extracted attack label: {BackgroundColors.CYAN}{attack_label}{Style.RESET_ALL}"
+        )  # Output extracted label
+        
+        return attack_label  # Return attack type label string
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def combine_files_for_multiclass(files_list, config=None):
@@ -888,92 +1001,97 @@ def combine_files_for_multiclass(files_list, config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Tuple (combined_df, attack_types_list, target_col_name) or (None, None, None) if failed
     """
-    
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Combining files for multi-class classification: {BackgroundColors.CYAN}{len(files_list)} files{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
-    
-    if not files_list:  # If files list is empty
-        print(f"{BackgroundColors.RED}No files provided for multi-class combination.{Style.RESET_ALL}")  # Print error message
-        return (None, None, None)  # Return None tuple
-    
-    processed_files_with_labels = []  # Initialize list for processed file data with attack labels
-    attack_types_set = set()  # Initialize set to track unique attack types
-    
-    for f in files_list:  # Iterate over each file in the list
-        result = process_single_file(f, config=config)  # Process the single file
-        if result is not None:  # If processing succeeded
-            df_clean, target_col, feat_cols = result  # Unpack the result
-            attack_label = extract_attack_label_from_path(f)  # Extract attack type from filename
-            attack_types_set.add(attack_label)  # Add attack type to set
-            processed_files_with_labels.append((f, df_clean, target_col, feat_cols, attack_label))  # Add to processed list with label
-        else:  # If processing failed
-            verbose_output(
-                f"{BackgroundColors.YELLOW}Skipping file due to processing failure: {BackgroundColors.CYAN}{f}{Style.RESET_ALL}",
-                config=config
-            )  # Output warning message
-    
-    if not processed_files_with_labels:  # If no files were processed successfully
-        print(f"{BackgroundColors.RED}No compatible files found to combine for multi-class dataset.{Style.RESET_ALL}")  # Print error
-        return (None, None, None)  # Return None tuple
-    
-    print(
-        f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{len(attack_types_set)}{BackgroundColors.GREEN} unique attack types for multi-class: {BackgroundColors.CYAN}{sorted(attack_types_set)}{Style.RESET_ALL}"
-    )  # Print attack types summary
-    
-    common_features = None  # Initialize common features set
-    target_col_name = None  # Initialize target column name
-    
-    for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # Iterate over processed files
-        if target_col_name is None:  # If target not yet set
-            target_col_name = this_target  # Set target column name
-        
-        if common_features is None:  # If common features not yet initialized
-            common_features = set(feat_cols)  # Initialize with first file's features
-        else:  # If common features already initialized
-            common_features = common_features.intersection(set(feat_cols))  # Intersect with current file's features
-    
-    if not common_features:  # If no common features found
-        print(f"{BackgroundColors.RED}No common features found across files for multi-class combination.{Style.RESET_ALL}")  # Print error
-        return (None, None, None)  # Return None tuple
-    
-    common_features_list = sorted(list(common_features))  # Convert to sorted list
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Common features for multi-class: {BackgroundColors.CYAN}{len(common_features_list)} features{Style.RESET_ALL}",
-        config=config
-    )  # Output common features count
-    
-    combined_parts = []  # Initialize list to accumulate dataframe parts
-    
-    for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # Iterate over processed files
-        df_subset = df_clean[common_features_list].copy()  # Select only common features
-        df_subset['attack_type'] = attack_label  # Add attack type column with the extracted label
-        combined_parts.append(df_subset)  # Append to combined parts list
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
         
         verbose_output(
-            f"{BackgroundColors.GREEN}Added {BackgroundColors.CYAN}{len(df_subset)}{BackgroundColors.GREEN} samples from {BackgroundColors.CYAN}{attack_label}{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Combining files for multi-class classification: {BackgroundColors.CYAN}{len(files_list)} files{Style.RESET_ALL}",
             config=config
-        )  # Output samples added message
-    
-    combined_df = pd.concat(combined_parts, ignore_index=True)  # Concatenate all parts into single dataframe
-    combined_df = combined_df.replace([np.inf, -np.inf], np.nan).dropna()  # Replace inf with nan and drop na
-    
-    if combined_df.empty:  # If combined dataframe is empty after cleaning
-        print(f"{BackgroundColors.RED}Combined multi-class dataset is empty after cleaning.{Style.RESET_ALL}")  # Print error
-        return (None, None, None)  # Return None tuple
-    
-    attack_types_list = sorted(list(attack_types_set))  # Convert attack types set to sorted list
-    
-    print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Multi-class dataset created: {BackgroundColors.CYAN}{len(combined_df)} samples, {len(common_features_list)} features, {len(attack_types_list)} classes{Style.RESET_ALL}"
-    )  # Print summary of combined dataset
-    
-    return (combined_df, attack_types_list, 'attack_type')  # Return combined dataframe, attack types list, and new target column name
+        )  # Output the verbose message
+        
+        if not files_list:  # If files list is empty
+            print(f"{BackgroundColors.RED}No files provided for multi-class combination.{Style.RESET_ALL}")  # Print error message
+            return (None, None, None)  # Return None tuple
+        
+        processed_files_with_labels = []  # Initialize list for processed file data with attack labels
+        attack_types_set = set()  # Initialize set to track unique attack types
+        
+        for f in files_list:  # Iterate over each file in the list
+            result = process_single_file(f, config=config)  # Process the single file
+            if result is not None:  # If processing succeeded
+                df_clean, target_col, feat_cols = result  # Unpack the result
+                attack_label = extract_attack_label_from_path(f)  # Extract attack type from filename
+                attack_types_set.add(attack_label)  # Add attack type to set
+                processed_files_with_labels.append((f, df_clean, target_col, feat_cols, attack_label))  # Add to processed list with label
+            else:  # If processing failed
+                verbose_output(
+                    f"{BackgroundColors.YELLOW}Skipping file due to processing failure: {BackgroundColors.CYAN}{f}{Style.RESET_ALL}",
+                    config=config
+                )  # Output warning message
+        
+        if not processed_files_with_labels:  # If no files were processed successfully
+            print(f"{BackgroundColors.RED}No compatible files found to combine for multi-class dataset.{Style.RESET_ALL}")  # Print error
+            return (None, None, None)  # Return None tuple
+        
+        print(
+            f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{len(attack_types_set)}{BackgroundColors.GREEN} unique attack types for multi-class: {BackgroundColors.CYAN}{sorted(attack_types_set)}{Style.RESET_ALL}"
+        )  # Print attack types summary
+        
+        common_features = None  # Initialize common features set
+        target_col_name = None  # Initialize target column name
+        
+        for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # Iterate over processed files
+            if target_col_name is None:  # If target not yet set
+                target_col_name = this_target  # Set target column name
+            
+            if common_features is None:  # If common features not yet initialized
+                common_features = set(feat_cols)  # Initialize with first file's features
+            else:  # If common features already initialized
+                common_features = common_features.intersection(set(feat_cols))  # Intersect with current file's features
+        
+        if not common_features:  # If no common features found
+            print(f"{BackgroundColors.RED}No common features found across files for multi-class combination.{Style.RESET_ALL}")  # Print error
+            return (None, None, None)  # Return None tuple
+        
+        common_features_list = sorted(list(common_features))  # Convert to sorted list
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Common features for multi-class: {BackgroundColors.CYAN}{len(common_features_list)} features{Style.RESET_ALL}",
+            config=config
+        )  # Output common features count
+        
+        combined_parts = []  # Initialize list to accumulate dataframe parts
+        
+        for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # Iterate over processed files
+            df_subset = df_clean[common_features_list].copy()  # Select only common features
+            df_subset['attack_type'] = attack_label  # Add attack type column with the extracted label
+            combined_parts.append(df_subset)  # Append to combined parts list
+            
+            verbose_output(
+                f"{BackgroundColors.GREEN}Added {BackgroundColors.CYAN}{len(df_subset)}{BackgroundColors.GREEN} samples from {BackgroundColors.CYAN}{attack_label}{Style.RESET_ALL}",
+                config=config
+            )  # Output samples added message
+        
+        combined_df = pd.concat(combined_parts, ignore_index=True)  # Concatenate all parts into single dataframe
+        combined_df = combined_df.replace([np.inf, -np.inf], np.nan).dropna()  # Replace inf with nan and drop na
+        
+        if combined_df.empty:  # If combined dataframe is empty after cleaning
+            print(f"{BackgroundColors.RED}Combined multi-class dataset is empty after cleaning.{Style.RESET_ALL}")  # Print error
+            return (None, None, None)  # Return None tuple
+        
+        attack_types_list = sorted(list(attack_types_set))  # Convert attack types set to sorted list
+        
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Multi-class dataset created: {BackgroundColors.CYAN}{len(combined_df)} samples, {len(common_features_list)} features, {len(attack_types_list)} classes{Style.RESET_ALL}"
+        )  # Print summary of combined dataset
+        
+        return (combined_df, attack_types_list, 'attack_type')  # Return combined dataframe, attack types list, and new target column name
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def find_data_augmentation_file(original_file_path, config=None):
@@ -985,41 +1103,46 @@ def find_data_augmentation_file(original_file_path, config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Path to the augmented file if it exists, None otherwise
     """
-    
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Looking for data augmentation file for: {BackgroundColors.CYAN}{original_file_path}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    data_augmentation_suffix = config.get("stacking", {}).get("data_augmentation_suffix", "_data_augmented")  # Get suffix from config
-    original_path = Path(original_file_path)  # Create Path object from the original file path
-    augmented_dir = original_path.parent / "Data_Augmentation"  # Build Data_Augmentation subdirectory path
-    augmented_filename = f"{original_path.stem}{data_augmentation_suffix}{original_path.suffix}"  # Build augmented filename with wgangp.py suffix convention
-    augmented_file = augmented_dir / augmented_filename  # Construct the full augmented file path
-
-    if augmented_file.exists():  # If the expected augmented file exists at the constructed path
         verbose_output(
-            f"{BackgroundColors.GREEN}Found augmented file: {BackgroundColors.CYAN}{augmented_file}{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Looking for data augmentation file for: {BackgroundColors.CYAN}{original_file_path}{Style.RESET_ALL}",
             config=config
-        )  # Output success message with the found path
-        return str(augmented_file)  # Return the augmented file path as a string
+        )  # Output the verbose message
 
-    fallback_candidates = list(augmented_dir.glob(f"{original_path.stem}*{data_augmentation_suffix}*"))  # Search for any file matching stem+suffix pattern as fallback
-    if fallback_candidates:  # If any fallback candidates were found via glob search
+        data_augmentation_suffix = config.get("stacking", {}).get("data_augmentation_suffix", "_data_augmented")  # Get suffix from config
+        original_path = Path(original_file_path)  # Create Path object from the original file path
+        augmented_dir = original_path.parent / "Data_Augmentation"  # Build Data_Augmentation subdirectory path
+        augmented_filename = f"{original_path.stem}{data_augmentation_suffix}{original_path.suffix}"  # Build augmented filename with wgangp.py suffix convention
+        augmented_file = augmented_dir / augmented_filename  # Construct the full augmented file path
+
+        if augmented_file.exists():  # If the expected augmented file exists at the constructed path
+            verbose_output(
+                f"{BackgroundColors.GREEN}Found augmented file: {BackgroundColors.CYAN}{augmented_file}{Style.RESET_ALL}",
+                config=config
+            )  # Output success message with the found path
+            return str(augmented_file)  # Return the augmented file path as a string
+
+        fallback_candidates = list(augmented_dir.glob(f"{original_path.stem}*{data_augmentation_suffix}*"))  # Search for any file matching stem+suffix pattern as fallback
+        if fallback_candidates:  # If any fallback candidates were found via glob search
+            verbose_output(
+                f"{BackgroundColors.GREEN}Found augmented file via fallback glob: {BackgroundColors.CYAN}{fallback_candidates[0]}{Style.RESET_ALL}",
+                config=config
+            )  # Output fallback match message
+            return str(fallback_candidates[0])  # Return the first matching fallback candidate
+
         verbose_output(
-            f"{BackgroundColors.GREEN}Found augmented file via fallback glob: {BackgroundColors.CYAN}{fallback_candidates[0]}{Style.RESET_ALL}",
+            f"{BackgroundColors.YELLOW}No augmented file found for: {BackgroundColors.CYAN}{original_file_path}{BackgroundColors.YELLOW}. Expected: {BackgroundColors.CYAN}{augmented_file}{Style.RESET_ALL}",
             config=config
-        )  # Output fallback match message
-        return str(fallback_candidates[0])  # Return the first matching fallback candidate
-
-    verbose_output(
-        f"{BackgroundColors.YELLOW}No augmented file found for: {BackgroundColors.CYAN}{original_file_path}{BackgroundColors.YELLOW}. Expected: {BackgroundColors.CYAN}{augmented_file}{Style.RESET_ALL}",
-        config=config
-    )  # Output warning with expected path for debugging
-    return None  # Return None when no augmented file is found
+        )  # Output warning with expected path for debugging
+        return None  # Return None when no augmented file is found
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def load_augmented_files_for_multiclass(original_files_list, config=None):
@@ -1030,34 +1153,45 @@ def load_augmented_files_for_multiclass(original_files_list, config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: List of augmented file paths (None entries where augmented file not found)
     """
-    
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Loading augmented files for multi-class mode: {BackgroundColors.CYAN}{len(original_files_list)} files{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
-    
-    augmented_files = []  # Initialize list to store augmented file paths
-    found_count = 0  # Initialize counter for found augmented files
-    
-    for original_file in original_files_list:  # Iterate over each original file
-        augmented_file = find_data_augmentation_file(original_file, config=config)  # Find corresponding augmented file
-        if augmented_file is not None:  # If augmented file was found
-            augmented_files.append(augmented_file)  # Add to augmented files list
-            found_count += 1  # Increment found counter
-        else:  # If augmented file was not found
-            verbose_output(
-                f"{BackgroundColors.YELLOW}No augmented file found for: {BackgroundColors.CYAN}{original_file}{Style.RESET_ALL}",
-                config=config
-            )  # Output warning message
-            augmented_files.append(None)  # Add None placeholder to maintain alignment
-    
-    if found_count == 0:  # If no augmented files were found at all
-        print(
-            f"{BackgroundColors.YELLOW}No augmented files found for any original files in multi-class mode.{Style.RESET_ALL}"
-        )  # Print warning message
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Loading augmented files for multi-class mode: {BackgroundColors.CYAN}{len(original_files_list)} files{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
+        
+        augmented_files = []  # Initialize list to store augmented file paths
+        found_count = 0  # Initialize counter for found augmented files
+        
+        for original_file in original_files_list:  # Iterate over each original file
+            augmented_file = find_data_augmentation_file(original_file, config=config)  # Find corresponding augmented file
+            if augmented_file is not None:  # If augmented file was found
+                augmented_files.append(augmented_file)  # Add to augmented files list
+                found_count += 1  # Increment found counter
+            else:  # If augmented file was not found
+                verbose_output(
+                    f"{BackgroundColors.YELLOW}No augmented file found for: {BackgroundColors.CYAN}{original_file}{Style.RESET_ALL}",
+                    config=config
+                )  # Output warning message
+                augmented_files.append(None)  # Add None placeholder to maintain alignment
+        
+        if found_count == 0:  # If no augmented files were found at all
+            print(
+                f"{BackgroundColors.YELLOW}No augmented files found for any original files in multi-class mode.{Style.RESET_ALL}"
+            )  # Print warning message
+        else:  # If at least one augmented file was found
+            print(
+                f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{found_count}/{len(original_files_list)}{BackgroundColors.GREEN} augmented files for multi-class mode.{Style.RESET_ALL}"
+            )  # Print success summary
+        
+        return augmented_files  # Return list of augmented file paths with None entries for missing files
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
         return []  # Return empty list
     
     if found_count < len(original_files_list):  # If some but not all augmented files were found
@@ -1084,22 +1218,27 @@ def merge_original_and_augmented(original_df, augmented_df, config=None):
     :return: Merged DataFrame
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Merging original ({len(original_df)} rows) and augmented ({len(augmented_df)} rows) data{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+        verbose_output(
+            f"{BackgroundColors.GREEN}Merging original ({len(original_df)} rows) and augmented ({len(augmented_df)} rows) data{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    merged_df = pd.concat([original_df, augmented_df], ignore_index=True)  # Concatenate dataframes
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Merged dataset has {BackgroundColors.CYAN}{len(merged_df)}{BackgroundColors.GREEN} rows{Style.RESET_ALL}",
-        config=config
-    )  # Output the result
+        merged_df = pd.concat([original_df, augmented_df], ignore_index=True)  # Concatenate dataframes
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Merged dataset has {BackgroundColors.CYAN}{len(merged_df)}{BackgroundColors.GREEN} rows{Style.RESET_ALL}",
+            config=config
+        )  # Output the result
 
-    return merged_df  # Return merged dataframe
+        return merged_df  # Return merged dataframe
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def calculate_metric_improvement(original_value, augmented_value):
@@ -1111,11 +1250,16 @@ def calculate_metric_improvement(original_value, augmented_value):
     :return: Percentage improvement (positive = better, negative = worse)
     """
 
-    if original_value == 0:  # Avoid division by zero
-        return 0.0 if augmented_value == 0 else float('inf')  # Return 0 if both are 0, inf if only original is 0
-    
-    improvement = ((augmented_value - original_value) / original_value) * 100  # Calculate percentage improvement
-    return improvement  # Return improvement
+    try:
+        if original_value == 0:  # Avoid division by zero
+            return 0.0 if augmented_value == 0 else float('inf')  # Return 0 if both are 0, inf if only original is 0
+        
+        improvement = ((augmented_value - original_value) / original_value) * 100  # Calculate percentage improvement
+        return improvement  # Return improvement
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def generate_experiment_id(file_path, experiment_mode, augmentation_ratio=None):
@@ -1128,12 +1272,17 @@ def generate_experiment_id(file_path, experiment_mode, augmentation_ratio=None):
     :return: String experiment identifier combining timestamp, filename, mode and ratio
     """
 
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")  # Create a timestamp string for uniqueness
-    file_stem = Path(file_path).stem  # Extract the filename stem without extension
-    ratio_tag = f"_ratio{int(augmentation_ratio * 100)}" if augmentation_ratio is not None else ""  # Build ratio tag string or empty
-    experiment_id = f"{timestamp}_{file_stem}_{experiment_mode}{ratio_tag}"  # Concatenate all parts into unique identifier
+    try:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")  # Create a timestamp string for uniqueness
+        file_stem = Path(file_path).stem  # Extract the filename stem without extension
+        ratio_tag = f"_ratio{int(augmentation_ratio * 100)}" if augmentation_ratio is not None else ""  # Build ratio tag string or empty
+        experiment_id = f"{timestamp}_{file_stem}_{experiment_mode}{ratio_tag}"  # Concatenate all parts into unique identifier
 
-    return experiment_id  # Return the generated experiment identifier
+        return experiment_id  # Return the generated experiment identifier
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def validate_augmented_dataframe(original_df, augmented_df, file_path):
@@ -1146,37 +1295,42 @@ def validate_augmented_dataframe(original_df, augmented_df, file_path):
     :return: True if augmented data is valid and compatible, False otherwise
     """
 
-    if augmented_df is None or augmented_df.empty:  # Check if augmented DataFrame is None or contains no rows
-        print(
-            f"{BackgroundColors.YELLOW}Warning: Augmented DataFrame is empty for {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping.{Style.RESET_ALL}"
-        )  # Print warning about empty augmented data
-        return False  # Return False for empty augmented data
+    try:
+        if augmented_df is None or augmented_df.empty:  # Check if augmented DataFrame is None or contains no rows
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Augmented DataFrame is empty for {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping.{Style.RESET_ALL}"
+            )  # Print warning about empty augmented data
+            return False  # Return False for empty augmented data
 
-    original_cols = set(original_df.columns)  # Get the set of column names from the original DataFrame
-    augmented_cols = set(augmented_df.columns)  # Get the set of column names from the augmented DataFrame
-    missing_cols = original_cols - augmented_cols  # Compute columns present in original but missing in augmented
+        original_cols = set(original_df.columns)  # Get the set of column names from the original DataFrame
+        augmented_cols = set(augmented_df.columns)  # Get the set of column names from the augmented DataFrame
+        missing_cols = original_cols - augmented_cols  # Compute columns present in original but missing in augmented
 
-    if missing_cols:  # If there are columns missing from the augmented DataFrame
-        print(
-            f"{BackgroundColors.YELLOW}Warning: Augmented data for {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW} is missing columns: {BackgroundColors.CYAN}{missing_cols}{BackgroundColors.YELLOW}. Skipping.{Style.RESET_ALL}"
-        )  # Print warning listing the missing column names
-        return False  # Return False due to column mismatch
+        if missing_cols:  # If there are columns missing from the augmented DataFrame
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Augmented data for {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW} is missing columns: {BackgroundColors.CYAN}{missing_cols}{BackgroundColors.YELLOW}. Skipping.{Style.RESET_ALL}"
+            )  # Print warning listing the missing column names
+            return False  # Return False due to column mismatch
 
-    original_dtypes = original_df.select_dtypes(include=np.number).columns.tolist()  # Get list of numeric columns in original
-    augmented_dtypes = augmented_df.select_dtypes(include=np.number).columns.tolist()  # Get list of numeric columns in augmented
-    numeric_overlap = set(original_dtypes) & set(augmented_dtypes)  # Compute intersection of numeric columns
+        original_dtypes = original_df.select_dtypes(include=np.number).columns.tolist()  # Get list of numeric columns in original
+        augmented_dtypes = augmented_df.select_dtypes(include=np.number).columns.tolist()  # Get list of numeric columns in augmented
+        numeric_overlap = set(original_dtypes) & set(augmented_dtypes)  # Compute intersection of numeric columns
 
-    if len(numeric_overlap) < 2:  # Check if there are at least 2 overlapping numeric columns (features + target)
-        print(
-            f"{BackgroundColors.YELLOW}Warning: Augmented data for {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW} has insufficient numeric column overlap ({len(numeric_overlap)}). Skipping.{Style.RESET_ALL}"
-        )  # Print warning about insufficient numeric overlap
-        return False  # Return False due to insufficient numeric columns
+        if len(numeric_overlap) < 2:  # Check if there are at least 2 overlapping numeric columns (features + target)
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Augmented data for {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW} has insufficient numeric column overlap ({len(numeric_overlap)}). Skipping.{Style.RESET_ALL}"
+            )  # Print warning about insufficient numeric overlap
+            return False  # Return False due to insufficient numeric columns
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Augmented data validation passed for {BackgroundColors.CYAN}{file_path}{BackgroundColors.GREEN}: {len(augmented_df)} rows, {len(augmented_cols)} columns{Style.RESET_ALL}"
-    )  # Output verbose message confirming validation success
+        verbose_output(
+            f"{BackgroundColors.GREEN}Augmented data validation passed for {BackgroundColors.CYAN}{file_path}{BackgroundColors.GREEN}: {len(augmented_df)} rows, {len(augmented_cols)} columns{Style.RESET_ALL}"
+        )  # Output verbose message confirming validation success
 
-    return True  # Return True indicating augmented data is valid and compatible
+        return True  # Return True indicating augmented data is valid and compatible
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def sample_augmented_by_ratio(augmented_df, original_df, ratio):
@@ -1189,30 +1343,35 @@ def sample_augmented_by_ratio(augmented_df, original_df, ratio):
     :return: Sampled DataFrame with at most ratio * len(original_df) rows, or None on failure
     """
 
-    n_original = len(original_df)  # Get the number of rows in the original dataset
-    n_requested = max(1, int(round(ratio * n_original)))  # Calculate requested sample size capped at minimum 1 row
-    n_available = len(augmented_df)  # Get the total number of rows available in augmented data
+    try:
+        n_original = len(original_df)  # Get the number of rows in the original dataset
+        n_requested = max(1, int(round(ratio * n_original)))  # Calculate requested sample size capped at minimum 1 row
+        n_available = len(augmented_df)  # Get the total number of rows available in augmented data
 
-    if n_available == 0:  # Check if augmented DataFrame has zero rows
-        print(
-            f"{BackgroundColors.YELLOW}Warning: Augmented DataFrame is empty. Cannot sample at ratio {ratio}.{Style.RESET_ALL}"
-        )  # Print warning about empty augmented source
-        return None  # Return None for empty augmented data
+        if n_available == 0:  # Check if augmented DataFrame has zero rows
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Augmented DataFrame is empty. Cannot sample at ratio {ratio}.{Style.RESET_ALL}"
+            )  # Print warning about empty augmented source
+            return None  # Return None for empty augmented data
 
-    n_sample = min(n_requested, n_available)  # Cap the sample size at the available number of augmented rows
+        n_sample = min(n_requested, n_available)  # Cap the sample size at the available number of augmented rows
 
-    if n_sample < n_requested:  # Log a warning if capping occurred (fewer augmented rows than requested)
+        if n_sample < n_requested:  # Log a warning if capping occurred (fewer augmented rows than requested)
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Augmented data has only {n_available} rows; requested {n_requested} (ratio={ratio}). Using all {n_available}.{Style.RESET_ALL}"
+            )  # Warn that fewer rows than requested are available
+
+        sampled_df = augmented_df.sample(n=n_sample, random_state=42, replace=False)  # Randomly sample n_sample rows with fixed seed for reproducibility
+
         verbose_output(
-            f"{BackgroundColors.YELLOW}Augmented data has only {n_available} rows; requested {n_requested} (ratio={ratio}). Using all {n_available}.{Style.RESET_ALL}"
-        )  # Warn that fewer rows than requested are available
+            f"{BackgroundColors.GREEN}Sampled {BackgroundColors.CYAN}{n_sample}{BackgroundColors.GREEN} augmented rows at ratio {BackgroundColors.CYAN}{ratio}{BackgroundColors.GREEN} (original has {n_original} rows){Style.RESET_ALL}"
+        )  # Output verbose message confirming sampling details
 
-    sampled_df = augmented_df.sample(n=n_sample, random_state=42, replace=False)  # Randomly sample n_sample rows with fixed seed for reproducibility
-
-    verbose_output(
-        f"{BackgroundColors.GREEN}Sampled {BackgroundColors.CYAN}{n_sample}{BackgroundColors.GREEN} augmented rows at ratio {BackgroundColors.CYAN}{ratio}{BackgroundColors.GREEN} (original has {n_original} rows){Style.RESET_ALL}"
-    )  # Output verbose message confirming sampling details
-
-    return sampled_df  # Return the sampled augmented DataFrame
+        return sampled_df  # Return the sampled augmented DataFrame
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def build_tsne_output_directory(original_file_path, augmented_file_path):
@@ -1224,38 +1383,43 @@ def build_tsne_output_directory(original_file_path, augmented_file_path):
     :return: Path object for t-SNE output directory
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Building t-SNE output directory for: {BackgroundColors.CYAN}{original_file_path}{Style.RESET_ALL}"
-    )  # Output verbose message for directory creation
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Building t-SNE output directory for: {BackgroundColors.CYAN}{original_file_path}{Style.RESET_ALL}"
+        )  # Output verbose message for directory creation
 
-    original_path = Path(original_file_path)  # Create Path object for original file
-    augmented_path = Path(augmented_file_path)  # Create Path object for augmented file
+        original_path = Path(original_file_path)  # Create Path object for original file
+        augmented_path = Path(augmented_file_path)  # Create Path object for augmented file
 
-    datasets_keyword = "Datasets"  # Standard directory name in project structure
-    relative_parts = []  # List to accumulate relative path components
-    found_datasets = False  # Flag to track if Datasets directory was found
+        datasets_keyword = "Datasets"  # Standard directory name in project structure
+        relative_parts = []  # List to accumulate relative path components
+        found_datasets = False  # Flag to track if Datasets directory was found
 
-    for part in original_path.parts:  # Iterate through path components
-        if found_datasets and part != original_path.name:  # After Datasets, before filename
-            relative_parts.append(part)  # Add intermediate directories to relative path
-        if part == datasets_keyword:  # Found the Datasets directory
-            found_datasets = True  # Set flag to start collecting relative parts
+        for part in original_path.parts:  # Iterate through path components
+            if found_datasets and part != original_path.name:  # After Datasets, before filename
+                relative_parts.append(part)  # Add intermediate directories to relative path
+            if part == datasets_keyword:  # Found the Datasets directory
+                found_datasets = True  # Set flag to start collecting relative parts
 
-    augmented_parent = augmented_path.parent  # Get parent directory of augmented file
-    tsne_base = augmented_parent / "tsne_plots"  # Base directory for all t-SNE plots
+        augmented_parent = augmented_path.parent  # Get parent directory of augmented file
+        tsne_base = augmented_parent / "tsne_plots"  # Base directory for all t-SNE plots
 
-    if relative_parts:  # If nested structure exists
-        tsne_dir = tsne_base / Path(*relative_parts) / original_path.stem  # Preserve nested path
-    else:  # Flat structure
-        tsne_dir = tsne_base / original_path.stem  # Use filename stem only
+        if relative_parts:  # If nested structure exists
+            tsne_dir = tsne_base / Path(*relative_parts) / original_path.stem  # Preserve nested path
+        else:  # Flat structure
+            tsne_dir = tsne_base / original_path.stem  # Use filename stem only
 
-    os.makedirs(tsne_dir, exist_ok=True)  # Create directory structure if it doesn't exist
+        os.makedirs(tsne_dir, exist_ok=True)  # Create directory structure if it doesn't exist
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Created t-SNE directory: {BackgroundColors.CYAN}{tsne_dir}{Style.RESET_ALL}"
-    )  # Output confirmation message
+        verbose_output(
+            f"{BackgroundColors.GREEN}Created t-SNE directory: {BackgroundColors.CYAN}{tsne_dir}{Style.RESET_ALL}"
+        )  # Output confirmation message
 
-    return tsne_dir  # Return the output directory path
+        return tsne_dir  # Return the output directory path
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def combine_and_label_augmentation_data(original_df, augmented_df=None, label_col=None):
@@ -1268,33 +1432,38 @@ def combine_and_label_augmentation_data(original_df, augmented_df=None, label_co
     :return: Combined DataFrame with composite labels for visualization
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Combining and labeling data for t-SNE visualization...{Style.RESET_ALL}"
-    )  # Output verbose message for data combination
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Combining and labeling data for t-SNE visualization...{Style.RESET_ALL}"
+        )  # Output verbose message for data combination
 
-    if label_col is None:  # No label column specified
-        label_col = original_df.columns[-1]  # Use last column as label
+        if label_col is None:  # No label column specified
+            label_col = original_df.columns[-1]  # Use last column as label
 
-    df_orig = original_df.copy()  # Copy original DataFrame to avoid modifying input
+        df_orig = original_df.copy()  # Copy original DataFrame to avoid modifying input
 
-    if label_col in df_orig.columns:  # If label column exists
-        df_orig['tsne_label'] = df_orig[label_col].astype(str) + "_original"  # Create composite label
-    else:  # No label column found
-        df_orig['tsne_label'] = "original"  # Use simple source label
-
-    if augmented_df is not None:  # If augmented data provided
-        df_aug = augmented_df.copy()  # Copy augmented DataFrame to avoid modifying input
-
-        if label_col in df_aug.columns:  # If label column exists
-            df_aug['tsne_label'] = df_aug[label_col].astype(str) + "_augmented"  # Create composite label
+        if label_col in df_orig.columns:  # If label column exists
+            df_orig['tsne_label'] = df_orig[label_col].astype(str) + "_original"  # Create composite label
         else:  # No label column found
-            df_aug['tsne_label'] = "augmented"  # Use simple source label
+            df_orig['tsne_label'] = "original"  # Use simple source label
 
-        combined_df = pd.concat([df_orig, df_aug], ignore_index=True)  # Concatenate DataFrames
-    else:  # Original only
-        combined_df = df_orig  # Use original DataFrame only
+        if augmented_df is not None:  # If augmented data provided
+            df_aug = augmented_df.copy()  # Copy augmented DataFrame to avoid modifying input
 
-    return combined_df  # Return combined DataFrame with composite labels
+            if label_col in df_aug.columns:  # If label column exists
+                df_aug['tsne_label'] = df_aug[label_col].astype(str) + "_augmented"  # Create composite label
+            else:  # No label column found
+                df_aug['tsne_label'] = "augmented"  # Use simple source label
+
+            combined_df = pd.concat([df_orig, df_aug], ignore_index=True)  # Concatenate DataFrames
+        else:  # Original only
+            combined_df = df_orig  # Use original DataFrame only
+
+        return combined_df  # Return combined DataFrame with composite labels
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def prepare_numeric_features_for_tsne(df, exclude_col='tsne_label'):
@@ -1306,47 +1475,52 @@ def prepare_numeric_features_for_tsne(df, exclude_col='tsne_label'):
     :return: Tuple (numeric_array, labels_array, success_flag)
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Preparing numeric features for t-SNE...{Style.RESET_ALL}"
-    )  # Output verbose message for feature preparation
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Preparing numeric features for t-SNE...{Style.RESET_ALL}"
+        )  # Output verbose message for feature preparation
 
-    if exclude_col in df.columns:  # If label column exists
-        labels = df[exclude_col].values  # Extract labels as numpy array
-        df_work = df.drop(columns=[exclude_col])  # Remove label column for numeric extraction
-    else:  # No label column
-        labels = np.array(['unknown'] * len(df))  # Create default labels
-        df_work = df.copy()  # Use full DataFrame
+        if exclude_col in df.columns:  # If label column exists
+            labels = df[exclude_col].values  # Extract labels as numpy array
+            df_work = df.drop(columns=[exclude_col])  # Remove label column for numeric extraction
+        else:  # No label column
+            labels = np.array(['unknown'] * len(df))  # Create default labels
+            df_work = df.copy()  # Use full DataFrame
 
-    numeric_df = df_work.select_dtypes(include=np.number)  # Select only numeric columns
+        numeric_df = df_work.select_dtypes(include=np.number)  # Select only numeric columns
 
-    if numeric_df.empty:  # No numeric columns found
-        print(
-            f"{BackgroundColors.YELLOW}Warning: No numeric features found for t-SNE generation.{Style.RESET_ALL}"
-        )  # Print warning message
-        return (None, None, False)  # Return failure tuple
+        if numeric_df.empty:  # No numeric columns found
+            print(
+                f"{BackgroundColors.YELLOW}Warning: No numeric features found for t-SNE generation.{Style.RESET_ALL}"
+            )  # Print warning message
+            return (None, None, False)  # Return failure tuple
 
-    numeric_df = numeric_df.replace([np.inf, -np.inf], np.nan)  # Replace infinities with NaN
-    numeric_df = numeric_df.fillna(numeric_df.median())  # Fill NaN with column median
-    numeric_df = numeric_df.fillna(0)  # Fill remaining NaN with zero
+        numeric_df = numeric_df.replace([np.inf, -np.inf], np.nan)  # Replace infinities with NaN
+        numeric_df = numeric_df.fillna(numeric_df.median())  # Fill NaN with column median
+        numeric_df = numeric_df.fillna(0)  # Fill remaining NaN with zero
 
-    if numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0:  # Empty result after cleaning
-        print(
-            f"{BackgroundColors.YELLOW}Warning: No valid numeric data remaining after cleaning.{Style.RESET_ALL}"
-        )  # Print warning message
-        return (None, None, False)  # Return failure tuple
+        if numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0:  # Empty result after cleaning
+            print(
+                f"{BackgroundColors.YELLOW}Warning: No valid numeric data remaining after cleaning.{Style.RESET_ALL}"
+            )  # Print warning message
+            return (None, None, False)  # Return failure tuple
 
-    X = numeric_df.values  # Extract values as numpy array
+        X = numeric_df.values  # Extract values as numpy array
 
-    try:  # Attempt feature scaling
-        scaler = StandardScaler()  # Initialize standard scaler
-        X_scaled = scaler.fit_transform(X)  # Scale features to zero mean and unit variance
-    except Exception as e:  # Scaling failed
-        print(
-            f"{BackgroundColors.YELLOW}Warning: Feature scaling failed: {e}. Using unscaled data.{Style.RESET_ALL}"
-        )  # Print warning message
-        X_scaled = X  # Use unscaled data as fallback
+        try:  # Attempt feature scaling
+            scaler = StandardScaler()  # Initialize standard scaler
+            X_scaled = scaler.fit_transform(X)  # Scale features to zero mean and unit variance
+        except Exception as e:  # Scaling failed
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Feature scaling failed: {e}. Using unscaled data.{Style.RESET_ALL}"
+            )  # Print warning message
+            X_scaled = X  # Use unscaled data as fallback
 
-    return (X_scaled, labels, True)  # Return scaled features, labels, and success flag
+        return (X_scaled, labels, True)  # Return scaled features, labels, and success flag
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def compute_and_save_tsne_plot(X_scaled, labels, output_path, title, perplexity=30, random_state=42):
@@ -1362,11 +1536,11 @@ def compute_and_save_tsne_plot(X_scaled, labels, output_path, title, perplexity=
     :return: True if successful, False otherwise
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Computing t-SNE embedding and saving plot...{Style.RESET_ALL}"
-    )  # Output verbose message for t-SNE computation
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Computing t-SNE embedding and saving plot...{Style.RESET_ALL}"
+        )  # Output verbose message for t-SNE computation
 
-    try:  # Attempt t-SNE computation
         max_perplexity = (X_scaled.shape[0] - 1) // 3  # Maximum valid perplexity
         actual_perplexity = min(perplexity, max_perplexity)  # Use minimum of requested and maximum
 
@@ -1426,6 +1600,7 @@ def compute_and_save_tsne_plot(X_scaled, labels, output_path, title, perplexity=
         print(
             f"{BackgroundColors.RED}Error generating t-SNE plot: {e}{Style.RESET_ALL}"
         )  # Print error message
+        send_exception_via_telegram(type(e), e, e.__traceback__)
         return False  # Return failure flag
 
 
@@ -1441,46 +1616,51 @@ def generate_augmentation_tsne_visualization(original_file, original_df, augment
     :return: None
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Generating t-SNE visualization for augmentation experiment...{Style.RESET_ALL}"
-    )  # Output verbose message for t-SNE generation
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Generating t-SNE visualization for augmentation experiment...{Style.RESET_ALL}"
+        )  # Output verbose message for t-SNE generation
 
-    augmented_file = find_data_augmentation_file(original_file)  # Locate augmented data file
-    if augmented_file is None:  # No augmented file found
-        print(
-            f"{BackgroundColors.YELLOW}Warning: Cannot generate t-SNE - augmented file path not found.{Style.RESET_ALL}"
-        )  # Print warning message
-        return  # Exit function early
+        augmented_file = find_data_augmentation_file(original_file)  # Locate augmented data file
+        if augmented_file is None:  # No augmented file found
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Cannot generate t-SNE - augmented file path not found.{Style.RESET_ALL}"
+            )  # Print warning message
+            return  # Exit function early
 
-    tsne_output_dir = build_tsne_output_directory(original_file, augmented_file)  # Create output directory
+        tsne_output_dir = build_tsne_output_directory(original_file, augmented_file)  # Create output directory
 
-    combined_df = combine_and_label_augmentation_data(original_df, augmented_df)  # Prepare labeled data
+        combined_df = combine_and_label_augmentation_data(original_df, augmented_df)  # Prepare labeled data
 
-    X_scaled, labels, success = prepare_numeric_features_for_tsne(combined_df, exclude_col='tsne_label')  # Extract and scale features
+        X_scaled, labels, success = prepare_numeric_features_for_tsne(combined_df, exclude_col='tsne_label')  # Extract and scale features
 
-    if not success:  # Feature preparation failed
-        print(
-            f"{BackgroundColors.YELLOW}Warning: Skipping t-SNE generation due to feature preparation failure.{Style.RESET_ALL}"
-        )  # Print warning message
-        return  # Exit function early
+        if not success:  # Feature preparation failed
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Skipping t-SNE generation due to feature preparation failure.{Style.RESET_ALL}"
+            )  # Print warning message
+            return  # Exit function early
 
-    file_stem = Path(original_file).stem  # Extract filename without extension
+        file_stem = Path(original_file).stem  # Extract filename without extension
 
-    if experiment_mode == "original_only":  # Original-only experiment
-        plot_filename = f"{file_stem}_original_only_tsne.png"  # Filename for original-only plot
-        plot_title = f"t-SNE: {file_stem} (Original Only)"  # Title for original-only plot
-    else:  # Original + augmented experiment
-        ratio_pct = int(augmentation_ratio * 100) if augmentation_ratio else 0  # Convert ratio to percentage
-        plot_filename = f"{file_stem}_augmented_{ratio_pct}pct_tsne.png"  # Filename for augmented plot
-        plot_title = f"t-SNE: {file_stem} (Original + {ratio_pct}% Augmented)"  # Title for augmented plot
+        if experiment_mode == "original_only":  # Original-only experiment
+            plot_filename = f"{file_stem}_original_only_tsne.png"  # Filename for original-only plot
+            plot_title = f"t-SNE: {file_stem} (Original Only)"  # Title for original-only plot
+        else:  # Original + augmented experiment
+            ratio_pct = int(augmentation_ratio * 100) if augmentation_ratio else 0  # Convert ratio to percentage
+            plot_filename = f"{file_stem}_augmented_{ratio_pct}pct_tsne.png"  # Filename for augmented plot
+            plot_title = f"t-SNE: {file_stem} (Original + {ratio_pct}% Augmented)"  # Title for augmented plot
 
-    output_path = tsne_output_dir / plot_filename  # Build full output path
+        output_path = tsne_output_dir / plot_filename  # Build full output path
 
-    compute_and_save_tsne_plot(X_scaled, labels, str(output_path), plot_title)  # Generate and save visualization
+        compute_and_save_tsne_plot(X_scaled, labels, str(output_path), plot_title)  # Generate and save visualization
 
-    send_telegram_message(
-        TELEGRAM_BOT, f"Generated t-SNE plot: {file_stem} ({experiment_mode}, ratio={augmentation_ratio})"
-    )  # Send notification via Telegram
+        send_telegram_message(
+            TELEGRAM_BOT, f"Generated t-SNE plot: {file_stem} ({experiment_mode}, ratio={augmentation_ratio})"
+        )  # Send notification via Telegram
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def save_augmentation_comparison_results(file_path, comparison_results, config=None):
@@ -1493,60 +1673,65 @@ def save_augmentation_comparison_results(file_path, comparison_results, config=N
     :return: None
     """
 
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
-    
-    augmentation_comparison_filename = config.get("stacking", {}).get("augmentation_comparison_filename", "Data_Augmentation_Comparison_Results.csv")  # Get filename from config
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        augmentation_comparison_filename = config.get("stacking", {}).get("augmentation_comparison_filename", "Data_Augmentation_Comparison_Results.csv")  # Get filename from config
 
-    if not comparison_results:  # If no results to save
-        return  # Exit early
+        if not comparison_results:  # If no results to save
+            return  # Exit early
 
-    file_path_obj = Path(file_path)  # Create Path object
-    feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"  # Feature_Analysis directory
-    os.makedirs(feature_analysis_dir, exist_ok=True)  # Ensure directory exists
-    output_path = feature_analysis_dir / augmentation_comparison_filename  # Output file path
+        file_path_obj = Path(file_path)  # Create Path object
+        feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"  # Feature_Analysis directory
+        os.makedirs(feature_analysis_dir, exist_ok=True)  # Ensure directory exists
+        output_path = feature_analysis_dir / augmentation_comparison_filename  # Output file path
 
-    df = pd.DataFrame(comparison_results)  # Convert results to DataFrame
+        df = pd.DataFrame(comparison_results)  # Convert results to DataFrame
 
-    column_order = [
-        "dataset",
-        "feature_set",
-        "classifier_type",
-        "model_name",
-        "data_source",
-        "experiment_id",
-        "experiment_mode",
-        "augmentation_ratio",
-        "n_features",
-        "n_samples_train",
-        "n_samples_test",
-        "accuracy",
-        "precision",
-        "recall",
-        "f1_score",
-        "fpr",
-        "fnr",
-        "training_time",
-        "accuracy_improvement",
-        "precision_improvement",
-        "recall_improvement",
-        "f1_score_improvement",
-        "fpr_improvement",
-        "fnr_improvement",
-        "training_time_improvement",
-        "features_list",
-        "Hardware",
-    ]  # Define desired column order with experiment traceability columns
+        column_order = [
+            "dataset",
+            "feature_set",
+            "classifier_type",
+            "model_name",
+            "data_source",
+            "experiment_id",
+            "experiment_mode",
+            "augmentation_ratio",
+            "n_features",
+            "n_samples_train",
+            "n_samples_test",
+            "accuracy",
+            "precision",
+            "recall",
+            "f1_score",
+            "fpr",
+            "fnr",
+            "training_time",
+            "accuracy_improvement",
+            "precision_improvement",
+            "recall_improvement",
+            "f1_score_improvement",
+            "fpr_improvement",
+            "fnr_improvement",
+            "training_time_improvement",
+            "features_list",
+            "Hardware",
+        ]  # Define desired column order with experiment traceability columns
 
-    existing_columns = [col for col in column_order if col in df.columns]  # Filter to existing columns
-    df = df[existing_columns]  # Reorder DataFrame columns
+        existing_columns = [col for col in column_order if col in df.columns]  # Filter to existing columns
+        df = df[existing_columns]  # Reorder DataFrame columns
 
-    df = add_hardware_column(df, existing_columns)  # Add hardware specifications column
+        df = add_hardware_column(df, existing_columns)  # Add hardware specifications column
 
-    df.to_csv(output_path, index=False)  # Save to CSV file
-    print(
-        f"{BackgroundColors.GREEN}Saved augmentation comparison results to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
-    )  # Output success message
+        df.to_csv(output_path, index=False)  # Save to CSV file
+        print(
+            f"{BackgroundColors.GREEN}Saved augmentation comparison results to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+        )  # Output success message
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def find_local_feature_file(file_dir, filename, config=None):
@@ -1559,20 +1744,25 @@ def find_local_feature_file(file_dir, filename, config=None):
     :return: The matching path or None
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Checking local Feature_Analysis in directory: {BackgroundColors.CYAN}{file_dir}{BackgroundColors.GREEN} for file: {BackgroundColors.CYAN}{filename}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+        verbose_output(
+            f"{BackgroundColors.GREEN}Checking local Feature_Analysis in directory: {BackgroundColors.CYAN}{file_dir}{BackgroundColors.GREEN} for file: {BackgroundColors.CYAN}{filename}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    candidate = os.path.join(file_dir, "Feature_Analysis", filename)  # Construct candidate path
+        candidate = os.path.join(file_dir, "Feature_Analysis", filename)  # Construct candidate path
 
-    if os.path.exists(candidate):  # If the candidate file exists
-        return candidate  # Return the candidate path
+        if os.path.exists(candidate):  # If the candidate file exists
+            return candidate  # Return the candidate path
 
-    return None  # Not found
+        return None  # Not found
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def find_parent_feature_file(file_dir, filename, config=None):
@@ -1585,27 +1775,32 @@ def find_parent_feature_file(file_dir, filename, config=None):
     :return: The matching path or None
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Ascending parent directories from: {BackgroundColors.CYAN}{file_dir}{BackgroundColors.GREEN} searching for file: {BackgroundColors.CYAN}{filename}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+        verbose_output(
+            f"{BackgroundColors.GREEN}Ascending parent directories from: {BackgroundColors.CYAN}{file_dir}{BackgroundColors.GREEN} searching for file: {BackgroundColors.CYAN}{filename}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    path = file_dir  # Start from the file's directory
-    while True:  # Loop until break
-        candidate = os.path.join(path, "Feature_Analysis", filename)  # Construct candidate path
-        if os.path.exists(candidate):  # If the candidate file exists
-            return candidate  # Return the candidate path
+        path = file_dir  # Start from the file's directory
+        while True:  # Loop until break
+            candidate = os.path.join(path, "Feature_Analysis", filename)  # Construct candidate path
+            if os.path.exists(candidate):  # If the candidate file exists
+                return candidate  # Return the candidate path
 
-        parent = os.path.dirname(path)  # Get the parent directory
-        if parent == path:  # If reached the root directory
-            break  # Break the loop
+            parent = os.path.dirname(path)  # Get the parent directory
+            if parent == path:  # If reached the root directory
+                break  # Break the loop
 
-        path = parent  # Move up to the parent directory
+            path = parent  # Move up to the parent directory
 
-    return None  # Not found
+        return None  # Not found
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def find_dataset_level_feature_file(file_path, filename, config=None):
@@ -1621,37 +1816,42 @@ def find_dataset_level_feature_file(file_path, filename, config=None):
     :return: The matching path or None
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Searching dataset-level Feature_Analysis for file: {BackgroundColors.CYAN}{filename}{BackgroundColors.GREEN} related to file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+        verbose_output(
+            f"{BackgroundColors.GREEN}Searching dataset-level Feature_Analysis for file: {BackgroundColors.CYAN}{filename}{BackgroundColors.GREEN} related to file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    abs_path = os.path.abspath(file_path)  # Get absolute path of the input file
-    parts = abs_path.split(os.sep)  # Split the path into parts
+        abs_path = os.path.abspath(file_path)  # Get absolute path of the input file
+        parts = abs_path.split(os.sep)  # Split the path into parts
 
-    if "Datasets" not in parts:  # If "Datasets" is not in the path parts
-        return None  # Nothing to do
+        if "Datasets" not in parts:  # If "Datasets" is not in the path parts
+            return None  # Nothing to do
 
-    idx = parts.index("Datasets")  # Get the index of "Datasets"
-    if idx + 1 >= len(parts):  # If there is no dataset name after "Datasets"
-        return None  # Nothing to do
+        idx = parts.index("Datasets")  # Get the index of "Datasets"
+        if idx + 1 >= len(parts):  # If there is no dataset name after "Datasets"
+            return None  # Nothing to do
 
-    dataset_dir = os.sep.join(parts[: idx + 2])  # Construct the dataset directory path
+        dataset_dir = os.sep.join(parts[: idx + 2])  # Construct the dataset directory path
 
-    candidate = os.path.join(dataset_dir, "Feature_Analysis", filename)  # Construct candidate path for the direct path
-    if os.path.exists(candidate):  # If the candidate file exists
-        return candidate  # Return the candidate path
+        candidate = os.path.join(dataset_dir, "Feature_Analysis", filename)  # Construct candidate path for the direct path
+        if os.path.exists(candidate):  # If the candidate file exists
+            return candidate  # Return the candidate path
 
-    matches = glob.glob(
-        os.path.join(dataset_dir, "**", "Feature_Analysis", filename), recursive=True
-    )  # Search recursively
-    if matches:  # If matches are found
-        return matches[0]  # Return the first match
+        matches = glob.glob(
+            os.path.join(dataset_dir, "**", "Feature_Analysis", filename), recursive=True
+        )  # Search recursively
+        if matches:  # If matches are found
+            return matches[0]  # Return the first match
 
-    return None  # Not found
+        return None  # Not found
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def find_feature_file(file_path, filename, config=None):
@@ -1670,33 +1870,38 @@ def find_feature_file(file_path, filename, config=None):
     :return: The matching path or None
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Searching for feature analysis file: {BackgroundColors.CYAN}{filename}{BackgroundColors.GREEN} related to file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+        verbose_output(
+            f"{BackgroundColors.GREEN}Searching for feature analysis file: {BackgroundColors.CYAN}{filename}{BackgroundColors.GREEN} related to file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    file_dir = os.path.dirname(os.path.abspath(file_path))  # Get the directory of the input file
+        file_dir = os.path.dirname(os.path.abspath(file_path))  # Get the directory of the input file
 
-    result = find_local_feature_file(file_dir, filename, config=config)  # 1. Local Feature_Analysis in the same directory
-    if result is not None:  # If found
-        return result  # Return the result
+        result = find_local_feature_file(file_dir, filename, config=config)  # 1. Local Feature_Analysis in the same directory
+        if result is not None:  # If found
+            return result  # Return the result
 
-    result = find_parent_feature_file(file_dir, filename, config=config)  # 2. Ascend parents checking for Feature_Analysis
-    if result is not None:  # If found
-        return result  # Return the result
+        result = find_parent_feature_file(file_dir, filename, config=config)  # 2. Ascend parents checking for Feature_Analysis
+        if result is not None:  # If found
+            return result  # Return the result
 
-    result = find_dataset_level_feature_file(file_path, filename, config=config)  # 3. Dataset-level Feature_Analysis
-    if result is not None:  # If found
-        return result  # Return the result
+        result = find_dataset_level_feature_file(file_path, filename, config=config)  # 3. Dataset-level Feature_Analysis
+        if result is not None:  # If found
+            return result  # Return the result
 
-    print(
-        f"{BackgroundColors.YELLOW}Warning: Feature analysis file {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}.{Style.RESET_ALL}"
-    )  # Output the warning message
+        print(
+            f"{BackgroundColors.YELLOW}Warning: Feature analysis file {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}.{Style.RESET_ALL}"
+        )  # Output the warning message
 
-    return None  # Return None if not found
+        return None  # Return None if not found
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def extract_genetic_algorithm_features(file_path, config=None):
@@ -1713,45 +1918,50 @@ def extract_genetic_algorithm_features(file_path, config=None):
     :return: List of features selected by the GA, or None if the file is not found or fails to load/parse.
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    file_dir = os.path.dirname(file_path)  # Determine the directory of the input file
-    verbose_output(
-        f"{BackgroundColors.GREEN}Extracting GA features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
-
-    ga_results_path = find_feature_file(file_path, "Genetic_Algorithm_Results.csv", config=config)  # Find the GA results file
-    if ga_results_path is None:  # If the GA results file does not exist
-        print(
-            f"{BackgroundColors.YELLOW}Warning: GA results file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping GA feature extraction for this file.{Style.RESET_ALL}"
-        )
-        return None  # Return None if the file does not exist
-
-    try:  # Try to load the GA results
-        df = pd.read_csv(ga_results_path, usecols=["best_features", "run_index"])  # Load only the necessary columns
-        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
-        best_row = df[df["run_index"] == "best"].iloc[0]  # Get the row where run_index is 'best'
-        best_features_json = best_row["best_features"]  # Get the JSON string of best features
-        ga_features = json.loads(best_features_json)  # Parse the JSON string into a Python list
-
+        file_dir = os.path.dirname(file_path)  # Determine the directory of the input file
         verbose_output(
-            f"{BackgroundColors.GREEN}Successfully extracted {BackgroundColors.CYAN}{len(ga_features)}{BackgroundColors.GREEN} GA features from the 'best' run.{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Extracting GA features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
             config=config
         )  # Output the verbose message
 
-        return ga_features  # Return the list of GA features
-    except IndexError:  # If there is no 'best' run_index
-        print(
-            f"{BackgroundColors.RED}Error: 'best' run_index not found in GA results file at {BackgroundColors.CYAN}{ga_results_path}{Style.RESET_ALL}"
-        )
-        return None  # Return None if 'best' run_index is not found
-    except Exception as e:  # If there is an error loading or parsing the file
-        print(
-            f"{BackgroundColors.RED}Error loading/parsing GA features from {BackgroundColors.CYAN}{ga_results_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
-        )
-        return None  # Return None if there was an error
+        ga_results_path = find_feature_file(file_path, "Genetic_Algorithm_Results.csv", config=config)  # Find the GA results file
+        if ga_results_path is None:  # If the GA results file does not exist
+            print(
+                f"{BackgroundColors.YELLOW}Warning: GA results file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping GA feature extraction for this file.{Style.RESET_ALL}"
+            )
+            return None  # Return None if the file does not exist
+
+        try:  # Try to load the GA results
+            df = pd.read_csv(ga_results_path, usecols=["best_features", "run_index"])  # Load only the necessary columns
+            df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+            best_row = df[df["run_index"] == "best"].iloc[0]  # Get the row where run_index is 'best'
+            best_features_json = best_row["best_features"]  # Get the JSON string of best features
+            ga_features = json.loads(best_features_json)  # Parse the JSON string into a Python list
+
+            verbose_output(
+                f"{BackgroundColors.GREEN}Successfully extracted {BackgroundColors.CYAN}{len(ga_features)}{BackgroundColors.GREEN} GA features from the 'best' run.{Style.RESET_ALL}",
+                config=config
+            )  # Output the verbose message
+
+            return ga_features  # Return the list of GA features
+        except IndexError:  # If there is no 'best' run_index
+            print(
+                f"{BackgroundColors.RED}Error: 'best' run_index not found in GA results file at {BackgroundColors.CYAN}{ga_results_path}{Style.RESET_ALL}"
+            )
+            return None  # Return None if 'best' run_index is not found
+        except Exception as e:  # If there is an error loading or parsing the file
+            print(
+                f"{BackgroundColors.RED}Error loading/parsing GA features from {BackgroundColors.CYAN}{ga_results_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
+            )
+            return None  # Return None if there was an error
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def extract_principal_component_analysis_features(file_path, config=None):
@@ -1767,55 +1977,60 @@ def extract_principal_component_analysis_features(file_path, config=None):
     :return: Integer representing the optimal number of components (n_components), or None if the file is not found or fails to load/parse.
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    file_dir = os.path.dirname(file_path)  # Determine the directory of the input file
-    verbose_output(
-        f"{BackgroundColors.GREEN}Extracting PCA features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
-
-    pca_results_path = find_feature_file(file_path, "PCA_Results.csv", config=config)  # Find the PCA results file
-    if pca_results_path is None:  # If the PCA results file does not exist
-        print(
-            f"{BackgroundColors.YELLOW}Warning: PCA results file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping PCA feature extraction for this file.{Style.RESET_ALL}"
-        )
-        return None  # Return None if the file does not exist
-
-    try:  # Try to load the PCA results
-        df = pd.read_csv(pca_results_path, usecols=["n_components", "cv_f1_score"])  # Load only the necessary columns
-        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
-
-        if df.empty:  # Verify if the DataFrame is empty
-            print(
-                f"{BackgroundColors.RED}Error: PCA results file at {BackgroundColors.CYAN}{pca_results_path}{BackgroundColors.RED} is empty.{Style.RESET_ALL}"
-            )
-            return None  # Return None if the file is empty
-
-        best_row_index = df["cv_f1_score"].idxmax()  # Get the index of the row with the highest CV F1-Score
-        best_n_components = df.loc[best_row_index, "n_components"]  # Get the optimal number of components
-
+        file_dir = os.path.dirname(file_path)  # Determine the directory of the input file
         verbose_output(
-            f"{BackgroundColors.GREEN}Successfully extracted best PCA configuration. Optimal components: {BackgroundColors.CYAN}{best_n_components}{Style.RESET_ALL}"
+            f"{BackgroundColors.GREEN}Extracting PCA features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
+            config=config
         )  # Output the verbose message
 
-        best_n_components = df.loc[best_row_index, "n_components"]  # Get the optimal number of components
+        pca_results_path = find_feature_file(file_path, "PCA_Results.csv", config=config)  # Find the PCA results file
+        if pca_results_path is None:  # If the PCA results file does not exist
+            print(
+                f"{BackgroundColors.YELLOW}Warning: PCA results file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping PCA feature extraction for this file.{Style.RESET_ALL}"
+            )
+            return None  # Return None if the file does not exist
 
-        best_n_components_int = int(pd.to_numeric(best_n_components, errors="raise"))  # Ensure it's an integer
+        try:  # Try to load the PCA results
+            df = pd.read_csv(pca_results_path, usecols=["n_components", "cv_f1_score"])  # Load only the necessary columns
+            df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
 
-        return best_n_components_int  # Return the optimal number of components
+            if df.empty:  # Verify if the DataFrame is empty
+                print(
+                    f"{BackgroundColors.RED}Error: PCA results file at {BackgroundColors.CYAN}{pca_results_path}{BackgroundColors.RED} is empty.{Style.RESET_ALL}"
+                )
+                return None  # Return None if the file is empty
 
-    except KeyError as e:  # Handle missing columns
-        print(
-            f"{BackgroundColors.RED}Error: Required column {e} not found in PCA results file at {BackgroundColors.CYAN}{pca_results_path}{Style.RESET_ALL}"
-        )
-        return None  # Return None if required column is missing
-    except Exception as e:  # Handle other errors (loading, parsing, etc.)
-        print(
-            f"{BackgroundColors.RED}Error loading/parsing PCA features from {BackgroundColors.CYAN}{pca_results_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
-        )
-        return None  # Return None if there was an error
+            best_row_index = df["cv_f1_score"].idxmax()  # Get the index of the row with the highest CV F1-Score
+            best_n_components = df.loc[best_row_index, "n_components"]  # Get the optimal number of components
+
+            verbose_output(
+                f"{BackgroundColors.GREEN}Successfully extracted best PCA configuration. Optimal components: {BackgroundColors.CYAN}{best_n_components}{Style.RESET_ALL}"
+            )  # Output the verbose message
+
+            best_n_components = df.loc[best_row_index, "n_components"]  # Get the optimal number of components
+
+            best_n_components_int = int(pd.to_numeric(best_n_components, errors="raise"))  # Ensure it's an integer
+
+            return best_n_components_int  # Return the optimal number of components
+
+        except KeyError as e:  # Handle missing columns
+            print(
+                f"{BackgroundColors.RED}Error: Required column {e} not found in PCA results file at {BackgroundColors.CYAN}{pca_results_path}{Style.RESET_ALL}"
+            )
+            return None  # Return None if required column is missing
+        except Exception as e:  # Handle other errors (loading, parsing, etc.)
+            print(
+                f"{BackgroundColors.RED}Error loading/parsing PCA features from {BackgroundColors.CYAN}{pca_results_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
+            )
+            return None  # Return None if there was an error
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def extract_recursive_feature_elimination_features(file_path, config=None):
@@ -1829,50 +2044,55 @@ def extract_recursive_feature_elimination_features(file_path, config=None):
     :return: List of top features selected by RFE from the first run, or None if the file is not found or fails to load/parse.
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    file_dir = os.path.dirname(file_path)  # Determine the directory of the input file
-    verbose_output(
-        f"{BackgroundColors.GREEN}Extracting RFE features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+        file_dir = os.path.dirname(file_path)  # Determine the directory of the input file
+        verbose_output(
+            f"{BackgroundColors.GREEN}Extracting RFE features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    rfe_runs_path = find_feature_file(file_path, "RFE_Run_Results.csv", config=config)  # Find the RFE runs file
-    if rfe_runs_path is None:  # If the RFE runs file does not exist
-        print(
-            f"{BackgroundColors.YELLOW}Warning: RFE runs file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping RFE feature extraction for this file.{Style.RESET_ALL}"
-        )
-        return None  # Return None if the file does not exist
-
-    try:  # Try to load the RFE runs results
-        df = pd.read_csv(rfe_runs_path, usecols=["top_features"])  # Load only the "top_features" column
-        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
-
-        if not df.empty:  # Verify if the DataFrame is not empty
-            top_features_raw = df.loc[0, "top_features"]  # Get the "top_features" from the first row
-
-            top_features_str = str(top_features_raw)  # Ensure it's a string
-
-            rfe_features = ast.literal_eval(top_features_str)  # Convert string to list
-
-            verbose_output(
-                f"{BackgroundColors.GREEN}Successfully extracted RFE top features from Run 1. Total features: {BackgroundColors.CYAN}{len(rfe_features)}{Style.RESET_ALL}",
-                config=config
-            )  # Output the verbose message
-
-            return rfe_features  # Return the list of RFE features
-        else:  # If the DataFrame is empty
+        rfe_runs_path = find_feature_file(file_path, "RFE_Run_Results.csv", config=config)  # Find the RFE runs file
+        if rfe_runs_path is None:  # If the RFE runs file does not exist
             print(
-                f"{BackgroundColors.RED}Error: RFE runs file at {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.RED} is empty.{Style.RESET_ALL}"
+                f"{BackgroundColors.YELLOW}Warning: RFE runs file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping RFE feature extraction for this file.{Style.RESET_ALL}"
             )
-            return None  # Return None if the file is empty
+            return None  # Return None if the file does not exist
 
-    except Exception as e:  # If there is an error loading or parsing the file
-        print(
-            f"{BackgroundColors.RED}Error loading/parsing RFE features from {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
-        )
-        return None  # Return None if there was an error
+        try:  # Try to load the RFE runs results
+            df = pd.read_csv(rfe_runs_path, usecols=["top_features"])  # Load only the "top_features" column
+            df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+
+            if not df.empty:  # Verify if the DataFrame is not empty
+                top_features_raw = df.loc[0, "top_features"]  # Get the "top_features" from the first row
+
+                top_features_str = str(top_features_raw)  # Ensure it's a string
+
+                rfe_features = ast.literal_eval(top_features_str)  # Convert string to list
+
+                verbose_output(
+                    f"{BackgroundColors.GREEN}Successfully extracted RFE top features from Run 1. Total features: {BackgroundColors.CYAN}{len(rfe_features)}{Style.RESET_ALL}",
+                    config=config
+                )  # Output the verbose message
+
+                return rfe_features  # Return the list of RFE features
+            else:  # If the DataFrame is empty
+                print(
+                    f"{BackgroundColors.RED}Error: RFE runs file at {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.RED} is empty.{Style.RESET_ALL}"
+                )
+                return None  # Return None if the file is empty
+
+        except Exception as e:  # If there is an error loading or parsing the file
+            print(
+                f"{BackgroundColors.RED}Error loading/parsing RFE features from {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
+            )
+            return None  # Return None if there was an error
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def load_feature_selection_results(file_path, config=None):
@@ -1885,55 +2105,60 @@ def load_feature_selection_results(file_path, config=None):
     :return: Tuple (ga_selected_features, pca_n_components, rfe_selected_features)
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    ga_selected_features = extract_genetic_algorithm_features(file_path, config=config)  # Extract GA features
-    if ga_selected_features:  # If GA features were successfully extracted
-        verbose_output(
-            f"{BackgroundColors.GREEN}Genetic Algorithm Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file_path)}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(ga_selected_features)}{Style.RESET_ALL}",
-            config=config
-        )
-        verbose_output(
-            f"{BackgroundColors.GREEN}Genetic Algorithm Selected Features: {BackgroundColors.CYAN}{ga_selected_features}{Style.RESET_ALL}",
-            config=config
-        )
-    else:  # If GA features were not extracted
-        print(
-            f"{BackgroundColors.YELLOW}Proceeding without GA features for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}"
-        )
+        ga_selected_features = extract_genetic_algorithm_features(file_path, config=config)  # Extract GA features
+        if ga_selected_features:  # If GA features were successfully extracted
+            verbose_output(
+                f"{BackgroundColors.GREEN}Genetic Algorithm Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file_path)}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(ga_selected_features)}{Style.RESET_ALL}",
+                config=config
+            )
+            verbose_output(
+                f"{BackgroundColors.GREEN}Genetic Algorithm Selected Features: {BackgroundColors.CYAN}{ga_selected_features}{Style.RESET_ALL}",
+                config=config
+            )
+        else:  # If GA features were not extracted
+            print(
+                f"{BackgroundColors.YELLOW}Proceeding without GA features for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}"
+            )
 
-    pca_n_components = extract_principal_component_analysis_features(file_path, config=config)  # Extract PCA components
-    if pca_n_components:  # If PCA components were successfully extracted
-        verbose_output(
-            f"{BackgroundColors.GREEN}PCA optimal components successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file_path)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{pca_n_components}{Style.RESET_ALL}",
-            config=config
-        )
-        verbose_output(
-            f"{BackgroundColors.GREEN}PCA Number of Components: {BackgroundColors.CYAN}{pca_n_components}{Style.RESET_ALL}",
-            config=config
-        )
-    else:  # If PCA components were not extracted
-        print(
-            f"{BackgroundColors.YELLOW}Proceeding without PCA components for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}"
-        )
+        pca_n_components = extract_principal_component_analysis_features(file_path, config=config)  # Extract PCA components
+        if pca_n_components:  # If PCA components were successfully extracted
+            verbose_output(
+                f"{BackgroundColors.GREEN}PCA optimal components successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file_path)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{pca_n_components}{Style.RESET_ALL}",
+                config=config
+            )
+            verbose_output(
+                f"{BackgroundColors.GREEN}PCA Number of Components: {BackgroundColors.CYAN}{pca_n_components}{Style.RESET_ALL}",
+                config=config
+            )
+        else:  # If PCA components were not extracted
+            print(
+                f"{BackgroundColors.YELLOW}Proceeding without PCA components for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}"
+            )
 
-    rfe_selected_features = extract_recursive_feature_elimination_features(file_path, config=config)  # Extract RFE features
-    if rfe_selected_features:  # If RFE features were successfully extracted
-        verbose_output(
-            f"{BackgroundColors.GREEN}RFE Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file_path)}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(rfe_selected_features)}{Style.RESET_ALL}",
-            config=config
-        )
-        verbose_output(
-            f"{BackgroundColors.GREEN}RFE Selected Features: {BackgroundColors.CYAN}{rfe_selected_features}{Style.RESET_ALL}",
-            config=config
-        )
-    else:  # If RFE features were not extracted
-        print(
-            f"{BackgroundColors.YELLOW}Proceeding without RFE features for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}"
-        )
+        rfe_selected_features = extract_recursive_feature_elimination_features(file_path, config=config)  # Extract RFE features
+        if rfe_selected_features:  # If RFE features were successfully extracted
+            verbose_output(
+                f"{BackgroundColors.GREEN}RFE Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(file_path)}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(rfe_selected_features)}{Style.RESET_ALL}",
+                config=config
+            )
+            verbose_output(
+                f"{BackgroundColors.GREEN}RFE Selected Features: {BackgroundColors.CYAN}{rfe_selected_features}{Style.RESET_ALL}",
+                config=config
+            )
+        else:  # If RFE features were not extracted
+            print(
+                f"{BackgroundColors.YELLOW}Proceeding without RFE features for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}"
+            )
 
-    return ga_selected_features, pca_n_components, rfe_selected_features  # Return the extracted features
+        return ga_selected_features, pca_n_components, rfe_selected_features  # Return the extracted features
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def load_dataset(csv_path, config=None):
@@ -1945,27 +2170,32 @@ def load_dataset(csv_path, config=None):
     :return: DataFrame
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"\n{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}",
-        config=config
-    )  # Output the loading dataset message
+        verbose_output(
+            f"\n{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}",
+            config=config
+        )  # Output the loading dataset message
 
-    if not verify_filepath_exists(csv_path):  # If the CSV file does not exist
-        print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
-        return None  # Return None
+        if not verify_filepath_exists(csv_path):  # If the CSV file does not exist
+            print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
+            return None  # Return None
 
-    df = pd.read_csv(csv_path, low_memory=False)  # Load the dataset
+        df = pd.read_csv(csv_path, low_memory=False)  # Load the dataset
 
-    df.columns = df.columns.str.strip()  # Clean column names by stripping leading/trailing whitespace
+        df.columns = df.columns.str.strip()  # Clean column names by stripping leading/trailing whitespace
 
-    if df.shape[1] < 2:  # If there are less than 2 columns
-        print(f"{BackgroundColors.RED}CSV must have at least 1 feature and 1 target.{Style.RESET_ALL}")
-        return None  # Return None
+        if df.shape[1] < 2:  # If there are less than 2 columns
+            print(f"{BackgroundColors.RED}CSV must have at least 1 feature and 1 target.{Style.RESET_ALL}")
+            return None  # Return None
 
-    return df  # Return the loaded DataFrame
+        return df  # Return the loaded DataFrame
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def sanitize_feature_names(columns):
@@ -1977,15 +2207,20 @@ def sanitize_feature_names(columns):
     :return: list of sanitized column names
     """
     
-    sanitized = []  # List to store sanitized column names
-    
-    for col in columns:  # Iterate over each column name
-        clean_col = re.sub(r"[{}\[\]:,\"\\]", "_", str(col))  # Replace special characters with underscores
-        clean_col = re.sub(r"_+", "_", clean_col)  # Replace multiple underscores with a single underscore
-        clean_col = clean_col.strip("_")  # Remove leading/trailing underscores
-        sanitized.append(clean_col)  # Add sanitized column name to the list
+    try:
+        sanitized = []  # List to store sanitized column names
         
-    return sanitized  # Return the list of sanitized column names
+        for col in columns:  # Iterate over each column name
+            clean_col = re.sub(r"[{}\[\]:,\"\\]", "_", str(col))  # Replace special characters with underscores
+            clean_col = re.sub(r"_+", "_", clean_col)  # Replace multiple underscores with a single underscore
+            clean_col = clean_col.strip("_")  # Remove leading/trailing underscores
+            sanitized.append(clean_col)  # Add sanitized column name to the list
+            
+        return sanitized  # Return the list of sanitized column names
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def preprocess_dataframe(df, remove_zero_variance=True, config=None):
@@ -1999,42 +2234,47 @@ def preprocess_dataframe(df, remove_zero_variance=True, config=None):
     :return: cleaned DataFrame
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    if remove_zero_variance:  # If remove_zero_variance is set to True
-        verbose_output(
-            f"{BackgroundColors.GREEN}Preprocessing DataFrame: "
-            f"{BackgroundColors.CYAN}normalizing and sanitizing column names, removing NaN/infinite rows, and dropping zero-variance numeric features"
-            f"{BackgroundColors.GREEN}.{Style.RESET_ALL}",
-            config=config
-        )
-    else:  # If remove_zero_variance is set to False
-        verbose_output(
-            f"{BackgroundColors.GREEN}Preprocessing DataFrame: "
-            f"{BackgroundColors.CYAN}normalizing and sanitizing column names and removing NaN/infinite rows"
-            f"{BackgroundColors.GREEN}.{Style.RESET_ALL}",
-            config=config
-        )
+        if remove_zero_variance:  # If remove_zero_variance is set to True
+            verbose_output(
+                f"{BackgroundColors.GREEN}Preprocessing DataFrame: "
+                f"{BackgroundColors.CYAN}normalizing and sanitizing column names, removing NaN/infinite rows, and dropping zero-variance numeric features"
+                f"{BackgroundColors.GREEN}.{Style.RESET_ALL}",
+                config=config
+            )
+        else:  # If remove_zero_variance is set to False
+            verbose_output(
+                f"{BackgroundColors.GREEN}Preprocessing DataFrame: "
+                f"{BackgroundColors.CYAN}normalizing and sanitizing column names and removing NaN/infinite rows"
+                f"{BackgroundColors.GREEN}.{Style.RESET_ALL}",
+                config=config
+            )
 
-    if df is None:  # If the DataFrame is None
-        return df  # Return None
+        if df is None:  # If the DataFrame is None
+            return df  # Return None
 
-    df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
-    
-    df.columns = sanitize_feature_names(df.columns)  # Sanitize column names to remove special characters
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+        
+        df.columns = sanitize_feature_names(df.columns)  # Sanitize column names to remove special characters
 
-    df_clean = df.replace([np.inf, -np.inf], np.nan).dropna()  # Remove rows with NaN or infinite values
+        df_clean = df.replace([np.inf, -np.inf], np.nan).dropna()  # Remove rows with NaN or infinite values
 
-    if remove_zero_variance:  # If remove_zero_variance is set to True
-        numeric_cols = df_clean.select_dtypes(include=["number"]).columns  # Select only numeric columns
-        if len(numeric_cols) > 0:  # If there are numeric columns
-            variances = df_clean[numeric_cols].var(axis=0, ddof=0)  # Calculate variances
-            zero_var_cols = variances[variances == 0].index.tolist()  # Get columns with zero variance
-            if zero_var_cols:  # If there are zero-variance columns
-                df_clean = df_clean.drop(columns=zero_var_cols)  # Drop zero-variance columns
+        if remove_zero_variance:  # If remove_zero_variance is set to True
+            numeric_cols = df_clean.select_dtypes(include=["number"]).columns  # Select only numeric columns
+            if len(numeric_cols) > 0:  # If there are numeric columns
+                variances = df_clean[numeric_cols].var(axis=0, ddof=0)  # Calculate variances
+                zero_var_cols = variances[variances == 0].index.tolist()  # Get columns with zero variance
+                if zero_var_cols:  # If there are zero-variance columns
+                    df_clean = df_clean.drop(columns=zero_var_cols)  # Drop zero-variance columns
 
-    return df_clean  # Return the cleaned DataFrame
+        return df_clean  # Return the cleaned DataFrame
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, X_augmented=None, y_augmented=None):
@@ -2054,78 +2294,83 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, X_augment
     :return: Tuple (X_train_scaled, X_test_scaled, y_train, y_test, scaler)
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Scaling features and splitting data (train/test ratio: {BackgroundColors.CYAN}{1-test_size}/{test_size}{BackgroundColors.GREEN})...{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
-
-    y = pd.Series(y)  # Normalize target to pandas Series
-
-    le = LabelEncoder()  # Initialize a LabelEncoder
-    encoded_values: np.ndarray = np.asarray(le.fit_transform(y.to_numpy()), dtype=int)  # Encode target labels as integers
-
-    y_encoded = pd.Series(encoded_values, index=y.index)  # Create a Series for the encoded target
-
-    numeric_X = X.select_dtypes(include=np.number)  # Select only numeric columns for scaling
-    non_numeric_X = X.select_dtypes(exclude=np.number)  # Identify non-numeric columns (to be dropped)
-
-    if not non_numeric_X.empty:  # If non-numeric columns were found
-        print(
-            f"{BackgroundColors.YELLOW}Warning: Dropping non-numeric feature columns for scaling: {BackgroundColors.CYAN}{list(non_numeric_X.columns)}{Style.RESET_ALL}"
-        )  # Warn about dropped columns
-
-    if numeric_X.empty:  # If no numeric features remain
-        raise ValueError(
-            f"{BackgroundColors.RED}No numeric features found in X after filtering.{Style.RESET_ALL}"
-        )  # Raise an error if X is empty
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        numeric_X, y_encoded, test_size=test_size, random_state=random_state, stratify=y_encoded
-    )  # Split the data into training and testing sets with stratification
-
-    if X_augmented is not None and y_augmented is not None:  # If augmented data is provided for training enhancement
         verbose_output(
-            f"{BackgroundColors.GREEN}Merging augmented data into training set ({len(X_augmented)} augmented samples)...{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Scaling features and splitting data (train/test ratio: {BackgroundColors.CYAN}{1-test_size}/{test_size}{BackgroundColors.GREEN})...{Style.RESET_ALL}",
             config=config
-        )  # Output augmentation merge message
-        
-        y_augmented_series = pd.Series(y_augmented)  # Normalize augmented target to pandas Series
-        le_augmented = LabelEncoder()  # Initialize LabelEncoder for augmented target
-        le_augmented.classes_ = le.classes_  # Use same classes as original encoder for consistency
-        encoded_augmented_values = np.asarray(le_augmented.transform(y_augmented_series.to_numpy()), dtype=int)  # Encode augmented target labels as integers
-        y_augmented_encoded = pd.Series(encoded_augmented_values, index=y_augmented_series.index)  # Create Series for encoded augmented target
-        
-        numeric_X_augmented = X_augmented.select_dtypes(include=np.number)  # Select only numeric columns from augmented features
-        
-        X_train = pd.concat([X_train, numeric_X_augmented], ignore_index=True)  # Concatenate augmented features into training set
-        y_train = pd.concat([y_train, y_augmented_encoded], ignore_index=True)  # Concatenate augmented target into training labels
-        
+        )  # Output the verbose message
+
+        y = pd.Series(y)  # Normalize target to pandas Series
+
+        le = LabelEncoder()  # Initialize a LabelEncoder
+        encoded_values: np.ndarray = np.asarray(le.fit_transform(y.to_numpy()), dtype=int)  # Encode target labels as integers
+
+        y_encoded = pd.Series(encoded_values, index=y.index)  # Create a Series for the encoded target
+
+        numeric_X = X.select_dtypes(include=np.number)  # Select only numeric columns for scaling
+        non_numeric_X = X.select_dtypes(exclude=np.number)  # Identify non-numeric columns (to be dropped)
+
+        if not non_numeric_X.empty:  # If non-numeric columns were found
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Dropping non-numeric feature columns for scaling: {BackgroundColors.CYAN}{list(non_numeric_X.columns)}{Style.RESET_ALL}"
+            )  # Warn about dropped columns
+
+        if numeric_X.empty:  # If no numeric features remain
+            raise ValueError(
+                f"{BackgroundColors.RED}No numeric features found in X after filtering.{Style.RESET_ALL}"
+            )  # Raise an error if X is empty
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            numeric_X, y_encoded, test_size=test_size, random_state=random_state, stratify=y_encoded
+        )  # Split the data into training and testing sets with stratification
+
+        if X_augmented is not None and y_augmented is not None:  # If augmented data is provided for training enhancement
+            verbose_output(
+                f"{BackgroundColors.GREEN}Merging augmented data into training set ({len(X_augmented)} augmented samples)...{Style.RESET_ALL}",
+                config=config
+            )  # Output augmentation merge message
+            
+            y_augmented_series = pd.Series(y_augmented)  # Normalize augmented target to pandas Series
+            le_augmented = LabelEncoder()  # Initialize LabelEncoder for augmented target
+            le_augmented.classes_ = le.classes_  # Use same classes as original encoder for consistency
+            encoded_augmented_values = np.asarray(le_augmented.transform(y_augmented_series.to_numpy()), dtype=int)  # Encode augmented target labels as integers
+            y_augmented_encoded = pd.Series(encoded_augmented_values, index=y_augmented_series.index)  # Create Series for encoded augmented target
+            
+            numeric_X_augmented = X_augmented.select_dtypes(include=np.number)  # Select only numeric columns from augmented features
+            
+            X_train = pd.concat([X_train, numeric_X_augmented], ignore_index=True)  # Concatenate augmented features into training set
+            y_train = pd.concat([y_train, y_augmented_encoded], ignore_index=True)  # Concatenate augmented target into training labels
+            
+            verbose_output(
+                f"{BackgroundColors.GREEN}Training set expanded to {BackgroundColors.CYAN}{len(X_train)}{BackgroundColors.GREEN} samples (original + augmented){Style.RESET_ALL}",
+                config=config
+            )  # Output expanded training set size
+
+        scaler = StandardScaler()  # Initialize the StandardScaler
+
+        X_train_scaled = scaler.fit_transform(X_train)  # Fit and transform the training features (including augmented if provided)
+
+        X_test_scaled = scaler.transform(X_test)  # Transform the testing features (original data only)
+
         verbose_output(
-            f"{BackgroundColors.GREEN}Training set expanded to {BackgroundColors.CYAN}{len(X_train)}{BackgroundColors.GREEN} samples (original + augmented){Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Data split successful. Training set shape: {BackgroundColors.CYAN}{X_train_scaled.shape}{BackgroundColors.GREEN}. Testing set shape: {BackgroundColors.CYAN}{X_test_scaled.shape}{Style.RESET_ALL}",
             config=config
-        )  # Output expanded training set size
+        )  # Output the successful split message
 
-    scaler = StandardScaler()  # Initialize the StandardScaler
-
-    X_train_scaled = scaler.fit_transform(X_train)  # Fit and transform the training features (including augmented if provided)
-
-    X_test_scaled = scaler.transform(X_test)  # Transform the testing features (original data only)
-
-    verbose_output(
-        f"{BackgroundColors.GREEN}Data split successful. Training set shape: {BackgroundColors.CYAN}{X_train_scaled.shape}{BackgroundColors.GREEN}. Testing set shape: {BackgroundColors.CYAN}{X_test_scaled.shape}{Style.RESET_ALL}",
-        config=config
-    )  # Output the successful split message
-
-    return (
-        X_train_scaled,
-        X_test_scaled,
-        y_train,
-        y_test,
-        scaler,
-    )  # Return scaled features, target, and the fitted scaler
+        return (
+            X_train_scaled,
+            X_test_scaled,
+            y_train,
+            y_test,
+            scaler,
+        )  # Return scaled features, target, and the fitted scaler
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def get_models(config=None):
@@ -2136,67 +2381,72 @@ def get_models(config=None):
     :return: Dictionary of model name and instance
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Initializing models for training...{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
-    
-    n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Get n_jobs from config
-    random_state = config.get("evaluation", {}).get("random_state", 42)  # Get random_state from config
-    
-    rf_params = config.get("models", {}).get("random_forest", {})  # Random Forest params
-    svm_params = config.get("models", {}).get("svm", {})  # SVM params
-    xgb_params = config.get("models", {}).get("xgboost", {})  # XGBoost params
-    lr_params = config.get("models", {}).get("logistic_regression", {})  # Logistic Regression params
-    knn_params = config.get("models", {}).get("knn", {})  # KNN params
-    gb_params = config.get("models", {}).get("gradient_boosting", {})  # Gradient Boosting params
-    lgb_params = config.get("models", {}).get("lightgbm", {})  # LightGBM params
-    mlp_params = config.get("models", {}).get("mlp", {})  # MLP params
+        verbose_output(
+            f"{BackgroundColors.GREEN}Initializing models for training...{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
+        
+        n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Get n_jobs from config
+        random_state = config.get("evaluation", {}).get("random_state", 42)  # Get random_state from config
+        
+        rf_params = config.get("models", {}).get("random_forest", {})  # Random Forest params
+        svm_params = config.get("models", {}).get("svm", {})  # SVM params
+        xgb_params = config.get("models", {}).get("xgboost", {})  # XGBoost params
+        lr_params = config.get("models", {}).get("logistic_regression", {})  # Logistic Regression params
+        knn_params = config.get("models", {}).get("knn", {})  # KNN params
+        gb_params = config.get("models", {}).get("gradient_boosting", {})  # Gradient Boosting params
+        lgb_params = config.get("models", {}).get("lightgbm", {})  # LightGBM params
+        mlp_params = config.get("models", {}).get("mlp", {})  # MLP params
 
-    return {  # Dictionary of models to train
-        "Random Forest": RandomForestClassifier(
-            n_estimators=rf_params.get("n_estimators", 100),
-            random_state=rf_params.get("random_state", random_state),
-            n_jobs=n_jobs
-        ),
-        "SVM": SVC(
-            kernel=svm_params.get("kernel", "rbf"),
-            probability=svm_params.get("probability", True),
-            random_state=svm_params.get("random_state", random_state)
-        ),
-        "XGBoost": XGBClassifier(
-            eval_metric=xgb_params.get("eval_metric", "mlogloss"),
-            random_state=xgb_params.get("random_state", random_state),
-            n_jobs=n_jobs
-        ),
-        "Logistic Regression": LogisticRegression(
-            max_iter=lr_params.get("max_iter", 1000),
-            random_state=lr_params.get("random_state", random_state)
-        ),
-        "KNN": KNeighborsClassifier(
-            n_neighbors=knn_params.get("n_neighbors", 5),
-            n_jobs=n_jobs
-        ),
-        "Nearest Centroid": NearestCentroid(),
-        "Gradient Boosting": GradientBoostingClassifier(
-            random_state=gb_params.get("random_state", random_state)
-        ),
-        "LightGBM": lgb.LGBMClassifier(
-            force_row_wise=lgb_params.get("force_row_wise", True),
-            min_gain_to_split=lgb_params.get("min_gain_to_split", 0.01),
-            random_state=lgb_params.get("random_state", random_state),
-            verbosity=lgb_params.get("verbosity", -1),
-            n_jobs=n_jobs
-        ),
-        "MLP (Neural Net)": MLPClassifier(
-            hidden_layer_sizes=mlp_params.get("hidden_layer_sizes", (100,)),
-            max_iter=mlp_params.get("max_iter", 500),
-            random_state=mlp_params.get("random_state", random_state)
-        ),
-    }
+        return {  # Dictionary of models to train
+            "Random Forest": RandomForestClassifier(
+                n_estimators=rf_params.get("n_estimators", 100),
+                random_state=rf_params.get("random_state", random_state),
+                n_jobs=n_jobs
+            ),
+            "SVM": SVC(
+                kernel=svm_params.get("kernel", "rbf"),
+                probability=svm_params.get("probability", True),
+                random_state=svm_params.get("random_state", random_state)
+            ),
+            "XGBoost": XGBClassifier(
+                eval_metric=xgb_params.get("eval_metric", "mlogloss"),
+                random_state=xgb_params.get("random_state", random_state),
+                n_jobs=n_jobs
+            ),
+            "Logistic Regression": LogisticRegression(
+                max_iter=lr_params.get("max_iter", 1000),
+                random_state=lr_params.get("random_state", random_state)
+            ),
+            "KNN": KNeighborsClassifier(
+                n_neighbors=knn_params.get("n_neighbors", 5),
+                n_jobs=n_jobs
+            ),
+            "Nearest Centroid": NearestCentroid(),
+            "Gradient Boosting": GradientBoostingClassifier(
+                random_state=gb_params.get("random_state", random_state)
+            ),
+            "LightGBM": lgb.LGBMClassifier(
+                force_row_wise=lgb_params.get("force_row_wise", True),
+                min_gain_to_split=lgb_params.get("min_gain_to_split", 0.01),
+                random_state=lgb_params.get("random_state", random_state),
+                verbosity=lgb_params.get("verbosity", -1),
+                n_jobs=n_jobs
+            ),
+            "MLP (Neural Net)": MLPClassifier(
+                hidden_layer_sizes=mlp_params.get("hidden_layer_sizes", (100,)),
+                max_iter=mlp_params.get("max_iter", 500),
+                random_state=mlp_params.get("random_state", random_state)
+            ),
+        }
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def extract_hyperparameter_optimization_results(csv_path, config=None):
@@ -2215,77 +2465,82 @@ def extract_hyperparameter_optimization_results(csv_path, config=None):
     :return: Dictionary mapping model names to their best hyperparameters, or None if not found.
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Looking for hyperparameter optimization results for: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}",
-        config=config
-    )  # Inform user which dataset we're searching for
-
-    file_dir = os.path.dirname(csv_path)  # Directory containing the dataset file
-    base_filename = os.path.basename(csv_path)  # Get the base filename (e.g., "UDPLag.csv")
-    
-    hyperparameters_filename = config.get("stacking", {}).get("hyperparameters_filename", "Hyperparameter_Optimization_Results.csv")  # Get filename from config
-
-    hyperparams_path = os.path.join(
-        file_dir, "Classifiers_Hyperparameters", hyperparameters_filename
-    )  # Path to hyperparameter optimization results
-
-    if not verify_filepath_exists(hyperparams_path):  # If the hyperparameters file does not exist
         verbose_output(
-            f"{BackgroundColors.YELLOW}No hyperparameter optimization results found at: {BackgroundColors.CYAN}{hyperparams_path}{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Looking for hyperparameter optimization results for: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}",
+            config=config
+        )  # Inform user which dataset we're searching for
+
+        file_dir = os.path.dirname(csv_path)  # Directory containing the dataset file
+        base_filename = os.path.basename(csv_path)  # Get the base filename (e.g., "UDPLag.csv")
+        
+        hyperparameters_filename = config.get("stacking", {}).get("hyperparameters_filename", "Hyperparameter_Optimization_Results.csv")  # Get filename from config
+
+        hyperparams_path = os.path.join(
+            file_dir, "Classifiers_Hyperparameters", hyperparameters_filename
+        )  # Path to hyperparameter optimization results
+
+        if not verify_filepath_exists(hyperparams_path):  # If the hyperparameters file does not exist
+            verbose_output(
+                f"{BackgroundColors.YELLOW}No hyperparameter optimization results found at: {BackgroundColors.CYAN}{hyperparams_path}{Style.RESET_ALL}",
+                config=config
+            )
+            return None  # Return None if no optimization results found
+
+        try:  # Try to load the CSV file
+            df = pd.read_csv(hyperparams_path)  # Load the CSV into a DataFrame
+            df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+        except Exception as e:  # If there is an error loading the CSV
+            print(
+                f"{BackgroundColors.RED}Failed to load hyperparameter optimization file {hyperparams_path}: {e}{Style.RESET_ALL}"
+            )
+            return {}  # Return empty dict on failure
+
+        matching_rows = df[df["base_csv"] == base_filename]  # Filter by base_csv column
+
+        if matching_rows.empty:  # If no matching rows found
+            verbose_output(
+                f"{BackgroundColors.YELLOW}No hyperparameter results found for file: {BackgroundColors.CYAN}{base_filename}{BackgroundColors.YELLOW} in {BackgroundColors.CYAN}{hyperparams_path}{Style.RESET_ALL}",
+                config=config
+            )
+            return None  # Return None if no results for this file
+
+        results = {}  # Initialize dictionary to hold parsed results per model
+        for _, row in matching_rows.iterrows():  # Iterate over each matching row
+            try:  # Try to parse each row
+                model = row.get("model") or row.get("Model")  # Try common column names for model identifier
+                if not model:  # If model identifier is missing
+                    continue  # Skip invalid rows
+
+                best_params_raw = (
+                    row.get("best_params") or row.get("best_params_json") or row.get("best_params_str")
+                )  # Try common column names for best_params
+                best_params = None  # Default if parsing fails or value missing
+                if isinstance(best_params_raw, str) and best_params_raw.strip():  # If best_params_raw is a non-empty string
+                    try:  # Try to parse best_params as JSON first
+                        best_params = json.loads(best_params_raw)  # Parse JSON string if possible
+                    except Exception:  # If JSON parsing fails, try ast.literal_eval as a fallback
+                        try:  # Try to parse using ast.literal_eval
+                            best_params = ast.literal_eval(best_params_raw)  # Safely evaluate string to Python literal
+                        except Exception:  # If both parsing attempts fail
+                            best_params = None  # Leave as None if parsing fails
+
+                results[str(model)] = {"best_params": best_params}  # Store parsed parameters only
+            except Exception:  # Catch any unexpected errors during row parsing
+                continue  # Skip problematic rows silently
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(results)}{BackgroundColors.GREEN} hyperparameter optimization results for {BackgroundColors.CYAN}{base_filename}{BackgroundColors.GREEN} from: {BackgroundColors.CYAN}{hyperparams_path}{Style.RESET_ALL}",
             config=config
         )
-        return None  # Return None if no optimization results found
-
-    try:  # Try to load the CSV file
-        df = pd.read_csv(hyperparams_path)  # Load the CSV into a DataFrame
-        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
-    except Exception as e:  # If there is an error loading the CSV
-        print(
-            f"{BackgroundColors.RED}Failed to load hyperparameter optimization file {hyperparams_path}: {e}{Style.RESET_ALL}"
-        )
-        return {}  # Return empty dict on failure
-
-    matching_rows = df[df["base_csv"] == base_filename]  # Filter by base_csv column
-
-    if matching_rows.empty:  # If no matching rows found
-        verbose_output(
-            f"{BackgroundColors.YELLOW}No hyperparameter results found for file: {BackgroundColors.CYAN}{base_filename}{BackgroundColors.YELLOW} in {BackgroundColors.CYAN}{hyperparams_path}{Style.RESET_ALL}",
-            config=config
-        )
-        return None  # Return None if no results for this file
-
-    results = {}  # Initialize dictionary to hold parsed results per model
-    for _, row in matching_rows.iterrows():  # Iterate over each matching row
-        try:  # Try to parse each row
-            model = row.get("model") or row.get("Model")  # Try common column names for model identifier
-            if not model:  # If model identifier is missing
-                continue  # Skip invalid rows
-
-            best_params_raw = (
-                row.get("best_params") or row.get("best_params_json") or row.get("best_params_str")
-            )  # Try common column names for best_params
-            best_params = None  # Default if parsing fails or value missing
-            if isinstance(best_params_raw, str) and best_params_raw.strip():  # If best_params_raw is a non-empty string
-                try:  # Try to parse best_params as JSON first
-                    best_params = json.loads(best_params_raw)  # Parse JSON string if possible
-                except Exception:  # If JSON parsing fails, try ast.literal_eval as a fallback
-                    try:  # Try to parse using ast.literal_eval
-                        best_params = ast.literal_eval(best_params_raw)  # Safely evaluate string to Python literal
-                    except Exception:  # If both parsing attempts fail
-                        best_params = None  # Leave as None if parsing fails
-
-            results[str(model)] = {"best_params": best_params}  # Store parsed parameters only
-        except Exception:  # Catch any unexpected errors during row parsing
-            continue  # Skip problematic rows silently
-
-    verbose_output(
-        f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(results)}{BackgroundColors.GREEN} hyperparameter optimization results for {BackgroundColors.CYAN}{base_filename}{BackgroundColors.GREEN} from: {BackgroundColors.CYAN}{hyperparams_path}{Style.RESET_ALL}",
-        config=config
-    )
-    return results  # Return the normalized results mapping
+        return results  # Return the normalized results mapping
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def apply_hyperparameters_to_models(hyperparams_map, models_map, config=None):
@@ -2307,74 +2562,79 @@ def apply_hyperparameters_to_models(hyperparams_map, models_map, config=None):
     :return: Updated models_map with applied hyperparameters where possible
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Starting to apply hyperparameters to models...{Style.RESET_ALL}",
-        config=config
-    )  # Inform user that application is starting
+        verbose_output(
+            f"{BackgroundColors.GREEN}Starting to apply hyperparameters to models...{Style.RESET_ALL}",
+            config=config
+        )  # Inform user that application is starting
 
-    if not hyperparams_map:  # Nothing to apply
-        return models_map  # Return models unchanged
+        if not hyperparams_map:  # Nothing to apply
+            return models_map  # Return models unchanged
 
-    def _normalize(name):  # Convert to alphanumeric lowercase
-        return "".join(
-            [c.lower() for c in str(name) if c.isalnum()]
-        )  # Normalize model name by removing non-alphanumeric characters and converting to lowercase
+        def _normalize(name):  # Convert to alphanumeric lowercase
+            return "".join(
+                [c.lower() for c in str(name) if c.isalnum()]
+            )  # Normalize model name by removing non-alphanumeric characters and converting to lowercase
 
-    hp_keys = list(hyperparams_map.keys())  # List of provided model names
-    hp_normalized = {k: _normalize(k) for k in hp_keys}  # Normalized lookup for matching
+        hp_keys = list(hyperparams_map.keys())  # List of provided model names
+        hp_normalized = {k: _normalize(k) for k in hp_keys}  # Normalized lookup for matching
 
-    for model_name, model in models_map.items():  # Iterate over each instantiated model
-        try:  # Try to match hyperparameters to this model
-            params = None  # Default if not found
+        for model_name, model in models_map.items():  # Iterate over each instantiated model
+            try:  # Try to match hyperparameters to this model
+                params = None  # Default if not found
 
-            if model_name in hyperparams_map:  # Attempt exact match
-                params = hyperparams_map[model_name]  # Exact match found
-            else:  # Try case-insensitive and normalized matches
-                lower_matches = [k for k in hp_keys if k.lower() == model_name.lower()]  # Case-insensitive match
-                if lower_matches:  # If case-insensitive match found
-                    params = hyperparams_map[lower_matches[0]]  # Use the matched parameters
-                else:  # Try normalized match
-                    norm = _normalize(model_name)  # Compute normalized name
-                    norm_matches = [k for k, nk in hp_normalized.items() if nk == norm]  # Normalized match
-                    if norm_matches:  # If normalized match found
-                        params = hyperparams_map[norm_matches[0]]  # Use the matched parameters
+                if model_name in hyperparams_map:  # Attempt exact match
+                    params = hyperparams_map[model_name]  # Exact match found
+                else:  # Try case-insensitive and normalized matches
+                    lower_matches = [k for k in hp_keys if k.lower() == model_name.lower()]  # Case-insensitive match
+                    if lower_matches:  # If case-insensitive match found
+                        params = hyperparams_map[lower_matches[0]]  # Use the matched parameters
+                    else:  # Try normalized match
+                        norm = _normalize(model_name)  # Compute normalized name
+                        norm_matches = [k for k, nk in hp_normalized.items() if nk == norm]  # Normalized match
+                        if norm_matches:  # If normalized match found
+                            params = hyperparams_map[norm_matches[0]]  # Use the matched parameters
 
-            if params is None:  # No parameters for this model
-                continue  # Skip to next model
+                if params is None:  # No parameters for this model
+                    continue  # Skip to next model
 
-            if isinstance(params, str):  # Parameters stored as string
-                try:  # Try JSON decode
-                    params = json.loads(params)  # Parse JSON if possible
-                except Exception:  # Fallback to literal evaluation
-                    try:  # Try to parse using ast.literal_eval
-                        params = ast.literal_eval(params)  # Safely evaluate string to Python literal
-                    except Exception:  # If both parsing attempts fail
-                        params = None  # Leave as None if parsing fails
+                if isinstance(params, str):  # Parameters stored as string
+                    try:  # Try JSON decode
+                        params = json.loads(params)  # Parse JSON if possible
+                    except Exception:  # Fallback to literal evaluation
+                        try:  # Try to parse using ast.literal_eval
+                            params = ast.literal_eval(params)  # Safely evaluate string to Python literal
+                        except Exception:  # If both parsing attempts fail
+                            params = None  # Leave as None if parsing fails
 
-            if not isinstance(params, dict):  # Ensure parameters are valid dictionary
-                verbose_output(
-                    f"{BackgroundColors.YELLOW}Warning: Parsed hyperparameters for {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW} are not a dict. Skipping.{Style.RESET_ALL}",
-                    config=config
-                )
-                continue  # Skip invalid parameter entries
+                if not isinstance(params, dict):  # Ensure parameters are valid dictionary
+                    verbose_output(
+                        f"{BackgroundColors.YELLOW}Warning: Parsed hyperparameters for {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW} are not a dict. Skipping.{Style.RESET_ALL}",
+                        config=config
+                    )
+                    continue  # Skip invalid parameter entries
 
-            try:  # Try applying parameters
-                model.set_params(**params)  # Apply parameters to estimator
-                verbose_output(
-                    f"{BackgroundColors.GREEN}Applied hyperparameters to {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
-                    config=config
-                )  # Inform success
-            except Exception as e:  # If applying fails
-                print(
-                    f"{BackgroundColors.YELLOW}Failed to apply hyperparameters to {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
-                )  # Warn user
-        except Exception:  # Catch any unexpected errors for this model
-            continue  # Skip problematic entries silently
+                try:  # Try applying parameters
+                    model.set_params(**params)  # Apply parameters to estimator
+                    verbose_output(
+                        f"{BackgroundColors.GREEN}Applied hyperparameters to {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+                        config=config
+                    )  # Inform success
+                except Exception as e:  # If applying fails
+                    print(
+                        f"{BackgroundColors.YELLOW}Failed to apply hyperparameters to {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
+                    )  # Warn user
+            except Exception:  # Catch any unexpected errors for this model
+                continue  # Skip problematic entries silently
 
-    return models_map  # Return updated model mapping
+        return models_map  # Return updated model mapping
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def load_pca_object(file_path, pca_n_components, config=None):
@@ -2387,39 +2647,44 @@ def load_pca_object(file_path, pca_n_components, config=None):
     :return: PCA object if found, None otherwise.
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Loading the PCA Cache object with {BackgroundColors.CYAN}{pca_n_components}{BackgroundColors.GREEN} components from file {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
-
-    file_dir = os.path.dirname(file_path)  # Get the directory of the dataset
-    pca_file = os.path.join(
-        file_dir, "Cache", f"PCA_{pca_n_components}_components.pkl"
-    )  # Construct the path to the PCA pickle file
-
-    if not verify_filepath_exists(pca_file):  # Check if the PCA file exists
         verbose_output(
-            f"{BackgroundColors.YELLOW}PCA object file not found at {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Loading the PCA Cache object with {BackgroundColors.CYAN}{pca_n_components}{BackgroundColors.GREEN} components from file {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
             config=config
-        )
-        return None  # Return None if the file doesn't exist
+        )  # Output the verbose message
 
-    try:  # Try to load the PCA object
-        with open(pca_file, "rb") as f:  # Open the PCA pickle file
-            pca = pickle.load(f)  # Load the PCA object
-        verbose_output(
-            f"{BackgroundColors.GREEN}Successfully loaded PCA object from {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}",
-            config=config
-        )
-        return pca  # Return the loaded PCA object
-    except Exception as e:  # Handle any errors during loading
-        print(
-            f"{BackgroundColors.RED}Error loading PCA object from {BackgroundColors.CYAN}{pca_file}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
-        )
-        return None  # Return None if there was an error
+        file_dir = os.path.dirname(file_path)  # Get the directory of the dataset
+        pca_file = os.path.join(
+            file_dir, "Cache", f"PCA_{pca_n_components}_components.pkl"
+        )  # Construct the path to the PCA pickle file
+
+        if not verify_filepath_exists(pca_file):  # Check if the PCA file exists
+            verbose_output(
+                f"{BackgroundColors.YELLOW}PCA object file not found at {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}",
+                config=config
+            )
+            return None  # Return None if the file doesn't exist
+
+        try:  # Try to load the PCA object
+            with open(pca_file, "rb") as f:  # Open the PCA pickle file
+                pca = pickle.load(f)  # Load the PCA object
+            verbose_output(
+                f"{BackgroundColors.GREEN}Successfully loaded PCA object from {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}",
+                config=config
+            )
+            return pca  # Return the loaded PCA object
+        except Exception as e:  # Handle any errors during loading
+            print(
+                f"{BackgroundColors.RED}Error loading PCA object from {BackgroundColors.CYAN}{pca_file}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
+            )
+            return None  # Return None if there was an error
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file_path=None, config=None):
@@ -2438,52 +2703,57 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
     :return: Tuple (X_train_pca, X_test_pca) - Transformed features, or (None, None).
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    X_train_pca = None  # Initialize PCA training features
-    X_test_pca = None  # Initialize PCA testing features
+        X_train_pca = None  # Initialize PCA training features
+        X_test_pca = None  # Initialize PCA testing features
 
-    if pca_n_components is not None and pca_n_components > 0:  # If PCA components are specified
-        verbose_output(
-            f"{BackgroundColors.GREEN}Starting PCA transformation with {BackgroundColors.CYAN}{pca_n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}",
-            config=config
-        )  # Output the verbose message
-
-        n_features = X_train_scaled.shape[1]  # Get the number of features in the training set
-        n_components = min(
-            pca_n_components, n_features
-        )  # Effective number of components cannot exceed number of features
-
-        if n_components < pca_n_components:  # Verify if the component count was reduced
-            print(
-                f"{BackgroundColors.YELLOW}Warning: Reduced PCA components from {pca_n_components} to {n_components} due to limited features ({n_features}).{Style.RESET_ALL}"
-            )
-
-        pca = None  # Initialize PCA object as None
-        if file_path:  # Only attempt to load if file_path is provided
-            pca = load_pca_object(file_path, n_components, config=config)  # Load pre-fitted PCA object
-
-        if pca is None:  # If PCA object wasn't loaded, fit a new one
+        if pca_n_components is not None and pca_n_components > 0:  # If PCA components are specified
             verbose_output(
-                f"{BackgroundColors.GREEN}Fitting new PCA model with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}",
+                f"{BackgroundColors.GREEN}Starting PCA transformation with {BackgroundColors.CYAN}{pca_n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}",
                 config=config
-            )
-            pca = PCA(n_components=n_components)  # Initialize PCA with the effective number of components
-            X_train_pca = pca.fit_transform(X_train_scaled)  # Fit and transform the training data
-        else:  # PCA object was loaded successfully
-            print(
-                f"{BackgroundColors.GREEN}Using pre-fitted PCA model with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components{Style.RESET_ALL}"
-            )
-            X_train_pca = pca.transform(X_train_scaled)  # Only transform the training data
+            )  # Output the verbose message
 
-        X_test_pca = pca.transform(X_test_scaled)  # Transform the testing data
+            n_features = X_train_scaled.shape[1]  # Get the number of features in the training set
+            n_components = min(
+                pca_n_components, n_features
+            )  # Effective number of components cannot exceed number of features
 
-        verbose_output(
-            f"{BackgroundColors.GREEN}PCA applied successfully. Transformed data shape: {BackgroundColors.CYAN}{X_train_pca.shape}{Style.RESET_ALL}"
-        )  # Output the transformed shape
+            if n_components < pca_n_components:  # Verify if the component count was reduced
+                print(
+                    f"{BackgroundColors.YELLOW}Warning: Reduced PCA components from {pca_n_components} to {n_components} due to limited features ({n_features}).{Style.RESET_ALL}"
+                )
 
-    return X_train_pca, X_test_pca  # Return the transformed features
+            pca = None  # Initialize PCA object as None
+            if file_path:  # Only attempt to load if file_path is provided
+                pca = load_pca_object(file_path, n_components, config=config)  # Load pre-fitted PCA object
+
+            if pca is None:  # If PCA object wasn't loaded, fit a new one
+                verbose_output(
+                    f"{BackgroundColors.GREEN}Fitting new PCA model with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}",
+                    config=config
+                )
+                pca = PCA(n_components=n_components)  # Initialize PCA with the effective number of components
+                X_train_pca = pca.fit_transform(X_train_scaled)  # Fit and transform the training data
+            else:  # PCA object was loaded successfully
+                print(
+                    f"{BackgroundColors.GREEN}Using pre-fitted PCA model with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components{Style.RESET_ALL}"
+                )
+                X_train_pca = pca.transform(X_train_scaled)  # Only transform the training data
+
+            X_test_pca = pca.transform(X_test_scaled)  # Transform the testing data
+
+            verbose_output(
+                f"{BackgroundColors.GREEN}PCA applied successfully. Transformed data shape: {BackgroundColors.CYAN}{X_train_pca.shape}{Style.RESET_ALL}"
+            )  # Output the transformed shape
+
+        return X_train_pca, X_test_pca  # Return the transformed features
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def get_feature_subset(X_scaled, features, feature_names):
@@ -2496,17 +2766,22 @@ def get_feature_subset(X_scaled, features, feature_names):
     :param feature_names: List of all feature names corresponding to columns in X_scaled.
     :return: Tuple of (subset array, list of actual selected feature names)
     """
-
-    if features:  # Only proceed if the list of selected features is NOT empty/None
-        indices = []  # List to store indices of selected features
-        selected_names = []  # List to store names of selected features
-        for f in features:  # Iterate over each feature in the provided list
-            if f in feature_names:  # Check if the feature exists in the full feature list
-                indices.append(feature_names.index(f))  # Append the index of the feature
-                selected_names.append(f)  # Append the name of the feature
-        return X_scaled[:, indices], selected_names  # Return the subset and actual names
-    else:  # If no features are selected (or features is None)
-        return np.empty((X_scaled.shape[0], 0)), []  # Return empty array and empty list
+    
+    try:
+        if features:  # Only proceed if the list of selected features is NOT empty/None
+            indices = []  # List to store indices of selected features
+            selected_names = []  # List to store names of selected features
+            for f in features:  # Iterate over each feature in the provided list
+                if f in feature_names:  # Check if the feature exists in the full feature list
+                    indices.append(feature_names.index(f))  # Append the index of the feature
+                    selected_names.append(f)  # Append the name of the feature
+            return X_scaled[:, indices], selected_names  # Return the subset and actual names
+        else:  # If no features are selected (or features is None)
+            return np.empty((X_scaled.shape[0], 0)), []  # Return empty array and empty list
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def truncate_value(value):
@@ -2516,15 +2791,20 @@ def truncate_value(value):
     :param value: Numeric value
     :return: Formatted string or None
     """
-
-    try:  # Try to format the value
-        if value is None:  # If value is None
+    
+    try:
+        try:  # Try to format the value
+            if value is None:  # If value is None
+                return None  # Return None
+            v = float(value)  # Convert to float
+            truncated = math.trunc(v * 10000) / 10000.0  # Truncate to 4 decimal places
+            return f"{truncated:.4f}"  # Return formatted string
+        except Exception:  # On failure
             return None  # Return None
-        v = float(value)  # Convert to float
-        truncated = math.trunc(v * 10000) / 10000.0  # Truncate to 4 decimal places
-        return f"{truncated:.4f}"  # Return formatted string
-    except Exception:  # On failure
-        return None  # Return None
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_names, best_params=None, feature_set=None, dataset_csv_path=None, config=None):
@@ -2543,43 +2823,48 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_nam
     :return: None
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
-    
-    model_export_base = config.get("stacking", {}).get("model_export_base", "Feature_Analysis/Stacking/Models/")  # Get model export base from config
-    
-    def safe_filename(name):
-        return re.sub(r'[\\/*?:"<>|]', "_", str(name))
-
-    if dataset_csv_path:
-        file_path_obj = Path(dataset_csv_path)
-        export_dir = file_path_obj.parent / "Classifiers" / "Models"
-    else:
-        export_dir = Path(model_export_base) / safe_filename(dataset_name)
-    os.makedirs(export_dir, exist_ok=True)
-    param_str = "_".join(f"{k}-{v}" for k, v in sorted(best_params.items())) if best_params else ""
-    param_str = safe_filename(param_str)[:64]
-    features_str = safe_filename("_".join(feature_names))[:64] if feature_names else "all_features"
-    fs = safe_filename(feature_set) if feature_set else "all"
-    base_name = f"{safe_filename(model_name)}__{fs}__{features_str}__{param_str}"
-    model_path = os.path.join(str(export_dir), f"{base_name}_model.joblib")
-    scaler_path = os.path.join(str(export_dir), f"{base_name}_scaler.joblib")
     try:
-        dump(model, model_path)
-        if scaler is not None:
-            dump(scaler, scaler_path)
-        meta = {
-            "model_name": model_name,
-            "feature_set": feature_set,
-            "features": feature_names,
-            "params": best_params,
-        }
-        meta_path = os.path.join(str(export_dir), f"{base_name}_meta.json")
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2)
-        verbose_output(f"Exported model to {model_path} and scaler to {scaler_path}")
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        model_export_base = config.get("stacking", {}).get("model_export_base", "Feature_Analysis/Stacking/Models/")  # Get model export base from config
+        
+        def safe_filename(name):
+            return re.sub(r'[\\/*?:"<>|]', "_", str(name))
+
+        if dataset_csv_path:
+            file_path_obj = Path(dataset_csv_path)
+            export_dir = file_path_obj.parent / "Classifiers" / "Models"
+        else:
+            export_dir = Path(model_export_base) / safe_filename(dataset_name)
+        os.makedirs(export_dir, exist_ok=True)
+        param_str = "_".join(f"{k}-{v}" for k, v in sorted(best_params.items())) if best_params else ""
+        param_str = safe_filename(param_str)[:64]
+        features_str = safe_filename("_".join(feature_names))[:64] if feature_names else "all_features"
+        fs = safe_filename(feature_set) if feature_set else "all"
+        base_name = f"{safe_filename(model_name)}__{fs}__{features_str}__{param_str}"
+        model_path = os.path.join(str(export_dir), f"{base_name}_model.joblib")
+        scaler_path = os.path.join(str(export_dir), f"{base_name}_scaler.joblib")
+        try:
+            dump(model, model_path)
+            if scaler is not None:
+                dump(scaler, scaler_path)
+            meta = {
+                "model_name": model_name,
+                "feature_set": feature_set,
+                "features": feature_names,
+                "params": best_params,
+            }
+            meta_path = os.path.join(str(export_dir), f"{base_name}_meta.json")
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2)
+            verbose_output(f"Exported model to {model_path} and scaler to {scaler_path}")
+        except Exception as e:
+            print(f"{BackgroundColors.YELLOW}Warning: Failed to export model {model_name}: {e}{Style.RESET_ALL}")
     except Exception as e:
-        print(f"{BackgroundColors.YELLOW}Warning: Failed to export model {model_name}: {e}{Style.RESET_ALL}")
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None):
@@ -2599,87 +2884,92 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
-
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
     
-    skip_train_if_model_exists = config.get("execution", {}).get("skip_train_if_model_exists", False)  # Get skip train flag from config
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        skip_train_if_model_exists = config.get("execution", {}).get("skip_train_if_model_exists", False)  # Get skip train flag from config
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Training {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}...{Style.RESET_ALL}",
-        config=config,
-    )  # Output the verbose message
+        verbose_output(
+            f"{BackgroundColors.GREEN}Training {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}...{Style.RESET_ALL}",
+            config=config,
+        )  # Output the verbose message
 
-    start_time = time.time()  # Record the start time
+        start_time = time.time()  # Record the start time
 
-    if dataset_file is not None and skip_train_if_model_exists:
+        if dataset_file is not None and skip_train_if_model_exists:
+            try:
+                models_dir = Path(dataset_file).parent / "Classifiers" / "Models"
+                if models_dir.exists():
+                    safe_model = re.sub(r'[\\/*?:"<>|]', "_", str(model_name))
+                    pattern = f"*{safe_model}*"
+                    if feature_set:
+                        safe_fs = re.sub(r'[\\/*?:"<>|]', "_", str(feature_set))
+                        pattern = f"*{safe_model}*{safe_fs}*"
+                    matches = list(models_dir.glob(f"{pattern}_model.joblib"))
+                    if matches:
+                        try:
+                            loaded = load(str(matches[0]))
+                            model = loaded
+                            scaler_path = str(matches[0]).replace("_model.joblib", "_scaler.joblib")
+                            if os.path.exists(scaler_path):
+                                scaler = load(scaler_path)
+                            verbose_output(f"Loaded existing model from {matches[0]}")
+                            y_pred = model.predict(X_test)
+                            elapsed_time = 0.0
+                            acc = accuracy_score(y_test, y_pred)
+                            prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)
+                            rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)
+                            f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
+                            if len(np.unique(y_test)) == 2:
+                                tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+                                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+                                fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0
+                            else:
+                                fpr = 0.0
+                                fnr = 0.0
+                            return (acc, prec, rec, f1, fpr, fnr, elapsed_time)
+                        except Exception:
+                            verbose_output(f"Failed to load existing model for {model_name}; retraining.")
+            except Exception:
+                pass
+
+        model.fit(X_train, y_train)  # Fit the model on the training data
+
+        y_pred = model.predict(X_test)  # Predict the labels for the test set
+
+        elapsed_time = time.time() - start_time  # Calculate the total time elapsed
+
+        acc = accuracy_score(y_test, y_pred)  # Calculate Accuracy
+        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Precision
+        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Recall
+        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate F1-Score
+
+        if len(np.unique(y_test)) == 2:  # Binary classification
+            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()  # Get confusion matrix components
+            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Calculate FPR
+            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Calculate FNR
+        else:  # Multi-class
+            fpr = 0.0  # Placeholder
+            fnr = 0.0  # Placeholder
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed_time))}s{Style.RESET_ALL}"
+        )  # Output result
+
         try:
-            models_dir = Path(dataset_file).parent / "Classifiers" / "Models"
-            if models_dir.exists():
-                safe_model = re.sub(r'[\\/*?:"<>|]', "_", str(model_name))
-                pattern = f"*{safe_model}*"
-                if feature_set:
-                    safe_fs = re.sub(r'[\\/*?:"<>|]', "_", str(feature_set))
-                    pattern = f"*{safe_model}*{safe_fs}*"
-                matches = list(models_dir.glob(f"{pattern}_model.joblib"))
-                if matches:
-                    try:
-                        loaded = load(str(matches[0]))
-                        model = loaded
-                        scaler_path = str(matches[0]).replace("_model.joblib", "_scaler.joblib")
-                        if os.path.exists(scaler_path):
-                            scaler = load(scaler_path)
-                        verbose_output(f"Loaded existing model from {matches[0]}")
-                        y_pred = model.predict(X_test)
-                        elapsed_time = 0.0
-                        acc = accuracy_score(y_test, y_pred)
-                        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)
-                        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)
-                        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
-                        if len(np.unique(y_test)) == 2:
-                            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
-                            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
-                            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0
-                        else:
-                            fpr = 0.0
-                            fnr = 0.0
-                        return (acc, prec, rec, f1, fpr, fnr, elapsed_time)
-                    except Exception:
-                        verbose_output(f"Failed to load existing model for {model_name}; retraining.")
+            if dataset_file is not None:
+                dataset_name = os.path.basename(os.path.dirname(dataset_file))
+                export_model_and_scaler(model, scaler, dataset_name, model_name, feature_names or [], best_params=None, feature_set=feature_set, dataset_csv_path=dataset_file)
         except Exception:
             pass
 
-    model.fit(X_train, y_train)  # Fit the model on the training data
-
-    y_pred = model.predict(X_test)  # Predict the labels for the test set
-
-    elapsed_time = time.time() - start_time  # Calculate the total time elapsed
-
-    acc = accuracy_score(y_test, y_pred)  # Calculate Accuracy
-    prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Precision
-    rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Recall
-    f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate F1-Score
-
-    if len(np.unique(y_test)) == 2:  # Binary classification
-        tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()  # Get confusion matrix components
-        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Calculate FPR
-        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Calculate FNR
-    else:  # Multi-class
-        fpr = 0.0  # Placeholder
-        fnr = 0.0  # Placeholder
-
-    verbose_output(
-        f"{BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed_time))}s{Style.RESET_ALL}"
-    )  # Output result
-
-    try:
-        if dataset_file is not None:
-            dataset_name = os.path.basename(os.path.dirname(dataset_file))
-            export_model_and_scaler(model, scaler, dataset_name, model_name, feature_names or [], best_params=None, feature_set=feature_set, dataset_csv_path=dataset_file)
-    except Exception:
-        pass
-
-    return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
+        return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
@@ -2693,40 +2983,45 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
     :param y_test: Testing target labels (encoded Series/array).
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
+    
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Starting training and evaluation of Stacking Classifier...{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Starting training and evaluation of Stacking Classifier...{Style.RESET_ALL}"
-    )  # Output the verbose message
+        start_time = time.time()  # Record the start time for timing training and prediction
 
-    start_time = time.time()  # Record the start time for timing training and prediction
+        model.fit(X_train, y_train)  # Fit the stacking model on the training data (accepts DataFrame or array)
 
-    model.fit(X_train, y_train)  # Fit the stacking model on the training data (accepts DataFrame or array)
+        y_pred = model.predict(X_test)  # Predict the labels for the test set
 
-    y_pred = model.predict(X_test)  # Predict the labels for the test set
+        elapsed_time = time.time() - start_time  # Calculate the total time elapsed
 
-    elapsed_time = time.time() - start_time  # Calculate the total time elapsed
+        acc = accuracy_score(y_test, y_pred)  # Calculate Accuracy
+        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Precision (weighted)
+        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Recall (weighted)
+        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate F1-Score (weighted)
 
-    acc = accuracy_score(y_test, y_pred)  # Calculate Accuracy
-    prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Precision (weighted)
-    rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Recall (weighted)
-    f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate F1-Score (weighted)
+        if len(np.unique(y_test)) == 2:  # Verify if it's a binary classification problem
+            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()  # Get Confusion Matrix components
+            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Calculate False Positive Rate
+            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Calculate False Negative Rate
+        else:  # For multi-class (simplified approach, actual implementation is complex)
+            fpr = 0.0  # Placeholder
+            fnr = 0.0  # Placeholder
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Multi-class FPR/FNR calculation simplified to 0.0.{Style.RESET_ALL}"
+            )  # Warning about simplification
 
-    if len(np.unique(y_test)) == 2:  # Verify if it's a binary classification problem
-        tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()  # Get Confusion Matrix components
-        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Calculate False Positive Rate
-        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Calculate False Negative Rate
-    else:  # For multi-class (simplified approach, actual implementation is complex)
-        fpr = 0.0  # Placeholder
-        fnr = 0.0  # Placeholder
-        print(
-            f"{BackgroundColors.YELLOW}Warning: Multi-class FPR/FNR calculation simplified to 0.0.{Style.RESET_ALL}"
-        )  # Warning about simplification
+        verbose_output(
+            f"{BackgroundColors.GREEN}Evaluation complete. Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed_time))}s{Style.RESET_ALL}"
+        )  # Output the final result summary
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Evaluation complete. Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed_time))}s{Style.RESET_ALL}"
-    )  # Output the final result summary
-
-    return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
+        return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config=None):
@@ -2744,91 +3039,96 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Dictionary with SHAP values and summary metrics or None if failed
     """
+    
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+        try:  # Attempt to generate SHAP explanations
+            import shap  # Import SHAP library
 
-    try:  # Attempt to generate SHAP explanations
-        import shap  # Import SHAP library
+            verbose_output(
+                f"{BackgroundColors.GREEN}Generating SHAP explanations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+                config=config
+            )  # Log SHAP generation start
 
-        verbose_output(
-            f"{BackgroundColors.GREEN}Generating SHAP explanations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
-            config=config
-        )  # Log SHAP generation start
+            shap_config = config.get("explainability", {})  # Get explainability config
+            max_samples = shap_config.get("shap_max_samples", 100)  # Max samples for SHAP computation
+            max_display = shap_config.get("max_display_features", 20)  # Max features to display
+            random_state = shap_config.get("random_state", 42)  # Random state for sampling
 
-        shap_config = config.get("explainability", {})  # Get explainability config
-        max_samples = shap_config.get("shap_max_samples", 100)  # Max samples for SHAP computation
-        max_display = shap_config.get("max_display_features", 20)  # Max features to display
-        random_state = shap_config.get("random_state", 42)  # Random state for sampling
+            os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
-        os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+            if len(X_test) > max_samples:  # If test set is large
+                np.random.seed(random_state)  # Set random seed for reproducibility
+                sample_indices = np.random.choice(len(X_test), size=max_samples, replace=False)  # Sample indices
+                X_test_sampled = X_test[sample_indices]  # Sample test features
+                y_test_sampled = y_test.iloc[sample_indices] if hasattr(y_test, 'iloc') else y_test[sample_indices]  # Sample test labels
+            else:  # If test set is small
+                X_test_sampled = X_test  # Use full test set
+                y_test_sampled = y_test  # Use full test labels
 
-        if len(X_test) > max_samples:  # If test set is large
-            np.random.seed(random_state)  # Set random seed for reproducibility
-            sample_indices = np.random.choice(len(X_test), size=max_samples, replace=False)  # Sample indices
-            X_test_sampled = X_test[sample_indices]  # Sample test features
-            y_test_sampled = y_test.iloc[sample_indices] if hasattr(y_test, 'iloc') else y_test[sample_indices]  # Sample test labels
-        else:  # If test set is small
-            X_test_sampled = X_test  # Use full test set
-            y_test_sampled = y_test  # Use full test labels
+            model_type = model.__class__.__name__  # Get model class name
 
-        model_type = model.__class__.__name__  # Get model class name
+            if model_type in ["RandomForestClassifier", "GradientBoostingClassifier", "XGBClassifier", "LightGBMClassifier", "ExtraTreesClassifier"]:  # Tree-based models
+                explainer = shap.TreeExplainer(model)  # Use TreeExplainer for tree-based models
+            elif model_type in ["LogisticRegression", "LinearSVC", "SGDClassifier"]:  # Linear models
+                explainer = shap.LinearExplainer(model, X_test_sampled)  # Use LinearExplainer for linear models
+            else:  # Other models
+                explainer = shap.KernelExplainer(model.predict_proba, shap.sample(X_test_sampled, 50, random_state=random_state))  # Use KernelExplainer as fallback
 
-        if model_type in ["RandomForestClassifier", "GradientBoostingClassifier", "XGBClassifier", "LightGBMClassifier", "ExtraTreesClassifier"]:  # Tree-based models
-            explainer = shap.TreeExplainer(model)  # Use TreeExplainer for tree-based models
-        elif model_type in ["LogisticRegression", "LinearSVC", "SGDClassifier"]:  # Linear models
-            explainer = shap.LinearExplainer(model, X_test_sampled)  # Use LinearExplainer for linear models
-        else:  # Other models
-            explainer = shap.KernelExplainer(model.predict_proba, shap.sample(X_test_sampled, 50, random_state=random_state))  # Use KernelExplainer as fallback
+            shap_values = explainer.shap_values(X_test_sampled)  # Compute SHAP values
 
-        shap_values = explainer.shap_values(X_test_sampled)  # Compute SHAP values
+            if isinstance(shap_values, list):  # Multi-class case
+                shap_values_summary = shap_values[0] if len(shap_values) > 0 else shap_values  # Use first class for summary
+            else:  # Binary or regression case
+                shap_values_summary = shap_values  # Use SHAP values directly
 
-        if isinstance(shap_values, list):  # Multi-class case
-            shap_values_summary = shap_values[0] if len(shap_values) > 0 else shap_values  # Use first class for summary
-        else:  # Binary or regression case
-            shap_values_summary = shap_values  # Use SHAP values directly
+            try:  # Try to create summary plot
+                plt.figure()  # Create new figure
+                shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, show=False)  # Create summary plot
+                summary_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_summary.png")  # Build plot path
+                plt.tight_layout()  # Adjust layout
+                plt.savefig(summary_plot_path, dpi=150, bbox_inches='tight')  # Save plot
+                plt.close()  # Close plot
+            except Exception:  # If summary plot fails
+                plt.close()  # Close plot
 
-        try:  # Try to create summary plot
-            plt.figure()  # Create new figure
-            shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, show=False)  # Create summary plot
-            summary_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_summary.png")  # Build plot path
-            plt.tight_layout()  # Adjust layout
-            plt.savefig(summary_plot_path, dpi=150, bbox_inches='tight')  # Save plot
-            plt.close()  # Close plot
-        except Exception:  # If summary plot fails
-            plt.close()  # Close plot
+            try:  # Try to create bar plot
+                plt.figure()  # Create new figure
+                shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, plot_type="bar", show=False)  # Create bar plot
+                bar_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_bar.png")  # Build plot path
+                plt.tight_layout()  # Adjust layout
+                plt.savefig(bar_plot_path, dpi=150, bbox_inches='tight')  # Save plot
+                plt.close()  # Close plot
+            except Exception:  # If bar plot fails
+                plt.close()  # Close plot
 
-        try:  # Try to create bar plot
-            plt.figure()  # Create new figure
-            shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, plot_type="bar", show=False)  # Create bar plot
-            bar_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_bar.png")  # Build plot path
-            plt.tight_layout()  # Adjust layout
-            plt.savefig(bar_plot_path, dpi=150, bbox_inches='tight')  # Save plot
-            plt.close()  # Close plot
-        except Exception:  # If bar plot fails
-            plt.close()  # Close plot
+            shap_array = np.array(shap_values_summary)  # Convert to numpy array for type safety
+            mean_shap_values = np.mean(np.abs(shap_array), axis=0)  # Compute mean absolute SHAP values
+            mean_shap_list = mean_shap_values.tolist() if hasattr(mean_shap_values, 'tolist') else list(mean_shap_values)  # Convert to list
+            shap_importance = dict(zip(feature_names[:len(mean_shap_list)], mean_shap_list))  # Create importance dict
 
-        shap_array = np.array(shap_values_summary)  # Convert to numpy array for type safety
-        mean_shap_values = np.mean(np.abs(shap_array), axis=0)  # Compute mean absolute SHAP values
-        mean_shap_list = mean_shap_values.tolist() if hasattr(mean_shap_values, 'tolist') else list(mean_shap_values)  # Convert to list
-        shap_importance = dict(zip(feature_names[:len(mean_shap_list)], mean_shap_list))  # Create importance dict
+            verbose_output(
+                f"{BackgroundColors.GREEN}SHAP explanations saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
+                config=config
+            )  # Log SHAP completion
 
-        verbose_output(
-            f"{BackgroundColors.GREEN}SHAP explanations saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
-            config=config
-        )  # Log SHAP completion
+            return {"shap_importance": shap_importance, "shap_values": shap_values}  # Return SHAP results
 
-        return {"shap_importance": shap_importance, "shap_values": shap_values}  # Return SHAP results
-
-    except ImportError:  # If SHAP not installed
-        print(f"{BackgroundColors.YELLOW}SHAP library not installed. Skipping SHAP explanations. Install with: pip install shap{Style.RESET_ALL}")  # Warn user
-        return None  # Return None
-    except Exception as e:  # If any other error
-        verbose_output(
-            f"{BackgroundColors.YELLOW}Failed to generate SHAP explanations for {model_name}: {e}{Style.RESET_ALL}",
-            config=config
-        )  # Log error
-        return None  # Return None
+        except ImportError:  # If SHAP not installed
+            print(f"{BackgroundColors.YELLOW}SHAP library not installed. Skipping SHAP explanations. Install with: pip install shap{Style.RESET_ALL}")  # Warn user
+            return None  # Return None
+        except Exception as e:  # If any other error
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Failed to generate SHAP explanations for {model_name}: {e}{Style.RESET_ALL}",
+                config=config
+            )  # Log error
+            return None  # Return None
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def generate_lime_explanations(model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config=None):
@@ -2846,78 +3146,83 @@ def generate_lime_explanations(model, X_test, y_test, feature_names, output_dir,
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Dictionary with LIME explanations or None if failed
     """
+    
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+        try:  # Attempt to generate LIME explanations
+            from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 
-    try:  # Attempt to generate LIME explanations
-        from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
+            verbose_output(
+                f"{BackgroundColors.GREEN}Generating LIME explanations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+                config=config
+            )  # Log LIME generation start
 
-        verbose_output(
-            f"{BackgroundColors.GREEN}Generating LIME explanations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
-            config=config
-        )  # Log LIME generation start
+            lime_config = config.get("explainability", {})  # Get explainability config
+            num_features = lime_config.get("lime_num_features", 10)  # Number of features in explanation
+            num_samples = lime_config.get("lime_num_samples", 1000)  # Number of samples for LIME
+            random_state = lime_config.get("random_state", 42)  # Random state for sampling
 
-        lime_config = config.get("explainability", {})  # Get explainability config
-        num_features = lime_config.get("lime_num_features", 10)  # Number of features in explanation
-        num_samples = lime_config.get("lime_num_samples", 1000)  # Number of samples for LIME
-        random_state = lime_config.get("random_state", 42)  # Random state for sampling
+            os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
-        os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+            mode = "classification"  # Default mode
+            class_names = [str(c) for c in np.unique(y_test)]  # Get class names
 
-        mode = "classification"  # Default mode
-        class_names = [str(c) for c in np.unique(y_test)]  # Get class names
+            explainer = LimeTabularExplainer(
+                X_test,
+                feature_names=feature_names[:X_test.shape[1]],
+                class_names=class_names,
+                mode=mode,
+                random_state=random_state
+            )  # Initialize LIME explainer
 
-        explainer = LimeTabularExplainer(
-            X_test,
-            feature_names=feature_names[:X_test.shape[1]],
-            class_names=class_names,
-            mode=mode,
-            random_state=random_state
-        )  # Initialize LIME explainer
+            np.random.seed(random_state)  # Set random seed
+            num_instances_to_explain = min(5, len(X_test))  # Explain up to 5 instances
+            instance_indices = np.random.choice(len(X_test), size=num_instances_to_explain, replace=False)  # Sample indices
 
-        np.random.seed(random_state)  # Set random seed
-        num_instances_to_explain = min(5, len(X_test))  # Explain up to 5 instances
-        instance_indices = np.random.choice(len(X_test), size=num_instances_to_explain, replace=False)  # Sample indices
+            lime_explanations = []  # List to store LIME explanations
 
-        lime_explanations = []  # List to store LIME explanations
+            for idx in instance_indices:  # For each instance to explain
+                instance = X_test[idx]  # Get instance
+                explanation = explainer.explain_instance(
+                    instance,
+                    model.predict_proba,
+                    num_features=num_features,
+                    num_samples=num_samples
+                )  # Generate LIME explanation
 
-        for idx in instance_indices:  # For each instance to explain
-            instance = X_test[idx]  # Get instance
-            explanation = explainer.explain_instance(
-                instance,
-                model.predict_proba,
-                num_features=num_features,
-                num_samples=num_samples
-            )  # Generate LIME explanation
+                try:  # Try to save explanation figure
+                    fig = explanation.as_pyplot_figure()  # Get matplotlib figure
+                    explanation_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_lime_instance_{idx}.png")  # Build plot path
+                    plt.tight_layout()  # Adjust layout
+                    plt.savefig(explanation_plot_path, dpi=150, bbox_inches='tight')  # Save plot
+                    plt.close()  # Close plot
+                except Exception:  # If plot save fails
+                    plt.close()  # Close plot
 
-            try:  # Try to save explanation figure
-                fig = explanation.as_pyplot_figure()  # Get matplotlib figure
-                explanation_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_lime_instance_{idx}.png")  # Build plot path
-                plt.tight_layout()  # Adjust layout
-                plt.savefig(explanation_plot_path, dpi=150, bbox_inches='tight')  # Save plot
-                plt.close()  # Close plot
-            except Exception:  # If plot save fails
-                plt.close()  # Close plot
+                lime_explanations.append(explanation.as_list())  # Store explanation as list
 
-            lime_explanations.append(explanation.as_list())  # Store explanation as list
+            verbose_output(
+                f"{BackgroundColors.GREEN}LIME explanations saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
+                config=config
+            )  # Log LIME completion
 
-        verbose_output(
-            f"{BackgroundColors.GREEN}LIME explanations saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
-            config=config
-        )  # Log LIME completion
+            return {"lime_explanations": lime_explanations}  # Return LIME results
 
-        return {"lime_explanations": lime_explanations}  # Return LIME results
-
-    except ImportError:  # If LIME not installed
-        print(f"{BackgroundColors.YELLOW}LIME library not installed. Skipping LIME explanations. Install with: pip install lime{Style.RESET_ALL}")  # Warn user
-        return None  # Return None
-    except Exception as e:  # If any other error
-        verbose_output(
-            f"{BackgroundColors.YELLOW}Failed to generate LIME explanations for {model_name}: {e}{Style.RESET_ALL}",
-            config=config
-        )  # Log error
-        return None  # Return None
+        except ImportError:  # If LIME not installed
+            print(f"{BackgroundColors.YELLOW}LIME library not installed. Skipping LIME explanations. Install with: pip install lime{Style.RESET_ALL}")  # Warn user
+            return None  # Return None
+        except Exception as e:  # If any other error
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Failed to generate LIME explanations for {model_name}: {e}{Style.RESET_ALL}",
+                config=config
+            )  # Log error
+            return None  # Return None
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def generate_permutation_importance(model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, config=None):
@@ -2934,76 +3239,81 @@ def generate_permutation_importance(model, X_test, y_test, feature_names, output
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Dictionary with permutation importance or None if failed
     """
+    
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+        try:  # Attempt to generate permutation importance
+            from sklearn.inspection import permutation_importance  # Import permutation importance
 
-    try:  # Attempt to generate permutation importance
-        from sklearn.inspection import permutation_importance  # Import permutation importance
+            verbose_output(
+                f"{BackgroundColors.GREEN}Computing permutation importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+                config=config
+            )  # Log permutation importance computation start
 
-        verbose_output(
-            f"{BackgroundColors.GREEN}Computing permutation importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
-            config=config
-        )  # Log permutation importance computation start
+            explainer_config = config.get("explainability", {})  # Get explainability config
+            random_state = explainer_config.get("random_state", 42)  # Random state for permutation
+            n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Number of parallel jobs
 
-        explainer_config = config.get("explainability", {})  # Get explainability config
-        random_state = explainer_config.get("random_state", 42)  # Random state for permutation
-        n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Number of parallel jobs
+            os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
-        os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+            perm_importance = permutation_importance(
+                model,
+                X_test,
+                y_test,
+                n_repeats=10,
+                random_state=random_state,
+                n_jobs=n_jobs
+            )  # Compute permutation importance
 
-        perm_importance = permutation_importance(
-            model,
-            X_test,
-            y_test,
-            n_repeats=10,
-            random_state=random_state,
-            n_jobs=n_jobs
-        )  # Compute permutation importance
+            importances_mean = perm_importance['importances_mean']  # Extract mean importances from Bunch
+            importances_std = perm_importance['importances_std']  # Extract std importances from Bunch
+            sorted_indices = importances_mean.argsort()[::-1]  # Sort indices by descending importance
+            sorted_features = [feature_names[i] for i in sorted_indices]  # Get sorted feature names
+            sorted_importances = importances_mean[sorted_indices]  # Get sorted importances
+            sorted_std = importances_std[sorted_indices]  # Get sorted standard deviations
 
-        importances_mean = perm_importance['importances_mean']  # Extract mean importances from Bunch
-        importances_std = perm_importance['importances_std']  # Extract std importances from Bunch
-        sorted_indices = importances_mean.argsort()[::-1]  # Sort indices by descending importance
-        sorted_features = [feature_names[i] for i in sorted_indices]  # Get sorted feature names
-        sorted_importances = importances_mean[sorted_indices]  # Get sorted importances
-        sorted_std = importances_std[sorted_indices]  # Get sorted standard deviations
+            importance_dict = {}  # Initialize importance dictionary
+            for feat, imp, std in zip(sorted_features, sorted_importances, sorted_std):  # For each feature
+                importance_dict[feat] = {"mean": float(imp), "std": float(std)}  # Store importance and std
 
-        importance_dict = {}  # Initialize importance dictionary
-        for feat, imp, std in zip(sorted_features, sorted_importances, sorted_std):  # For each feature
-            importance_dict[feat] = {"mean": float(imp), "std": float(std)}  # Store importance and std
+            try:  # Try to create bar plot
+                max_display = explainer_config.get("max_display_features", 20)  # Max features to display
+                display_count = min(max_display, len(sorted_features))  # Number of features to display
 
-        try:  # Try to create bar plot
-            max_display = explainer_config.get("max_display_features", 20)  # Max features to display
-            display_count = min(max_display, len(sorted_features))  # Number of features to display
+                plt.figure(figsize=(10, max(6, display_count * 0.3)))  # Create figure with dynamic height
+                y_pos = np.arange(display_count)  # Y positions for bars
+                plt.barh(y_pos, sorted_importances[:display_count], xerr=sorted_std[:display_count], align='center', alpha=0.7, color='steelblue')  # Create horizontal bar plot with error bars
+                plt.yticks(y_pos, sorted_features[:display_count])  # Set Y-axis labels
+                plt.xlabel('Permutation Importance', fontsize=12)  # Set X-axis label
+                plt.ylabel('Features', fontsize=12)  # Set Y-axis label
+                plt.title(f'Permutation Importance - {model_name}\n{dataset_name}', fontsize=14)  # Set title
+                plt.grid(axis='x', alpha=0.3)  # Add X-axis grid
+                plt.tight_layout()  # Adjust layout
+                perm_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_permutation_importance.png")  # Build plot path
+                plt.savefig(perm_plot_path, dpi=150, bbox_inches='tight')  # Save plot
+                plt.close()  # Close plot
+            except Exception:  # If plot fails
+                plt.close()  # Close plot
 
-            plt.figure(figsize=(10, max(6, display_count * 0.3)))  # Create figure with dynamic height
-            y_pos = np.arange(display_count)  # Y positions for bars
-            plt.barh(y_pos, sorted_importances[:display_count], xerr=sorted_std[:display_count], align='center', alpha=0.7, color='steelblue')  # Create horizontal bar plot with error bars
-            plt.yticks(y_pos, sorted_features[:display_count])  # Set Y-axis labels
-            plt.xlabel('Permutation Importance', fontsize=12)  # Set X-axis label
-            plt.ylabel('Features', fontsize=12)  # Set Y-axis label
-            plt.title(f'Permutation Importance - {model_name}\n{dataset_name}', fontsize=14)  # Set title
-            plt.grid(axis='x', alpha=0.3)  # Add X-axis grid
-            plt.tight_layout()  # Adjust layout
-            perm_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_permutation_importance.png")  # Build plot path
-            plt.savefig(perm_plot_path, dpi=150, bbox_inches='tight')  # Save plot
-            plt.close()  # Close plot
-        except Exception:  # If plot fails
-            plt.close()  # Close plot
+            verbose_output(
+                f"{BackgroundColors.GREEN}Permutation importance saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
+                config=config
+            )  # Log permutation importance completion
 
-        verbose_output(
-            f"{BackgroundColors.GREEN}Permutation importance saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
-            config=config
-        )  # Log permutation importance completion
+            return {"permutation_importance": importance_dict}  # Return permutation importance results
 
-        return {"permutation_importance": importance_dict}  # Return permutation importance results
-
-    except Exception as e:  # If any error
-        verbose_output(
-            f"{BackgroundColors.YELLOW}Failed to compute permutation importance for {model_name}: {e}{Style.RESET_ALL}",
-            config=config
-        )  # Log error
-        return None  # Return None
+        except Exception as e:  # If any error
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Failed to compute permutation importance for {model_name}: {e}{Style.RESET_ALL}",
+                config=config
+            )  # Log error
+            return None  # Return None
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def extract_model_feature_importance(model, feature_names, output_dir, model_name, dataset_name, config=None):
@@ -3018,95 +3328,100 @@ def extract_model_feature_importance(model, feature_names, output_dir, model_nam
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Dictionary with feature importance or None if not supported
     """
+    
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+        try:  # Attempt to extract feature importance
+            model_type = model.__class__.__name__  # Get model class name
 
-    try:  # Attempt to extract feature importance
-        model_type = model.__class__.__name__  # Get model class name
+            if hasattr(model, 'feature_importances_'):  # If model has built-in feature importance
+                verbose_output(
+                    f"{BackgroundColors.GREEN}Extracting built-in feature importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+                    config=config
+                )  # Log extraction start
 
-        if hasattr(model, 'feature_importances_'):  # If model has built-in feature importance
+                os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+
+                importances = model.feature_importances_  # Get feature importances
+                sorted_indices = np.argsort(importances)[::-1]  # Sort indices by descending importance
+                sorted_features = [feature_names[i] for i in sorted_indices]  # Get sorted feature names
+                sorted_importances = importances[sorted_indices]  # Get sorted importances
+
+                importance_dict = dict(zip(sorted_features, sorted_importances.tolist()))  # Create importance dict
+
+                try:  # Try to create bar plot
+                    explainer_config = config.get("explainability", {})  # Get explainability config
+                    max_display = explainer_config.get("max_display_features", 20)  # Max features to display
+                    display_count = min(max_display, len(sorted_features))  # Number of features to display
+
+                    plt.figure(figsize=(10, max(6, display_count * 0.3)))  # Create figure with dynamic height
+                    y_pos = np.arange(display_count)  # Y positions for bars
+                    plt.barh(y_pos, sorted_importances[:display_count], align='center', alpha=0.7, color='forestgreen')  # Create horizontal bar plot
+                    plt.yticks(y_pos, sorted_features[:display_count])  # Set Y-axis labels
+                    plt.xlabel('Feature Importance', fontsize=12)  # Set X-axis label
+                    plt.ylabel('Features', fontsize=12)  # Set Y-axis label
+                    plt.title(f'Model Feature Importance - {model_name}\n{dataset_name}', fontsize=14)  # Set title
+                    plt.grid(axis='x', alpha=0.3)  # Add X-axis grid
+                    plt.tight_layout()  # Adjust layout
+                    importance_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_feature_importance.png")  # Build plot path
+                    plt.savefig(importance_plot_path, dpi=150, bbox_inches='tight')  # Save plot
+                    plt.close()  # Close plot
+                except Exception:  # If plot fails
+                    plt.close()  # Close plot
+
+                verbose_output(
+                    f"{BackgroundColors.GREEN}Model feature importance saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
+                    config=config
+                )  # Log extraction completion
+
+                return {"model_importance": importance_dict}  # Return feature importance results
+
+            elif hasattr(model, 'coef_'):  # If linear model with coefficients
+                verbose_output(
+                    f"{BackgroundColors.GREEN}Extracting coefficients as feature importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+                    config=config
+                )  # Log extraction start
+
+                os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+
+                coef = model.coef_  # Get coefficients
+                if len(coef.shape) > 1:  # Multi-class case
+                    importances = np.abs(coef).mean(axis=0)  # Average absolute coefficients across classes
+                else:  # Binary case
+                    importances = np.abs(coef[0] if coef.ndim > 1 else coef)  # Use absolute coefficients
+
+                sorted_indices = np.argsort(importances)[::-1]  # Sort indices by descending importance
+                sorted_features = [feature_names[i] for i in sorted_indices]  # Get sorted feature names
+                sorted_importances = importances[sorted_indices]  # Get sorted importances
+
+                importance_dict = dict(zip(sorted_features, sorted_importances.tolist()))  # Create importance dict
+
+                verbose_output(
+                    f"{BackgroundColors.GREEN}Model coefficients saved as importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+                    config=config
+                )  # Log extraction completion
+
+                return {"model_importance": importance_dict}  # Return feature importance results
+
+            else:  # Model does not support feature importance
+                verbose_output(
+                    f"{BackgroundColors.YELLOW}Model {model_name} does not support built-in feature importance{Style.RESET_ALL}",
+                    config=config
+                )  # Log unsupported model
+                return None  # Return None
+
+        except Exception as e:  # If any error
             verbose_output(
-                f"{BackgroundColors.GREEN}Extracting built-in feature importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+                f"{BackgroundColors.YELLOW}Failed to extract feature importance for {model_name}: {e}{Style.RESET_ALL}",
                 config=config
-            )  # Log extraction start
-
-            os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
-
-            importances = model.feature_importances_  # Get feature importances
-            sorted_indices = np.argsort(importances)[::-1]  # Sort indices by descending importance
-            sorted_features = [feature_names[i] for i in sorted_indices]  # Get sorted feature names
-            sorted_importances = importances[sorted_indices]  # Get sorted importances
-
-            importance_dict = dict(zip(sorted_features, sorted_importances.tolist()))  # Create importance dict
-
-            try:  # Try to create bar plot
-                explainer_config = config.get("explainability", {})  # Get explainability config
-                max_display = explainer_config.get("max_display_features", 20)  # Max features to display
-                display_count = min(max_display, len(sorted_features))  # Number of features to display
-
-                plt.figure(figsize=(10, max(6, display_count * 0.3)))  # Create figure with dynamic height
-                y_pos = np.arange(display_count)  # Y positions for bars
-                plt.barh(y_pos, sorted_importances[:display_count], align='center', alpha=0.7, color='forestgreen')  # Create horizontal bar plot
-                plt.yticks(y_pos, sorted_features[:display_count])  # Set Y-axis labels
-                plt.xlabel('Feature Importance', fontsize=12)  # Set X-axis label
-                plt.ylabel('Features', fontsize=12)  # Set Y-axis label
-                plt.title(f'Model Feature Importance - {model_name}\n{dataset_name}', fontsize=14)  # Set title
-                plt.grid(axis='x', alpha=0.3)  # Add X-axis grid
-                plt.tight_layout()  # Adjust layout
-                importance_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_feature_importance.png")  # Build plot path
-                plt.savefig(importance_plot_path, dpi=150, bbox_inches='tight')  # Save plot
-                plt.close()  # Close plot
-            except Exception:  # If plot fails
-                plt.close()  # Close plot
-
-            verbose_output(
-                f"{BackgroundColors.GREEN}Model feature importance saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
-                config=config
-            )  # Log extraction completion
-
-            return {"model_importance": importance_dict}  # Return feature importance results
-
-        elif hasattr(model, 'coef_'):  # If linear model with coefficients
-            verbose_output(
-                f"{BackgroundColors.GREEN}Extracting coefficients as feature importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
-                config=config
-            )  # Log extraction start
-
-            os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
-
-            coef = model.coef_  # Get coefficients
-            if len(coef.shape) > 1:  # Multi-class case
-                importances = np.abs(coef).mean(axis=0)  # Average absolute coefficients across classes
-            else:  # Binary case
-                importances = np.abs(coef[0] if coef.ndim > 1 else coef)  # Use absolute coefficients
-
-            sorted_indices = np.argsort(importances)[::-1]  # Sort indices by descending importance
-            sorted_features = [feature_names[i] for i in sorted_indices]  # Get sorted feature names
-            sorted_importances = importances[sorted_indices]  # Get sorted importances
-
-            importance_dict = dict(zip(sorted_features, sorted_importances.tolist()))  # Create importance dict
-
-            verbose_output(
-                f"{BackgroundColors.GREEN}Model coefficients saved as importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
-                config=config
-            )  # Log extraction completion
-
-            return {"model_importance": importance_dict}  # Return feature importance results
-
-        else:  # Model does not support feature importance
-            verbose_output(
-                f"{BackgroundColors.YELLOW}Model {model_name} does not support built-in feature importance{Style.RESET_ALL}",
-                config=config
-            )  # Log unsupported model
+            )  # Log error
             return None  # Return None
-
-    except Exception as e:  # If any error
-        verbose_output(
-            f"{BackgroundColors.YELLOW}Failed to extract feature importance for {model_name}: {e}{Style.RESET_ALL}",
-            config=config
-        )  # Log error
-        return None  # Return None
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def generate_combined_importance_report(shap_result, lime_result, perm_result, model_result, feature_names, output_dir, model_name, dataset_name, config=None):
@@ -3124,74 +3439,79 @@ def generate_combined_importance_report(shap_result, lime_result, perm_result, m
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Path to saved report or None if failed
     """
+    
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+        try:  # Attempt to generate combined report
+            verbose_output(
+                f"{BackgroundColors.GREEN}Generating combined importance report for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+                config=config
+            )  # Log report generation start
 
-    try:  # Attempt to generate combined report
-        verbose_output(
-            f"{BackgroundColors.GREEN}Generating combined importance report for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
-            config=config
-        )  # Log report generation start
+            os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
-        os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+            report_data = []  # List to store report rows
 
-        report_data = []  # List to store report rows
+            for feature in feature_names:  # For each feature
+                row = {"feature": feature}  # Initialize row with feature name
 
-        for feature in feature_names:  # For each feature
-            row = {"feature": feature}  # Initialize row with feature name
+                if shap_result and "shap_importance" in shap_result:  # If SHAP results available
+                    row["shap_importance"] = shap_result["shap_importance"].get(feature, 0.0)  # Get SHAP importance
+                else:  # If SHAP not available
+                    row["shap_importance"] = np.nan  # Set to NaN
 
-            if shap_result and "shap_importance" in shap_result:  # If SHAP results available
-                row["shap_importance"] = shap_result["shap_importance"].get(feature, 0.0)  # Get SHAP importance
-            else:  # If SHAP not available
-                row["shap_importance"] = np.nan  # Set to NaN
+                if perm_result and "permutation_importance" in perm_result:  # If permutation results available
+                    perm_dict = perm_result["permutation_importance"].get(feature, {})  # Get permutation dict for feature
+                    row["permutation_importance_mean"] = perm_dict.get("mean", np.nan)  # Get mean importance
+                    row["permutation_importance_std"] = perm_dict.get("std", np.nan)  # Get std
 
-            if perm_result and "permutation_importance" in perm_result:  # If permutation results available
-                perm_dict = perm_result["permutation_importance"].get(feature, {})  # Get permutation dict for feature
-                row["permutation_importance_mean"] = perm_dict.get("mean", np.nan)  # Get mean importance
-                row["permutation_importance_std"] = perm_dict.get("std", np.nan)  # Get std
+                else:  # If permutation not available
+                    row["permutation_importance_mean"] = np.nan  # Set to NaN
+                    row["permutation_importance_std"] = np.nan  # Set to NaN
 
-            else:  # If permutation not available
-                row["permutation_importance_mean"] = np.nan  # Set to NaN
-                row["permutation_importance_std"] = np.nan  # Set to NaN
+                if model_result and "model_importance" in model_result:  # If model importance available
+                    row["model_importance"] = model_result["model_importance"].get(feature, 0.0)  # Get model importance
+                else:  # If model importance not available
+                    row["model_importance"] = np.nan  # Set to NaN
 
-            if model_result and "model_importance" in model_result:  # If model importance available
-                row["model_importance"] = model_result["model_importance"].get(feature, 0.0)  # Get model importance
-            else:  # If model importance not available
-                row["model_importance"] = np.nan  # Set to NaN
+                report_data.append(row)  # Add row to report data
 
-            report_data.append(row)  # Add row to report data
+            report_df = pd.DataFrame(report_data)  # Create DataFrame from report data
 
-        report_df = pd.DataFrame(report_data)  # Create DataFrame from report data
+            importance_cols = [col for col in report_df.columns if col != "feature" and "std" not in col]  # Get importance columns
+            if len(importance_cols) >= 2:  # If at least 2 importance methods available
+                for col in importance_cols:  # For each importance column
+                    report_df[f"{col}_rank"] = report_df[col].rank(ascending=False, na_option='bottom')  # Compute rank
 
-        importance_cols = [col for col in report_df.columns if col != "feature" and "std" not in col]  # Get importance columns
-        if len(importance_cols) >= 2:  # If at least 2 importance methods available
-            for col in importance_cols:  # For each importance column
-                report_df[f"{col}_rank"] = report_df[col].rank(ascending=False, na_option='bottom')  # Compute rank
+                rank_cols = [f"{col}_rank" for col in importance_cols]  # Get rank column names
+                report_df["average_rank"] = report_df[rank_cols].mean(axis=1)  # Compute average rank
+                report_df["rank_std"] = report_df[rank_cols].std(axis=1)  # Compute rank standard deviation
+                report_df["consistency_score"] = 1.0 / (1.0 + report_df["rank_std"])  # Compute consistency score (higher = more consistent)
 
-            rank_cols = [f"{col}_rank" for col in importance_cols]  # Get rank column names
-            report_df["average_rank"] = report_df[rank_cols].mean(axis=1)  # Compute average rank
-            report_df["rank_std"] = report_df[rank_cols].std(axis=1)  # Compute rank standard deviation
-            report_df["consistency_score"] = 1.0 / (1.0 + report_df["rank_std"])  # Compute consistency score (higher = more consistent)
+                report_df = report_df.sort_values("average_rank")  # Sort by average rank
 
-            report_df = report_df.sort_values("average_rank")  # Sort by average rank
+            report_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_combined_importance.csv")  # Build report path
+            report_df.to_csv(report_path, index=False)  # Save report to CSV
 
-        report_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_combined_importance.csv")  # Build report path
-        report_df.to_csv(report_path, index=False)  # Save report to CSV
+            verbose_output(
+                f"{BackgroundColors.GREEN}Combined importance report saved to {BackgroundColors.CYAN}{report_path}{Style.RESET_ALL}",
+                config=config
+            )  # Log report completion
 
-        verbose_output(
-            f"{BackgroundColors.GREEN}Combined importance report saved to {BackgroundColors.CYAN}{report_path}{Style.RESET_ALL}",
-            config=config
-        )  # Log report completion
+            return report_path  # Return path to saved report
 
-        return report_path  # Return path to saved report
-
-    except Exception as e:  # If any error
-        verbose_output(
-            f"{BackgroundColors.YELLOW}Failed to generate combined importance report for {model_name}: {e}{Style.RESET_ALL}",
-            config=config
-        )  # Log error
-        return None  # Return None
+        except Exception as e:  # If any error
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Failed to generate combined importance report for {model_name}: {e}{Style.RESET_ALL}",
+                config=config
+            )  # Log error
+            return None  # Return None
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def run_explainability_pipeline(model, model_name, X_test, y_test, feature_names, dataset_file, feature_set, execution_mode, config=None):
@@ -3212,72 +3532,77 @@ def run_explainability_pipeline(model, model_name, X_test, y_test, feature_names
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Dictionary with all explainability results or None if disabled
     """
+    
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+        explainability_config = config.get("explainability", {})  # Get explainability config
+        if not explainability_config.get("enabled", False):  # If explainability is disabled
+            return None  # Return None immediately
 
-    explainability_config = config.get("explainability", {})  # Get explainability config
-    if not explainability_config.get("enabled", False):  # If explainability is disabled
-        return None  # Return None immediately
+        verbose_output(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Running explainability pipeline for {BackgroundColors.CYAN}{model_name} - {feature_set}{Style.RESET_ALL}",
+            config=config
+        )  # Log pipeline start
 
-    verbose_output(
-        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Running explainability pipeline for {BackgroundColors.CYAN}{model_name} - {feature_set}{Style.RESET_ALL}",
-        config=config
-    )  # Log pipeline start
+        dataset_name = Path(dataset_file).stem  # Get dataset name from file path
+        output_subdir = explainability_config.get("output_subdir", "explainability")  # Get output subdirectory name
+        base_output_dir = Path(dataset_file).parent / output_subdir / execution_mode / dataset_name  # Build base output directory
+        output_dir = base_output_dir / feature_set.replace(" ", "_") / model_name.replace(" ", "_")  # Build full output directory
+        output_dir = str(output_dir)  # Convert Path to string
 
-    dataset_name = Path(dataset_file).stem  # Get dataset name from file path
-    output_subdir = explainability_config.get("output_subdir", "explainability")  # Get output subdirectory name
-    base_output_dir = Path(dataset_file).parent / output_subdir / execution_mode / dataset_name  # Build base output directory
-    output_dir = base_output_dir / feature_set.replace(" ", "_") / model_name.replace(" ", "_")  # Build full output directory
-    output_dir = str(output_dir)  # Convert Path to string
+        all_results = {}  # Dictionary to store all explainability results
 
-    all_results = {}  # Dictionary to store all explainability results
+        if explainability_config.get("shap", True):  # If SHAP is enabled
+            shap_result = generate_shap_explanations(
+                model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config
+            )  # Generate SHAP explanations
+            if shap_result:  # If SHAP results available
+                all_results.update(shap_result)  # Add SHAP results to all results
 
-    if explainability_config.get("shap", True):  # If SHAP is enabled
-        shap_result = generate_shap_explanations(
-            model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config
-        )  # Generate SHAP explanations
-        if shap_result:  # If SHAP results available
-            all_results.update(shap_result)  # Add SHAP results to all results
+        if explainability_config.get("lime", True):  # If LIME is enabled
+            lime_result = generate_lime_explanations(
+                model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config
+            )  # Generate LIME explanations
+            if lime_result:  # If LIME results available
+                all_results.update(lime_result)  # Add LIME results to all results
 
-    if explainability_config.get("lime", True):  # If LIME is enabled
-        lime_result = generate_lime_explanations(
-            model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config
-        )  # Generate LIME explanations
-        if lime_result:  # If LIME results available
-            all_results.update(lime_result)  # Add LIME results to all results
+        if explainability_config.get("permutation_importance", True):  # If permutation importance is enabled
+            perm_result = generate_permutation_importance(
+                model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, config
+            )  # Generate permutation importance
+            if perm_result:  # If permutation results available
+                all_results.update(perm_result)  # Add permutation results to all results
 
-    if explainability_config.get("permutation_importance", True):  # If permutation importance is enabled
-        perm_result = generate_permutation_importance(
-            model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, config
-        )  # Generate permutation importance
-        if perm_result:  # If permutation results available
-            all_results.update(perm_result)  # Add permutation results to all results
+        if explainability_config.get("feature_importance", True):  # If feature importance extraction is enabled
+            model_result = extract_model_feature_importance(
+                model, feature_names, output_dir, model_name, dataset_name, config
+            )  # Extract model feature importance
+            if model_result:  # If model importance available
+                all_results.update(model_result)  # Add model importance to all results
 
-    if explainability_config.get("feature_importance", True):  # If feature importance extraction is enabled
-        model_result = extract_model_feature_importance(
-            model, feature_names, output_dir, model_name, dataset_name, config
-        )  # Extract model feature importance
-        if model_result:  # If model importance available
-            all_results.update(model_result)  # Add model importance to all results
+        shap_res = all_results if "shap_importance" in all_results else None  # Get SHAP results or None
+        lime_res = all_results if "lime_explanations" in all_results else None  # Get LIME results or None
+        perm_res = all_results if "permutation_importance" in all_results else None  # Get permutation results or None
+        model_res = all_results if "model_importance" in all_results else None  # Get model importance or None
 
-    shap_res = all_results if "shap_importance" in all_results else None  # Get SHAP results or None
-    lime_res = all_results if "lime_explanations" in all_results else None  # Get LIME results or None
-    perm_res = all_results if "permutation_importance" in all_results else None  # Get permutation results or None
-    model_res = all_results if "model_importance" in all_results else None  # Get model importance or None
+        report_path = generate_combined_importance_report(
+            shap_res, lime_res, perm_res, model_res, feature_names, output_dir, model_name, dataset_name, config
+        )  # Generate combined report
+        if report_path:  # If report generated successfully
+            all_results["combined_report_path"] = report_path  # Add report path to results
 
-    report_path = generate_combined_importance_report(
-        shap_res, lime_res, perm_res, model_res, feature_names, output_dir, model_name, dataset_name, config
-    )  # Generate combined report
-    if report_path:  # If report generated successfully
-        all_results["combined_report_path"] = report_path  # Add report path to results
+        verbose_output(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Explainability pipeline completed for {BackgroundColors.CYAN}{model_name} - {feature_set}{Style.RESET_ALL}",
+            config=config
+        )  # Log pipeline completion
 
-    verbose_output(
-        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Explainability pipeline completed for {BackgroundColors.CYAN}{model_name} - {feature_set}{Style.RESET_ALL}",
-        config=config
-    )  # Log pipeline completion
-
-    return all_results  # Return all explainability results
+        return all_results  # Return all explainability results
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def get_hardware_specifications():
@@ -3287,46 +3612,51 @@ def get_hardware_specifications():
 
     :return: Dictionary with keys: cpu_model, cores, ram_gb, os
     """
+    
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Fetching system specifications...{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Fetching system specifications...{Style.RESET_ALL}"
-    )  # Output the verbose message
+        system = platform.system()  # Identify OS type
 
-    system = platform.system()  # Identify OS type
+        try:  # Try to fetch real CPU model using OS-specific methods
+            if system == "Windows":  # Windows: use WMIC
+                out = subprocess.check_output("wmic cpu get Name", shell=True).decode(errors="ignore")  # Run WMIC
+                cpu_model = out.strip().split("\n")[1].strip()  # Extract model line
 
-    try:  # Try to fetch real CPU model using OS-specific methods
-        if system == "Windows":  # Windows: use WMIC
-            out = subprocess.check_output("wmic cpu get Name", shell=True).decode(errors="ignore")  # Run WMIC
-            cpu_model = out.strip().split("\n")[1].strip()  # Extract model line
+            elif system == "Linux":  # Linux: read from /proc/cpuinfo
+                cpu_model = "Unknown"  # Default
+                with open("/proc/cpuinfo") as f:  # Open cpuinfo
+                    for line in f:  # Iterate lines
+                        if "model name" in line:  # Model name entry
+                            cpu_model = line.split(":", 1)[1].strip()  # Extract name
+                            break  # Stop after first match
 
-        elif system == "Linux":  # Linux: read from /proc/cpuinfo
-            cpu_model = "Unknown"  # Default
-            with open("/proc/cpuinfo") as f:  # Open cpuinfo
-                for line in f:  # Iterate lines
-                    if "model name" in line:  # Model name entry
-                        cpu_model = line.split(":", 1)[1].strip()  # Extract name
-                        break  # Stop after first match
+            elif system == "Darwin":  # MacOS: use sysctl
+                out = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"])  # Run sysctl
+                cpu_model = out.decode().strip()  # Extract model string
 
-        elif system == "Darwin":  # MacOS: use sysctl
-            out = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"])  # Run sysctl
-            cpu_model = out.decode().strip()  # Extract model string
+            else:  # Unsupported OS
+                cpu_model = "Unknown"  # Fallback
 
-        else:  # Unsupported OS
-            cpu_model = "Unknown"  # Fallback
+        except Exception:  # If any method fails
+            cpu_model = "Unknown"  # Fallback on failure
 
-    except Exception:  # If any method fails
-        cpu_model = "Unknown"  # Fallback on failure
+        cores = psutil.cpu_count(logical=False)  # Physical core count
+        ram_gb = round(psutil.virtual_memory().total / (1024**3), 1)  # Total RAM in GB
+        os_name = f"{platform.system()} {platform.release()}"  # OS name + version
 
-    cores = psutil.cpu_count(logical=False)  # Physical core count
-    ram_gb = round(psutil.virtual_memory().total / (1024**3), 1)  # Total RAM in GB
-    os_name = f"{platform.system()} {platform.release()}"  # OS name + version
-
-    return {  # Build final dictionary
-        "cpu_model": cpu_model,  # CPU model string
-        "cores": cores,  # Physical cores
-        "ram_gb": ram_gb,  # RAM in gigabytes
-        "os": os_name,  # Operating system
-    }
+        return {  # Build final dictionary
+            "cpu_model": cpu_model,  # CPU model string
+            "cores": cores,  # Physical cores
+            "ram_gb": ram_gb,  # RAM in gigabytes
+            "os": os_name,  # Operating system
+        }
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def add_hardware_column(df, columns_order, column_name="Hardware"):
@@ -3339,28 +3669,33 @@ def add_hardware_column(df, columns_order, column_name="Hardware"):
     :param column_name: hardware column name to add (default: "Hardware")
     :return: None
     """
+    
+    try:
+        try:  # Try to get hardware specifications
+            hardware_specs = get_hardware_specifications()  # Get system specs
+            df[column_name] = (
+                hardware_specs["cpu_model"]
+                + " | Cores: "
+                + str(hardware_specs["cores"])
+                + " | RAM: "
+                + str(hardware_specs["ram_gb"])
+                + " GB | OS: "
+                + hardware_specs["os"]
+            )  # Add hardware specs column
+        except Exception:  # If fetching specs fails
+            df[column_name] = None  # Add column with None values
 
-    try:  # Try to get hardware specifications
-        hardware_specs = get_hardware_specifications()  # Get system specs
-        df[column_name] = (
-            hardware_specs["cpu_model"]
-            + " | Cores: "
-            + str(hardware_specs["cores"])
-            + " | RAM: "
-            + str(hardware_specs["ram_gb"])
-            + " GB | OS: "
-            + hardware_specs["os"]
-        )  # Add hardware specs column
-    except Exception:  # If fetching specs fails
-        df[column_name] = None  # Add column with None values
-
-    if column_name not in columns_order:  # If the hardware column is not already in the order list
-        insert_idx = (
-            (columns_order.index("elapsed_time_s") + 1) if "elapsed_time_s" in columns_order else len(columns_order)
-        )  # Determine insertion index
-        columns_order.insert(insert_idx, column_name)  # Insert hardware column into the desired position
-        
-    return df  # Return the modified DataFrame
+        if column_name not in columns_order:  # If the hardware column is not already in the order list
+            insert_idx = (
+                (columns_order.index("elapsed_time_s") + 1) if "elapsed_time_s" in columns_order else len(columns_order)
+            )  # Determine insertion index
+            columns_order.insert(insert_idx, column_name)  # Insert hardware column into the desired position
+            
+        return df  # Return the modified DataFrame
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def save_stacking_results(csv_path, results_list, config=None):
@@ -3371,70 +3706,74 @@ def save_stacking_results(csv_path, results_list, config=None):
     hyperparameters, features_list and Hardware.
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
-
-    verbose_output(
-        f"{BackgroundColors.GREEN}Preparing to save {BackgroundColors.CYAN}{len(results_list)}{BackgroundColors.GREEN} stacking results to CSV...{Style.RESET_ALL}",
-        config=config
-    )
-
-    if not results_list:
-        print(f"{BackgroundColors.YELLOW}Warning: No results provided to save.{Style.RESET_ALL}")
-        return
-
-    results_filename = config.get("stacking", {}).get("results_filename", "Stacking_Classifiers_Results.csv")  # Get results filename from config
-    file_path_obj = Path(csv_path)
-    feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"
-    os.makedirs(feature_analysis_dir, exist_ok=True)
-    stacking_dir = feature_analysis_dir / "Stacking"
-    os.makedirs(stacking_dir, exist_ok=True)
-    output_path = stacking_dir / results_filename
-
-    flat_rows = []
-    for res in results_list:
-        row = dict(res)
-
-        for metric in ["accuracy", "precision", "recall", "f1_score", "fpr", "fnr"]:
-            if metric in row and row[metric] is not None:
-                row[metric] = truncate_value(row[metric])
-
-        if "features_list" in row and not isinstance(row["features_list"], str):
-            row["features_list"] = json.dumps(row["features_list"])
-        if "top_features" in row and not isinstance(row["top_features"], str):
-            row["top_features"] = json.dumps(row["top_features"])
-        if "rfe_ranking" in row and row["rfe_ranking"] is not None and not isinstance(
-            row["rfe_ranking"], str
-        ):
-            row["rfe_ranking"] = json.dumps(row["rfe_ranking"])
-        if "hyperparameters" in row and row["hyperparameters"] is not None and not isinstance(
-            row["hyperparameters"], str
-        ):
-            row["hyperparameters"] = json.dumps(row["hyperparameters"])
-
-        flat_rows.append(row)
-
-    df = pd.DataFrame(flat_rows)
-
-    results_csv_columns = config.get("stacking", {}).get("results_csv_columns", [])  # Get columns from config
-    column_order = list(results_csv_columns) if results_csv_columns else list(config.get("stacking", {}).get("results_csv_columns", []))  # Use config or fallback to global
-
-    existing_columns = [col for col in column_order if col in df.columns]
-    df = df[existing_columns + [c for c in df.columns if c not in existing_columns]]
-
-    df = add_hardware_column(df, existing_columns)
-
     try:
-        df.to_csv(str(output_path), index=False, encoding="utf-8")
-        print(
-            f"\n{BackgroundColors.GREEN}Stacking classifier results successfully saved to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Preparing to save {BackgroundColors.CYAN}{len(results_list)}{BackgroundColors.GREEN} stacking results to CSV...{Style.RESET_ALL}",
+            config=config
         )
+
+        if not results_list:
+            print(f"{BackgroundColors.YELLOW}Warning: No results provided to save.{Style.RESET_ALL}")
+            return
+
+        results_filename = config.get("stacking", {}).get("results_filename", "Stacking_Classifiers_Results.csv")  # Get results filename from config
+        file_path_obj = Path(csv_path)
+        feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"
+        os.makedirs(feature_analysis_dir, exist_ok=True)
+        stacking_dir = feature_analysis_dir / "Stacking"
+        os.makedirs(stacking_dir, exist_ok=True)
+        output_path = stacking_dir / results_filename
+
+        flat_rows = []
+        for res in results_list:
+            row = dict(res)
+
+            for metric in ["accuracy", "precision", "recall", "f1_score", "fpr", "fnr"]:
+                if metric in row and row[metric] is not None:
+                    row[metric] = truncate_value(row[metric])
+
+            if "features_list" in row and not isinstance(row["features_list"], str):
+                row["features_list"] = json.dumps(row["features_list"])
+            if "top_features" in row and not isinstance(row["top_features"], str):
+                row["top_features"] = json.dumps(row["top_features"])
+            if "rfe_ranking" in row and row["rfe_ranking"] is not None and not isinstance(
+                row["rfe_ranking"], str
+            ):
+                row["rfe_ranking"] = json.dumps(row["rfe_ranking"])
+            if "hyperparameters" in row and row["hyperparameters"] is not None and not isinstance(
+                row["hyperparameters"], str
+            ):
+                row["hyperparameters"] = json.dumps(row["hyperparameters"])
+
+            flat_rows.append(row)
+
+        df = pd.DataFrame(flat_rows)
+
+        results_csv_columns = config.get("stacking", {}).get("results_csv_columns", [])  # Get columns from config
+        column_order = list(results_csv_columns) if results_csv_columns else list(config.get("stacking", {}).get("results_csv_columns", []))  # Use config or fallback to global
+
+        existing_columns = [col for col in column_order if col in df.columns]
+        df = df[existing_columns + [c for c in df.columns if c not in existing_columns]]
+
+        df = add_hardware_column(df, existing_columns)
+
+        try:
+            df.to_csv(str(output_path), index=False, encoding="utf-8")
+            print(
+                f"\n{BackgroundColors.GREEN}Stacking classifier results successfully saved to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+            )
+        except Exception as e:
+            print(
+                f"{BackgroundColors.RED}Failed to write Stacking Classifier CSV to {BackgroundColors.CYAN}{output_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
+            )
     except Exception as e:
-        print(
-            f"{BackgroundColors.RED}Failed to write Stacking Classifier CSV to {BackgroundColors.CYAN}{output_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
-        )
-
-
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+    
 def get_cache_file_path(csv_path, config=None):
     """
     Generate the cache file path for a given dataset CSV path.
@@ -3444,22 +3783,27 @@ def get_cache_file_path(csv_path, config=None):
     :return: Path to the cache file
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Generating cache file path for: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+        verbose_output(
+            f"{BackgroundColors.GREEN}Generating cache file path for: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    cache_prefix = config.get("stacking", {}).get("cache_prefix", "CACHE_")  # Get cache prefix from config
-    dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Get base dataset name
-    output_dir = f"{os.path.dirname(csv_path)}/Classifiers"  # Directory relative to the dataset
-    os.makedirs(output_dir, exist_ok=True)  # Ensure the directory exists
-    cache_filename = f"{cache_prefix}{dataset_name}-Stacking_Classifiers_Results.csv"  # Cache filename
-    cache_path = os.path.join(output_dir, cache_filename)  # Full cache file path
+        cache_prefix = config.get("stacking", {}).get("cache_prefix", "CACHE_")  # Get cache prefix from config
+        dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Get base dataset name
+        output_dir = f"{os.path.dirname(csv_path)}/Classifiers"  # Directory relative to the dataset
+        os.makedirs(output_dir, exist_ok=True)  # Ensure the directory exists
+        cache_filename = f"{cache_prefix}{dataset_name}-Stacking_Classifiers_Results.csv"  # Cache filename
+        cache_path = os.path.join(output_dir, cache_filename)  # Full cache file path
 
-    return cache_path  # Return the cache file path
+        return cache_path  # Return the cache file path
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def load_cache_results(csv_path, config=None):
@@ -3471,80 +3815,85 @@ def load_cache_results(csv_path, config=None):
     :return: Dictionary mapping (feature_set, model_name) to result entry
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    cache_path = get_cache_file_path(csv_path, config=config)  # Get the cache file path
+        cache_path = get_cache_file_path(csv_path, config=config)  # Get the cache file path
 
-    if not os.path.exists(cache_path):  # If cache file doesn't exist
+        if not os.path.exists(cache_path):  # If cache file doesn't exist
+            verbose_output(
+                f"{BackgroundColors.YELLOW}No cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}",
+                config=config
+            )  # Output the verbose message
+            return {}  # Return empty dictionary
+
         verbose_output(
-            f"{BackgroundColors.YELLOW}No cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Loading cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}",
             config=config
         )  # Output the verbose message
-        return {}  # Return empty dictionary
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Loading cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+        try:  # Try to load the cache file
+            df_cache = pd.read_csv(cache_path)  # Read the cache file
+            df_cache.columns = df_cache.columns.str.strip()  # Remove leading/trailing whitespace from column names
+            cache_dict = {}  # Initialize cache dictionary
 
-    try:  # Try to load the cache file
-        df_cache = pd.read_csv(cache_path)  # Read the cache file
-        df_cache.columns = df_cache.columns.str.strip()  # Remove leading/trailing whitespace from column names
-        cache_dict = {}  # Initialize cache dictionary
+            for _, row in df_cache.iterrows():  # Iterate through each row
+                feature_set = row.get("feature_set", "")  # Get feature set name
+                model_name = row.get("model_name", "")  # Get model name
+                cache_key = (feature_set, model_name)  # Create cache key tuple
 
-        for _, row in df_cache.iterrows():  # Iterate through each row
-            feature_set = row.get("feature_set", "")  # Get feature set name
-            model_name = row.get("model_name", "")  # Get model name
-            cache_key = (feature_set, model_name)  # Create cache key tuple
+                def _safe_load_json(val):
+                    if pd.isna(val):
+                        return None
+                    if isinstance(val, str):
+                        try:
+                            return json.loads(val)
+                        except Exception:
+                            return val
+                    return val
 
-            def _safe_load_json(val):
-                if pd.isna(val):
-                    return None
-                if isinstance(val, str):
-                    try:
-                        return json.loads(val)
-                    except Exception:
-                        return val
-                return val
+                result_entry = {
+                    "model": row.get("model", ""),
+                    "dataset": row.get("dataset", ""),
+                    "feature_set": feature_set,
+                    "classifier_type": row.get("classifier_type", ""),
+                    "model_name": model_name,
+                    "data_source": row.get("data_source", ""),
+                    "experiment_id": row.get("experiment_id", None),
+                    "experiment_mode": row.get("experiment_mode", "original_only"),
+                    "augmentation_ratio": float(row["augmentation_ratio"]) if "augmentation_ratio" in row and not pd.isna(row.get("augmentation_ratio")) else None,
+                    "n_features": int(row["n_features"]) if "n_features" in row and not pd.isna(row["n_features"]) else None,
+                    "n_samples_train": int(row["n_samples_train"]) if "n_samples_train" in row and not pd.isna(row["n_samples_train"]) else None,
+                    "n_samples_test": int(row["n_samples_test"]) if "n_samples_test" in row and not pd.isna(row["n_samples_test"]) else None,
+                    "accuracy": float(row["accuracy"]) if "accuracy" in row and not pd.isna(row["accuracy"]) else None,
+                    "precision": float(row["precision"]) if "precision" in row and not pd.isna(row["precision"]) else None,
+                    "recall": float(row["recall"]) if "recall" in row and not pd.isna(row["recall"]) else None,
+                    "f1_score": float(row["f1_score"]) if "f1_score" in row and not pd.isna(row["f1_score"]) else None,
+                    "fpr": float(row["fpr"]) if "fpr" in row and not pd.isna(row["fpr"]) else None,
+                    "fnr": float(row["fnr"]) if "fnr" in row and not pd.isna(row["fnr"]) else None,
+                    "elapsed_time_s": float(row["elapsed_time_s"]) if "elapsed_time_s" in row and not pd.isna(row["elapsed_time_s"]) else None,
+                    "cv_method": row.get("cv_method", None),
+                    "top_features": _safe_load_json(row.get("top_features", None)),
+                    "rfe_ranking": _safe_load_json(row.get("rfe_ranking", None)),
+                    "hyperparameters": _safe_load_json(row.get("hyperparameters", None)),
+                    "features_list": _safe_load_json(row.get("features_list", None)),
+                    "Hardware": row.get("Hardware", None),
+                }
 
-            result_entry = {
-                "model": row.get("model", ""),
-                "dataset": row.get("dataset", ""),
-                "feature_set": feature_set,
-                "classifier_type": row.get("classifier_type", ""),
-                "model_name": model_name,
-                "data_source": row.get("data_source", ""),
-                "experiment_id": row.get("experiment_id", None),
-                "experiment_mode": row.get("experiment_mode", "original_only"),
-                "augmentation_ratio": float(row["augmentation_ratio"]) if "augmentation_ratio" in row and not pd.isna(row.get("augmentation_ratio")) else None,
-                "n_features": int(row["n_features"]) if "n_features" in row and not pd.isna(row["n_features"]) else None,
-                "n_samples_train": int(row["n_samples_train"]) if "n_samples_train" in row and not pd.isna(row["n_samples_train"]) else None,
-                "n_samples_test": int(row["n_samples_test"]) if "n_samples_test" in row and not pd.isna(row["n_samples_test"]) else None,
-                "accuracy": float(row["accuracy"]) if "accuracy" in row and not pd.isna(row["accuracy"]) else None,
-                "precision": float(row["precision"]) if "precision" in row and not pd.isna(row["precision"]) else None,
-                "recall": float(row["recall"]) if "recall" in row and not pd.isna(row["recall"]) else None,
-                "f1_score": float(row["f1_score"]) if "f1_score" in row and not pd.isna(row["f1_score"]) else None,
-                "fpr": float(row["fpr"]) if "fpr" in row and not pd.isna(row["fpr"]) else None,
-                "fnr": float(row["fnr"]) if "fnr" in row and not pd.isna(row["fnr"]) else None,
-                "elapsed_time_s": float(row["elapsed_time_s"]) if "elapsed_time_s" in row and not pd.isna(row["elapsed_time_s"]) else None,
-                "cv_method": row.get("cv_method", None),
-                "top_features": _safe_load_json(row.get("top_features", None)),
-                "rfe_ranking": _safe_load_json(row.get("rfe_ranking", None)),
-                "hyperparameters": _safe_load_json(row.get("hyperparameters", None)),
-                "features_list": _safe_load_json(row.get("features_list", None)),
-                "Hardware": row.get("Hardware", None),
-            }
+                cache_dict[cache_key] = result_entry
 
-            cache_dict[cache_key] = result_entry
+            print(f"{BackgroundColors.GREEN}Loaded cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")
+            return cache_dict
 
-        print(f"{BackgroundColors.GREEN}Loaded cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")
-        return cache_dict
-
-    except Exception as e:  # Catch any errors
-        print(
-            f"{BackgroundColors.YELLOW}Warning: Failed to save to cache {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
-        )  # Print warning message
+        except Exception as e:  # Catch any errors
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Failed to save to cache {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
+            )  # Print warning message
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def remove_cache_file(csv_path, config=None):
@@ -3556,25 +3905,30 @@ def remove_cache_file(csv_path, config=None):
     :return: None
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    cache_path = get_cache_file_path(csv_path, config=config)  # Get the cache file path
+        cache_path = get_cache_file_path(csv_path, config=config)  # Get the cache file path
 
-    if os.path.exists(cache_path):  # If cache file exists
-        try:  # Try to remove the cache file
-            os.remove(cache_path)  # Delete the cache file
-            print(
-                f"{BackgroundColors.GREEN}Cache file removed: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
-            )  # Print success message
-        except Exception as e:  # Catch any errors
-            print(
-                f"{BackgroundColors.YELLOW}Warning: Failed to remove cache file {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
-            )  # Print warning message
-    else:  # If cache file doesn't exist
-        verbose_output(
-            f"{BackgroundColors.YELLOW}No cache file to remove at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
-        )  # Output verbose message
+        if os.path.exists(cache_path):  # If cache file exists
+            try:  # Try to remove the cache file
+                os.remove(cache_path)  # Delete the cache file
+                print(
+                    f"{BackgroundColors.GREEN}Cache file removed: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
+                )  # Print success message
+            except Exception as e:  # Catch any errors
+                print(
+                    f"{BackgroundColors.YELLOW}Warning: Failed to remove cache file {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
+                )  # Print warning message
+        else:  # If cache file doesn't exist
+            verbose_output(
+                f"{BackgroundColors.YELLOW}No cache file to remove at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
+            )  # Output verbose message
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def get_automl_search_spaces():
@@ -3584,82 +3938,87 @@ def get_automl_search_spaces():
     :param: None
     :return: Dictionary mapping model names to their search space configurations
     """
-
-    return {  # Dictionary of model search spaces
-        "Random Forest": {  # Random Forest search space
-            "n_estimators": ("int", 50, 500),  # Number of trees range
-            "max_depth": ("int_or_none", 3, 50),  # Max depth range or None
-            "min_samples_split": ("int", 2, 20),  # Min samples to split
-            "min_samples_leaf": ("int", 1, 10),  # Min samples per leaf
-            "max_features": ("categorical", ["sqrt", "log2", None]),  # Feature selection method
-        },
-        "XGBoost": {  # XGBoost search space
-            "n_estimators": ("int", 50, 500),  # Number of boosting rounds
-            "max_depth": ("int", 3, 15),  # Max tree depth
-            "learning_rate": ("float_log", 0.01, 0.3),  # Learning rate (log scale)
-            "subsample": ("float", 0.5, 1.0),  # Row subsampling ratio
-            "colsample_bytree": ("float", 0.5, 1.0),  # Column subsampling ratio
-            "min_child_weight": ("int", 1, 10),  # Min child weight
-            "reg_alpha": ("float_log", 1e-8, 10.0),  # L1 regularization
-            "reg_lambda": ("float_log", 1e-8, 10.0),  # L2 regularization
-        },
-        "LightGBM": {  # LightGBM search space
-            "n_estimators": ("int", 50, 500),  # Number of boosting rounds
-            "max_depth": ("int", 3, 15),  # Max tree depth
-            "learning_rate": ("float_log", 0.01, 0.3),  # Learning rate (log scale)
-            "num_leaves": ("int", 15, 127),  # Number of leaves
-            "min_child_samples": ("int", 5, 100),  # Min samples in leaf
-            "subsample": ("float", 0.5, 1.0),  # Row subsampling ratio
-            "colsample_bytree": ("float", 0.5, 1.0),  # Column subsampling ratio
-            "reg_alpha": ("float_log", 1e-8, 10.0),  # L1 regularization
-            "reg_lambda": ("float_log", 1e-8, 10.0),  # L2 regularization
-        },
-        "Logistic Regression": {  # Logistic Regression search space
-            "C": ("float_log", 0.001, 100.0),  # Regularization parameter
-            "solver": ("categorical", ["lbfgs", "saga"]),  # Optimization algorithm
-            "max_iter": ("int", 500, 5000),  # Max iterations
-        },
-        "SVM": {  # SVM search space
-            "C": ("float_log", 0.01, 100.0),  # Regularization parameter
-            "kernel": ("categorical", ["rbf", "linear", "poly"]),  # Kernel function
-            "gamma": ("categorical", ["scale", "auto"]),  # Kernel coefficient
-        },
-        "Extra Trees": {  # Extra Trees search space
-            "n_estimators": ("int", 50, 500),  # Number of trees
-            "max_depth": ("int_or_none", 3, 50),  # Max depth or None
-            "min_samples_split": ("int", 2, 20),  # Min samples to split
-            "min_samples_leaf": ("int", 1, 10),  # Min samples per leaf
-            "max_features": ("categorical", ["sqrt", "log2", None]),  # Feature selection method
-        },
-        "Gradient Boosting": {  # Gradient Boosting search space
-            "n_estimators": ("int", 50, 300),  # Number of boosting rounds
-            "max_depth": ("int", 3, 10),  # Max tree depth
-            "learning_rate": ("float_log", 0.01, 0.3),  # Learning rate
-            "subsample": ("float", 0.5, 1.0),  # Row subsampling ratio
-            "min_samples_split": ("int", 2, 20),  # Min samples to split
-            "min_samples_leaf": ("int", 1, 10),  # Min samples per leaf
-        },
-        "MLP (Neural Net)": {  # MLP Neural Network search space
-            "hidden_layer_sizes_0": ("int", 32, 256),  # First hidden layer size
-            "hidden_layer_sizes_1": ("int", 0, 128),  # Second hidden layer size (0 means single layer)
-            "learning_rate_init": ("float_log", 0.0001, 0.01),  # Initial learning rate
-            "alpha": ("float_log", 1e-6, 0.01),  # L2 penalty (regularization)
-            "max_iter": ("int", 200, 1000),  # Max iterations
-            "activation": ("categorical", ["relu", "tanh"]),  # Activation function
-        },
-        "Decision Tree": {  # Decision Tree search space
-            "max_depth": ("int_or_none", 3, 50),  # Max depth or None
-            "min_samples_split": ("int", 2, 20),  # Min samples to split
-            "min_samples_leaf": ("int", 1, 10),  # Min samples per leaf
-            "criterion": ("categorical", ["gini", "entropy"]),  # Split criterion
-            "max_features": ("categorical", ["sqrt", "log2", None]),  # Feature selection method
-        },
-        "KNN": {  # K-Nearest Neighbors search space
-            "n_neighbors": ("int", 3, 25),  # Number of neighbors
-            "weights": ("categorical", ["uniform", "distance"]),  # Weight function
-            "metric": ("categorical", ["euclidean", "manhattan", "minkowski"]),  # Distance metric
-        },
-    }  # Return full search space dictionary
+    
+    try:
+        return {  # Dictionary of model search spaces
+            "Random Forest": {  # Random Forest search space
+                "n_estimators": ("int", 50, 500),  # Number of trees range
+                "max_depth": ("int_or_none", 3, 50),  # Max depth range or None
+                "min_samples_split": ("int", 2, 20),  # Min samples to split
+                "min_samples_leaf": ("int", 1, 10),  # Min samples per leaf
+                "max_features": ("categorical", ["sqrt", "log2", None]),  # Feature selection method
+            },
+            "XGBoost": {  # XGBoost search space
+                "n_estimators": ("int", 50, 500),  # Number of boosting rounds
+                "max_depth": ("int", 3, 15),  # Max tree depth
+                "learning_rate": ("float_log", 0.01, 0.3),  # Learning rate (log scale)
+                "subsample": ("float", 0.5, 1.0),  # Row subsampling ratio
+                "colsample_bytree": ("float", 0.5, 1.0),  # Column subsampling ratio
+                "min_child_weight": ("int", 1, 10),  # Min child weight
+                "reg_alpha": ("float_log", 1e-8, 10.0),  # L1 regularization
+                "reg_lambda": ("float_log", 1e-8, 10.0),  # L2 regularization
+            },
+            "LightGBM": {  # LightGBM search space
+                "n_estimators": ("int", 50, 500),  # Number of boosting rounds
+                "max_depth": ("int", 3, 15),  # Max tree depth
+                "learning_rate": ("float_log", 0.01, 0.3),  # Learning rate (log scale)
+                "num_leaves": ("int", 15, 127),  # Number of leaves
+                "min_child_samples": ("int", 5, 100),  # Min samples in leaf
+                "subsample": ("float", 0.5, 1.0),  # Row subsampling ratio
+                "colsample_bytree": ("float", 0.5, 1.0),  # Column subsampling ratio
+                "reg_alpha": ("float_log", 1e-8, 10.0),  # L1 regularization
+                "reg_lambda": ("float_log", 1e-8, 10.0),  # L2 regularization
+            },
+            "Logistic Regression": {  # Logistic Regression search space
+                "C": ("float_log", 0.001, 100.0),  # Regularization parameter
+                "solver": ("categorical", ["lbfgs", "saga"]),  # Optimization algorithm
+                "max_iter": ("int", 500, 5000),  # Max iterations
+            },
+            "SVM": {  # SVM search space
+                "C": ("float_log", 0.01, 100.0),  # Regularization parameter
+                "kernel": ("categorical", ["rbf", "linear", "poly"]),  # Kernel function
+                "gamma": ("categorical", ["scale", "auto"]),  # Kernel coefficient
+            },
+            "Extra Trees": {  # Extra Trees search space
+                "n_estimators": ("int", 50, 500),  # Number of trees
+                "max_depth": ("int_or_none", 3, 50),  # Max depth or None
+                "min_samples_split": ("int", 2, 20),  # Min samples to split
+                "min_samples_leaf": ("int", 1, 10),  # Min samples per leaf
+                "max_features": ("categorical", ["sqrt", "log2", None]),  # Feature selection method
+            },
+            "Gradient Boosting": {  # Gradient Boosting search space
+                "n_estimators": ("int", 50, 300),  # Number of boosting rounds
+                "max_depth": ("int", 3, 10),  # Max tree depth
+                "learning_rate": ("float_log", 0.01, 0.3),  # Learning rate
+                "subsample": ("float", 0.5, 1.0),  # Row subsampling ratio
+                "min_samples_split": ("int", 2, 20),  # Min samples to split
+                "min_samples_leaf": ("int", 1, 10),  # Min samples per leaf
+            },
+            "MLP (Neural Net)": {  # MLP Neural Network search space
+                "hidden_layer_sizes_0": ("int", 32, 256),  # First hidden layer size
+                "hidden_layer_sizes_1": ("int", 0, 128),  # Second hidden layer size (0 means single layer)
+                "learning_rate_init": ("float_log", 0.0001, 0.01),  # Initial learning rate
+                "alpha": ("float_log", 1e-6, 0.01),  # L2 penalty (regularization)
+                "max_iter": ("int", 200, 1000),  # Max iterations
+                "activation": ("categorical", ["relu", "tanh"]),  # Activation function
+            },
+            "Decision Tree": {  # Decision Tree search space
+                "max_depth": ("int_or_none", 3, 50),  # Max depth or None
+                "min_samples_split": ("int", 2, 20),  # Min samples to split
+                "min_samples_leaf": ("int", 1, 10),  # Min samples per leaf
+                "criterion": ("categorical", ["gini", "entropy"]),  # Split criterion
+                "max_features": ("categorical", ["sqrt", "log2", None]),  # Feature selection method
+            },
+            "KNN": {  # K-Nearest Neighbors search space
+                "n_neighbors": ("int", 3, 25),  # Number of neighbors
+                "weights": ("categorical", ["uniform", "distance"]),  # Weight function
+                "metric": ("categorical", ["euclidean", "manhattan", "minkowski"]),  # Distance metric
+            },
+        }  # Return full search space dictionary
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def suggest_hyperparameters_for_model(trial, model_name, search_spaces):
@@ -3671,29 +4030,34 @@ def suggest_hyperparameters_for_model(trial, model_name, search_spaces):
     :param search_spaces: Dictionary of search space definitions
     :return: Dictionary of suggested hyperparameters
     """
+    
+    try:
+        space = search_spaces.get(model_name, {})  # Get the search space for this model
+        params = {}  # Initialize empty parameters dictionary
 
-    space = search_spaces.get(model_name, {})  # Get the search space for this model
-    params = {}  # Initialize empty parameters dictionary
+        for param_name, config in space.items():  # Iterate over each parameter definition
+            param_type = config[0]  # Extract the parameter type
 
-    for param_name, config in space.items():  # Iterate over each parameter definition
-        param_type = config[0]  # Extract the parameter type
-
-        if param_type == "int":  # Integer parameter
-            params[param_name] = trial.suggest_int(param_name, config[1], config[2])  # Suggest integer value
-        elif param_type == "float":  # Float parameter (uniform)
-            params[param_name] = trial.suggest_float(param_name, config[1], config[2])  # Suggest float value
-        elif param_type == "float_log":  # Float parameter (log scale)
-            params[param_name] = trial.suggest_float(param_name, config[1], config[2], log=True)  # Suggest log-scaled float
-        elif param_type == "categorical":  # Categorical parameter
-            params[param_name] = trial.suggest_categorical(param_name, config[1])  # Suggest from categories
-        elif param_type == "int_or_none":  # Integer or None parameter
-            use_none = trial.suggest_categorical(f"{param_name}_none", [True, False])  # Decide whether to use None
-            if use_none:  # If None is selected
-                params[param_name] = None  # Set parameter to None
-            else:  # Otherwise suggest an integer
+            if param_type == "int":  # Integer parameter
                 params[param_name] = trial.suggest_int(param_name, config[1], config[2])  # Suggest integer value
+            elif param_type == "float":  # Float parameter (uniform)
+                params[param_name] = trial.suggest_float(param_name, config[1], config[2])  # Suggest float value
+            elif param_type == "float_log":  # Float parameter (log scale)
+                params[param_name] = trial.suggest_float(param_name, config[1], config[2], log=True)  # Suggest log-scaled float
+            elif param_type == "categorical":  # Categorical parameter
+                params[param_name] = trial.suggest_categorical(param_name, config[1])  # Suggest from categories
+            elif param_type == "int_or_none":  # Integer or None parameter
+                use_none = trial.suggest_categorical(f"{param_name}_none", [True, False])  # Decide whether to use None
+                if use_none:  # If None is selected
+                    params[param_name] = None  # Set parameter to None
+                else:  # Otherwise suggest an integer
+                    params[param_name] = trial.suggest_int(param_name, config[1], config[2])  # Suggest integer value
 
-    return params  # Return the suggested parameters
+        return params  # Return the suggested parameters
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def create_model_from_params(model_name, params, config=None):
@@ -3705,40 +4069,45 @@ def create_model_from_params(model_name, params, config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Instantiated classifier object
     """
-
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
     
-    automl_random_state = config.get("automl", {}).get("random_state", 42)  # Get random state from config
-    n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Get n_jobs from config
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        automl_random_state = config.get("automl", {}).get("random_state", 42)  # Get random state from config
+        n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Get n_jobs from config
 
-    clean_params = {k: v for k, v in params.items() if not k.endswith("_none")}  # Copy params excluding _none flags
+        clean_params = {k: v for k, v in params.items() if not k.endswith("_none")}  # Copy params excluding _none flags
 
-    if model_name == "Random Forest":  # Random Forest classifier
-        return RandomForestClassifier(random_state=automl_random_state, n_jobs=n_jobs, **clean_params)  # Create RF instance
-    elif model_name == "XGBoost":  # XGBoost classifier
-        return XGBClassifier(eval_metric="mlogloss", random_state=automl_random_state, n_jobs=n_jobs, **clean_params)  # Create XGB instance
-    elif model_name == "LightGBM":  # LightGBM classifier
-        return lgb.LGBMClassifier(force_row_wise=True, random_state=automl_random_state, verbosity=-1, n_jobs=n_jobs, **clean_params)  # Create LGBM instance
-    elif model_name == "Logistic Regression":  # Logistic Regression classifier
-        return LogisticRegression(random_state=automl_random_state, **clean_params)  # Create LR instance
-    elif model_name == "SVM":  # Support Vector Machine classifier
-        return SVC(probability=True, random_state=automl_random_state, **clean_params)  # Create SVM instance
-    elif model_name == "Extra Trees":  # Extra Trees classifier
-        return ExtraTreesClassifier(random_state=automl_random_state, n_jobs=n_jobs, **clean_params)  # Create ET instance
-    elif model_name == "Gradient Boosting":  # Gradient Boosting classifier
-        return GradientBoostingClassifier(random_state=automl_random_state, **clean_params)  # Create GB instance
-    elif model_name == "MLP (Neural Net)":  # MLP Neural Network classifier
-        hidden_0 = clean_params.pop("hidden_layer_sizes_0", 100)  # Extract first hidden layer size
-        hidden_1 = clean_params.pop("hidden_layer_sizes_1", 0)  # Extract second hidden layer size
-        hidden_layers = (hidden_0,) if hidden_1 == 0 else (hidden_0, hidden_1)  # Build hidden layer tuple
-        return MLPClassifier(hidden_layer_sizes=hidden_layers, random_state=automl_random_state, **clean_params)  # Create MLP instance
-    elif model_name == "Decision Tree":  # Decision Tree classifier
-        return DecisionTreeClassifier(random_state=automl_random_state, **clean_params)  # Create DT instance
-    elif model_name == "KNN":  # K-Nearest Neighbors classifier
-        return KNeighborsClassifier(n_jobs=n_jobs, **clean_params)  # Create KNN instance
-    else:  # Unknown model type
-        raise ValueError(f"Unknown AutoML model name: {model_name}")  # Raise error for unknown model
+        if model_name == "Random Forest":  # Random Forest classifier
+            return RandomForestClassifier(random_state=automl_random_state, n_jobs=n_jobs, **clean_params)  # Create RF instance
+        elif model_name == "XGBoost":  # XGBoost classifier
+            return XGBClassifier(eval_metric="mlogloss", random_state=automl_random_state, n_jobs=n_jobs, **clean_params)  # Create XGB instance
+        elif model_name == "LightGBM":  # LightGBM classifier
+            return lgb.LGBMClassifier(force_row_wise=True, random_state=automl_random_state, verbosity=-1, n_jobs=n_jobs, **clean_params)  # Create LGBM instance
+        elif model_name == "Logistic Regression":  # Logistic Regression classifier
+            return LogisticRegression(random_state=automl_random_state, **clean_params)  # Create LR instance
+        elif model_name == "SVM":  # Support Vector Machine classifier
+            return SVC(probability=True, random_state=automl_random_state, **clean_params)  # Create SVM instance
+        elif model_name == "Extra Trees":  # Extra Trees classifier
+            return ExtraTreesClassifier(random_state=automl_random_state, n_jobs=n_jobs, **clean_params)  # Create ET instance
+        elif model_name == "Gradient Boosting":  # Gradient Boosting classifier
+            return GradientBoostingClassifier(random_state=automl_random_state, **clean_params)  # Create GB instance
+        elif model_name == "MLP (Neural Net)":  # MLP Neural Network classifier
+            hidden_0 = clean_params.pop("hidden_layer_sizes_0", 100)  # Extract first hidden layer size
+            hidden_1 = clean_params.pop("hidden_layer_sizes_1", 0)  # Extract second hidden layer size
+            hidden_layers = (hidden_0,) if hidden_1 == 0 else (hidden_0, hidden_1)  # Build hidden layer tuple
+            return MLPClassifier(hidden_layer_sizes=hidden_layers, random_state=automl_random_state, **clean_params)  # Create MLP instance
+        elif model_name == "Decision Tree":  # Decision Tree classifier
+            return DecisionTreeClassifier(random_state=automl_random_state, **clean_params)  # Create DT instance
+        elif model_name == "KNN":  # K-Nearest Neighbors classifier
+            return KNeighborsClassifier(n_jobs=n_jobs, **clean_params)  # Create KNN instance
+        else:  # Unknown model type
+            raise ValueError(f"Unknown AutoML model name: {model_name}")  # Raise error for unknown model
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def automl_cross_validate_model(model, X_train, y_train, cv_folds, trial=None, config=None):
@@ -3753,32 +4122,37 @@ def automl_cross_validate_model(model, X_train, y_train, cv_folds, trial=None, c
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Mean cross-validated F1 score
     """
-
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
     
-    automl_random_state = config.get("automl", {}).get("random_state", 42)  # Get random state from config
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        automl_random_state = config.get("automl", {}).get("random_state", 42)  # Get random state from config
 
-    skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=automl_random_state)  # Create stratified k-fold
-    f1_scores = []  # Initialize list for F1 scores
+        skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=automl_random_state)  # Create stratified k-fold
+        f1_scores = []  # Initialize list for F1 scores
 
-    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):  # Iterate over folds
-        X_fold_train = X_train[train_idx]  # Get fold training features
-        y_fold_train = y_train[train_idx]  # Get fold training target
-        X_fold_val = X_train[val_idx]  # Get fold validation features
-        y_fold_val = y_train[val_idx]  # Get fold validation target
+        for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):  # Iterate over folds
+            X_fold_train = X_train[train_idx]  # Get fold training features
+            y_fold_train = y_train[train_idx]  # Get fold training target
+            X_fold_val = X_train[val_idx]  # Get fold validation features
+            y_fold_val = y_train[val_idx]  # Get fold validation target
 
-        model.fit(X_fold_train, y_fold_train)  # Fit model on fold training data
-        y_pred = model.predict(X_fold_val)  # Predict on fold validation data
-        fold_f1 = f1_score(y_fold_val, y_pred, average="weighted", zero_division=0)  # Calculate fold F1
-        f1_scores.append(fold_f1)  # Append fold F1 score
+            model.fit(X_fold_train, y_fold_train)  # Fit model on fold training data
+            y_pred = model.predict(X_fold_val)  # Predict on fold validation data
+            fold_f1 = f1_score(y_fold_val, y_pred, average="weighted", zero_division=0)  # Calculate fold F1
+            f1_scores.append(fold_f1)  # Append fold F1 score
 
-        if trial is not None:  # If Optuna trial is provided
-            trial.report(np.mean(f1_scores), fold_idx)  # Report intermediate value for pruning
-            if trial.should_prune():  # Check if trial should be pruned
-                raise optuna.exceptions.TrialPruned()  # Prune this trial
+            if trial is not None:  # If Optuna trial is provided
+                trial.report(np.mean(f1_scores), fold_idx)  # Report intermediate value for pruning
+                if trial.should_prune():  # Check if trial should be pruned
+                    raise optuna.exceptions.TrialPruned()  # Prune this trial
 
-    return float(np.mean(f1_scores))  # Return mean F1 score across folds as Python float
+        return float(np.mean(f1_scores))  # Return mean F1 score across folds as Python float
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def automl_objective(trial, X_train, y_train, cv_folds, config=None):
@@ -3792,28 +4166,33 @@ def automl_objective(trial, X_train, y_train, cv_folds, config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Mean cross-validated F1 score (to maximize)
     """
+    
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+        search_spaces = get_automl_search_spaces()  # Get all model search spaces
+        model_names = list(search_spaces.keys())  # Get list of available model names
 
-    search_spaces = get_automl_search_spaces()  # Get all model search spaces
-    model_names = list(search_spaces.keys())  # Get list of available model names
+        model_name = trial.suggest_categorical("model_name", model_names)  # Select model type via trial
+        params = suggest_hyperparameters_for_model(trial, model_name, search_spaces)  # Suggest hyperparameters
 
-    model_name = trial.suggest_categorical("model_name", model_names)  # Select model type via trial
-    params = suggest_hyperparameters_for_model(trial, model_name, search_spaces)  # Suggest hyperparameters
-
-    try:  # Try to create and evaluate the model
-        model = create_model_from_params(model_name, params, config=config)  # Create model instance from params
-        mean_f1 = automl_cross_validate_model(model, X_train, y_train, cv_folds, trial, config=config)  # Cross-validate
-        return mean_f1  # Return mean F1 score
-    except optuna.exceptions.TrialPruned:  # Handle Optuna pruning
-        raise  # Re-raise pruning exception
-    except Exception as e:  # Handle other errors gracefully
-        verbose_output(
-            f"{BackgroundColors.YELLOW}AutoML trial failed for {model_name}: {e}{Style.RESET_ALL}",
-            config=config,
-        )  # Log the trial failure
-        return 0.0  # Return zero score for failed trials
+        try:  # Try to create and evaluate the model
+            model = create_model_from_params(model_name, params, config=config)  # Create model instance from params
+            mean_f1 = automl_cross_validate_model(model, X_train, y_train, cv_folds, trial, config=config)  # Cross-validate
+            return mean_f1  # Return mean F1 score
+        except optuna.exceptions.TrialPruned:  # Handle Optuna pruning
+            raise  # Re-raise pruning exception
+        except Exception as e:  # Handle other errors gracefully
+            verbose_output(
+                f"{BackgroundColors.YELLOW}AutoML trial failed for {model_name}: {e}{Style.RESET_ALL}",
+                config=config,
+            )  # Log the trial failure
+            return 0.0  # Return zero score for failed trials
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def run_automl_model_search(X_train, y_train, file_path, config=None):
@@ -3826,61 +4205,66 @@ def run_automl_model_search(X_train, y_train, file_path, config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Tuple (best_model_name, best_params, study) or (None, None, None) on failure
     """
-
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
     
-    automl_n_trials = config.get("automl", {}).get("n_trials", 50)  # Get number of trials from config
-    automl_timeout = config.get("automl", {}).get("timeout", 3600)  # Get timeout from config
-    automl_cv_folds = config.get("automl", {}).get("cv_folds", 5)  # Get CV folds from config
-    automl_random_state = config.get("automl", {}).get("random_state", 42)  # Get random state from config
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        automl_n_trials = config.get("automl", {}).get("n_trials", 50)  # Get number of trials from config
+        automl_timeout = config.get("automl", {}).get("timeout", 3600)  # Get timeout from config
+        automl_cv_folds = config.get("automl", {}).get("cv_folds", 5)  # Get CV folds from config
+        automl_random_state = config.get("automl", {}).get("random_state", 42)  # Get random state from config
 
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Starting AutoML model search with {BackgroundColors.CYAN}{automl_n_trials}{BackgroundColors.GREEN} trials...{Style.RESET_ALL}"
-    )  # Output search start message
-
-    optuna.logging.set_verbosity(optuna.logging.WARNING)  # Suppress verbose Optuna logging
-
-    sampler = optuna.samplers.TPESampler(seed=automl_random_state)  # Create TPE sampler with deterministic seed
-    pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=2)  # Create median pruner for early stopping
-
-    study = optuna.create_study(
-        direction="maximize", sampler=sampler, pruner=pruner, study_name="automl_model_search"
-    )  # Create Optuna study to maximize F1 score
-
-    objective_fn = lambda trial: automl_objective(trial, X_train, y_train, automl_cv_folds, config=config)  # Create objective wrapper
-    study.optimize(objective_fn, n_trials=automl_n_trials, timeout=automl_timeout, n_jobs=1)  # Run the optimization
-
-    completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]  # Get completed trials
-
-    if not completed_trials:  # If no trials completed successfully
         print(
-            f"{BackgroundColors.RED}AutoML model search failed: no successful trials completed.{Style.RESET_ALL}"
-        )  # Output failure message
-        return (None, None, None)  # Return None tuple
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Starting AutoML model search with {BackgroundColors.CYAN}{automl_n_trials}{BackgroundColors.GREEN} trials...{Style.RESET_ALL}"
+        )  # Output search start message
 
-    best_trial = study.best_trial  # Get the best trial
-    best_model_name = best_trial.params.get("model_name", "Unknown")  # Extract best model name
-    best_params = {
-        k: v for k, v in best_trial.params.items() if k != "model_name" and not k.endswith("_none")
-    }  # Extract best params excluding model_name and _none flags
+        optuna.logging.set_verbosity(optuna.logging.WARNING)  # Suppress verbose Optuna logging
 
-    pruned_count = len([t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED])  # Count pruned trials
+        sampler = optuna.samplers.TPESampler(seed=automl_random_state)  # Create TPE sampler with deterministic seed
+        pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=2)  # Create median pruner for early stopping
 
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}AutoML Best Model: {BackgroundColors.CYAN}{best_model_name}{Style.RESET_ALL}"
-    )  # Output best model name
-    print(
-        f"{BackgroundColors.GREEN}Best CV F1 Score: {BackgroundColors.CYAN}{truncate_value(study.best_value)}{Style.RESET_ALL}"
-    )  # Output best F1 score
-    print(
-        f"{BackgroundColors.GREEN}Best Parameters: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}"
-    )  # Output best parameters
-    print(
-        f"{BackgroundColors.GREEN}Trials: {BackgroundColors.CYAN}{len(completed_trials)} completed, {pruned_count} pruned{Style.RESET_ALL}"
-    )  # Output trial statistics
+        study = optuna.create_study(
+            direction="maximize", sampler=sampler, pruner=pruner, study_name="automl_model_search"
+        )  # Create Optuna study to maximize F1 score
 
-    return (best_model_name, best_params, study)  # Return best model info and study object
+        objective_fn = lambda trial: automl_objective(trial, X_train, y_train, automl_cv_folds, config=config)  # Create objective wrapper
+        study.optimize(objective_fn, n_trials=automl_n_trials, timeout=automl_timeout, n_jobs=1)  # Run the optimization
+
+        completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]  # Get completed trials
+
+        if not completed_trials:  # If no trials completed successfully
+            print(
+                f"{BackgroundColors.RED}AutoML model search failed: no successful trials completed.{Style.RESET_ALL}"
+            )  # Output failure message
+            return (None, None, None)  # Return None tuple
+
+        best_trial = study.best_trial  # Get the best trial
+        best_model_name = best_trial.params.get("model_name", "Unknown")  # Extract best model name
+        best_params = {
+            k: v for k, v in best_trial.params.items() if k != "model_name" and not k.endswith("_none")
+        }  # Extract best params excluding model_name and _none flags
+
+        pruned_count = len([t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED])  # Count pruned trials
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}AutoML Best Model: {BackgroundColors.CYAN}{best_model_name}{Style.RESET_ALL}"
+        )  # Output best model name
+        print(
+            f"{BackgroundColors.GREEN}Best CV F1 Score: {BackgroundColors.CYAN}{truncate_value(study.best_value)}{Style.RESET_ALL}"
+        )  # Output best F1 score
+        print(
+            f"{BackgroundColors.GREEN}Best Parameters: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}"
+        )  # Output best parameters
+        print(
+            f"{BackgroundColors.GREEN}Trials: {BackgroundColors.CYAN}{len(completed_trials)} completed, {pruned_count} pruned{Style.RESET_ALL}"
+        )  # Output trial statistics
+
+        return (best_model_name, best_params, study)  # Return best model info and study object
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def automl_stacking_objective(trial, X_train, y_train, cv_folds, candidate_models, config=None):
@@ -3895,62 +4279,67 @@ def automl_stacking_objective(trial, X_train, y_train, cv_folds, candidate_model
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Mean cross-validated F1 score (to maximize)
     """
-
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
     
-    automl_random_state = config.get("automl", {}).get("random_state", 42)  # Get random state from config
-    n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Get n_jobs from config
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
+        automl_random_state = config.get("automl", {}).get("random_state", 42)  # Get random state from config
+        n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Get n_jobs from config
 
-    model_names = list(candidate_models.keys())  # Get list of candidate model names
-    selected_models = []  # Initialize list for selected base learners
+        model_names = list(candidate_models.keys())  # Get list of candidate model names
+        selected_models = []  # Initialize list for selected base learners
 
-    for name in model_names:  # Iterate over each candidate model
-        safe_name = name.replace(" ", "_").replace("(", "").replace(")", "")  # Sanitize name for Optuna parameter
-        include = trial.suggest_categorical(f"use_{safe_name}", [True, False])  # Decide whether to include this model
-        if include:  # If model is selected for inclusion
-            selected_models.append(name)  # Add to selected list
+        for name in model_names:  # Iterate over each candidate model
+            safe_name = name.replace(" ", "_").replace("(", "").replace(")", "")  # Sanitize name for Optuna parameter
+            include = trial.suggest_categorical(f"use_{safe_name}", [True, False])  # Decide whether to include this model
+            if include:  # If model is selected for inclusion
+                selected_models.append(name)  # Add to selected list
 
-    if len(selected_models) < 2:  # Need at least 2 base learners for stacking
-        return 0.0  # Return zero score if insufficient base learners
+        if len(selected_models) < 2:  # Need at least 2 base learners for stacking
+            return 0.0  # Return zero score if insufficient base learners
 
-    meta_learner_name = trial.suggest_categorical(
-        "meta_learner", ["Logistic Regression", "Random Forest", "Gradient Boosting"]
-    )  # Select meta-learner type
-    n_cv_splits = trial.suggest_int("stacking_cv_splits", 3, min(cv_folds, 10))  # Select CV splits for stacking
+        meta_learner_name = trial.suggest_categorical(
+            "meta_learner", ["Logistic Regression", "Random Forest", "Gradient Boosting"]
+        )  # Select meta-learner type
+        n_cv_splits = trial.suggest_int("stacking_cv_splits", 3, min(cv_folds, 10))  # Select CV splits for stacking
 
-    try:  # Try to build and evaluate stacking ensemble
-        estimators = []  # Initialize base estimators list
-        for name in selected_models:  # Build each selected base learner
-            model_params = candidate_models[name]  # Get pre-optimized parameters
-            model = create_model_from_params(name, model_params, config=config)  # Create model instance
-            safe_name = name.replace(" ", "_").replace("(", "").replace(")", "")  # Sanitize estimator name
-            estimators.append((safe_name, model))  # Add to estimators list
+        try:  # Try to build and evaluate stacking ensemble
+            estimators = []  # Initialize base estimators list
+            for name in selected_models:  # Build each selected base learner
+                model_params = candidate_models[name]  # Get pre-optimized parameters
+                model = create_model_from_params(name, model_params, config=config)  # Create model instance
+                safe_name = name.replace(" ", "_").replace("(", "").replace(")", "")  # Sanitize estimator name
+                estimators.append((safe_name, model))  # Add to estimators list
 
-        if meta_learner_name == "Logistic Regression":  # Logistic Regression meta-learner
-            meta_model = LogisticRegression(max_iter=1000, random_state=automl_random_state)  # Create LR meta-learner
-        elif meta_learner_name == "Random Forest":  # Random Forest meta-learner
-            meta_model = RandomForestClassifier(n_estimators=50, random_state=automl_random_state, n_jobs=n_jobs)  # Create RF meta-learner
-        else:  # Gradient Boosting meta-learner
-            meta_model = GradientBoostingClassifier(random_state=automl_random_state)  # Create GB meta-learner
+            if meta_learner_name == "Logistic Regression":  # Logistic Regression meta-learner
+                meta_model = LogisticRegression(max_iter=1000, random_state=automl_random_state)  # Create LR meta-learner
+            elif meta_learner_name == "Random Forest":  # Random Forest meta-learner
+                meta_model = RandomForestClassifier(n_estimators=50, random_state=automl_random_state, n_jobs=n_jobs)  # Create RF meta-learner
+            else:  # Gradient Boosting meta-learner
+                meta_model = GradientBoostingClassifier(random_state=automl_random_state)  # Create GB meta-learner
 
-        stacking = StackingClassifier(
-            estimators=estimators,
-            final_estimator=meta_model,
-            cv=StratifiedKFold(n_splits=n_cv_splits, shuffle=True, random_state=automl_random_state),
-            n_jobs=n_jobs,
-        )  # Create stacking classifier
+            stacking = StackingClassifier(
+                estimators=estimators,
+                final_estimator=meta_model,
+                cv=StratifiedKFold(n_splits=n_cv_splits, shuffle=True, random_state=automl_random_state),
+                n_jobs=n_jobs,
+            )  # Create stacking classifier
 
-        mean_f1 = automl_cross_validate_model(stacking, X_train, y_train, cv_folds, trial)  # Cross-validate stacking
-        return mean_f1  # Return mean F1 score
+            mean_f1 = automl_cross_validate_model(stacking, X_train, y_train, cv_folds, trial)  # Cross-validate stacking
+            return mean_f1  # Return mean F1 score
 
-    except optuna.exceptions.TrialPruned:  # Handle Optuna pruning
-        raise  # Re-raise pruning exception
-    except Exception as e:  # Handle other errors gracefully
-        verbose_output(
-            f"{BackgroundColors.YELLOW}AutoML stacking trial failed: {e}{Style.RESET_ALL}"
-        )  # Log the failure
-        return 0.0  # Return zero for failed trials
+        except optuna.exceptions.TrialPruned:  # Handle Optuna pruning
+            raise  # Re-raise pruning exception
+        except Exception as e:  # Handle other errors gracefully
+            verbose_output(
+                f"{BackgroundColors.YELLOW}AutoML stacking trial failed: {e}{Style.RESET_ALL}"
+            )  # Log the failure
+            return 0.0  # Return zero for failed trials
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def extract_top_automl_models(study, top_n=5):
@@ -3961,25 +4350,30 @@ def extract_top_automl_models(study, top_n=5):
     :param top_n: Number of top models to extract
     :return: Dictionary mapping model names to their best parameters
     """
+    
+    try:
+        completed = [
+            t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE
+        ]  # Filter to completed trials only
+        sorted_trials = sorted(completed, key=lambda t: t.value, reverse=True)  # Sort trials by score descending
 
-    completed = [
-        t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE
-    ]  # Filter to completed trials only
-    sorted_trials = sorted(completed, key=lambda t: t.value, reverse=True)  # Sort trials by score descending
+        top_models = {}  # Initialize dictionary for top models
 
-    top_models = {}  # Initialize dictionary for top models
+        for trial in sorted_trials:  # Iterate through sorted trials
+            model_name = trial.params.get("model_name", "Unknown")  # Get model name from trial
+            if model_name not in top_models:  # If this model type hasn't been added yet
+                params = {
+                    k: v for k, v in trial.params.items() if k != "model_name" and not k.endswith("_none")
+                }  # Extract parameters
+                top_models[model_name] = params  # Store best params for this model type
+            if len(top_models) >= top_n:  # If we've collected enough models
+                break  # Stop collecting
 
-    for trial in sorted_trials:  # Iterate through sorted trials
-        model_name = trial.params.get("model_name", "Unknown")  # Get model name from trial
-        if model_name not in top_models:  # If this model type hasn't been added yet
-            params = {
-                k: v for k, v in trial.params.items() if k != "model_name" and not k.endswith("_none")
-            }  # Extract parameters
-            top_models[model_name] = params  # Store best params for this model type
-        if len(top_models) >= top_n:  # If we've collected enough models
-            break  # Stop collecting
-
-    return top_models  # Return dictionary of top models and their parameters
+        return top_models  # Return dictionary of top models and their parameters
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def run_automl_stacking_search(X_train, y_train, model_study, file_path, config=None):
@@ -3994,80 +4388,85 @@ def run_automl_stacking_search(X_train, y_train, model_study, file_path, config=
     :return: Tuple (best_stacking_config, stacking_study) or (None, None) on failure
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Starting AutoML stacking search with {BackgroundColors.CYAN}{config.get("automl", {}).get("stacking_trials", 20)}{BackgroundColors.GREEN} trials...{Style.RESET_ALL}"
-    )  # Output search start message
-
-    candidate_models = extract_top_automl_models(model_study, top_n=config.get("automl", {}).get("stacking_top_n", 5))  # Get top models from model search
-
-    if len(candidate_models) < 2:  # If not enough candidate models
         print(
-            f"{BackgroundColors.YELLOW}Not enough candidate models for stacking search. Need at least 2, got {len(candidate_models)}.{Style.RESET_ALL}"
-        )  # Output warning
-        return (None, None)  # Return None tuple
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Starting AutoML stacking search with {BackgroundColors.CYAN}{config.get("automl", {}).get("stacking_trials", 20)}{BackgroundColors.GREEN} trials...{Style.RESET_ALL}"
+        )  # Output search start message
 
-    print(
-        f"{BackgroundColors.GREEN}Candidate base learners: {BackgroundColors.CYAN}{list(candidate_models.keys())}{Style.RESET_ALL}"
-    )  # Output candidate models
+        candidate_models = extract_top_automl_models(model_study, top_n=config.get("automl", {}).get("stacking_top_n", 5))  # Get top models from model search
 
-    optuna.logging.set_verbosity(optuna.logging.WARNING)  # Suppress verbose Optuna logging
+        if len(candidate_models) < 2:  # If not enough candidate models
+            print(
+                f"{BackgroundColors.YELLOW}Not enough candidate models for stacking search. Need at least 2, got {len(candidate_models)}.{Style.RESET_ALL}"
+            )  # Output warning
+            return (None, None)  # Return None tuple
 
-    sampler = optuna.samplers.TPESampler(seed=config.get("automl", {}).get("random_state", 42) + 1)  # Create sampler with different seed
-    pruner = optuna.pruners.MedianPruner(n_startup_trials=3, n_warmup_steps=1)  # Create pruner
-
-    stacking_study = optuna.create_study(
-        direction="maximize", sampler=sampler, pruner=pruner, study_name="automl_stacking_search"
-    )  # Create Optuna study for stacking optimization
-
-    objective_fn = lambda trial: automl_stacking_objective(
-        trial, X_train, y_train, config.get("automl", {}).get("cv_folds", 5), candidate_models
-    )  # Create stacking objective wrapper
-    stacking_study.optimize(
-        objective_fn, n_trials=config.get("automl", {}).get("stacking_trials", 20), timeout=config.get("automl", {}).get("timeout", 3600), n_jobs=1
-    )  # Run stacking optimization
-
-    completed = [
-        t for t in stacking_study.trials if t.state == optuna.trial.TrialState.COMPLETE
-    ]  # Get completed trials
-
-    if not completed:  # If no stacking trials completed
         print(
-            f"{BackgroundColors.YELLOW}AutoML stacking search: no successful trials.{Style.RESET_ALL}"
-        )  # Output warning
-        return (None, None)  # Return None tuple
+            f"{BackgroundColors.GREEN}Candidate base learners: {BackgroundColors.CYAN}{list(candidate_models.keys())}{Style.RESET_ALL}"
+        )  # Output candidate models
 
-    best_trial = stacking_study.best_trial  # Get best stacking trial
-    best_config = {
-        "meta_learner": best_trial.params.get("meta_learner"),  # Best meta-learner choice
-        "stacking_cv_splits": best_trial.params.get("stacking_cv_splits"),  # Best CV splits
-        "base_learners": [
-            name for name in candidate_models.keys()
-            if best_trial.params.get(f"use_{name.replace(' ', '_').replace('(', '').replace(')', '')}", False)
-        ],  # Selected base learner names
-        "base_learner_params": candidate_models,  # Parameters for each base learner
-        "best_cv_f1": stacking_study.best_value,  # Best CV F1 score
-    }  # Build best configuration dictionary
+        optuna.logging.set_verbosity(optuna.logging.WARNING)  # Suppress verbose Optuna logging
 
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}AutoML Best Stacking Config:{Style.RESET_ALL}"
-    )  # Output header
-    print(
-        f"{BackgroundColors.GREEN}  Meta-learner: {BackgroundColors.CYAN}{best_config['meta_learner']}{Style.RESET_ALL}"
-    )  # Output meta-learner
-    print(
-        f"{BackgroundColors.GREEN}  Base learners: {BackgroundColors.CYAN}{best_config['base_learners']}{Style.RESET_ALL}"
-    )  # Output base learners
-    print(
-        f"{BackgroundColors.GREEN}  CV splits: {BackgroundColors.CYAN}{best_config['stacking_cv_splits']}{Style.RESET_ALL}"
-    )  # Output CV splits
-    print(
-        f"{BackgroundColors.GREEN}  Best CV F1: {BackgroundColors.CYAN}{truncate_value(best_config['best_cv_f1'])}{Style.RESET_ALL}"
-    )  # Output best F1
+        sampler = optuna.samplers.TPESampler(seed=config.get("automl", {}).get("random_state", 42) + 1)  # Create sampler with different seed
+        pruner = optuna.pruners.MedianPruner(n_startup_trials=3, n_warmup_steps=1)  # Create pruner
 
-    return (best_config, stacking_study)  # Return best config and study
+        stacking_study = optuna.create_study(
+            direction="maximize", sampler=sampler, pruner=pruner, study_name="automl_stacking_search"
+        )  # Create Optuna study for stacking optimization
+
+        objective_fn = lambda trial: automl_stacking_objective(
+            trial, X_train, y_train, config.get("automl", {}).get("cv_folds", 5), candidate_models
+        )  # Create stacking objective wrapper
+        stacking_study.optimize(
+            objective_fn, n_trials=config.get("automl", {}).get("stacking_trials", 20), timeout=config.get("automl", {}).get("timeout", 3600), n_jobs=1
+        )  # Run stacking optimization
+
+        completed = [
+            t for t in stacking_study.trials if t.state == optuna.trial.TrialState.COMPLETE
+        ]  # Get completed trials
+
+        if not completed:  # If no stacking trials completed
+            print(
+                f"{BackgroundColors.YELLOW}AutoML stacking search: no successful trials.{Style.RESET_ALL}"
+            )  # Output warning
+            return (None, None)  # Return None tuple
+
+        best_trial = stacking_study.best_trial  # Get best stacking trial
+        best_config = {
+            "meta_learner": best_trial.params.get("meta_learner"),  # Best meta-learner choice
+            "stacking_cv_splits": best_trial.params.get("stacking_cv_splits"),  # Best CV splits
+            "base_learners": [
+                name for name in candidate_models.keys()
+                if best_trial.params.get(f"use_{name.replace(' ', '_').replace('(', '').replace(')', '')}", False)
+            ],  # Selected base learner names
+            "base_learner_params": candidate_models,  # Parameters for each base learner
+            "best_cv_f1": stacking_study.best_value,  # Best CV F1 score
+        }  # Build best configuration dictionary
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}AutoML Best Stacking Config:{Style.RESET_ALL}"
+        )  # Output header
+        print(
+            f"{BackgroundColors.GREEN}  Meta-learner: {BackgroundColors.CYAN}{best_config['meta_learner']}{Style.RESET_ALL}"
+        )  # Output meta-learner
+        print(
+            f"{BackgroundColors.GREEN}  Base learners: {BackgroundColors.CYAN}{best_config['base_learners']}{Style.RESET_ALL}"
+        )  # Output base learners
+        print(
+            f"{BackgroundColors.GREEN}  CV splits: {BackgroundColors.CYAN}{best_config['stacking_cv_splits']}{Style.RESET_ALL}"
+        )  # Output CV splits
+        print(
+            f"{BackgroundColors.GREEN}  Best CV F1: {BackgroundColors.CYAN}{truncate_value(best_config['best_cv_f1'])}{Style.RESET_ALL}"
+        )  # Output best F1
+
+        return (best_config, stacking_study)  # Return best config and study
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def build_automl_stacking_model(best_config, config=None):
@@ -4079,36 +4478,41 @@ def build_automl_stacking_model(best_config, config=None):
     :return: Configured StackingClassifier instance
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    estimators = []  # Initialize estimators list
+        estimators = []  # Initialize estimators list
 
-    for name in best_config["base_learners"]:  # Iterate over selected base learners
-        params = best_config["base_learner_params"].get(name, {})  # Get model parameters
-        model = create_model_from_params(name, params)  # Create model instance
-        safe_name = name.replace(" ", "_").replace("(", "").replace(")", "")  # Sanitize estimator name
-        estimators.append((safe_name, model))  # Add to estimators list
+        for name in best_config["base_learners"]:  # Iterate over selected base learners
+            params = best_config["base_learner_params"].get(name, {})  # Get model parameters
+            model = create_model_from_params(name, params)  # Create model instance
+            safe_name = name.replace(" ", "_").replace("(", "").replace(")", "")  # Sanitize estimator name
+            estimators.append((safe_name, model))  # Add to estimators list
 
-    meta_learner_name = best_config["meta_learner"]  # Get meta-learner name
+        meta_learner_name = best_config["meta_learner"]  # Get meta-learner name
 
-    if meta_learner_name == "Logistic Regression":  # Logistic Regression meta-learner
-        meta_model = LogisticRegression(max_iter=1000, random_state=config.get("automl", {}).get("random_state", 42))  # Create LR
-    elif meta_learner_name == "Random Forest":  # Random Forest meta-learner
-        meta_model = RandomForestClassifier(n_estimators=50, random_state=config.get("automl", {}).get("random_state", 42), n_jobs=config.get("evaluation", {}).get("n_jobs", -1))  # Create RF
-    else:  # Gradient Boosting meta-learner
-        meta_model = GradientBoostingClassifier(random_state=config.get("automl", {}).get("random_state", 42))  # Create GB
+        if meta_learner_name == "Logistic Regression":  # Logistic Regression meta-learner
+            meta_model = LogisticRegression(max_iter=1000, random_state=config.get("automl", {}).get("random_state", 42))  # Create LR
+        elif meta_learner_name == "Random Forest":  # Random Forest meta-learner
+            meta_model = RandomForestClassifier(n_estimators=50, random_state=config.get("automl", {}).get("random_state", 42), n_jobs=config.get("evaluation", {}).get("n_jobs", -1))  # Create RF
+        else:  # Gradient Boosting meta-learner
+            meta_model = GradientBoostingClassifier(random_state=config.get("automl", {}).get("random_state", 42))  # Create GB
 
-    stacking_model = StackingClassifier(
-        estimators=estimators,
-        final_estimator=meta_model,
-        cv=StratifiedKFold(
-            n_splits=best_config["stacking_cv_splits"], shuffle=True, random_state=config.get("automl", {}).get("random_state", 42)
-        ),
-        n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
-    )  # Create stacking classifier with optimal configuration
+        stacking_model = StackingClassifier(
+            estimators=estimators,
+            final_estimator=meta_model,
+            cv=StratifiedKFold(
+                n_splits=best_config["stacking_cv_splits"], shuffle=True, random_state=config.get("automl", {}).get("random_state", 42)
+            ),
+            n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
+        )  # Create stacking classifier with optimal configuration
 
-    return stacking_model  # Return configured stacking model
+        return stacking_model  # Return configured stacking model
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y_test):
@@ -4123,52 +4527,57 @@ def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y
     :param y_test: Testing target labels
     :return: Dictionary containing all evaluation metrics
     """
+    
+    try:
+        start_time = time.time()  # Record start time
 
-    start_time = time.time()  # Record start time
+        model.fit(X_train, y_train)  # Train model on full training set
+        y_pred = model.predict(X_test)  # Generate predictions on test set
 
-    model.fit(X_train, y_train)  # Train model on full training set
-    y_pred = model.predict(X_test)  # Generate predictions on test set
+        elapsed = time.time() - start_time  # Calculate elapsed training time
 
-    elapsed = time.time() - start_time  # Calculate elapsed training time
+        acc = accuracy_score(y_test, y_pred)  # Calculate accuracy
+        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted precision
+        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted recall
+        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted F1 score
 
-    acc = accuracy_score(y_test, y_pred)  # Calculate accuracy
-    prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted precision
-    rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted recall
-    f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted F1 score
+        roc_auc = None  # Initialize ROC-AUC as None
+        try:  # Try to compute ROC-AUC
+            if hasattr(model, "predict_proba"):  # If model supports probability predictions
+                y_proba = model.predict_proba(X_test)  # Get probability predictions
+                if len(np.unique(y_test)) == 2:  # Binary classification
+                    roc_auc = roc_auc_score(y_test, y_proba[:, 1])  # Compute binary ROC-AUC
+                else:  # Multi-class classification
+                    roc_auc = roc_auc_score(y_test, y_proba, multi_class="ovr", average="weighted")  # Compute multi-class ROC-AUC
+        except Exception:  # If ROC-AUC computation fails
+            roc_auc = None  # Keep as None
 
-    roc_auc = None  # Initialize ROC-AUC as None
-    try:  # Try to compute ROC-AUC
-        if hasattr(model, "predict_proba"):  # If model supports probability predictions
-            y_proba = model.predict_proba(X_test)  # Get probability predictions
-            if len(np.unique(y_test)) == 2:  # Binary classification
-                roc_auc = roc_auc_score(y_test, y_proba[:, 1])  # Compute binary ROC-AUC
-            else:  # Multi-class classification
-                roc_auc = roc_auc_score(y_test, y_proba, multi_class="ovr", average="weighted")  # Compute multi-class ROC-AUC
-    except Exception:  # If ROC-AUC computation fails
-        roc_auc = None  # Keep as None
+        if len(np.unique(y_test)) == 2:  # Binary classification metrics
+            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()  # Get confusion matrix components
+            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Calculate false positive rate
+            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Calculate false negative rate
+        else:  # Multi-class (simplified)
+            fpr = 0.0  # Placeholder FPR
+            fnr = 0.0  # Placeholder FNR
 
-    if len(np.unique(y_test)) == 2:  # Binary classification metrics
-        tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()  # Get confusion matrix components
-        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Calculate false positive rate
-        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Calculate false negative rate
-    else:  # Multi-class (simplified)
-        fpr = 0.0  # Placeholder FPR
-        fnr = 0.0  # Placeholder FNR
+        print(
+            f"{BackgroundColors.GREEN}AutoML {model_name} Test Results - Acc: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, F1: {BackgroundColors.CYAN}{truncate_value(f1)}{BackgroundColors.GREEN}, ROC-AUC: {BackgroundColors.CYAN}{truncate_value(roc_auc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed))}s{Style.RESET_ALL}"
+        )  # Output test results
 
-    print(
-        f"{BackgroundColors.GREEN}AutoML {model_name} Test Results - Acc: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, F1: {BackgroundColors.CYAN}{truncate_value(f1)}{BackgroundColors.GREEN}, ROC-AUC: {BackgroundColors.CYAN}{truncate_value(roc_auc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed))}s{Style.RESET_ALL}"
-    )  # Output test results
-
-    return {  # Build and return metrics dictionary
-        "accuracy": acc,  # Accuracy value
-        "precision": prec,  # Precision value
-        "recall": rec,  # Recall value
-        "f1_score": f1,  # F1 score value
-        "roc_auc": roc_auc,  # ROC-AUC value
-        "fpr": fpr,  # False positive rate
-        "fnr": fnr,  # False negative rate
-        "elapsed_time_s": int(round(elapsed)),  # Elapsed time in seconds
-    }  # Return metrics dictionary
+        return {  # Build and return metrics dictionary
+            "accuracy": acc,  # Accuracy value
+            "precision": prec,  # Precision value
+            "recall": rec,  # Recall value
+            "f1_score": f1,  # F1 score value
+            "roc_auc": roc_auc,  # ROC-AUC value
+            "fpr": fpr,  # False positive rate
+            "fnr": fnr,  # False negative rate
+            "elapsed_time_s": int(round(elapsed)),  # Elapsed time in seconds
+        }  # Return metrics dictionary
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def export_automl_search_history(study, output_dir, study_name):
@@ -4180,32 +4589,37 @@ def export_automl_search_history(study, output_dir, study_name):
     :param study_name: Name prefix for the output file
     :return: Path to the exported CSV file
     """
+    
+    try:
+        os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
-    os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+        trials_data = []  # Initialize list for trial data
 
-    trials_data = []  # Initialize list for trial data
+        for trial in study.trials:  # Iterate over all trials
+            trial_entry = {  # Build entry for this trial
+                "trial_number": trial.number,  # Trial index number
+                "value": trial.value if trial.value is not None else None,  # Objective value (F1 score)
+                "state": trial.state.name,  # Trial state (COMPLETE, PRUNED, FAIL)
+                "duration_s": (
+                    trial.duration.total_seconds() if trial.duration else None
+                ),  # Trial duration in seconds
+            }  # Build basic trial entry
+            trial_entry.update(trial.params)  # Add trial parameters to entry
+            trials_data.append(trial_entry)  # Append to trials data list
 
-    for trial in study.trials:  # Iterate over all trials
-        trial_entry = {  # Build entry for this trial
-            "trial_number": trial.number,  # Trial index number
-            "value": trial.value if trial.value is not None else None,  # Objective value (F1 score)
-            "state": trial.state.name,  # Trial state (COMPLETE, PRUNED, FAIL)
-            "duration_s": (
-                trial.duration.total_seconds() if trial.duration else None
-            ),  # Trial duration in seconds
-        }  # Build basic trial entry
-        trial_entry.update(trial.params)  # Add trial parameters to entry
-        trials_data.append(trial_entry)  # Append to trials data list
+        df = pd.DataFrame(trials_data)  # Convert trials data to DataFrame
+        output_path = os.path.join(output_dir, f"{study_name}_search_history.csv")  # Build output file path
+        df.to_csv(output_path, index=False)  # Save to CSV
 
-    df = pd.DataFrame(trials_data)  # Convert trials data to DataFrame
-    output_path = os.path.join(output_dir, f"{study_name}_search_history.csv")  # Build output file path
-    df.to_csv(output_path, index=False)  # Save to CSV
+        print(
+            f"{BackgroundColors.GREEN}AutoML search history exported to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+        )  # Output export confirmation
 
-    print(
-        f"{BackgroundColors.GREEN}AutoML search history exported to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
-    )  # Output export confirmation
-
-    return output_path  # Return the output file path
+        return output_path  # Return the output file path
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def export_automl_best_config(best_model_name, best_params, test_metrics, stacking_config, output_dir, feature_names):
@@ -4220,40 +4634,45 @@ def export_automl_best_config(best_model_name, best_params, test_metrics, stacki
     :param feature_names: List of feature names used
     :return: Path to the exported JSON file
     """
+    
+    try:
+        os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
-    os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+        export_config = {  # Build configuration export dictionary
+            "best_individual_model": {  # Best individual model section
+                "model_name": best_model_name,  # Model name
+                "hyperparameters": best_params,  # Model hyperparameters
+                "test_metrics": {
+                    k: truncate_value(v) if isinstance(v, (int, float)) and v is not None else v
+                    for k, v in test_metrics.items()
+                },  # Test metrics with truncation
+            },
+            "best_stacking_config": stacking_config,  # Stacking configuration (may be None)
+            "automl_settings": {  # AutoML settings used
+                "n_trials": CONFIG.get("automl", {}).get("n_trials", 50),  # Number of model search trials
+                "stacking_trials": CONFIG.get("automl", {}).get("stacking_trials", 20),  # Number of stacking search trials
+                "cv_folds": CONFIG.get("automl", {}).get("cv_folds", 5),  # Cross-validation folds
+                "timeout_s": CONFIG.get("automl", {}).get("timeout", 3600),  # Timeout in seconds
+                "random_state": CONFIG.get("automl", {}).get("random_state", 42),  # Random seed used
+            },
+            "feature_names": feature_names,  # Features used in training
+            "n_features": len(feature_names),  # Number of features
+        }  # Build complete config dictionary
 
-    export_config = {  # Build configuration export dictionary
-        "best_individual_model": {  # Best individual model section
-            "model_name": best_model_name,  # Model name
-            "hyperparameters": best_params,  # Model hyperparameters
-            "test_metrics": {
-                k: truncate_value(v) if isinstance(v, (int, float)) and v is not None else v
-                for k, v in test_metrics.items()
-            },  # Test metrics with truncation
-        },
-        "best_stacking_config": stacking_config,  # Stacking configuration (may be None)
-        "automl_settings": {  # AutoML settings used
-            "n_trials": CONFIG.get("automl", {}).get("n_trials", 50),  # Number of model search trials
-            "stacking_trials": CONFIG.get("automl", {}).get("stacking_trials", 20),  # Number of stacking search trials
-            "cv_folds": CONFIG.get("automl", {}).get("cv_folds", 5),  # Cross-validation folds
-            "timeout_s": CONFIG.get("automl", {}).get("timeout", 3600),  # Timeout in seconds
-            "random_state": CONFIG.get("automl", {}).get("random_state", 42),  # Random seed used
-        },
-        "feature_names": feature_names,  # Features used in training
-        "n_features": len(feature_names),  # Number of features
-    }  # Build complete config dictionary
+        output_path = os.path.join(output_dir, CONFIG.get("automl", {}).get("results_filename", "AutoML_Results.csv").replace(".csv", "_best_config.json"))  # Build output path
 
-    output_path = os.path.join(output_dir, CONFIG.get("automl", {}).get("results_filename", "AutoML_Results.csv").replace(".csv", "_best_config.json"))  # Build output path
+        with open(output_path, "w", encoding="utf-8") as f:  # Open file for writing
+            json.dump(export_config, f, indent=2, default=str)  # Write JSON with indentation
 
-    with open(output_path, "w", encoding="utf-8") as f:  # Open file for writing
-        json.dump(export_config, f, indent=2, default=str)  # Write JSON with indentation
+        print(
+            f"{BackgroundColors.GREEN}AutoML best configuration exported to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+        )  # Output export confirmation
 
-    print(
-        f"{BackgroundColors.GREEN}AutoML best configuration exported to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
-    )  # Output export confirmation
-
-    return output_path  # Return the output file path
+        return output_path  # Return the output file path
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def export_automl_best_model(model, scaler, output_dir, model_name, feature_names):
@@ -4267,33 +4686,38 @@ def export_automl_best_model(model, scaler, output_dir, model_name, feature_name
     :param feature_names: List of feature names for metadata
     :return: Tuple (model_path, scaler_path)
     """
+    
+    try:
+        os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
-    os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+        safe_name = re.sub(r'[\\/*?:"<>|() ]', "_", str(model_name))  # Sanitize model name for filename
+        model_path = os.path.join(output_dir, f"AutoML_best_{safe_name}_model.joblib")  # Build model file path
+        scaler_path = os.path.join(output_dir, f"AutoML_best_{safe_name}_scaler.joblib")  # Build scaler file path
 
-    safe_name = re.sub(r'[\\/*?:"<>|() ]', "_", str(model_name))  # Sanitize model name for filename
-    model_path = os.path.join(output_dir, f"AutoML_best_{safe_name}_model.joblib")  # Build model file path
-    scaler_path = os.path.join(output_dir, f"AutoML_best_{safe_name}_scaler.joblib")  # Build scaler file path
+        dump(model, model_path)  # Export model to disk
 
-    dump(model, model_path)  # Export model to disk
+        if scaler is not None:  # If scaler is provided
+            dump(scaler, scaler_path)  # Export scaler to disk
 
-    if scaler is not None:  # If scaler is provided
-        dump(scaler, scaler_path)  # Export scaler to disk
+        meta_path = os.path.join(output_dir, f"AutoML_best_{safe_name}_meta.json")  # Build metadata file path
+        meta = {  # Build metadata dictionary
+            "model_name": model_name,  # Model name
+            "features": feature_names,  # Feature names used
+            "n_features": len(feature_names),  # Number of features
+        }  # Metadata content
 
-    meta_path = os.path.join(output_dir, f"AutoML_best_{safe_name}_meta.json")  # Build metadata file path
-    meta = {  # Build metadata dictionary
-        "model_name": model_name,  # Model name
-        "features": feature_names,  # Feature names used
-        "n_features": len(feature_names),  # Number of features
-    }  # Metadata content
+        with open(meta_path, "w", encoding="utf-8") as f:  # Open metadata file
+            json.dump(meta, f, indent=2)  # Write metadata JSON
 
-    with open(meta_path, "w", encoding="utf-8") as f:  # Open metadata file
-        json.dump(meta, f, indent=2)  # Write metadata JSON
+        print(
+            f"{BackgroundColors.GREEN}AutoML best model exported to: {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}"
+        )  # Output export confirmation
 
-    print(
-        f"{BackgroundColors.GREEN}AutoML best model exported to: {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}"
-    )  # Output export confirmation
-
-    return (model_path, scaler_path)  # Return file paths
+        return (model_path, scaler_path)  # Return file paths
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def build_automl_results_list(best_model_name, best_params, individual_metrics, stacking_metrics, stacking_config, file_path, feature_names, n_train, n_test, config=None):
@@ -4313,46 +4737,18 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
     :return: List of result dictionaries for CSV export
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    results = []  # Initialize results list
+        results = []  # Initialize results list
 
-    individual_entry = {  # Build individual model result entry
-        "model": best_model_name,  # Model class name
-        "dataset": os.path.relpath(file_path),  # Dataset relative path
-        "feature_set": "AutoML",  # Feature set label
-        "classifier_type": "AutoML_Individual",  # Classifier type
-        "model_name": f"AutoML_{best_model_name}",  # Prefixed model name
-        "data_source": "Original",  # Data source label
-        "experiment_id": None,  # No experiment ID for standalone AutoML runs
-        "experiment_mode": "original_only",  # AutoML runs on original data only
-        "augmentation_ratio": None,  # No augmentation ratio for AutoML
-        "n_features": len(feature_names),  # Number of features
-        "n_samples_train": n_train,  # Training sample count
-        "n_samples_test": n_test,  # Test sample count
-        "accuracy": truncate_value(individual_metrics["accuracy"]),  # Accuracy
-        "precision": truncate_value(individual_metrics["precision"]),  # Precision
-        "recall": truncate_value(individual_metrics["recall"]),  # Recall
-        "f1_score": truncate_value(individual_metrics["f1_score"]),  # F1 score
-        "fpr": truncate_value(individual_metrics["fpr"]),  # False positive rate
-        "fnr": truncate_value(individual_metrics["fnr"]),  # False negative rate
-        "elapsed_time_s": individual_metrics["elapsed_time_s"],  # Elapsed time
-        "cv_method": f"Optuna({config.get("automl", {}).get("n_trials", 50)} trials, {config.get("automl", {}).get("cv_folds", 5)}-fold CV)",  # CV method description
-        "top_features": json.dumps(feature_names),  # Feature names as JSON
-        "rfe_ranking": None,  # No RFE ranking for AutoML
-        "hyperparameters": json.dumps(best_params),  # Hyperparameters as JSON
-        "features_list": feature_names,  # Feature names list
-    }  # Individual model result entry
-    results.append(individual_entry)  # Add to results list
-
-    if stacking_metrics is not None and stacking_config is not None:  # If stacking results are available
-        stacking_entry = {  # Build stacking result entry
-            "model": "StackingClassifier",  # Model class name
+        individual_entry = {  # Build individual model result entry
+            "model": best_model_name,  # Model class name
             "dataset": os.path.relpath(file_path),  # Dataset relative path
             "feature_set": "AutoML",  # Feature set label
-            "classifier_type": "AutoML_Stacking",  # Classifier type
-            "model_name": "AutoML_StackingClassifier",  # Prefixed model name
+            "classifier_type": "AutoML_Individual",  # Classifier type
+            "model_name": f"AutoML_{best_model_name}",  # Prefixed model name
             "data_source": "Original",  # Data source label
             "experiment_id": None,  # No experiment ID for standalone AutoML runs
             "experiment_mode": "original_only",  # AutoML runs on original data only
@@ -4360,22 +4756,55 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
             "n_features": len(feature_names),  # Number of features
             "n_samples_train": n_train,  # Training sample count
             "n_samples_test": n_test,  # Test sample count
-            "accuracy": truncate_value(stacking_metrics["accuracy"]),  # Accuracy
-            "precision": truncate_value(stacking_metrics["precision"]),  # Precision
-            "recall": truncate_value(stacking_metrics["recall"]),  # Recall
-            "f1_score": truncate_value(stacking_metrics["f1_score"]),  # F1 score
-            "fpr": truncate_value(stacking_metrics["fpr"]),  # False positive rate
-            "fnr": truncate_value(stacking_metrics["fnr"]),  # False negative rate
-            "elapsed_time_s": stacking_metrics["elapsed_time_s"],  # Elapsed time
-            "cv_method": f"Optuna({config.get("automl", {}).get("stacking_trials", 20)} trials, {config.get("automl", {}).get("cv_folds", 5)}-fold CV)",  # CV method description
+            "accuracy": truncate_value(individual_metrics["accuracy"]),  # Accuracy
+            "precision": truncate_value(individual_metrics["precision"]),  # Precision
+            "recall": truncate_value(individual_metrics["recall"]),  # Recall
+            "f1_score": truncate_value(individual_metrics["f1_score"]),  # F1 score
+            "fpr": truncate_value(individual_metrics["fpr"]),  # False positive rate
+            "fnr": truncate_value(individual_metrics["fnr"]),  # False negative rate
+            "elapsed_time_s": individual_metrics["elapsed_time_s"],  # Elapsed time
+            "cv_method": f"Optuna({config.get("automl", {}).get("n_trials", 50)} trials, {config.get("automl", {}).get("cv_folds", 5)}-fold CV)",  # CV method description
             "top_features": json.dumps(feature_names),  # Feature names as JSON
             "rfe_ranking": None,  # No RFE ranking for AutoML
-            "hyperparameters": json.dumps(stacking_config, default=str),  # Stacking config as JSON
+            "hyperparameters": json.dumps(best_params),  # Hyperparameters as JSON
             "features_list": feature_names,  # Feature names list
-        }  # Stacking result entry
-        results.append(stacking_entry)  # Add stacking to results list
+        }  # Individual model result entry
+        results.append(individual_entry)  # Add to results list
 
-    return results  # Return results list
+        if stacking_metrics is not None and stacking_config is not None:  # If stacking results are available
+            stacking_entry = {  # Build stacking result entry
+                "model": "StackingClassifier",  # Model class name
+                "dataset": os.path.relpath(file_path),  # Dataset relative path
+                "feature_set": "AutoML",  # Feature set label
+                "classifier_type": "AutoML_Stacking",  # Classifier type
+                "model_name": "AutoML_StackingClassifier",  # Prefixed model name
+                "data_source": "Original",  # Data source label
+                "experiment_id": None,  # No experiment ID for standalone AutoML runs
+                "experiment_mode": "original_only",  # AutoML runs on original data only
+                "augmentation_ratio": None,  # No augmentation ratio for AutoML
+                "n_features": len(feature_names),  # Number of features
+                "n_samples_train": n_train,  # Training sample count
+                "n_samples_test": n_test,  # Test sample count
+                "accuracy": truncate_value(stacking_metrics["accuracy"]),  # Accuracy
+                "precision": truncate_value(stacking_metrics["precision"]),  # Precision
+                "recall": truncate_value(stacking_metrics["recall"]),  # Recall
+                "f1_score": truncate_value(stacking_metrics["f1_score"]),  # F1 score
+                "fpr": truncate_value(stacking_metrics["fpr"]),  # False positive rate
+                "fnr": truncate_value(stacking_metrics["fnr"]),  # False negative rate
+                "elapsed_time_s": stacking_metrics["elapsed_time_s"],  # Elapsed time
+                "cv_method": f"Optuna({config.get("automl", {}).get("stacking_trials", 20)} trials, {config.get("automl", {}).get("cv_folds", 5)}-fold CV)",  # CV method description
+                "top_features": json.dumps(feature_names),  # Feature names as JSON
+                "rfe_ranking": None,  # No RFE ranking for AutoML
+                "hyperparameters": json.dumps(stacking_config, default=str),  # Stacking config as JSON
+                "features_list": feature_names,  # Feature names list
+            }  # Stacking result entry
+            results.append(stacking_entry)  # Add stacking to results list
+
+        return results  # Return results list
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def save_automl_results(csv_path, results_list, config=None):
@@ -4388,29 +4817,34 @@ def save_automl_results(csv_path, results_list, config=None):
     :return: None
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    if not results_list:  # If no results to save
-        return  # Exit early
+        if not results_list:  # If no results to save
+            return  # Exit early
 
-    file_path_obj = Path(csv_path)  # Create Path object for dataset file
-    automl_dir = file_path_obj.parent / "Feature_Analysis" / "AutoML"  # Build AutoML output directory
-    os.makedirs(automl_dir, exist_ok=True)  # Ensure directory exists
-    output_path = automl_dir / config.get("automl", {}).get("results_filename", "AutoML_Results.csv")  # Build output file path
+        file_path_obj = Path(csv_path)  # Create Path object for dataset file
+        automl_dir = file_path_obj.parent / "Feature_Analysis" / "AutoML"  # Build AutoML output directory
+        os.makedirs(automl_dir, exist_ok=True)  # Ensure directory exists
+        output_path = automl_dir / config.get("automl", {}).get("results_filename", "AutoML_Results.csv")  # Build output file path
 
-    df = pd.DataFrame(results_list)  # Convert results to DataFrame
-    column_order = list(config.get("stacking", {}).get("results_csv_columns", []))  # Use canonical column ordering
-    existing_columns = [col for col in column_order if col in df.columns]  # Filter to existing columns
-    df = df[existing_columns + [c for c in df.columns if c not in existing_columns]]  # Reorder columns
+        df = pd.DataFrame(results_list)  # Convert results to DataFrame
+        column_order = list(config.get("stacking", {}).get("results_csv_columns", []))  # Use canonical column ordering
+        existing_columns = [col for col in column_order if col in df.columns]  # Filter to existing columns
+        df = df[existing_columns + [c for c in df.columns if c not in existing_columns]]  # Reorder columns
 
-    df = add_hardware_column(df, existing_columns)  # Add hardware specifications column
+        df = add_hardware_column(df, existing_columns)  # Add hardware specifications column
 
-    df.to_csv(str(output_path), index=False, encoding="utf-8")  # Save to CSV file
+        df.to_csv(str(output_path), index=False, encoding="utf-8")  # Save to CSV file
 
-    print(
-        f"\n{BackgroundColors.GREEN}AutoML results saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
-    )  # Output save confirmation
+        print(
+            f"\n{BackgroundColors.GREEN}AutoML results saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+        )  # Output save confirmation
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def run_automl_pipeline(file, df, feature_names, data_source_label="Original", config=None):
@@ -4425,124 +4859,129 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
     :return: Dictionary containing AutoML results, or None on failure
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}"
-    )  # Print separator
-    print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}AutoML Pipeline - {BackgroundColors.CYAN}{os.path.basename(file)}{Style.RESET_ALL}"
-    )  # Print pipeline header
-    print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}\n"
-    )  # Print separator
-
-    automl_start = time.time()  # Record pipeline start time
-
-    X_full = df.select_dtypes(include=np.number).iloc[:, :-1]  # Extract numeric features
-    y = df.iloc[:, -1]  # Extract target column
-
-    if len(np.unique(y)) < 2:  # Check for at least 2 classes
         print(
-            f"{BackgroundColors.RED}AutoML: Target has only one class. Skipping.{Style.RESET_ALL}"
-        )  # Output error
-        return None  # Return None
-
-    X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X_full, y, config=config)  # Scale and split data
-
-    y_train_arr = np.asarray(y_train)  # Convert training target to numpy array
-    y_test_arr = np.asarray(y_test)  # Convert test target to numpy array
-
-    send_telegram_message(TELEGRAM_BOT, f"Starting AutoML pipeline for {os.path.basename(file)}")  # Notify via Telegram
-
-    best_model_name, best_params, model_study = run_automl_model_search(
-        X_train_scaled, y_train_arr, file
-    )  # Phase 1: Run model search
-
-    if best_model_name is None:  # If model search failed
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}"
+        )  # Print separator
         print(
-            f"{BackgroundColors.RED}AutoML pipeline aborted: model search failed.{Style.RESET_ALL}"
-        )  # Output failure message
-        return None  # Return None
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}AutoML Pipeline - {BackgroundColors.CYAN}{os.path.basename(file)}{Style.RESET_ALL}"
+        )  # Print pipeline header
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}\n"
+        )  # Print separator
 
-    best_individual_model = create_model_from_params(best_model_name, best_params)  # Create best individual model
+        automl_start = time.time()  # Record pipeline start time
 
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating AutoML best individual model on test set...{Style.RESET_ALL}"
-    )  # Output evaluation message
+        X_full = df.select_dtypes(include=np.number).iloc[:, :-1]  # Extract numeric features
+        y = df.iloc[:, -1]  # Extract target column
 
-    individual_metrics = evaluate_automl_model_on_test(
-        best_individual_model, best_model_name, X_train_scaled, y_train_arr, X_test_scaled, y_test_arr
-    )  # Evaluate best individual model on test set
-
-    stacking_config = None  # Initialize stacking config as None
-    stacking_metrics = None  # Initialize stacking metrics as None
-    stacking_study = None  # Initialize stacking study as None
-
-    if config.get("automl", {}).get("stacking_trials", 20) > 0:  # If stacking search is enabled
-        stacking_config, stacking_study = run_automl_stacking_search(
-            X_train_scaled, y_train_arr, model_study, file, config=config
-        )  # Phase 2: Run stacking search
-
-        if stacking_config is not None:  # If stacking search succeeded
-            best_stacking_model = build_automl_stacking_model(stacking_config, config=config)  # Build best stacking model
-
+        if len(np.unique(y)) < 2:  # Check for at least 2 classes
             print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating AutoML best stacking model on test set...{Style.RESET_ALL}"
-            )  # Output evaluation message
+                f"{BackgroundColors.RED}AutoML: Target has only one class. Skipping.{Style.RESET_ALL}"
+            )  # Output error
+            return None  # Return None
 
-            stacking_metrics = evaluate_automl_model_on_test(
-                best_stacking_model, "AutoML_Stacking", X_train_scaled, y_train_arr, X_test_scaled, y_test_arr
-            )  # Evaluate stacking model on test set
+        X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X_full, y, config=config)  # Scale and split data
 
-    file_path_obj = Path(file)  # Create Path object for file
-    automl_output_dir = str(file_path_obj.parent / "Feature_Analysis" / "AutoML")  # Build AutoML output directory
+        y_train_arr = np.asarray(y_train)  # Convert training target to numpy array
+        y_test_arr = np.asarray(y_test)  # Convert test target to numpy array
 
-    export_automl_search_history(model_study, automl_output_dir, "model_search")  # Export model search history
+        send_telegram_message(TELEGRAM_BOT, f"Starting AutoML pipeline for {os.path.basename(file)}")  # Notify via Telegram
 
-    if stacking_study is not None:  # If stacking study exists
-        export_automl_search_history(stacking_study, automl_output_dir, "stacking_search")  # Export stacking search history
+        best_model_name, best_params, model_study = run_automl_model_search(
+            X_train_scaled, y_train_arr, file
+        )  # Phase 1: Run model search
 
-    export_automl_best_config(
-        best_model_name, best_params, individual_metrics, stacking_config, automl_output_dir, feature_names
-    )  # Export best configuration
+        if best_model_name is None:  # If model search failed
+            print(
+                f"{BackgroundColors.RED}AutoML pipeline aborted: model search failed.{Style.RESET_ALL}"
+            )  # Output failure message
+            return None  # Return None
 
-    export_automl_best_model(
-        best_individual_model, scaler, automl_output_dir, best_model_name, feature_names
-    )  # Export best individual model
+        best_individual_model = create_model_from_params(best_model_name, best_params)  # Create best individual model
 
-    if stacking_config is not None and stacking_metrics is not None:  # If stacking was successful
-        best_stacking_model_final = build_automl_stacking_model(stacking_config, config=config)  # Rebuild stacking model for export
-        best_stacking_model_final.fit(X_train_scaled, y_train_arr)  # Fit stacking model on full training data
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating AutoML best individual model on test set...{Style.RESET_ALL}"
+        )  # Output evaluation message
+
+        individual_metrics = evaluate_automl_model_on_test(
+            best_individual_model, best_model_name, X_train_scaled, y_train_arr, X_test_scaled, y_test_arr
+        )  # Evaluate best individual model on test set
+
+        stacking_config = None  # Initialize stacking config as None
+        stacking_metrics = None  # Initialize stacking metrics as None
+        stacking_study = None  # Initialize stacking study as None
+
+        if config.get("automl", {}).get("stacking_trials", 20) > 0:  # If stacking search is enabled
+            stacking_config, stacking_study = run_automl_stacking_search(
+                X_train_scaled, y_train_arr, model_study, file, config=config
+            )  # Phase 2: Run stacking search
+
+            if stacking_config is not None:  # If stacking search succeeded
+                best_stacking_model = build_automl_stacking_model(stacking_config, config=config)  # Build best stacking model
+
+                print(
+                    f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating AutoML best stacking model on test set...{Style.RESET_ALL}"
+                )  # Output evaluation message
+
+                stacking_metrics = evaluate_automl_model_on_test(
+                    best_stacking_model, "AutoML_Stacking", X_train_scaled, y_train_arr, X_test_scaled, y_test_arr
+                )  # Evaluate stacking model on test set
+
+        file_path_obj = Path(file)  # Create Path object for file
+        automl_output_dir = str(file_path_obj.parent / "Feature_Analysis" / "AutoML")  # Build AutoML output directory
+
+        export_automl_search_history(model_study, automl_output_dir, "model_search")  # Export model search history
+
+        if stacking_study is not None:  # If stacking study exists
+            export_automl_search_history(stacking_study, automl_output_dir, "stacking_search")  # Export stacking search history
+
+        export_automl_best_config(
+            best_model_name, best_params, individual_metrics, stacking_config, automl_output_dir, feature_names
+        )  # Export best configuration
+
         export_automl_best_model(
-            best_stacking_model_final, scaler, automl_output_dir, "AutoML_Stacking", feature_names
-        )  # Export best stacking model
+            best_individual_model, scaler, automl_output_dir, best_model_name, feature_names
+        )  # Export best individual model
 
-    results_list = build_automl_results_list(
-        best_model_name, best_params, individual_metrics, stacking_metrics, stacking_config,
-        file, feature_names, len(y_train), len(y_test), config=config
-    )  # Build results list for CSV
+        if stacking_config is not None and stacking_metrics is not None:  # If stacking was successful
+            best_stacking_model_final = build_automl_stacking_model(stacking_config, config=config)  # Rebuild stacking model for export
+            best_stacking_model_final.fit(X_train_scaled, y_train_arr)  # Fit stacking model on full training data
+            export_automl_best_model(
+                best_stacking_model_final, scaler, automl_output_dir, "AutoML_Stacking", feature_names
+            )  # Export best stacking model
 
-    save_automl_results(file, results_list, config=config)  # Save AutoML results to CSV
+        results_list = build_automl_results_list(
+            best_model_name, best_params, individual_metrics, stacking_metrics, stacking_config,
+            file, feature_names, len(y_train), len(y_test), config=config
+        )  # Build results list for CSV
 
-    automl_elapsed = time.time() - automl_start  # Calculate total AutoML pipeline time
+        save_automl_results(file, results_list, config=config)  # Save AutoML results to CSV
 
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}AutoML pipeline completed in {BackgroundColors.CYAN}{calculate_execution_time(0, automl_elapsed)}{Style.RESET_ALL}"
-    )  # Output completion message
+        automl_elapsed = time.time() - automl_start  # Calculate total AutoML pipeline time
 
-    send_telegram_message(
-        TELEGRAM_BOT, f"AutoML pipeline completed for {os.path.basename(file)} in {calculate_execution_time(0, automl_elapsed)}. Best model: {best_model_name} (F1: {truncate_value(individual_metrics['f1_score'])})"
-    )  # Send Telegram notification
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}AutoML pipeline completed in {BackgroundColors.CYAN}{calculate_execution_time(0, automl_elapsed)}{Style.RESET_ALL}"
+        )  # Output completion message
 
-    return {  # Return AutoML results summary
-        "best_model_name": best_model_name,  # Best model name
-        "best_params": best_params,  # Best parameters
-        "individual_metrics": individual_metrics,  # Individual model metrics
-        "stacking_config": stacking_config,  # Stacking configuration
-        "stacking_metrics": stacking_metrics,  # Stacking metrics
-    }  # Return results dictionary
+        send_telegram_message(
+            TELEGRAM_BOT, f"AutoML pipeline completed for {os.path.basename(file)} in {calculate_execution_time(0, automl_elapsed)}. Best model: {best_model_name} (F1: {truncate_value(individual_metrics['f1_score'])})"
+        )  # Send Telegram notification
+
+        return {  # Return AutoML results summary
+            "best_model_name": best_model_name,  # Best model name
+            "best_params": best_params,  # Best parameters
+            "individual_metrics": individual_metrics,  # Individual model metrics
+            "stacking_config": stacking_config,  # Stacking configuration
+            "stacking_metrics": stacking_metrics,  # Stacking metrics
+        }  # Return results dictionary
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def evaluate_on_dataset(
@@ -4582,280 +5021,285 @@ def evaluate_on_dataset(
     :param df_augmented_for_training: Optional augmented DataFrame to merge into training set only (test set remains original-only)
     :return: Dictionary mapping (feature_set, model_name) to results
     """
-
-    if ga_selected_features:
-        ga_selected_features = sanitize_feature_names(ga_selected_features)
-    if rfe_selected_features:
-        rfe_selected_features = sanitize_feature_names(rfe_selected_features)
-
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}"
-    )
-    print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating on: {BackgroundColors.CYAN}{data_source_label} Data{Style.RESET_ALL}"
-    )
-    print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}\n"
-    )
-
-    X_full = df.select_dtypes(include=np.number).iloc[:, :-1]  # Features (numeric only)
-    y = df.iloc[:, -1]  # Target
-
-    if len(np.unique(y)) < 2:  # Verify if there is more than one class
-        print(
-            f"{BackgroundColors.RED}Target column has only one class. Cannot perform classification. Skipping.{Style.RESET_ALL}"
-        )  # Output the error message
-        return {}  # Return empty dictionary
-
-    if df_augmented_for_training is not None:  # If augmented data provided for training enhancement
-        X_augmented = df_augmented_for_training.select_dtypes(include=np.number).iloc[:, :-1]  # Extract augmented features (numeric only)
-        y_augmented = df_augmented_for_training.iloc[:, -1]  # Extract augmented target
-        
-        X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
-            X_full, y, config=config, X_augmented=X_augmented, y_augmented=y_augmented
-        )  # Scale and split with augmented data merged into training set only
-    else:  # No augmented data provided
-        X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
-            X_full, y, config=config
-        )  # Scale and split the data normally (original-only)
-
-    estimators = [
-        (name, model) for name, model in base_models.items() if name != "SVM"
-    ]  # Define estimators (excluding SVM)
-
-    stacking_model = StackingClassifier(
-        estimators=estimators,
-        final_estimator=RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=config.get("evaluation", {}).get("n_jobs", -1)),
-        cv=StratifiedKFold(n_splits=10, shuffle=True, random_state=42),
-        n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
-    )  # Define the Stacking Classifier model
-
-    X_train_pca, X_test_pca = apply_pca_transformation(
-        X_train_scaled, X_test_scaled, pca_n_components, file
-    )  # Apply PCA transformation if applicable
-
-    X_train_ga, ga_actual_features = get_feature_subset(X_train_scaled, ga_selected_features, feature_names)
-    X_test_ga, _ = get_feature_subset(X_test_scaled, ga_selected_features, feature_names)
     
-    X_train_rfe, rfe_actual_features = get_feature_subset(X_train_scaled, rfe_selected_features, feature_names)
-    X_test_rfe, _ = get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)
-
-    feature_sets = {  # Dictionary of feature sets to evaluate
-        "Full Features": (X_train_scaled, X_test_scaled, feature_names),  # All features with names
-        "GA Features": (X_train_ga, X_test_ga, ga_actual_features),  # GA subset with actual names
-        "PCA Components": (
-            (X_train_pca, X_test_pca, None) if X_train_pca is not None else None
-        ),  # PCA components (only if PCA was applied)
-        "RFE Features": (X_train_rfe, X_test_rfe, rfe_actual_features),  # RFE subset with actual names
-    }
-
-    feature_sets = {
-        k: v for k, v in feature_sets.items() if v is not None
-    }  # Remove any None entries (e.g., PCA if not applied)
-    feature_sets = dict(sorted(feature_sets.items()))  # Sort the feature sets by name
-
-    individual_models = {
-        k: v for k, v in base_models.items()
-    }  # Use the base models (with hyperparameters applied) for individual evaluation
-    total_steps = len(feature_sets) * (
-        len(individual_models) + 1
-    )  # Total steps: models + stacking per feature set
-    progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout)  # Progress bar for all evaluations
-
-    all_results = {}  # Dictionary to store results: (feature_set, model_name) -> result_entry
-
-    current_combination = 1  # Counter for combination index
-
-    for idx, (name, (X_train_subset, X_test_subset, subset_feature_names_list)) in enumerate(feature_sets.items(), start=1):
-        if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
-            print(
-                f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}"
-            )  # Output warning
-            progress_bar.update(len(individual_models) + 1)  # Skip all steps for this feature set
-            continue  # Skip to the next set
+    try:
+        if ga_selected_features:
+            ga_selected_features = sanitize_feature_names(ga_selected_features)
+        if rfe_selected_features:
+            rfe_selected_features = sanitize_feature_names(rfe_selected_features)
 
         print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating models on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}"
-        )  # Output evaluation status
-
-        if name == "PCA Components":  # If the feature set is PCA Components
-            subset_feature_names = [
-                f"PC{i+1}" for i in range(X_train_subset.shape[1])
-            ]  # Generate PCA component names
-        else:  # For other feature sets
-            subset_feature_names = (
-                subset_feature_names_list if subset_feature_names_list else [f"feature_{i}" for i in range(X_train_subset.shape[1])]
-            )  # Use actual feature names or generate generic ones
-
-        X_train_df = pd.DataFrame(
-            X_train_subset, columns=subset_feature_names
-        )  # Convert training features to DataFrame
-        X_test_df = pd.DataFrame(
-            X_test_subset, columns=subset_feature_names
-        )  # Convert test features to DataFrame
-
-        progress_bar.set_description(
-            f"{data_source_label} - {name} (Individual)"
-        )  # Update progress bar description
-        
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=config.get("evaluation", {}).get("threads_limit", 2)
-        ) as executor:  # Create a thread pool executor for parallel evaluation
-            future_to_model = {}  # Dictionary to map futures to model names
-            for model_name, model in individual_models.items():  # Iterate over each individual model
-                send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - {model_name}")
-                future = executor.submit(
-                    evaluate_individual_classifier,
-                    model,
-                    model_name,
-                    X_train_df.values,
-                    y_train,
-                    X_test_df.values,
-                    y_test,
-                    file,
-                    scaler,
-                    subset_feature_names,
-                    name,
-                )  # Submit evaluation task to thread pool (using .values for numpy arrays)
-                future_to_model[future] = (model_name, model.__class__.__name__, current_combination)
-                current_combination += 1
-            
-            for future in concurrent.futures.as_completed(future_to_model):  # As each evaluation completes
-                model_name, model_class, comb_idx = future_to_model[future]  # Get metadata from mapping
-                metrics = future.result()  # Get the metrics from the completed future
-                acc, prec, rec, f1, fpr, fnr, elapsed = metrics
-                result_entry = {
-                    "model": model_class,
-                    "dataset": os.path.relpath(file),
-                    "execution_mode": execution_mode_str,
-                    "attack_types_combined": json.dumps(attack_types_combined) if attack_types_combined else None,
-                    "feature_set": name,
-                    "classifier_type": "Individual",
-                    "model_name": model_name,
-                    "data_source": data_source_label,
-                    "experiment_id": experiment_id,
-                    "experiment_mode": experiment_mode,
-                    "augmentation_ratio": augmentation_ratio,
-                    "n_features": X_train_subset.shape[1],
-                    "n_samples_train": len(y_train),
-                    "n_samples_test": len(y_test),
-                    "accuracy": truncate_value(acc),
-                    "precision": truncate_value(prec),
-                    "recall": truncate_value(rec),
-                    "f1_score": truncate_value(f1),
-                    "fpr": truncate_value(fpr),
-                    "fnr": truncate_value(fnr),
-                    "elapsed_time_s": int(round(elapsed)),
-                    "cv_method": f"StratifiedKFold(n_splits=10)",
-                    "top_features": json.dumps(subset_feature_names),
-                    "rfe_ranking": None,
-                    "hyperparameters": json.dumps(hyperparams_map.get(model_name)) if hyperparams_map and hyperparams_map.get(model_name) is not None else None,
-                    "features_list": subset_feature_names,
-                }  # Prepare result entry
-                all_results[(name, model_name)] = result_entry  # Store result with key
-                send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} with F1: {truncate_value(f1)} in {calculate_execution_time(0, elapsed)}")
-                print(
-                    f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(metrics[0])}{Style.RESET_ALL}"
-                )  # Output accuracy
-                progress_bar.update(1)  # Update progress after each model
-                
-                if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run on original data
-                    try:  # Attempt explainability
-                        trained_model = individual_models[model_name]  # Get trained model object
-                        run_explainability_pipeline(
-                            trained_model,
-                            model_name,
-                            X_test_subset,
-                            y_test,
-                            subset_feature_names,
-                            file,
-                            name,
-                            execution_mode_str,
-                            config
-                        )  # Run explainability pipeline on original test data only
-                    except Exception as e:  # If explainability fails
-                        verbose_output(
-                            f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
-                            config=config
-                        )  # Log error but continue
-
-        print(
-            f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}"
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}"
         )
-        progress_bar.set_description(
-            f"{data_source_label} - {name} (Stacking)"
-        )  # Update progress bar description for stacking
-
-        send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - StackingClassifier")
-
-        stacking_metrics = evaluate_stacking_classifier(
-            stacking_model, X_train_df, y_train, X_test_df, y_test
-        )  # Evaluate stacking model with DataFrames
-
-        try:
-            dataset_name = os.path.basename(os.path.dirname(file))
-            export_model_and_scaler(stacking_model, scaler, dataset_name, "StackingClassifier", subset_feature_names, best_params=None, feature_set=name, dataset_csv_path=file)
-        except Exception:
-            pass
-
-        s_acc, s_prec, s_rec, s_f1, s_fpr, s_fnr, s_elapsed = stacking_metrics
-        stacking_result_entry = {
-            "model": stacking_model.__class__.__name__,
-            "dataset": os.path.relpath(file),
-            "execution_mode": execution_mode_str,
-            "attack_types_combined": json.dumps(attack_types_combined) if attack_types_combined else None,
-            "feature_set": name,
-            "classifier_type": "Stacking",
-            "model_name": "StackingClassifier",
-            "data_source": data_source_label,
-            "experiment_id": experiment_id,
-            "experiment_mode": experiment_mode,
-            "augmentation_ratio": augmentation_ratio,
-            "n_features": X_train_subset.shape[1],
-            "n_samples_train": len(y_train),
-            "n_samples_test": len(y_test),
-            "accuracy": truncate_value(s_acc),
-            "precision": truncate_value(s_prec),
-            "recall": truncate_value(s_rec),
-            "f1_score": truncate_value(s_f1),
-            "fpr": truncate_value(s_fpr),
-            "fnr": truncate_value(s_fnr),
-            "elapsed_time_s": int(round(s_elapsed)),
-            "cv_method": f"StratifiedKFold(n_splits=10)",
-            "top_features": json.dumps(subset_feature_names),
-            "rfe_ranking": None,
-            "hyperparameters": None,
-            "features_list": subset_feature_names,
-        }  # Prepare stacking result entry
-        all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store result with key
-        send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier with F1: {truncate_value(s_f1)} in {calculate_execution_time(0, s_elapsed)}")
         print(
-            f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{truncate_value(stacking_metrics[0])}{Style.RESET_ALL}"
-        )  # Output accuracy
-        progress_bar.update(1)  # Update progress after stacking
-        current_combination += 1
-        
-        if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run on original data
-            try:  # Attempt explainability
-                run_explainability_pipeline(
-                    stacking_model,
-                    "StackingClassifier",
-                    X_test_subset,
-                    y_test,
-                    subset_feature_names,
-                    file,
-                    name,
-                    execution_mode_str,
-                    config
-                )  # Run explainability pipeline on original test data only for stacking model
-            except Exception as e:  # If explainability fails
-                verbose_output(
-                    f"{BackgroundColors.YELLOW}Explainability failed for StackingClassifier: {e}{Style.RESET_ALL}",
-                    config=config
-                )  # Log error but continue
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating on: {BackgroundColors.CYAN}{data_source_label} Data{Style.RESET_ALL}"
+        )
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}\n"
+        )
 
-    progress_bar.close()  # Close progress bar
-    return all_results  # Return dictionary of results
+        X_full = df.select_dtypes(include=np.number).iloc[:, :-1]  # Features (numeric only)
+        y = df.iloc[:, -1]  # Target
+
+        if len(np.unique(y)) < 2:  # Verify if there is more than one class
+            print(
+                f"{BackgroundColors.RED}Target column has only one class. Cannot perform classification. Skipping.{Style.RESET_ALL}"
+            )  # Output the error message
+            return {}  # Return empty dictionary
+
+        if df_augmented_for_training is not None:  # If augmented data provided for training enhancement
+            X_augmented = df_augmented_for_training.select_dtypes(include=np.number).iloc[:, :-1]  # Extract augmented features (numeric only)
+            y_augmented = df_augmented_for_training.iloc[:, -1]  # Extract augmented target
+            
+            X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
+                X_full, y, config=config, X_augmented=X_augmented, y_augmented=y_augmented
+            )  # Scale and split with augmented data merged into training set only
+        else:  # No augmented data provided
+            X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
+                X_full, y, config=config
+            )  # Scale and split the data normally (original-only)
+
+        estimators = [
+            (name, model) for name, model in base_models.items() if name != "SVM"
+        ]  # Define estimators (excluding SVM)
+
+        stacking_model = StackingClassifier(
+            estimators=estimators,
+            final_estimator=RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=config.get("evaluation", {}).get("n_jobs", -1)),
+            cv=StratifiedKFold(n_splits=10, shuffle=True, random_state=42),
+            n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
+        )  # Define the Stacking Classifier model
+
+        X_train_pca, X_test_pca = apply_pca_transformation(
+            X_train_scaled, X_test_scaled, pca_n_components, file
+        )  # Apply PCA transformation if applicable
+
+        X_train_ga, ga_actual_features = get_feature_subset(X_train_scaled, ga_selected_features, feature_names)
+        X_test_ga, _ = get_feature_subset(X_test_scaled, ga_selected_features, feature_names)
+        
+        X_train_rfe, rfe_actual_features = get_feature_subset(X_train_scaled, rfe_selected_features, feature_names)
+        X_test_rfe, _ = get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)
+
+        feature_sets = {  # Dictionary of feature sets to evaluate
+            "Full Features": (X_train_scaled, X_test_scaled, feature_names),  # All features with names
+            "GA Features": (X_train_ga, X_test_ga, ga_actual_features),  # GA subset with actual names
+            "PCA Components": (
+                (X_train_pca, X_test_pca, None) if X_train_pca is not None else None
+            ),  # PCA components (only if PCA was applied)
+            "RFE Features": (X_train_rfe, X_test_rfe, rfe_actual_features),  # RFE subset with actual names
+        }
+
+        feature_sets = {
+            k: v for k, v in feature_sets.items() if v is not None
+        }  # Remove any None entries (e.g., PCA if not applied)
+        feature_sets = dict(sorted(feature_sets.items()))  # Sort the feature sets by name
+
+        individual_models = {
+            k: v for k, v in base_models.items()
+        }  # Use the base models (with hyperparameters applied) for individual evaluation
+        total_steps = len(feature_sets) * (
+            len(individual_models) + 1
+        )  # Total steps: models + stacking per feature set
+        progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout)  # Progress bar for all evaluations
+
+        all_results = {}  # Dictionary to store results: (feature_set, model_name) -> result_entry
+
+        current_combination = 1  # Counter for combination index
+
+        for idx, (name, (X_train_subset, X_test_subset, subset_feature_names_list)) in enumerate(feature_sets.items(), start=1):
+            if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
+                print(
+                    f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}"
+                )  # Output warning
+                progress_bar.update(len(individual_models) + 1)  # Skip all steps for this feature set
+                continue  # Skip to the next set
+
+            print(
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating models on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}"
+            )  # Output evaluation status
+
+            if name == "PCA Components":  # If the feature set is PCA Components
+                subset_feature_names = [
+                    f"PC{i+1}" for i in range(X_train_subset.shape[1])
+                ]  # Generate PCA component names
+            else:  # For other feature sets
+                subset_feature_names = (
+                    subset_feature_names_list if subset_feature_names_list else [f"feature_{i}" for i in range(X_train_subset.shape[1])]
+                )  # Use actual feature names or generate generic ones
+
+            X_train_df = pd.DataFrame(
+                X_train_subset, columns=subset_feature_names
+            )  # Convert training features to DataFrame
+            X_test_df = pd.DataFrame(
+                X_test_subset, columns=subset_feature_names
+            )  # Convert test features to DataFrame
+
+            progress_bar.set_description(
+                f"{data_source_label} - {name} (Individual)"
+            )  # Update progress bar description
+            
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=config.get("evaluation", {}).get("threads_limit", 2)
+            ) as executor:  # Create a thread pool executor for parallel evaluation
+                future_to_model = {}  # Dictionary to map futures to model names
+                for model_name, model in individual_models.items():  # Iterate over each individual model
+                    send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - {model_name}")
+                    future = executor.submit(
+                        evaluate_individual_classifier,
+                        model,
+                        model_name,
+                        X_train_df.values,
+                        y_train,
+                        X_test_df.values,
+                        y_test,
+                        file,
+                        scaler,
+                        subset_feature_names,
+                        name,
+                    )  # Submit evaluation task to thread pool (using .values for numpy arrays)
+                    future_to_model[future] = (model_name, model.__class__.__name__, current_combination)
+                    current_combination += 1
+                
+                for future in concurrent.futures.as_completed(future_to_model):  # As each evaluation completes
+                    model_name, model_class, comb_idx = future_to_model[future]  # Get metadata from mapping
+                    metrics = future.result()  # Get the metrics from the completed future
+                    acc, prec, rec, f1, fpr, fnr, elapsed = metrics
+                    result_entry = {
+                        "model": model_class,
+                        "dataset": os.path.relpath(file),
+                        "execution_mode": execution_mode_str,
+                        "attack_types_combined": json.dumps(attack_types_combined) if attack_types_combined else None,
+                        "feature_set": name,
+                        "classifier_type": "Individual",
+                        "model_name": model_name,
+                        "data_source": data_source_label,
+                        "experiment_id": experiment_id,
+                        "experiment_mode": experiment_mode,
+                        "augmentation_ratio": augmentation_ratio,
+                        "n_features": X_train_subset.shape[1],
+                        "n_samples_train": len(y_train),
+                        "n_samples_test": len(y_test),
+                        "accuracy": truncate_value(acc),
+                        "precision": truncate_value(prec),
+                        "recall": truncate_value(rec),
+                        "f1_score": truncate_value(f1),
+                        "fpr": truncate_value(fpr),
+                        "fnr": truncate_value(fnr),
+                        "elapsed_time_s": int(round(elapsed)),
+                        "cv_method": f"StratifiedKFold(n_splits=10)",
+                        "top_features": json.dumps(subset_feature_names),
+                        "rfe_ranking": None,
+                        "hyperparameters": json.dumps(hyperparams_map.get(model_name)) if hyperparams_map and hyperparams_map.get(model_name) is not None else None,
+                        "features_list": subset_feature_names,
+                    }  # Prepare result entry
+                    all_results[(name, model_name)] = result_entry  # Store result with key
+                    send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} with F1: {truncate_value(f1)} in {calculate_execution_time(0, elapsed)}")
+                    print(
+                        f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(metrics[0])}{Style.RESET_ALL}"
+                    )  # Output accuracy
+                    progress_bar.update(1)  # Update progress after each model
+                    
+                    if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run on original data
+                        try:  # Attempt explainability
+                            trained_model = individual_models[model_name]  # Get trained model object
+                            run_explainability_pipeline(
+                                trained_model,
+                                model_name,
+                                X_test_subset,
+                                y_test,
+                                subset_feature_names,
+                                file,
+                                name,
+                                execution_mode_str,
+                                config
+                            )  # Run explainability pipeline on original test data only
+                        except Exception as e:  # If explainability fails
+                            verbose_output(
+                                f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
+                                config=config
+                            )  # Log error but continue
+
+            print(
+                f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}"
+            )
+            progress_bar.set_description(
+                f"{data_source_label} - {name} (Stacking)"
+            )  # Update progress bar description for stacking
+
+            send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - StackingClassifier")
+
+            stacking_metrics = evaluate_stacking_classifier(
+                stacking_model, X_train_df, y_train, X_test_df, y_test
+            )  # Evaluate stacking model with DataFrames
+
+            try:
+                dataset_name = os.path.basename(os.path.dirname(file))
+                export_model_and_scaler(stacking_model, scaler, dataset_name, "StackingClassifier", subset_feature_names, best_params=None, feature_set=name, dataset_csv_path=file)
+            except Exception:
+                pass
+
+            s_acc, s_prec, s_rec, s_f1, s_fpr, s_fnr, s_elapsed = stacking_metrics
+            stacking_result_entry = {
+                "model": stacking_model.__class__.__name__,
+                "dataset": os.path.relpath(file),
+                "execution_mode": execution_mode_str,
+                "attack_types_combined": json.dumps(attack_types_combined) if attack_types_combined else None,
+                "feature_set": name,
+                "classifier_type": "Stacking",
+                "model_name": "StackingClassifier",
+                "data_source": data_source_label,
+                "experiment_id": experiment_id,
+                "experiment_mode": experiment_mode,
+                "augmentation_ratio": augmentation_ratio,
+                "n_features": X_train_subset.shape[1],
+                "n_samples_train": len(y_train),
+                "n_samples_test": len(y_test),
+                "accuracy": truncate_value(s_acc),
+                "precision": truncate_value(s_prec),
+                "recall": truncate_value(s_rec),
+                "f1_score": truncate_value(s_f1),
+                "fpr": truncate_value(s_fpr),
+                "fnr": truncate_value(s_fnr),
+                "elapsed_time_s": int(round(s_elapsed)),
+                "cv_method": f"StratifiedKFold(n_splits=10)",
+                "top_features": json.dumps(subset_feature_names),
+                "rfe_ranking": None,
+                "hyperparameters": None,
+                "features_list": subset_feature_names,
+            }  # Prepare stacking result entry
+            all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store result with key
+            send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier with F1: {truncate_value(s_f1)} in {calculate_execution_time(0, s_elapsed)}")
+            print(
+                f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{truncate_value(stacking_metrics[0])}{Style.RESET_ALL}"
+            )  # Output accuracy
+            progress_bar.update(1)  # Update progress after stacking
+            current_combination += 1
+            
+            if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run on original data
+                try:  # Attempt explainability
+                    run_explainability_pipeline(
+                        stacking_model,
+                        "StackingClassifier",
+                        X_test_subset,
+                        y_test,
+                        subset_feature_names,
+                        file,
+                        name,
+                        execution_mode_str,
+                        config
+                    )  # Run explainability pipeline on original test data only for stacking model
+                except Exception as e:  # If explainability fails
+                    verbose_output(
+                        f"{BackgroundColors.YELLOW}Explainability failed for StackingClassifier: {e}{Style.RESET_ALL}",
+                        config=config
+                    )  # Log error but continue
+
+        progress_bar.close()  # Close progress bar
+        return all_results  # Return dictionary of results
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def determine_files_to_process(csv_file, input_path, config=None):
@@ -4868,26 +5312,31 @@ def determine_files_to_process(csv_file, input_path, config=None):
     :return: List of file paths to process
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Determining files to process from path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+        verbose_output(
+            f"{BackgroundColors.GREEN}Determining files to process from path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    if csv_file:  # If a specific CSV file is provided via CLI
-        try:  # Attempt to validate CSV file path
-            abs_csv = os.path.abspath(csv_file)  # Get absolute path of CSV file
-            abs_input = os.path.abspath(input_path)  # Get absolute path of input directory
-            if abs_csv.startswith(abs_input):  # If CSV file belongs to this input path
-                return [csv_file]  # Return list with single CSV file
-            else:  # CSV override does not belong to this path
-                return []  # Return empty list to skip this path
-        except Exception:  # If validation fails
-            return []  # Return empty list on error
-    else:  # No CLI override, scan directory for CSV files
-        return get_files_to_process(input_path, file_extension=".csv", config=config)  # Get list of CSV files to process
+        if csv_file:  # If a specific CSV file is provided via CLI
+            try:  # Attempt to validate CSV file path
+                abs_csv = os.path.abspath(csv_file)  # Get absolute path of CSV file
+                abs_input = os.path.abspath(input_path)  # Get absolute path of input directory
+                if abs_csv.startswith(abs_input):  # If CSV file belongs to this input path
+                    return [csv_file]  # Return list with single CSV file
+                else:  # CSV override does not belong to this path
+                    return []  # Return empty list to skip this path
+            except Exception:  # If validation fails
+                return []  # Return empty list on error
+        else:  # No CLI override, scan directory for CSV files
+            return get_files_to_process(input_path, file_extension=".csv", config=config)  # Get list of CSV files to process
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def combine_dataset_if_needed(files_to_process, config=None):
@@ -4899,33 +5348,38 @@ def combine_dataset_if_needed(files_to_process, config=None):
     :return: Tuple (combined_df, combined_file_for_features, updated_files_list) or (None, None, files_to_process)
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Checking if dataset combination is needed...{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
-    
-    process_entire_dataset = config.get("execution", {}).get("process_entire_dataset", False)  # Get process entire dataset flag from config
-
-    if process_entire_dataset and len(files_to_process) > 1:  # If combining is enabled and multiple files exist
         verbose_output(
-            f"{BackgroundColors.GREEN}Attempting to combine {BackgroundColors.CYAN}{len(files_to_process)}{BackgroundColors.GREEN} dataset files...{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Checking if dataset combination is needed...{Style.RESET_ALL}",
             config=config
         )  # Output the verbose message
-        result = combine_dataset_files(files_to_process, config=config)  # Attempt to combine all files
-        if result is not None:  # If combination was successful
-            combined_df, combined_target_col = result  # Unpack the combined dataframe and target column
-            combined_file_for_features = files_to_process[0]  # Use first file for feature selection metadata
-            files_to_process = ["combined"]  # Replace file list with single "combined" entry
-            return (combined_df, combined_file_for_features, files_to_process)  # Return combined data and updated file list
-        else:  # If combination failed
-            print(
-                f"{BackgroundColors.YELLOW}Warning: Could not combine dataset files. Processing individually.{Style.RESET_ALL}"
-            )  # Output warning message
+        
+        process_entire_dataset = config.get("execution", {}).get("process_entire_dataset", False)  # Get process entire dataset flag from config
 
-    return (None, None, files_to_process)  # Return original file list unchanged
+        if process_entire_dataset and len(files_to_process) > 1:  # If combining is enabled and multiple files exist
+            verbose_output(
+                f"{BackgroundColors.GREEN}Attempting to combine {BackgroundColors.CYAN}{len(files_to_process)}{BackgroundColors.GREEN} dataset files...{Style.RESET_ALL}",
+                config=config
+            )  # Output the verbose message
+            result = combine_dataset_files(files_to_process, config=config)  # Attempt to combine all files
+            if result is not None:  # If combination was successful
+                combined_df, combined_target_col = result  # Unpack the combined dataframe and target column
+                combined_file_for_features = files_to_process[0]  # Use first file for feature selection metadata
+                files_to_process = ["combined"]  # Replace file list with single "combined" entry
+                return (combined_df, combined_file_for_features, files_to_process)  # Return combined data and updated file list
+            else:  # If combination failed
+                print(
+                    f"{BackgroundColors.YELLOW}Warning: Could not combine dataset files. Processing individually.{Style.RESET_ALL}"
+                )  # Output warning message
+
+        return (None, None, files_to_process)  # Return original file list unchanged
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def load_and_preprocess_dataset(file, combined_df, config=None):
@@ -4938,39 +5392,44 @@ def load_and_preprocess_dataset(file, combined_df, config=None):
     :return: Tuple (df_cleaned, feature_names) or (None, None) if loading/preprocessing fails
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Loading and preprocessing dataset: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
-
-    if file == "combined":  # If using combined dataset
-        df_original = combined_df  # Use the pre-combined dataframe
-    else:  # Otherwise load from file
-        df_original = load_dataset(file, config=config)  # Load the original dataset
-
-    if df_original is None:  # If the dataset failed to load
         verbose_output(
-            f"{BackgroundColors.RED}Failed to load dataset from: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Loading and preprocessing dataset: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}",
             config=config
-        )  # Output the failure message
-        return (None, None)  # Return None tuple
-    
-    remove_zero_variance = config.get("dataset", {}).get("remove_zero_variance", True)  # Get remove zero variance flag from config
+        )  # Output the verbose message
 
-    df_cleaned = preprocess_dataframe(df_original, remove_zero_variance=remove_zero_variance, config=config)  # Preprocess the DataFrame
+        if file == "combined":  # If using combined dataset
+            df_original = combined_df  # Use the pre-combined dataframe
+        else:  # Otherwise load from file
+            df_original = load_dataset(file, config=config)  # Load the original dataset
 
-    if df_cleaned is None or df_cleaned.empty:  # If the DataFrame is None or empty after preprocessing
-        print(
-            f"{BackgroundColors.RED}Dataset {BackgroundColors.CYAN}{file}{BackgroundColors.RED} empty after preprocessing. Skipping.{Style.RESET_ALL}"
-        )  # Output error message
-        return (None, None)  # Return None tuple
+        if df_original is None:  # If the dataset failed to load
+            verbose_output(
+                f"{BackgroundColors.RED}Failed to load dataset from: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}",
+                config=config
+            )  # Output the failure message
+            return (None, None)  # Return None tuple
+        
+        remove_zero_variance = config.get("dataset", {}).get("remove_zero_variance", True)  # Get remove zero variance flag from config
 
-    feature_names = df_cleaned.select_dtypes(include=np.number).iloc[:, :-1].columns.tolist()  # Get numeric feature names excluding target
+        df_cleaned = preprocess_dataframe(df_original, remove_zero_variance=remove_zero_variance, config=config)  # Preprocess the DataFrame
 
-    return (df_cleaned, feature_names)  # Return cleaned dataframe and feature names
+        if df_cleaned is None or df_cleaned.empty:  # If the DataFrame is None or empty after preprocessing
+            print(
+                f"{BackgroundColors.RED}Dataset {BackgroundColors.CYAN}{file}{BackgroundColors.RED} empty after preprocessing. Skipping.{Style.RESET_ALL}"
+            )  # Output error message
+            return (None, None)  # Return None tuple
+
+        feature_names = df_cleaned.select_dtypes(include=np.number).iloc[:, :-1].columns.tolist()  # Get numeric feature names excluding target
+
+        return (df_cleaned, feature_names)  # Return cleaned dataframe and feature names
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def prepare_models_with_hyperparameters(file_path, config=None):
@@ -4982,30 +5441,35 @@ def prepare_models_with_hyperparameters(file_path, config=None):
     :return: Tuple (base_models, hp_params_map)
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Preparing models with hyperparameters for: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
-
-    base_models = get_models(config=config)  # Get the base models with default parameters
-
-    hp_params_map = {}  # Initialize empty hyperparameters mapping
-    hp_results_raw = extract_hyperparameter_optimization_results(file_path, config=config)  # Extract hyperparameter optimization results
-
-    if hp_results_raw:  # If results were found, extract the params mapping and apply
-        hp_params_map = {
-            k: (v.get("best_params") if isinstance(v, dict) else v) for k, v in hp_results_raw.items()
-        }  # Extract only the best_params mapping
-        base_models = apply_hyperparameters_to_models(hp_params_map, base_models, config=config)  # Apply hyperparameters to base models
         verbose_output(
-            f"{BackgroundColors.GREEN}Applied hyperparameters from optimization results{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Preparing models with hyperparameters for: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
             config=config
         )  # Output the verbose message
 
-    return (base_models, hp_params_map)  # Return models and hyperparameters mapping
+        base_models = get_models(config=config)  # Get the base models with default parameters
+
+        hp_params_map = {}  # Initialize empty hyperparameters mapping
+        hp_results_raw = extract_hyperparameter_optimization_results(file_path, config=config)  # Extract hyperparameter optimization results
+
+        if hp_results_raw:  # If results were found, extract the params mapping and apply
+            hp_params_map = {
+                k: (v.get("best_params") if isinstance(v, dict) else v) for k, v in hp_results_raw.items()
+            }  # Extract only the best_params mapping
+            base_models = apply_hyperparameters_to_models(hp_params_map, base_models, config=config)  # Apply hyperparameters to base models
+            verbose_output(
+                f"{BackgroundColors.GREEN}Applied hyperparameters from optimization results{Style.RESET_ALL}",
+                config=config
+            )  # Output the verbose message
+
+        return (base_models, hp_params_map)  # Return models and hyperparameters mapping
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def extract_metrics_from_result(result):
@@ -5015,20 +5479,25 @@ def extract_metrics_from_result(result):
     :param result: Result dictionary containing metric keys
     :return: List of [accuracy, precision, recall, f1_score, fpr, fnr, elapsed_time_s]
     """
+    
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Extracting metrics from result dictionary...{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Extracting metrics from result dictionary...{Style.RESET_ALL}"
-    )  # Output the verbose message
-
-    return [
-        result.get("accuracy", 0),  # Get accuracy or default to 0
-        result.get("precision", 0),  # Get precision or default to 0
-        result.get("recall", 0),  # Get recall or default to 0
-        result.get("f1_score", 0),  # Get F1 score or default to 0
-        result.get("fpr", 0),  # Get false positive rate or default to 0
-        result.get("fnr", 0),  # Get false negative rate or default to 0
-        result.get("elapsed_time_s", 0),  # Get elapsed time or default to 0
-    ]  # Return list of metric values
+        return [
+            result.get("accuracy", 0),  # Get accuracy or default to 0
+            result.get("precision", 0),  # Get precision or default to 0
+            result.get("recall", 0),  # Get recall or default to 0
+            result.get("f1_score", 0),  # Get F1 score or default to 0
+            result.get("fpr", 0),  # Get false positive rate or default to 0
+            result.get("fnr", 0),  # Get false negative rate or default to 0
+            result.get("elapsed_time_s", 0),  # Get elapsed time or default to 0
+        ]  # Return list of metric values
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def calculate_all_improvements(orig_metrics, merged_metrics):
@@ -5039,20 +5508,25 @@ def calculate_all_improvements(orig_metrics, merged_metrics):
     :param merged_metrics: List of merged metrics [accuracy, precision, recall, f1, fpr, fnr, time]
     :return: Dictionary of improvement percentages for each metric
     """
+    
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Calculating metric improvements...{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Calculating metric improvements...{Style.RESET_ALL}"
-    )  # Output the verbose message
-
-    return {
-        "accuracy": calculate_metric_improvement(orig_metrics[0], merged_metrics[0]),  # Calculate accuracy improvement
-        "precision": calculate_metric_improvement(orig_metrics[1], merged_metrics[1]),  # Calculate precision improvement
-        "recall": calculate_metric_improvement(orig_metrics[2], merged_metrics[2]),  # Calculate recall improvement
-        "f1_score": calculate_metric_improvement(orig_metrics[3], merged_metrics[3]),  # Calculate F1 score improvement
-        "fpr": calculate_metric_improvement(orig_metrics[4], merged_metrics[4]),  # Calculate FPR change (lower is better)
-        "fnr": calculate_metric_improvement(orig_metrics[5], merged_metrics[5]),  # Calculate FNR change (lower is better)
-        "training_time": calculate_metric_improvement(orig_metrics[6], merged_metrics[6]),  # Calculate time change (lower is better)
-    }  # Return dictionary of improvements
+        return {
+            "accuracy": calculate_metric_improvement(orig_metrics[0], merged_metrics[0]),  # Calculate accuracy improvement
+            "precision": calculate_metric_improvement(orig_metrics[1], merged_metrics[1]),  # Calculate precision improvement
+            "recall": calculate_metric_improvement(orig_metrics[2], merged_metrics[2]),  # Calculate recall improvement
+            "f1_score": calculate_metric_improvement(orig_metrics[3], merged_metrics[3]),  # Calculate F1 score improvement
+            "fpr": calculate_metric_improvement(orig_metrics[4], merged_metrics[4]),  # Calculate FPR change (lower is better)
+            "fnr": calculate_metric_improvement(orig_metrics[5], merged_metrics[5]),  # Calculate FNR change (lower is better)
+            "training_time": calculate_metric_improvement(orig_metrics[6], merged_metrics[6]),  # Calculate time change (lower is better)
+        }  # Return dictionary of improvements
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def print_model_comparison(feature_set, model_name, orig_metrics, aug_metrics, merged_metrics, improvements):
@@ -5067,49 +5541,54 @@ def print_model_comparison(feature_set, model_name, orig_metrics, aug_metrics, m
     :param improvements: Dictionary of improvement percentages
     :return: None
     """
+    
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Printing comparison for model: {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}, feature set: {BackgroundColors.CYAN}{feature_set}{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Printing comparison for model: {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}, feature set: {BackgroundColors.CYAN}{feature_set}{Style.RESET_ALL}"
-    )  # Output the verbose message
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Feature Set: {BackgroundColors.CYAN}{feature_set}{BackgroundColors.GREEN} | Model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
+        )  # Print header with feature set and model name
 
-    print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Feature Set: {BackgroundColors.CYAN}{feature_set}{BackgroundColors.GREEN} | Model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
-    )  # Print header with feature set and model name
+        print(f"  {BackgroundColors.YELLOW}Accuracy:{Style.RESET_ALL}")  # Print accuracy label
+        print(
+            f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[0])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[0])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[0])} | {BackgroundColors.CYAN}Improvement: {improvements['accuracy']:+.2f}%{Style.RESET_ALL}"
+        )  # Print accuracy comparison
 
-    print(f"  {BackgroundColors.YELLOW}Accuracy:{Style.RESET_ALL}")  # Print accuracy label
-    print(
-        f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[0])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[0])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[0])} | {BackgroundColors.CYAN}Improvement: {improvements['accuracy']:+.2f}%{Style.RESET_ALL}"
-    )  # Print accuracy comparison
+        print(f"  {BackgroundColors.YELLOW}Precision:{Style.RESET_ALL}")  # Print precision label
+        print(
+            f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[1])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[1])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[1])} | {BackgroundColors.CYAN}Improvement: {improvements['precision']:+.2f}%{Style.RESET_ALL}"
+        )  # Print precision comparison
 
-    print(f"  {BackgroundColors.YELLOW}Precision:{Style.RESET_ALL}")  # Print precision label
-    print(
-        f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[1])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[1])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[1])} | {BackgroundColors.CYAN}Improvement: {improvements['precision']:+.2f}%{Style.RESET_ALL}"
-    )  # Print precision comparison
+        print(f"  {BackgroundColors.YELLOW}Recall:{Style.RESET_ALL}")  # Print recall label
+        print(
+            f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[2])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[2])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[2])} | {BackgroundColors.CYAN}Improvement: {improvements['recall']:+.2f}%{Style.RESET_ALL}"
+        )  # Print recall comparison
 
-    print(f"  {BackgroundColors.YELLOW}Recall:{Style.RESET_ALL}")  # Print recall label
-    print(
-        f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[2])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[2])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[2])} | {BackgroundColors.CYAN}Improvement: {improvements['recall']:+.2f}%{Style.RESET_ALL}"
-    )  # Print recall comparison
+        print(f"  {BackgroundColors.YELLOW}F1-Score:{Style.RESET_ALL}")  # Print F1 score label
+        print(
+            f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[3])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[3])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[3])} | {BackgroundColors.CYAN}Improvement: {improvements['f1_score']:+.2f}%{Style.RESET_ALL}"
+        )  # Print F1 score comparison
 
-    print(f"  {BackgroundColors.YELLOW}F1-Score:{Style.RESET_ALL}")  # Print F1 score label
-    print(
-        f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[3])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[3])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[3])} | {BackgroundColors.CYAN}Improvement: {improvements['f1_score']:+.2f}%{Style.RESET_ALL}"
-    )  # Print F1 score comparison
+        print(f"  {BackgroundColors.YELLOW}FPR (lower is better):{Style.RESET_ALL}")  # Print FPR label
+        print(
+            f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[4])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[4])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[4])} | {BackgroundColors.CYAN}Change: {improvements['fpr']:+.2f}%{Style.RESET_ALL}"
+        )  # Print FPR comparison
 
-    print(f"  {BackgroundColors.YELLOW}FPR (lower is better):{Style.RESET_ALL}")  # Print FPR label
-    print(
-        f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[4])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[4])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[4])} | {BackgroundColors.CYAN}Change: {improvements['fpr']:+.2f}%{Style.RESET_ALL}"
-    )  # Print FPR comparison
+        print(f"  {BackgroundColors.YELLOW}FNR (lower is better):{Style.RESET_ALL}")  # Print FNR label
+        print(
+            f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[5])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[5])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[5])} | {BackgroundColors.CYAN}Change: {improvements['fnr']:+.2f}%{Style.RESET_ALL}"
+        )  # Print FNR comparison
 
-    print(f"  {BackgroundColors.YELLOW}FNR (lower is better):{Style.RESET_ALL}")  # Print FNR label
-    print(
-        f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[5])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[5])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[5])} | {BackgroundColors.CYAN}Change: {improvements['fnr']:+.2f}%{Style.RESET_ALL}"
-    )  # Print FNR comparison
-
-    print(f"  {BackgroundColors.YELLOW}Training Time (seconds, lower is better):{Style.RESET_ALL}")  # Print training time label
-    print(
-        f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[6]:.2f}s | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[6]:.2f}s | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[6]:.2f}s | {BackgroundColors.CYAN}Change: {improvements['training_time']:+.2f}%{Style.RESET_ALL}\n"
-    )  # Print training time comparison
+        print(f"  {BackgroundColors.YELLOW}Training Time (seconds, lower is better):{Style.RESET_ALL}")  # Print training time label
+        print(
+            f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[6]:.2f}s | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[6]:.2f}s | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[6]:.2f}s | {BackgroundColors.CYAN}Change: {improvements['training_time']:+.2f}%{Style.RESET_ALL}\n"
+        )  # Print training time comparison
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def build_comparison_result_entry(orig_result, feature_set, classifier_type, model_name, data_source, metrics, improvements, n_features_override=None, n_samples_train_override=None, n_samples_test_override=None, experiment_id=None, experiment_mode="original_only", augmentation_ratio=None):
@@ -5131,39 +5610,44 @@ def build_comparison_result_entry(orig_result, feature_set, classifier_type, mod
     :param augmentation_ratio: Augmentation ratio float or None
     :return: Dictionary containing comparison result entry
     """
+    
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Building comparison result entry for: {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}, data source: {BackgroundColors.CYAN}{data_source}{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Building comparison result entry for: {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}, data source: {BackgroundColors.CYAN}{data_source}{Style.RESET_ALL}"
-    )  # Output the verbose message
-
-    return {
-        "dataset": orig_result["dataset"],  # Dataset name from original result
-        "feature_set": feature_set,  # Feature set name
-        "classifier_type": classifier_type,  # Classifier type
-        "model_name": model_name,  # Model name
-        "data_source": data_source,  # Data source label
-        "experiment_id": experiment_id,  # Unique experiment identifier for traceability
-        "experiment_mode": experiment_mode,  # Experiment mode (original_only or original_plus_augmented)
-        "augmentation_ratio": augmentation_ratio,  # Augmentation ratio float or None
-        "n_features": n_features_override if n_features_override is not None else orig_result["n_features"],  # Number of features
-        "n_samples_train": n_samples_train_override if n_samples_train_override is not None else orig_result["n_samples_train"],  # Training samples count
-        "n_samples_test": n_samples_test_override if n_samples_test_override is not None else orig_result["n_samples_test"],  # Test samples count
-        "accuracy": metrics[0],  # Accuracy metric
-        "precision": metrics[1],  # Precision metric
-        "recall": metrics[2],  # Recall metric
-        "f1_score": metrics[3],  # F1 score metric
-        "fpr": metrics[4],  # False positive rate
-        "fnr": metrics[5],  # False negative rate
-        "training_time": metrics[6],  # Training time in seconds
-        "accuracy_improvement": improvements.get("accuracy", 0.0),  # Accuracy improvement percentage
-        "precision_improvement": improvements.get("precision", 0.0),  # Precision improvement percentage
-        "recall_improvement": improvements.get("recall", 0.0),  # Recall improvement percentage
-        "f1_score_improvement": improvements.get("f1_score", 0.0),  # F1 score improvement percentage
-        "fpr_improvement": improvements.get("fpr", 0.0),  # FPR improvement percentage
-        "fnr_improvement": improvements.get("fnr", 0.0),  # FNR improvement percentage
-        "training_time_improvement": improvements.get("training_time", 0.0),  # Training time improvement percentage
-        "features_list": orig_result["features_list"],  # List of feature names used
-    }  # Return comparison result entry dictionary
+        return {
+            "dataset": orig_result["dataset"],  # Dataset name from original result
+            "feature_set": feature_set,  # Feature set name
+            "classifier_type": classifier_type,  # Classifier type
+            "model_name": model_name,  # Model name
+            "data_source": data_source,  # Data source label
+            "experiment_id": experiment_id,  # Unique experiment identifier for traceability
+            "experiment_mode": experiment_mode,  # Experiment mode (original_only or original_plus_augmented)
+            "augmentation_ratio": augmentation_ratio,  # Augmentation ratio float or None
+            "n_features": n_features_override if n_features_override is not None else orig_result["n_features"],  # Number of features
+            "n_samples_train": n_samples_train_override if n_samples_train_override is not None else orig_result["n_samples_train"],  # Training samples count
+            "n_samples_test": n_samples_test_override if n_samples_test_override is not None else orig_result["n_samples_test"],  # Test samples count
+            "accuracy": metrics[0],  # Accuracy metric
+            "precision": metrics[1],  # Precision metric
+            "recall": metrics[2],  # Recall metric
+            "f1_score": metrics[3],  # F1 score metric
+            "fpr": metrics[4],  # False positive rate
+            "fnr": metrics[5],  # False negative rate
+            "training_time": metrics[6],  # Training time in seconds
+            "accuracy_improvement": improvements.get("accuracy", 0.0),  # Accuracy improvement percentage
+            "precision_improvement": improvements.get("precision", 0.0),  # Precision improvement percentage
+            "recall_improvement": improvements.get("recall", 0.0),  # Recall improvement percentage
+            "f1_score_improvement": improvements.get("f1_score", 0.0),  # F1 score improvement percentage
+            "fpr_improvement": improvements.get("fpr", 0.0),  # FPR improvement percentage
+            "fnr_improvement": improvements.get("fnr", 0.0),  # FNR improvement percentage
+            "training_time_improvement": improvements.get("training_time", 0.0),  # Training time improvement percentage
+            "features_list": orig_result["features_list"],  # List of feature names used
+        }  # Return comparison result entry dictionary
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def generate_ratio_comparison_report(results_original, all_ratio_results):
@@ -5175,78 +5659,83 @@ def generate_ratio_comparison_report(results_original, all_ratio_results):
     :param all_ratio_results: Dictionary mapping ratio (float) to results dictionary
     :return: List of comparison result entries for CSV export
     """
-
-    verbose_output(
-        f"{BackgroundColors.GREEN}Generating ratio-based data augmentation comparison report...{Style.RESET_ALL}"
-    )  # Output the verbose message
-
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
-    )  # Print separator line for visual clarity
-    print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}DATA AUGMENTATION RATIO-BASED COMPARISON REPORT{Style.RESET_ALL}"
-    )  # Print report header title
-    print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
-    )  # Print closing separator line
-
-    comparison_results = []  # Initialize list for comparison result entries
-    no_improvements = {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1_score": 0.0, "fpr": 0.0, "fnr": 0.0, "training_time": 0.0}  # Zero improvements dict for original baseline entries
-
-    for key in results_original.keys():  # Iterate through each feature_set/model combination from original results
-        orig_result = results_original[key]  # Get the original baseline result entry
-        feature_set = orig_result["feature_set"]  # Extract feature set name from result
-        model_name = orig_result["model_name"]  # Extract model name from result
-        classifier_type = orig_result["classifier_type"]  # Extract classifier type from result
-        orig_metrics = extract_metrics_from_result(orig_result)  # Extract metrics list from original result
-        orig_experiment_id = orig_result.get("experiment_id", None)  # Get experiment ID from original result
-
-        comparison_results.append(
-            build_comparison_result_entry(
-                orig_result, feature_set, classifier_type, model_name, "Original",
-                orig_metrics, no_improvements,
-                experiment_id=orig_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
-            )
-        )  # Add original baseline entry to comparison results
+    
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Generating ratio-based data augmentation comparison report...{Style.RESET_ALL}"
+        )  # Output the verbose message
 
         print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Feature Set: {BackgroundColors.CYAN}{feature_set}{BackgroundColors.GREEN} | Model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
-        )  # Print header with feature set and model name
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
+        )  # Print separator line for visual clarity
         print(
-            f"  {BackgroundColors.GREEN}Original baseline - Acc: {BackgroundColors.CYAN}{truncate_value(orig_metrics[0])}{BackgroundColors.GREEN}, F1: {BackgroundColors.CYAN}{truncate_value(orig_metrics[3])}{Style.RESET_ALL}"
-        )  # Print original baseline metrics summary
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}DATA AUGMENTATION RATIO-BASED COMPARISON REPORT{Style.RESET_ALL}"
+        )  # Print report header title
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
+        )  # Print closing separator line
 
-        for ratio in sorted(all_ratio_results.keys()):  # Iterate over each ratio in sorted order
-            ratio_results = all_ratio_results[ratio]  # Get results dict for this ratio
-            ratio_result = ratio_results.get(key)  # Get the matching result for this feature_set/model key
+        comparison_results = []  # Initialize list for comparison result entries
+        no_improvements = {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1_score": 0.0, "fpr": 0.0, "fnr": 0.0, "training_time": 0.0}  # Zero improvements dict for original baseline entries
 
-            if ratio_result is None:  # If no matching result exists for this ratio
-                continue  # Skip this ratio for this model/feature_set combination
-
-            ratio_metrics = extract_metrics_from_result(ratio_result)  # Extract metrics list from ratio result
-            improvements = calculate_all_improvements(orig_metrics, ratio_metrics)  # Calculate improvements vs original
-            ratio_pct = int(ratio * 100)  # Convert float ratio to integer percentage for display
-            ratio_experiment_id = ratio_result.get("experiment_id", None)  # Get experiment ID from ratio result
+        for key in results_original.keys():  # Iterate through each feature_set/model combination from original results
+            orig_result = results_original[key]  # Get the original baseline result entry
+            feature_set = orig_result["feature_set"]  # Extract feature set name from result
+            model_name = orig_result["model_name"]  # Extract model name from result
+            classifier_type = orig_result["classifier_type"]  # Extract classifier type from result
+            orig_metrics = extract_metrics_from_result(orig_result)  # Extract metrics list from original result
+            orig_experiment_id = orig_result.get("experiment_id", None)  # Get experiment ID from original result
 
             comparison_results.append(
                 build_comparison_result_entry(
-                    orig_result, feature_set, classifier_type, model_name,
-                    f"Original+Augmented@{ratio_pct}%", ratio_metrics, improvements,
-                    n_features_override=ratio_result.get("n_features"),
-                    n_samples_train_override=ratio_result.get("n_samples_train"),
-                    n_samples_test_override=ratio_result.get("n_samples_test"),
-                    experiment_id=ratio_experiment_id, experiment_mode="original_plus_augmented",
-                    augmentation_ratio=ratio,
+                    orig_result, feature_set, classifier_type, model_name, "Original",
+                    orig_metrics, no_improvements,
+                    experiment_id=orig_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
                 )
-            )  # Add ratio experiment entry with improvements to comparison results
+            )  # Add original baseline entry to comparison results
 
-            f1_improvement = improvements.get("f1_score", 0.0)  # Extract F1 improvement for display
-            improvement_color = BackgroundColors.GREEN if f1_improvement >= 0 else BackgroundColors.RED  # Choose color based on improvement direction
             print(
-                f"  {BackgroundColors.YELLOW}@{ratio_pct}%:{Style.RESET_ALL} Acc: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[0])}{Style.RESET_ALL}, F1: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[3])}{Style.RESET_ALL}, F1 change: {improvement_color}{f1_improvement:+.2f}%{Style.RESET_ALL}"
-            )  # Print ratio result metrics with F1 improvement indicator
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Feature Set: {BackgroundColors.CYAN}{feature_set}{BackgroundColors.GREEN} | Model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
+            )  # Print header with feature set and model name
+            print(
+                f"  {BackgroundColors.GREEN}Original baseline - Acc: {BackgroundColors.CYAN}{truncate_value(orig_metrics[0])}{BackgroundColors.GREEN}, F1: {BackgroundColors.CYAN}{truncate_value(orig_metrics[3])}{Style.RESET_ALL}"
+            )  # Print original baseline metrics summary
 
-    return comparison_results  # Return list of all comparison result entries for CSV export
+            for ratio in sorted(all_ratio_results.keys()):  # Iterate over each ratio in sorted order
+                ratio_results = all_ratio_results[ratio]  # Get results dict for this ratio
+                ratio_result = ratio_results.get(key)  # Get the matching result for this feature_set/model key
+
+                if ratio_result is None:  # If no matching result exists for this ratio
+                    continue  # Skip this ratio for this model/feature_set combination
+
+                ratio_metrics = extract_metrics_from_result(ratio_result)  # Extract metrics list from ratio result
+                improvements = calculate_all_improvements(orig_metrics, ratio_metrics)  # Calculate improvements vs original
+                ratio_pct = int(ratio * 100)  # Convert float ratio to integer percentage for display
+                ratio_experiment_id = ratio_result.get("experiment_id", None)  # Get experiment ID from ratio result
+
+                comparison_results.append(
+                    build_comparison_result_entry(
+                        orig_result, feature_set, classifier_type, model_name,
+                        f"Original+Augmented@{ratio_pct}%", ratio_metrics, improvements,
+                        n_features_override=ratio_result.get("n_features"),
+                        n_samples_train_override=ratio_result.get("n_samples_train"),
+                        n_samples_test_override=ratio_result.get("n_samples_test"),
+                        experiment_id=ratio_experiment_id, experiment_mode="original_plus_augmented",
+                        augmentation_ratio=ratio,
+                    )
+                )  # Add ratio experiment entry with improvements to comparison results
+
+                f1_improvement = improvements.get("f1_score", 0.0)  # Extract F1 improvement for display
+                improvement_color = BackgroundColors.GREEN if f1_improvement >= 0 else BackgroundColors.RED  # Choose color based on improvement direction
+                print(
+                    f"  {BackgroundColors.YELLOW}@{ratio_pct}%:{Style.RESET_ALL} Acc: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[0])}{Style.RESET_ALL}, F1: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[3])}{Style.RESET_ALL}, F1 change: {improvement_color}{f1_improvement:+.2f}%{Style.RESET_ALL}"
+                )  # Print ratio result metrics with F1 improvement indicator
+
+        return comparison_results  # Return list of all comparison result entries for CSV export
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, results_original, config=None):
@@ -5268,103 +5757,108 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
     :return: None
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Processing augmented data evaluation for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
-    )  # Output the verbose message
+        verbose_output(
+            f"{BackgroundColors.GREEN}Processing augmented data evaluation for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
+        )  # Output the verbose message
 
-    augmented_file = find_data_augmentation_file(file)  # Look for augmented data file using wgangp.py naming convention
+        augmented_file = find_data_augmentation_file(file)  # Look for augmented data file using wgangp.py naming convention
 
-    if augmented_file is None:  # If no augmented file found at expected path
-        print(
-            f"\n{BackgroundColors.YELLOW}No augmented data found for this file. Skipping augmentation comparison.{Style.RESET_ALL}"
-        )  # Print warning message about missing augmented file
-        return  # Exit function early when no augmented file exists
-
-    df_augmented = load_dataset(augmented_file)  # Load the augmented dataset from the discovered file
-
-    if df_augmented is None:  # If augmented dataset failed to load from disk
-        print(
-            f"{BackgroundColors.YELLOW}Warning: Failed to load augmented dataset from {BackgroundColors.CYAN}{augmented_file}{BackgroundColors.YELLOW}. Skipping.{Style.RESET_ALL}"
-        )  # Print warning message about load failure
-        return  # Exit function early on load failure
-
-    df_augmented_cleaned = preprocess_dataframe(df_augmented)  # Preprocess the augmented dataframe with same pipeline as original
-
-    if not validate_augmented_dataframe(df_original_cleaned, df_augmented_cleaned, file):  # Validate augmented data is compatible with original
-        return  # Exit function early if augmented data fails validation checks
-
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
-    )  # Print separator line for visual clarity
-    print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}RATIO-BASED DATA AUGMENTATION EXPERIMENTS{Style.RESET_ALL}"
-    )  # Print header for the ratio-based experiments section
-    print(
-        f"{BackgroundColors.GREEN}Ratios to evaluate: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])]}{Style.RESET_ALL}"
-    )  # Print the list of ratios that will be evaluated
-    print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
-    )  # Print closing separator line
-
-    all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
-
-    for ratio_idx, ratio in enumerate(config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]), start=1):  # Iterate over each augmentation ratio
-        ratio_pct = int(ratio * 100)  # Convert float ratio to integer percentage for display
-        experiment_id = generate_experiment_id(file, "original_plus_augmented", ratio)  # Generate unique experiment ID for this ratio
-
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx}/{len(config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]))}] Evaluating Original + Augmented@{ratio_pct}%{Style.RESET_ALL}"
-        )  # Print progress indicator for current ratio experiment
-
-        df_sampled = sample_augmented_by_ratio(df_augmented_cleaned, df_original_cleaned, ratio)  # Sample augmented rows at the current ratio
-
-        if df_sampled is None or df_sampled.empty:  # If sampling returned no valid data
+        if augmented_file is None:  # If no augmented file found at expected path
             print(
-                f"{BackgroundColors.YELLOW}Warning: Could not sample augmented data at ratio {ratio}. Skipping this ratio.{Style.RESET_ALL}"
-            )  # Print warning about sampling failure
-            continue  # Skip to the next ratio in the loop
+                f"\n{BackgroundColors.YELLOW}No augmented data found for this file. Skipping augmentation comparison.{Style.RESET_ALL}"
+            )  # Print warning message about missing augmented file
+            return  # Exit function early when no augmented file exists
 
-        data_source_label = f"Original+Augmented@{ratio_pct}%"  # Build descriptive data source label for CSV traceability
+        df_augmented = load_dataset(augmented_file)  # Load the augmented dataset from the discovered file
+
+        if df_augmented is None:  # If augmented dataset failed to load from disk
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Failed to load augmented dataset from {BackgroundColors.CYAN}{augmented_file}{BackgroundColors.YELLOW}. Skipping.{Style.RESET_ALL}"
+            )  # Print warning message about load failure
+            return  # Exit function early on load failure
+
+        df_augmented_cleaned = preprocess_dataframe(df_augmented)  # Preprocess the augmented dataframe with same pipeline as original
+
+        if not validate_augmented_dataframe(df_original_cleaned, df_augmented_cleaned, file):  # Validate augmented data is compatible with original
+            return  # Exit function early if augmented data fails validation checks
 
         print(
-            f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
-        )  # Print sampled dataset size for transparency
-
-        generate_augmentation_tsne_visualization(
-            file, df_original_cleaned, df_sampled, ratio, "original_plus_augmented"
-        )  # Generate t-SNE visualization for this augmentation ratio
-
-        results_ratio = evaluate_on_dataset(
-            file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
-            rfe_selected_features, base_models, data_source_label=data_source_label,
-            hyperparams_map=hp_params_map, experiment_id=experiment_id,
-            experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
-            execution_mode_str="binary", attack_types_combined=None,
-            df_augmented_for_training=df_sampled
-        )  # Evaluate all classifiers with augmented data in training only (test remains original-only)
-
-        all_ratio_results[ratio] = results_ratio  # Store the results for this ratio in the results dictionary
-
-        send_telegram_message(
-            TELEGRAM_BOT, f"Completed augmentation ratio {ratio_pct}% for {os.path.basename(file)}"
-        )  # Send Telegram notification for ratio completion
-
-    if not all_ratio_results:  # If no ratio experiments produced valid results
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
+        )  # Print separator line for visual clarity
         print(
-            f"{BackgroundColors.YELLOW}Warning: No ratio experiments completed successfully. Skipping comparison report.{Style.RESET_ALL}"
-        )  # Print warning about no completed experiments
-        return  # Exit function early when no results are available
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}RATIO-BASED DATA AUGMENTATION EXPERIMENTS{Style.RESET_ALL}"
+        )  # Print header for the ratio-based experiments section
+        print(
+            f"{BackgroundColors.GREEN}Ratios to evaluate: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])]}{Style.RESET_ALL}"
+        )  # Print the list of ratios that will be evaluated
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
+        )  # Print closing separator line
 
-    comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate the comparison report across all ratios
+        all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
 
-    save_augmentation_comparison_results(file, comparison_results)  # Save comparison results to CSV file
+        for ratio_idx, ratio in enumerate(config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]), start=1):  # Iterate over each augmentation ratio
+            ratio_pct = int(ratio * 100)  # Convert float ratio to integer percentage for display
+            experiment_id = generate_experiment_id(file, "original_plus_augmented", ratio)  # Generate unique experiment ID for this ratio
 
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Data augmentation ratio-based comparison complete!{Style.RESET_ALL}"
-    )  # Print success message indicating all ratio experiments are done
+            print(
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx}/{len(config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]))}] Evaluating Original + Augmented@{ratio_pct}%{Style.RESET_ALL}"
+            )  # Print progress indicator for current ratio experiment
+
+            df_sampled = sample_augmented_by_ratio(df_augmented_cleaned, df_original_cleaned, ratio)  # Sample augmented rows at the current ratio
+
+            if df_sampled is None or df_sampled.empty:  # If sampling returned no valid data
+                print(
+                    f"{BackgroundColors.YELLOW}Warning: Could not sample augmented data at ratio {ratio}. Skipping this ratio.{Style.RESET_ALL}"
+                )  # Print warning about sampling failure
+                continue  # Skip to the next ratio in the loop
+
+            data_source_label = f"Original+Augmented@{ratio_pct}%"  # Build descriptive data source label for CSV traceability
+
+            print(
+                f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
+            )  # Print sampled dataset size for transparency
+
+            generate_augmentation_tsne_visualization(
+                file, df_original_cleaned, df_sampled, ratio, "original_plus_augmented"
+            )  # Generate t-SNE visualization for this augmentation ratio
+
+            results_ratio = evaluate_on_dataset(
+                file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
+                rfe_selected_features, base_models, data_source_label=data_source_label,
+                hyperparams_map=hp_params_map, experiment_id=experiment_id,
+                experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+                execution_mode_str="binary", attack_types_combined=None,
+                df_augmented_for_training=df_sampled
+            )  # Evaluate all classifiers with augmented data in training only (test remains original-only)
+
+            all_ratio_results[ratio] = results_ratio  # Store the results for this ratio in the results dictionary
+
+            send_telegram_message(
+                TELEGRAM_BOT, f"Completed augmentation ratio {ratio_pct}% for {os.path.basename(file)}"
+            )  # Send Telegram notification for ratio completion
+
+        if not all_ratio_results:  # If no ratio experiments produced valid results
+            print(
+                f"{BackgroundColors.YELLOW}Warning: No ratio experiments completed successfully. Skipping comparison report.{Style.RESET_ALL}"
+            )  # Print warning about no completed experiments
+            return  # Exit function early when no results are available
+
+        comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate the comparison report across all ratios
+
+        save_augmentation_comparison_results(file, comparison_results)  # Save comparison results to CSV file
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Data augmentation ratio-based comparison complete!{Style.RESET_ALL}"
+        )  # Print success message indicating all ratio experiments are done
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def process_multiclass_evaluation(original_files_list, combined_multiclass_df, attack_types_list, dataset_name, config=None):
@@ -5379,177 +5873,182 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
     :return: None
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Processing multi-class evaluation for dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
-    
-    reference_file = original_files_list[0] if original_files_list else "multiclass_combined"  # Get reference file for feature metadata
-    
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
-    )  # Print separator line
-    print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing multi-class dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
-    )  # Print dataset header
-    print(
-        f"{BackgroundColors.GREEN}Attack types: {BackgroundColors.CYAN}{attack_types_list}{Style.RESET_ALL}"
-    )  # Print attack types
-    print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
-    )  # Print closing separator
-    
-    ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
-        reference_file, config=config
-    )  # Load feature selection results
-    
-    feature_names = [col for col in combined_multiclass_df.columns if col != 'attack_type']  # Get feature column names
-    
-    verbose_output(
-        f"{BackgroundColors.GREEN}Multi-class dataset features: {BackgroundColors.CYAN}{len(feature_names)} features{Style.RESET_ALL}",
-        config=config
-    )  # Output feature count
-    
-    base_models, hp_params_map = prepare_models_with_hyperparameters(reference_file, config=config)  # Prepare base models
-    
-    original_experiment_id = generate_experiment_id(reference_file, "multiclass_original_only")  # Generate unique experiment ID
-    
-    test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", False)  # Get test data augmentation flag from config
-    augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
-    
-    total_steps = 1 + (len(augmentation_ratios) if test_data_augmentation else 0)  # Calculate total evaluation steps
-    
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[1/{total_steps}] Evaluating on ORIGINAL MULTI-CLASS data{Style.RESET_ALL}"
-    )  # Print progress message with total step count
-    
-    results_original = evaluate_on_dataset(
-        reference_file, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components,
-        rfe_selected_features, base_models, data_source_label="Original_MultiClass", hyperparams_map=hp_params_map,
-        experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
-        execution_mode_str="multi-class", attack_types_combined=attack_types_list
-    )  # Evaluate on original multi-class data with execution mode tracking
-    
-    original_results_list = list(results_original.values())  # Convert results dict to list
-    
-    multiclass_results_filename = config.get("stacking", {}).get("multiclass_results_filename", "Stacking_Classifiers_MultiClass_Results.csv")  # Get multi-class results filename
-    reference_file_path = Path(reference_file)  # Create Path object
-    feature_analysis_dir = reference_file_path.parent / "Feature_Analysis"  # Feature_Analysis directory
-    os.makedirs(feature_analysis_dir, exist_ok=True)  # Ensure directory exists
-    multiclass_results_path = feature_analysis_dir / multiclass_results_filename  # Build multi-class results path
-    
-    save_stacking_results(str(multiclass_results_path), original_results_list, config=config)  # Save multi-class results to CSV
-    
-    enable_automl = config.get("automl", {}).get("enabled", False)  # Get enable automl flag from config
-    if enable_automl:  # If AutoML pipeline is enabled
-        run_automl_pipeline(reference_file, combined_multiclass_df, feature_names, data_source_label="Original_MultiClass", config=config)  # Run AutoML pipeline for multi-class
-    
-    if test_data_augmentation:  # If data augmentation testing is enabled
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+        
         verbose_output(
-            f"{BackgroundColors.GREEN}Processing multi-class augmented data evaluation...{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Processing multi-class evaluation for dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}",
             config=config
         )  # Output the verbose message
-        
-        generate_augmentation_tsne_visualization(
-            reference_file, combined_multiclass_df, None, None, "original_only"
-        )  # Generate t-SNE visualization for original multi-class data only
-        
-        augmented_files_list = load_augmented_files_for_multiclass(original_files_list, config=config)  # Load augmented files
-        
-        if not augmented_files_list:  # If no augmented files found
-            print(
-                f"{BackgroundColors.YELLOW}No augmented files found for multi-class mode. Skipping augmentation testing.{Style.RESET_ALL}"
-            )  # Print warning
-            return  # Exit function
-        
-        combined_augmented_df, augmented_attack_types, augmented_target_col = combine_files_for_multiclass(augmented_files_list, config=config)  # Combine augmented files
-        
-        if combined_augmented_df is None:  # If augmented combination failed
-            print(
-                f"{BackgroundColors.YELLOW}Failed to combine augmented files for multi-class. Skipping augmentation testing.{Style.RESET_ALL}"
-            )  # Print warning
-            return  # Exit function
+    
+        reference_file = original_files_list[0] if original_files_list else "multiclass_combined"  # Get reference file for feature metadata
         
         print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
-        )  # Print separator line for visual clarity
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+        )  # Print separator line
         print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}RATIO-BASED DATA AUGMENTATION EXPERIMENTS (Multi-Class){Style.RESET_ALL}"
-        )  # Print header for the ratio-based experiments section
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing multi-class dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
+        )  # Print dataset header
         print(
-            f"{BackgroundColors.GREEN}Ratios to evaluate: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in augmentation_ratios]}{Style.RESET_ALL}"
-        )  # Print the list of ratios that will be evaluated
+            f"{BackgroundColors.GREEN}Attack types: {BackgroundColors.CYAN}{attack_types_list}{Style.RESET_ALL}"
+        )  # Print attack types
         print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
-        )  # Print closing separator line
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+        )  # Print closing separator
         
-        all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
+        ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
+            reference_file, config=config
+        )  # Load feature selection results
         
-        for ratio_idx, ratio in enumerate(augmentation_ratios, start=1):  # Iterate over each augmentation ratio
-            ratio_pct = int(ratio * 100)  # Convert ratio to percentage for display
-            
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx + 1}/{total_steps}] Evaluating with {ratio_pct}% augmented data (Multi-Class){Style.RESET_ALL}"
-            )  # Print experiment step progress
-            
-            df_sampled = sample_augmented_by_ratio(combined_augmented_df, combined_multiclass_df, ratio)  # Sample augmented data proportionally
-            
-            if df_sampled is None:  # If sampling failed
-                print(
-                    f"{BackgroundColors.YELLOW}Failed to sample augmented data at ratio {ratio_pct}%. Skipping.{Style.RESET_ALL}"
-                )  # Print warning
-                continue  # Skip to next ratio
-            
-            data_source_label = f"Original+Augmented@{ratio_pct}%_MultiClass"  # Build data source label for this experiment
-            experiment_id = generate_experiment_id(reference_file, "multiclass_original_plus_augmented", ratio)  # Generate unique experiment ID
-            
-            print(
-                f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
-            )  # Print sampled dataset size for transparency
+        feature_names = [col for col in combined_multiclass_df.columns if col != 'attack_type']  # Get feature column names
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Multi-class dataset features: {BackgroundColors.CYAN}{len(feature_names)} features{Style.RESET_ALL}",
+            config=config
+        )  # Output feature count
+        
+        base_models, hp_params_map = prepare_models_with_hyperparameters(reference_file, config=config)  # Prepare base models
+        
+        original_experiment_id = generate_experiment_id(reference_file, "multiclass_original_only")  # Generate unique experiment ID
+        
+        test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", False)  # Get test data augmentation flag from config
+        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
+        
+        total_steps = 1 + (len(augmentation_ratios) if test_data_augmentation else 0)  # Calculate total evaluation steps
+        
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[1/{total_steps}] Evaluating on ORIGINAL MULTI-CLASS data{Style.RESET_ALL}"
+        )  # Print progress message with total step count
+        
+        results_original = evaluate_on_dataset(
+            reference_file, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components,
+            rfe_selected_features, base_models, data_source_label="Original_MultiClass", hyperparams_map=hp_params_map,
+            experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
+            execution_mode_str="multi-class", attack_types_combined=attack_types_list
+        )  # Evaluate on original multi-class data with execution mode tracking
+        
+        original_results_list = list(results_original.values())  # Convert results dict to list
+        
+        multiclass_results_filename = config.get("stacking", {}).get("multiclass_results_filename", "Stacking_Classifiers_MultiClass_Results.csv")  # Get multi-class results filename
+        reference_file_path = Path(reference_file)  # Create Path object
+        feature_analysis_dir = reference_file_path.parent / "Feature_Analysis"  # Feature_Analysis directory
+        os.makedirs(feature_analysis_dir, exist_ok=True)  # Ensure directory exists
+        multiclass_results_path = feature_analysis_dir / multiclass_results_filename  # Build multi-class results path
+        
+        save_stacking_results(str(multiclass_results_path), original_results_list, config=config)  # Save multi-class results to CSV
+        
+        enable_automl = config.get("automl", {}).get("enabled", False)  # Get enable automl flag from config
+        if enable_automl:  # If AutoML pipeline is enabled
+            run_automl_pipeline(reference_file, combined_multiclass_df, feature_names, data_source_label="Original_MultiClass", config=config)  # Run AutoML pipeline for multi-class
+        
+        if test_data_augmentation:  # If data augmentation testing is enabled
+            verbose_output(
+                f"{BackgroundColors.GREEN}Processing multi-class augmented data evaluation...{Style.RESET_ALL}",
+                config=config
+            )  # Output the verbose message
             
             generate_augmentation_tsne_visualization(
-                reference_file, combined_multiclass_df, df_sampled, ratio, "original_plus_augmented"
-            )  # Generate t-SNE visualization for multi-class augmented experiment
+                reference_file, combined_multiclass_df, None, None, "original_only"
+            )  # Generate t-SNE visualization for original multi-class data only
             
-            send_telegram_message(
-                TELEGRAM_BOT, f"Starting multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
-            )  # Send Telegram notification
+            augmented_files_list = load_augmented_files_for_multiclass(original_files_list, config=config)  # Load augmented files
             
-            results_ratio = evaluate_on_dataset(
-                reference_file, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components,
-                rfe_selected_features, base_models, data_source_label=data_source_label,
-                hyperparams_map=hp_params_map, experiment_id=experiment_id,
-                experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
-                execution_mode_str="multi-class", attack_types_combined=attack_types_list,
-                df_augmented_for_training=df_sampled
-            )  # Evaluate all classifiers with augmented data in training only (test remains original-only)
+            if not augmented_files_list:  # If no augmented files found
+                print(
+                    f"{BackgroundColors.YELLOW}No augmented files found for multi-class mode. Skipping augmentation testing.{Style.RESET_ALL}"
+                )  # Print warning
+                return  # Exit function
             
-            all_ratio_results[ratio] = results_ratio  # Store the results for this ratio in the results dictionary
+            combined_augmented_df, augmented_attack_types, augmented_target_col = combine_files_for_multiclass(augmented_files_list, config=config)  # Combine augmented files
             
-            send_telegram_message(
-                TELEGRAM_BOT, f"Completed multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
-            )  # Send completion notification
-        
-        if not all_ratio_results:  # If no ratio experiments succeeded
+            if combined_augmented_df is None:  # If augmented combination failed
+                print(
+                    f"{BackgroundColors.YELLOW}Failed to combine augmented files for multi-class. Skipping augmentation testing.{Style.RESET_ALL}"
+                )  # Print warning
+                return  # Exit function
+            
             print(
-                f"{BackgroundColors.YELLOW}No augmentation ratio experiments completed successfully for multi-class.{Style.RESET_ALL}"
-            )  # Print warning
-            return  # Exit function
-        
-        comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate the comparison report across all ratios
-        
-        augmentation_comparison_filename = config.get("stacking", {}).get("augmentation_comparison_filename", "Data_Augmentation_Comparison_Results.csv")  # Get comparison filename
-        multiclass_comparison_filename = augmentation_comparison_filename.replace(".csv", "_MultiClass.csv")  # Build multi-class comparison filename
-        multiclass_comparison_path = feature_analysis_dir / multiclass_comparison_filename  # Build comparison file path
-        
-        save_augmentation_comparison_results(str(multiclass_comparison_path), comparison_results, config=config)  # Save comparison results to CSV file
-        
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Multi-class data augmentation ratio-based comparison complete!{Style.RESET_ALL}"
-        )  # Print success message indicating all ratio experiments are done
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
+            )  # Print separator line for visual clarity
+            print(
+                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}RATIO-BASED DATA AUGMENTATION EXPERIMENTS (Multi-Class){Style.RESET_ALL}"
+            )  # Print header for the ratio-based experiments section
+            print(
+                f"{BackgroundColors.GREEN}Ratios to evaluate: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in augmentation_ratios]}{Style.RESET_ALL}"
+            )  # Print the list of ratios that will be evaluated
+            print(
+                f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
+            )  # Print closing separator line
+            
+            all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
+            
+            for ratio_idx, ratio in enumerate(augmentation_ratios, start=1):  # Iterate over each augmentation ratio
+                ratio_pct = int(ratio * 100)  # Convert ratio to percentage for display
+                
+                print(
+                    f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx + 1}/{total_steps}] Evaluating with {ratio_pct}% augmented data (Multi-Class){Style.RESET_ALL}"
+                )  # Print experiment step progress
+                
+                df_sampled = sample_augmented_by_ratio(combined_augmented_df, combined_multiclass_df, ratio)  # Sample augmented data proportionally
+                
+                if df_sampled is None:  # If sampling failed
+                    print(
+                        f"{BackgroundColors.YELLOW}Failed to sample augmented data at ratio {ratio_pct}%. Skipping.{Style.RESET_ALL}"
+                    )  # Print warning
+                    continue  # Skip to next ratio
+                
+                data_source_label = f"Original+Augmented@{ratio_pct}%_MultiClass"  # Build data source label for this experiment
+                experiment_id = generate_experiment_id(reference_file, "multiclass_original_plus_augmented", ratio)  # Generate unique experiment ID
+                
+                print(
+                    f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
+                )  # Print sampled dataset size for transparency
+                
+                generate_augmentation_tsne_visualization(
+                    reference_file, combined_multiclass_df, df_sampled, ratio, "original_plus_augmented"
+                )  # Generate t-SNE visualization for multi-class augmented experiment
+                
+                send_telegram_message(
+                    TELEGRAM_BOT, f"Starting multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
+                )  # Send Telegram notification
+                
+                results_ratio = evaluate_on_dataset(
+                    reference_file, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components,
+                    rfe_selected_features, base_models, data_source_label=data_source_label,
+                    hyperparams_map=hp_params_map, experiment_id=experiment_id,
+                    experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+                    execution_mode_str="multi-class", attack_types_combined=attack_types_list,
+                    df_augmented_for_training=df_sampled
+                )  # Evaluate all classifiers with augmented data in training only (test remains original-only)
+                
+                all_ratio_results[ratio] = results_ratio  # Store the results for this ratio in the results dictionary
+                
+                send_telegram_message(
+                    TELEGRAM_BOT, f"Completed multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
+                )  # Send completion notification
+            
+            if not all_ratio_results:  # If no ratio experiments succeeded
+                print(
+                    f"{BackgroundColors.YELLOW}No augmentation ratio experiments completed successfully for multi-class.{Style.RESET_ALL}"
+                )  # Print warning
+                return  # Exit function
+            
+            comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate the comparison report across all ratios
+            
+            augmentation_comparison_filename = config.get("stacking", {}).get("augmentation_comparison_filename", "Data_Augmentation_Comparison_Results.csv")  # Get comparison filename
+            multiclass_comparison_filename = augmentation_comparison_filename.replace(".csv", "_MultiClass.csv")  # Build multi-class comparison filename
+            multiclass_comparison_path = feature_analysis_dir / multiclass_comparison_filename  # Build comparison file path
+            
+            save_augmentation_comparison_results(str(multiclass_comparison_path), comparison_results, config=config)  # Save comparison results to CSV file
+            
+            print(
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Multi-class data augmentation ratio-based comparison complete!{Style.RESET_ALL}"
+            )  # Print success message indicating all ratio experiments are done
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def print_file_processing_header(file, config=None):
@@ -5561,23 +6060,28 @@ def print_file_processing_header(file, config=None):
     :return: None
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Printing file processing header for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+        verbose_output(
+            f"{BackgroundColors.GREEN}Printing file processing header for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
-    )  # Print separator line
-    print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
-    )  # Print file being processed
-    print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
-    )  # Print separator line
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+        )  # Print separator line
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
+        )  # Print file being processed
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+        )  # Print separator line
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def process_single_file_evaluation(file, combined_df, combined_file_for_features, config=None):
@@ -5591,61 +6095,66 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
     :return: None
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Starting single file evaluation for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+        verbose_output(
+            f"{BackgroundColors.GREEN}Starting single file evaluation for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    print_file_processing_header(file, config=config)  # Print formatted header
+        print_file_processing_header(file, config=config)  # Print formatted header
 
-    file_for_features = combined_file_for_features if file == "combined" else file  # Determine which file to use for feature selection metadata
-    ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
-        file_for_features, config=config
-    )  # Load feature selection results
+        file_for_features = combined_file_for_features if file == "combined" else file  # Determine which file to use for feature selection metadata
+        ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
+            file_for_features, config=config
+        )  # Load feature selection results
 
-    df_original_cleaned, feature_names = load_and_preprocess_dataset(file, combined_df, config=config)  # Load and preprocess the dataset
+        df_original_cleaned, feature_names = load_and_preprocess_dataset(file, combined_df, config=config)  # Load and preprocess the dataset
 
-    if df_original_cleaned is None:  # If loading or preprocessing failed
-        return  # Exit function early
+        if df_original_cleaned is None:  # If loading or preprocessing failed
+            return  # Exit function early
 
-    base_models, hp_params_map = prepare_models_with_hyperparameters(file, config=config)  # Prepare base models with hyperparameters
+        base_models, hp_params_map = prepare_models_with_hyperparameters(file, config=config)  # Prepare base models with hyperparameters
 
-    original_experiment_id = generate_experiment_id(file, "original_only")  # Generate unique experiment ID for the original-only evaluation
+        original_experiment_id = generate_experiment_id(file, "original_only")  # Generate unique experiment ID for the original-only evaluation
 
-    test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", False)  # Get test data augmentation flag from config
-    augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
-    
-    if test_data_augmentation:  # If data augmentation testing is enabled
-        generate_augmentation_tsne_visualization(
-            file, df_original_cleaned, None, None, "original_only"
-        )  # Generate t-SNE visualization for original data only
+        test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", False)  # Get test data augmentation flag from config
+        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
+        
+        if test_data_augmentation:  # If data augmentation testing is enabled
+            generate_augmentation_tsne_visualization(
+                file, df_original_cleaned, None, None, "original_only"
+            )  # Generate t-SNE visualization for original data only
 
-    total_steps = 1 + (len(augmentation_ratios) if test_data_augmentation else 0)  # Calculate total evaluation steps
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[1/{total_steps}] Evaluating on ORIGINAL data{Style.RESET_ALL}"
-    )  # Print progress message with total step count
-    results_original = evaluate_on_dataset(
-        file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
-        rfe_selected_features, base_models, data_source_label="Original", hyperparams_map=hp_params_map,
-        experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
-        execution_mode_str="binary", attack_types_combined=None
-    )  # Evaluate on original data with experiment traceability metadata
-
-    original_results_list = list(results_original.values())  # Convert results dict to list
-    save_stacking_results(file, original_results_list, config=config)  # Save original results to CSV
-
-    enable_automl = config.get("automl", {}).get("enabled", False)  # Get enable automl flag from config
-    if enable_automl:  # If AutoML pipeline is enabled
-        run_automl_pipeline(file, df_original_cleaned, feature_names, config=config)  # Run AutoML pipeline
-
-    if test_data_augmentation:  # If data augmentation testing is enabled
-        process_augmented_data_evaluation(
+        total_steps = 1 + (len(augmentation_ratios) if test_data_augmentation else 0)  # Calculate total evaluation steps
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[1/{total_steps}] Evaluating on ORIGINAL data{Style.RESET_ALL}"
+        )  # Print progress message with total step count
+        results_original = evaluate_on_dataset(
             file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
-            rfe_selected_features, base_models, hp_params_map, results_original, config=config
-        )  # Process augmented data evaluation workflow
+            rfe_selected_features, base_models, data_source_label="Original", hyperparams_map=hp_params_map,
+            experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
+            execution_mode_str="binary", attack_types_combined=None
+        )  # Evaluate on original data with experiment traceability metadata
+
+        original_results_list = list(results_original.values())  # Convert results dict to list
+        save_stacking_results(file, original_results_list, config=config)  # Save original results to CSV
+
+        enable_automl = config.get("automl", {}).get("enabled", False)  # Get enable automl flag from config
+        if enable_automl:  # If AutoML pipeline is enabled
+            run_automl_pipeline(file, df_original_cleaned, feature_names, config=config)  # Run AutoML pipeline
+
+        if test_data_augmentation:  # If data augmentation testing is enabled
+            process_augmented_data_evaluation(
+                file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
+                rfe_selected_features, base_models, hp_params_map, results_original, config=config
+            )  # Process augmented data evaluation workflow
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def process_files_in_path(input_path, dataset_name, config=None):
@@ -5658,140 +6167,145 @@ def process_files_in_path(input_path, dataset_name, config=None):
     :return: None
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Processing files in path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
-
-    if not verify_filepath_exists(input_path):  # If the input path does not exist
         verbose_output(
-            f"{BackgroundColors.YELLOW}Skipping missing path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Processing files in path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}",
             config=config
-        )  # Output skip message
-        return  # Exit function early
-    
-    csv_file = config.get("execution", {}).get("csv_file", None)  # Get CSV file override from config
-    execution_mode = config.get("execution", {}).get("execution_mode", "both")  # Get execution mode from config (binary/multi-class/both, default: both)
+        )  # Output the verbose message
 
-    files_to_process = determine_files_to_process(csv_file, input_path, config=config)  # Determine which files to process
+        if not verify_filepath_exists(input_path):  # If the input path does not exist
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Skipping missing path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}",
+                config=config
+            )  # Output skip message
+            return  # Exit function early
+        
+        csv_file = config.get("execution", {}).get("csv_file", None)  # Get CSV file override from config
+        execution_mode = config.get("execution", {}).get("execution_mode", "both")  # Get execution mode from config (binary/multi-class/both, default: both)
 
-    local_dataset_name = dataset_name or get_dataset_name(input_path)  # Use provided dataset name or infer from path
+        files_to_process = determine_files_to_process(csv_file, input_path, config=config)  # Determine which files to process
 
-    if execution_mode == "both":  # If BOTH execution modes are enabled (run binary first, then multi-class)
-        verbose_output(
-            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: BOTH (Binary + Multi-Class){Style.RESET_ALL}",
-            config=config
-        )  # Output execution mode
-        
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
-        )  # Print separator line
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}BOTH MODE: Running Binary and Multi-Class pipelines sequentially{Style.RESET_ALL}"
-        )  # Print mode header
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
-        )  # Print closing separator
-        
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[STEP 1/2] Executing BINARY Classification Pipeline{Style.RESET_ALL}\n"
-        )  # Print binary step header
-        
-        combined_df, combined_file_for_features, files_for_binary = combine_dataset_if_needed(files_to_process, config=config)  # Combine dataset files if needed
+        local_dataset_name = dataset_name or get_dataset_name(input_path)  # Use provided dataset name or infer from path
 
-        for file in files_for_binary:  # For each file to process in binary mode
-            process_single_file_evaluation(file, combined_df, combined_file_for_features, config=config)  # Process the single file evaluation
-        
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Binary pipeline complete{Style.RESET_ALL}\n"
-        )  # Print binary completion message
-        
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[STEP 2/2] Executing MULTI-CLASS Classification Pipeline{Style.RESET_ALL}\n"
-        )  # Print multi-class step header
-        
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
-        )  # Print separator line
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}MULTI-CLASS CLASSIFICATION MODE{Style.RESET_ALL}"
-        )  # Print mode header
-        print(
-            f"{BackgroundColors.GREEN}Combining {BackgroundColors.CYAN}{len(files_to_process)}{BackgroundColors.GREEN} files into single multi-class dataset{Style.RESET_ALL}"
-        )  # Print files count
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
-        )  # Print closing separator
-
-        combined_multiclass_df, attack_types_list, target_col_name = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for multi-class
-        
-        if combined_multiclass_df is None:  # If combination failed
+        if execution_mode == "both":  # If BOTH execution modes are enabled (run binary first, then multi-class)
+            verbose_output(
+                f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: BOTH (Binary + Multi-Class){Style.RESET_ALL}",
+                config=config
+            )  # Output execution mode
+            
             print(
-                f"{BackgroundColors.RED}Failed to create multi-class dataset. Skipping multi-class evaluation.{Style.RESET_ALL}"
-            )  # Print error
-        else:  # If combination succeeded
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+            )  # Print separator line
+            print(
+                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}BOTH MODE: Running Binary and Multi-Class pipelines sequentially{Style.RESET_ALL}"
+            )  # Print mode header
+            print(
+                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+            )  # Print closing separator
+            
+            print(
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[STEP 1/2] Executing BINARY Classification Pipeline{Style.RESET_ALL}\n"
+            )  # Print binary step header
+            
+            combined_df, combined_file_for_features, files_for_binary = combine_dataset_if_needed(files_to_process, config=config)  # Combine dataset files if needed
+
+            for file in files_for_binary:  # For each file to process in binary mode
+                process_single_file_evaluation(file, combined_df, combined_file_for_features, config=config)  # Process the single file evaluation
+            
+            print(
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Binary pipeline complete{Style.RESET_ALL}\n"
+            )  # Print binary completion message
+            
+            print(
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[STEP 2/2] Executing MULTI-CLASS Classification Pipeline{Style.RESET_ALL}\n"
+            )  # Print multi-class step header
+            
+            print(
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+            )  # Print separator line
+            print(
+                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}MULTI-CLASS CLASSIFICATION MODE{Style.RESET_ALL}"
+            )  # Print mode header
+            print(
+                f"{BackgroundColors.GREEN}Combining {BackgroundColors.CYAN}{len(files_to_process)}{BackgroundColors.GREEN} files into single multi-class dataset{Style.RESET_ALL}"
+            )  # Print files count
+            print(
+                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+            )  # Print closing separator
+
+            combined_multiclass_df, attack_types_list, target_col_name = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for multi-class
+            
+            if combined_multiclass_df is None:  # If combination failed
+                print(
+                    f"{BackgroundColors.RED}Failed to create multi-class dataset. Skipping multi-class evaluation.{Style.RESET_ALL}"
+                )  # Print error
+            else:  # If combination succeeded
+                process_multiclass_evaluation(
+                    files_to_process, combined_multiclass_df, attack_types_list, local_dataset_name, config=config
+                )  # Process multi-class evaluation workflow
+                
+                print(
+                    f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Multi-class pipeline complete{Style.RESET_ALL}\n"
+                )  # Print multi-class completion message
+            
+            print(
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+            )  # Print final separator
+            print(
+                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ BOTH MODE COMPLETE: Binary and Multi-Class pipelines finished{Style.RESET_ALL}"
+            )  # Print both mode completion message
+            print(
+                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+            )  # Print final separator
+            
+        elif execution_mode == "multi-class":  # If multi-class execution mode is enabled
+            verbose_output(
+                f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: MULTI-CLASS{Style.RESET_ALL}",
+                config=config
+            )  # Output execution mode
+            
+            print(
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+            )  # Print separator line
+            print(
+                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}MULTI-CLASS CLASSIFICATION MODE{Style.RESET_ALL}"
+            )  # Print mode header
+            print(
+                f"{BackgroundColors.GREEN}Combining {BackgroundColors.CYAN}{len(files_to_process)}{BackgroundColors.GREEN} files into single multi-class dataset{Style.RESET_ALL}"
+            )  # Print files count
+            print(
+                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+            )  # Print closing separator
+
+            combined_multiclass_df, attack_types_list, target_col_name = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for multi-class
+            
+            if combined_multiclass_df is None:  # If combination failed
+                print(
+                    f"{BackgroundColors.RED}Failed to create multi-class dataset. Skipping multi-class evaluation.{Style.RESET_ALL}"
+                )  # Print error
+                return  # Exit function
+            
             process_multiclass_evaluation(
                 files_to_process, combined_multiclass_df, attack_types_list, local_dataset_name, config=config
             )  # Process multi-class evaluation workflow
             
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Multi-class pipeline complete{Style.RESET_ALL}\n"
-            )  # Print multi-class completion message
-        
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
-        )  # Print final separator
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ BOTH MODE COMPLETE: Binary and Multi-Class pipelines finished{Style.RESET_ALL}"
-        )  # Print both mode completion message
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
-        )  # Print final separator
-        
-    elif execution_mode == "multi-class":  # If multi-class execution mode is enabled
-        verbose_output(
-            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: MULTI-CLASS{Style.RESET_ALL}",
-            config=config
-        )  # Output execution mode
-        
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
-        )  # Print separator line
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}MULTI-CLASS CLASSIFICATION MODE{Style.RESET_ALL}"
-        )  # Print mode header
-        print(
-            f"{BackgroundColors.GREEN}Combining {BackgroundColors.CYAN}{len(files_to_process)}{BackgroundColors.GREEN} files into single multi-class dataset{Style.RESET_ALL}"
-        )  # Print files count
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
-        )  # Print closing separator
+        else:  # If binary execution mode (default)
+            verbose_output(
+                f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: BINARY{Style.RESET_ALL}",
+                config=config
+            )  # Output execution mode
+            
+            combined_df, combined_file_for_features, files_to_process = combine_dataset_if_needed(files_to_process, config=config)  # Combine dataset files if needed
 
-        combined_multiclass_df, attack_types_list, target_col_name = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for multi-class
-        
-        if combined_multiclass_df is None:  # If combination failed
-            print(
-                f"{BackgroundColors.RED}Failed to create multi-class dataset. Skipping multi-class evaluation.{Style.RESET_ALL}"
-            )  # Print error
-            return  # Exit function
-        
-        process_multiclass_evaluation(
-            files_to_process, combined_multiclass_df, attack_types_list, local_dataset_name, config=config
-        )  # Process multi-class evaluation workflow
-        
-    else:  # If binary execution mode (default)
-        verbose_output(
-            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: BINARY{Style.RESET_ALL}",
-            config=config
-        )  # Output execution mode
-        
-        combined_df, combined_file_for_features, files_to_process = combine_dataset_if_needed(files_to_process, config=config)  # Combine dataset files if needed
-
-        for file in files_to_process:  # For each file to process
-            process_single_file_evaluation(file, combined_df, combined_file_for_features, config=config)  # Process the single file evaluation
+            for file in files_to_process:  # For each file to process
+                process_single_file_evaluation(file, combined_df, combined_file_for_features, config=config)  # Process the single file evaluation
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def process_dataset_paths(dataset_name, paths, config=None):
@@ -5804,20 +6318,25 @@ def process_dataset_paths(dataset_name, paths, config=None):
     :return: None
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}",
-        config=config
-    )  # Output the verbose message
+        verbose_output(
+            f"{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
 
-    print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
-    )  # Print dataset name
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
+        )  # Print dataset name
 
-    for input_path in paths:  # For each path in the dataset's paths list
-        process_files_in_path(input_path, dataset_name, config=config)  # Process all files in this path
+        for input_path in paths:  # For each path in the dataset's paths list
+            process_files_in_path(input_path, dataset_name, config=config)  # Process all files in  this path
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def run_stacking_pipeline(config_path=None, **config_overrides):
@@ -5864,21 +6383,26 @@ def to_seconds(obj):
     :return: The equivalent time in seconds as a float, or None if conversion fails
     """
     
-    if obj is None:  # None can't be converted
-        return None  # Signal failure to convert
-    if isinstance(obj, (int, float)):  # Already numeric (seconds or timestamp)
-        return float(obj)  # Return as float seconds
-    if hasattr(obj, "total_seconds"):  # Timedelta-like objects
-        try:  # Attempt to call total_seconds()
-            return float(obj.total_seconds())  # Use the total_seconds() method
-        except Exception:
-            pass  # Fallthrough on error
-    if hasattr(obj, "timestamp"):  # Datetime-like objects
-        try:  # Attempt to call timestamp()
-            return float(obj.timestamp())  # Use timestamp() to get seconds since epoch
-        except Exception:
-            pass  # Fallthrough on error
-    return None  # Couldn't convert
+    try:
+        if obj is None:  # None can't be converted
+            return None  # Signal failure to convert
+        if isinstance(obj, (int, float)):  # Already numeric (seconds or timestamp)
+            return float(obj)  # Return as float seconds
+        if hasattr(obj, "total_seconds"):  # Timedelta-like objects
+            try:  # Attempt to call total_seconds()
+                return float(obj.total_seconds())  # Use the total_seconds() method
+            except Exception:
+                pass  # Fallthrough on error
+        if hasattr(obj, "timestamp"):  # Datetime-like objects
+            try:  # Attempt to call timestamp()
+                return float(obj.timestamp())  # Use timestamp() to get seconds since epoch
+            except Exception:
+                pass  # Fallthrough on error
+        return None  # Couldn't convert
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def calculate_execution_time(start_time, finish_time=None):
@@ -5892,46 +6416,51 @@ def calculate_execution_time(start_time, finish_time=None):
 
     Returns a string like "1h 2m 3s".
     """
+    
+    try:
+        if finish_time is None:  # Single-argument mode: start_time already represents duration or seconds
+            total_seconds = to_seconds(start_time)  # Try to convert provided value to seconds
+            if total_seconds is None:  # Conversion failed
+                try:  # Attempt numeric coercion
+                    total_seconds = float(start_time)  # Attempt numeric coercion
+                except Exception:
+                    total_seconds = 0.0  # Fallback to zero
+        else:  # Two-argument mode: Compute difference finish_time - start_time
+            st = to_seconds(start_time)  # Convert start to seconds if possible
+            ft = to_seconds(finish_time)  # Convert finish to seconds if possible
+            if st is not None and ft is not None:  # Both converted successfully
+                total_seconds = ft - st  # Direct numeric subtraction
+            else:  # Fallback to other methods
+                try:  # Attempt to subtract (works for datetimes/timedeltas)
+                    delta = finish_time - start_time  # Try subtracting (works for datetimes/timedeltas)
+                    total_seconds = float(delta.total_seconds())  # Get seconds from the resulting timedelta
+                except Exception:  # Subtraction failed
+                    try:  # Final attempt: Numeric coercion
+                        total_seconds = float(finish_time) - float(start_time)  # Final numeric coercion attempt
+                    except Exception:  # Numeric coercion failed
+                        total_seconds = 0.0  # Fallback to zero on failure
 
-    if finish_time is None:  # Single-argument mode: start_time already represents duration or seconds
-        total_seconds = to_seconds(start_time)  # Try to convert provided value to seconds
-        if total_seconds is None:  # Conversion failed
-            try:  # Attempt numeric coercion
-                total_seconds = float(start_time)  # Attempt numeric coercion
-            except Exception:
-                total_seconds = 0.0  # Fallback to zero
-    else:  # Two-argument mode: Compute difference finish_time - start_time
-        st = to_seconds(start_time)  # Convert start to seconds if possible
-        ft = to_seconds(finish_time)  # Convert finish to seconds if possible
-        if st is not None and ft is not None:  # Both converted successfully
-            total_seconds = ft - st  # Direct numeric subtraction
-        else:  # Fallback to other methods
-            try:  # Attempt to subtract (works for datetimes/timedeltas)
-                delta = finish_time - start_time  # Try subtracting (works for datetimes/timedeltas)
-                total_seconds = float(delta.total_seconds())  # Get seconds from the resulting timedelta
-            except Exception:  # Subtraction failed
-                try:  # Final attempt: Numeric coercion
-                    total_seconds = float(finish_time) - float(start_time)  # Final numeric coercion attempt
-                except Exception:  # Numeric coercion failed
-                    total_seconds = 0.0  # Fallback to zero on failure
+        if total_seconds is None:  # Ensure a numeric value
+            total_seconds = 0.0  # Default to zero
+        if total_seconds < 0:  # Normalize negative durations
+            total_seconds = abs(total_seconds)  # Use absolute value
 
-    if total_seconds is None:  # Ensure a numeric value
-        total_seconds = 0.0  # Default to zero
-    if total_seconds < 0:  # Normalize negative durations
-        total_seconds = abs(total_seconds)  # Use absolute value
+        days = int(total_seconds // 86400)  # Compute full days
+        hours = int((total_seconds % 86400) // 3600)  # Compute remaining hours
+        minutes = int((total_seconds % 3600) // 60)  # Compute remaining minutes
+        seconds = int(total_seconds % 60)  # Compute remaining seconds
 
-    days = int(total_seconds // 86400)  # Compute full days
-    hours = int((total_seconds % 86400) // 3600)  # Compute remaining hours
-    minutes = int((total_seconds % 3600) // 60)  # Compute remaining minutes
-    seconds = int(total_seconds % 60)  # Compute remaining seconds
-
-    if days > 0:  # Include days when present
-        return f"{days}d {hours}h {minutes}m {seconds}s"  # Return formatted days+hours+minutes+seconds
-    if hours > 0:  # Include hours when present
-        return f"{hours}h {minutes}m {seconds}s"  # Return formatted hours+minutes+seconds
-    if minutes > 0:  # Include minutes when present
-        return f"{minutes}m {seconds}s"  # Return formatted minutes+seconds
-    return f"{seconds}s"  # Fallback: only seconds
+        if days > 0:  # Include days when present
+            return f"{days}d {hours}h {minutes}m {seconds}s"  # Return formatted days+hours+minutes+seconds
+        if hours > 0:  # Include hours when present
+            return f"{hours}h {minutes}m {seconds}s"  # Return formatted hours+minutes+seconds
+        if minutes > 0:  # Include minutes when present
+            return f"{minutes}m {seconds}s"  # Return formatted minutes+seconds
+        return f"{seconds}s"  # Fallback: only seconds
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def play_sound(config=None):
@@ -5942,31 +6471,36 @@ def play_sound(config=None):
     :return: None
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    current_os = platform.system()  # Get the current operating system
-    if current_os == "Windows":  # If the current operating system is Windows
-        return  # Do nothing
-    
-    sound_enabled = config.get("sound", {}).get("enabled", True)  # Get sound enabled flag from config
-    if not sound_enabled:  # If sound is disabled
-        return  # Do nothing
-    
-    sound_file = config.get("sound", {}).get("file", "./.assets/Sounds/NotificationSound.wav")  # Get sound file from config
-    sound_commands = config.get("sound", {}).get("commands", {})  # Get sound commands from config
+        current_os = platform.system()  # Get the current operating system
+        if current_os == "Windows":  # If the current operating system is Windows
+            return  # Do nothing
+        
+        sound_enabled = config.get("sound", {}).get("enabled", True)  # Get sound enabled flag from config
+        if not sound_enabled:  # If sound is disabled
+            return  # Do nothing
+        
+        sound_file = config.get("sound", {}).get("file", "./.assets/Sounds/NotificationSound.wav")  # Get sound file from config
+        sound_commands = config.get("sound", {}).get("commands", {})  # Get sound commands from config
 
-    if verify_filepath_exists(sound_file):  # If the sound file exists
-        if current_os in sound_commands:  # If the platform.system() is in the sound_commands dictionary
-            os.system(f"{sound_commands[current_os]} {sound_file}")  # Play the sound
-        else:  # If the platform.system() is not in the sound_commands dictionary
+        if verify_filepath_exists(sound_file):  # If the sound file exists
+            if current_os in sound_commands:  # If the platform.system() is in the sound_commands dictionary
+                os.system(f"{sound_commands[current_os]} {sound_file}")  # Play the sound
+            else:  # If the platform.system() is not in the sound_commands dictionary
+                print(
+                    f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not in the {BackgroundColors.CYAN}sound_commands dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}"
+                )
+        else:  # If the sound file does not exist
             print(
-                f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not in the {BackgroundColors.CYAN}sound_commands dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}"
+                f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{sound_file}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}"
             )
-    else:  # If the sound file does not exist
-        print(
-            f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{sound_file}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}"
-        )
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def main(config=None):
@@ -5977,52 +6511,57 @@ def main(config=None):
     :return: None
     """
     
-    if config is None:  # If no config provided
-        config = CONFIG  # Use global CONFIG
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
 
-    print(
-        f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Classifiers Stacking{BackgroundColors.GREEN} program!{Style.RESET_ALL}\n"
-    )  # Output the welcome message
-    
-    test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", True)  # Get test augmentation flag from config
-    augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
-
-    if test_data_augmentation:  # If data augmentation testing is enabled
         print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.YELLOW}Data Augmentation Testing: {BackgroundColors.CYAN}ENABLED{Style.RESET_ALL}"
-        )  # Print augmentation enabled message
+            f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Classifiers Stacking{BackgroundColors.GREEN} program!{Style.RESET_ALL}\n"
+        )  # Output the welcome message
+        
+        test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", True)  # Get test augmentation flag from config
+        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
+
+        if test_data_augmentation:  # If data augmentation testing is enabled
+            print(
+                f"{BackgroundColors.BOLD}{BackgroundColors.YELLOW}Data Augmentation Testing: {BackgroundColors.CYAN}ENABLED{Style.RESET_ALL}"
+            )  # Print augmentation enabled message
+            print(
+                f"{BackgroundColors.GREEN}Will evaluate Original vs Original+Augmented at ratios: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in augmentation_ratios]}{Style.RESET_ALL}\n"
+            )  # Print augmentation ratios to be evaluated
+
+        start_time = datetime.datetime.now()  # Get the start time of the program
+
+        setup_telegram_bot(config=config)  # Setup Telegram bot if configured
+
+        send_telegram_message(
+            TELEGRAM_BOT, [f"Starting Classifiers Stacking at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"]
+        )  # Send Telegram message indicating start
+
+        threads_limit = set_threads_limit_based_on_ram(config=config)  # Adjust config.get("evaluation", {}).get("threads_limit", 2) based on system RAM
+        
+        datasets = config.get("dataset", {}).get("datasets", {})  # Get datasets from config
+
+        for dataset_name, paths in datasets.items():  # For each dataset in the datasets dictionary
+            process_dataset_paths(dataset_name, paths, config=config)  # Process all paths for this dataset
+
+        finish_time = datetime.datetime.now()  # Get the finish time of the program
         print(
-            f"{BackgroundColors.GREEN}Will evaluate Original vs Original+Augmented at ratios: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in augmentation_ratios]}{Style.RESET_ALL}\n"
-        )  # Print augmentation ratios to be evaluated
+            f"\n{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
+        )  # Output the start and finish times
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
+        )  # Output the end of the program message
 
-    start_time = datetime.datetime.now()  # Get the start time of the program
-
-    setup_telegram_bot(config=config)  # Setup Telegram bot if configured
-
-    send_telegram_message(
-        TELEGRAM_BOT, [f"Starting Classifiers Stacking at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"]
-    )  # Send Telegram message indicating start
-
-    threads_limit = set_threads_limit_based_on_ram(config=config)  # Adjust config.get("evaluation", {}).get("threads_limit", 2) based on system RAM
-    
-    datasets = config.get("dataset", {}).get("datasets", {})  # Get datasets from config
-
-    for dataset_name, paths in datasets.items():  # For each dataset in the datasets dictionary
-        process_dataset_paths(dataset_name, paths, config=config)  # Process all paths for this dataset
-
-    finish_time = datetime.datetime.now()  # Get the finish time of the program
-    print(
-        f"\n{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
-    )  # Output the start and finish times
-    print(
-        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
-    )  # Output the end of the program message
-
-    send_telegram_message(TELEGRAM_BOT, [f"Finished Classifiers Stacking at {finish_time.strftime('%Y-%m-%d %H:%M:%S')} | Execution time: {calculate_execution_time(start_time, finish_time)}"])  # Send Telegram message indicating finish
-    
-    play_sound_enabled = config.get("sound", {}).get("enabled", True)  # Get play sound flag from config
-    if play_sound_enabled:  # If play sound is enabled
-        atexit.register(play_sound, config=config)  # Register the play_sound function to be called when the program finishes
+        send_telegram_message(TELEGRAM_BOT, [f"Finished Classifiers Stacking at {finish_time.strftime('%Y-%m-%d %H:%M:%S')} | Execution time: {calculate_execution_time(start_time, finish_time)}"])  # Send Telegram message indicating finish
+        
+        play_sound_enabled = config.get("sound", {}).get("enabled", True)  # Get play sound flag from config
+        if play_sound_enabled:  # If play sound is enabled
+            atexit.register(play_sound, config=config)  # Register the play_sound function to be called when the program finishes
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 if __name__ == "__main__":
