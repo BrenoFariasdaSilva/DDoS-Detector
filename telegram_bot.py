@@ -57,6 +57,8 @@ import os  # For environment variables and file operations
 import platform  # For getting the operating system name
 import re  # For stripping ANSI sequences
 import socket  # For getting the local IP address
+import sys  # For system-level hooks and excepthook manipulation
+import traceback  # For formatting and printing exception tracebacks
 from colorama import Style  # For coloring the terminal
 from dotenv import load_dotenv  # For loading .env file
 from telegram import Bot  # For Telegram bot operations
@@ -66,6 +68,7 @@ from telegram.error import BadRequest  # For handling Telegram errors
 # Telegram Configuration:
 TELEGRAM_DEVICE_INFO = ""  # Device info for Telegram messages, set by calling script
 RUNNING_CODE = ""  # Name of the running script, set by calling script
+TELEGRAM_BOT = None  # Optional module-level TelegramBot instance usable by the global handler
 
 # Macros:
 class BackgroundColors:  # Colors for the terminal
@@ -344,6 +347,79 @@ def send_telegram_message(bot, messages, condition=True):
             asyncio.run(bot.send_messages(prefixed_messages))  # Run the async method synchronously
         except Exception:  # Silently ignore Telegram errors
             pass  # Do nothing
+
+
+def send_exception_via_telegram(exc_type, exc_value, exc_tb):  # Custom exception handler exposed for global use
+    """
+    Custom exception handler that sends uncaught exceptions to Telegram.
+    
+    :param exc_type: Exception type
+    :param exc_value: Exception value
+    :param exc_tb: Exception traceback object
+    :return: None
+    """
+    
+    try:  # Attempt to format the traceback into a string for the message
+        tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))  # Traceback string
+    except Exception as e:  # Formatting may fail, provide safe fallback and notify minimally
+        print(str(e))  # Print formatting error to terminal for visibility
+        try:  # Try to inform via Telegram about the formatting failure as a minimal message
+            send_telegram_message(TELEGRAM_BOT, f"Failed to format traceback: {e}")  # Minimal notify
+        except Exception:  # Sending may fail, but must not raise further
+            pass  # Ignore notification failures to avoid recursion
+        tb = "Could not format traceback."  # Fallback traceback string when formatting fails
+
+    msg = f"Uncaught exception in {RUNNING_CODE}:\n{exc_value}\n\nTraceback:\n{tb}"  # Construct notification message including running code context
+
+    try:  # Attempt to ensure bot is initialized in this module before sending
+        if "TELEGRAM_BOT" in globals() and TELEGRAM_BOT is None:  # If module bot variable exists but not set
+            try:  # Try to initialize or at least attempt a setup hint (do not import-circular)
+                pass  # No-op placeholder: actual bot initialization controlled by caller modules
+            except Exception as e:  # If any problem arises attempting to initialize, print for diagnostics
+                print(str(e))  # Print bot setup error to terminal for diagnostics
+                try:  # Attempt to notify via any available bot instance about setup failure
+                    send_telegram_message(TELEGRAM_BOT, f"Failed to initialize bot: {e}")  # Minimal notify
+                except Exception:  # If notification fails, swallow to avoid recursion
+                    pass  # Ignore further errors
+        send_telegram_message(TELEGRAM_BOT, msg)  # Send the detailed exception message to Telegram
+    except Exception as e:  # If sending fails, ensure terminal still receives full diagnostics
+        try:  # Try to print an error marker to stderr for immediate visibility
+            print(f"{BackgroundColors.RED}Failed to send telegram message: {e}{Style.RESET_ALL}", file=sys.stderr)  # Print to stderr
+            traceback.print_exc()  # Print the internal send failure traceback to stderr
+        except Exception as e:  # If printing to stderr fails, fall back to stdout printing
+            try:  # Attempt to output the error to stdout as a last-resort visible channel
+                print(str(e))  # Print to stdout when stderr is unavailable
+            except Exception:  # If that also fails, give up silently to avoid crashing handler
+                pass  # Swallow to avoid cascading failures
+
+    try:  # Always call the original platform excepthook after notifications
+        sys.__excepthook__(exc_type, exc_value, exc_tb)  # Invoke default system excepthook for normal terminal behavior
+    except Exception:  # If default excepthook itself fails, swallow to avoid loops
+        pass  # Ignore exceptions from the original excepthook to avoid recursion
+
+
+_GLOBAL_HOOK_INSTALLED = False  # Internal flag tracking whether the global hook was installed
+
+
+def setup_global_exception_hook():  # Install the global excepthook to route uncaught exceptions here
+    """
+    Install the module-level global exception hook to forward uncaught exceptions to Telegram.
+    
+    :return: None
+    """
+    
+    global _GLOBAL_HOOK_INSTALLED  # Refer to the module-level installation flag
+    if _GLOBAL_HOOK_INSTALLED:  # If already installed, do nothing to avoid duplicate hooks
+        return  # Skip installation when already done
+    try:  # Try to set the system excepthook to the module handler
+        sys.excepthook = send_exception_via_telegram  # Set the global excepthook to forward to Telegram sender
+        _GLOBAL_HOOK_INSTALLED = True  # Mark as installed to prevent re-installation
+    except Exception as e:  # If installation fails, log and attempt a safe notification
+        print(str(e))  # Print installation error to terminal for visibility
+        try:  # Attempt to notify about the hook setup failure via the same handler
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send configuration error details via Telegram
+        except Exception:  # If notification fails, do not re-raise to avoid import-time recursion
+            pass  # Ignore Telegram send errors during hook configuration
 
 
 def verify_filepath_exists(filepath):
