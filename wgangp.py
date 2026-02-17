@@ -72,7 +72,7 @@ from contextlib import nullcontext  # For null context manager
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For data preprocessing
-from telegram_bot import TelegramBot, send_telegram_message, send_exception_via_telegram, setup_global_exception_hook  # For Telegram utilities and global exception hook
+from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For Telegram utilities and global exception hook
 from torch import autograd  # For gradient penalty
 from torch.utils.data import DataLoader, Dataset  # Dataset and DataLoader
 from tqdm import tqdm  # For progress bar visualization
