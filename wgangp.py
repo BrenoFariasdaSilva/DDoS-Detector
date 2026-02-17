@@ -72,7 +72,7 @@ from contextlib import nullcontext  # For null context manager
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For data preprocessing
-from telegram_bot import TelegramBot, send_telegram_message  # For sending progress messages to Telegram
+from telegram_bot import TelegramBot, send_telegram_message, send_exception_via_telegram, setup_global_exception_hook  # For Telegram utilities and global exception hook
 from torch import autograd  # For gradient penalty
 from torch.utils.data import DataLoader, Dataset  # Dataset and DataLoader
 from tqdm import tqdm  # For progress bar visualization
@@ -81,7 +81,12 @@ from typing import Any, Dict, List, Optional, Union, cast  # For Any type hint a
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
     from torch.amp.autocast_mode import autocast as _torch_autocast  # Import autocast for mixed precision
-except Exception:  # If import fails (e.g., CUDA not available), define a fallback
+except Exception as e:  # If import fails (e.g., CUDA not available), handle and notify
+    print(str(e))  # Print import error to terminal for visibility
+    try:  # Try to notify via Telegram about the import failure
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full import error via Telegram via shared handler
+    except Exception:  # If notification fails, ignore to avoid recursion during import
+        pass  # Ignore Telegram send errors during import fallback
     _torch_autocast = None  # Set to None to indicate autocast is unavailable
 
 
@@ -107,6 +112,8 @@ logger = None  # Will be initialized in initialize_logger()
 
 
 # Functions Definitions:
+
+setup_global_exception_hook()  # Set global exception hook to shared Telegram handler
 
 
 def get_default_config():
@@ -772,6 +779,7 @@ def setup_telegram_bot(config: Optional[Dict] = None):
         TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
         telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
         telegram_module.RUNNING_CODE = os.path.basename(__file__)
+        telegram_module.TELEGRAM_BOT = TELEGRAM_BOT  # Register the created bot instance in telegram_bot module
     except Exception as e:
         print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
         TELEGRAM_BOT = None  # Set to None if initialization fails
@@ -1161,7 +1169,12 @@ def plot_training_metrics(metrics_history, out_dir, filename=None, config: Optio
     save_dir = Path(out_dir) / data_aug_subdir / plotting_subdir  # Construct save directory path
     try:  # Try to create the save directory, but catch exceptions (e.g., permission issues, invalid path, etc.)
         save_dir.mkdir(parents=True, exist_ok=True)  # Create save directory with parents if it doesn't exist, but don't raise error if it already exists
-    except Exception:  # Catch any exception during directory creation
+    except Exception as e:  # Catch any exception during directory creation
+        print(str(e))  # Print directory creation error to terminal for visibility
+        try:  # Attempt to notify about directory creation error via Telegram
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full directory creation error via Telegram
+        except Exception:  # If notification fails, ignore to avoid cascading errors
+            pass  # Ignore Telegram send errors during directory creation fallback
         save_dir = Path(out_dir)  # Fallback to out_dir if subdirectories cannot be created
 
     plot_path = str(save_dir / filename)  # Construct full path for the plot file
@@ -1672,9 +1685,13 @@ def generate(args, config: Optional[Dict] = None):
 
     batch_size = args.gen_batch_size  # Set generation batch size
     try:
-        send_telegram_message(TELEGRAM_BOT, f"Starting generation: producing {n} samples to {Path(args.out_file).name}")
-    except Exception:
-        pass
+        send_telegram_message(TELEGRAM_BOT, f"Starting generation: producing {n} samples to {Path(args.out_file).name}")  # Notify start of generation
+    except Exception as e:  # Failed to notify start of generation
+        print(str(e))  # Print send error to terminal for visibility
+        try:  # Attempt to send full error via Telegram using exception sender
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full send error via Telegram
+        except Exception:  # If notification fails, continue without raising to allow generation
+            pass  # Ignore Telegram send errors and continue generation
     all_fake = []  # List to store generated feature batches
     all_labels = []  # List to store corresponding labels
     with torch.no_grad():  # Disable gradient computation for generation
@@ -1714,13 +1731,21 @@ def to_seconds(obj):
     if hasattr(obj, "total_seconds"):  # Timedelta-like objects
         try:  # Attempt to call total_seconds()
             return float(obj.total_seconds())  # Use the total_seconds() method
-        except Exception:
-            pass  # Fallthrough on error
+        except Exception as e:  # total_seconds() failed
+            print(str(e))  # Print error to terminal for visibility
+            try:  # Attempt to notify about total_seconds failure via Telegram
+                send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full error via Telegram
+            except Exception:  # If notification fails, ignore to avoid recursion
+                pass  # Ignore Telegram send errors and fall through
     if hasattr(obj, "timestamp"):  # Datetime-like objects
         try:  # Attempt to call timestamp()
             return float(obj.timestamp())  # Use timestamp() to get seconds since epoch
-        except Exception:
-            pass  # Fallthrough on error
+        except Exception as e:  # timestamp() failed
+            print(str(e))  # Print error to terminal for visibility
+            try:  # Attempt to notify about timestamp failure via Telegram
+                send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full error via Telegram
+            except Exception:  # If notification fails, ignore to avoid recursion
+                pass  # Ignore Telegram send errors and fall through
     return None  # Couldn't convert
 
 
@@ -1741,7 +1766,12 @@ def calculate_execution_time(start_time, finish_time=None):
         if total_seconds is None:  # Conversion failed
             try:  # Attempt numeric coercion
                 total_seconds = float(start_time)  # Attempt numeric coercion
-            except Exception:  # Coercion failed
+            except Exception as e:  # Coercion failed
+                print(str(e))  # Print coercion error to terminal for visibility
+                try:  # Attempt to notify about coercion failure via Telegram
+                    send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full coercion error via Telegram
+                except Exception:  # If notification fails, ignore to avoid cascading errors
+                    pass  # Ignore Telegram send errors and fallback
                 total_seconds = 0.0  # Fallback to zero
     else:  # Two-argument mode: Compute difference finish_time - start_time
         st = to_seconds(start_time)  # Convert start to seconds if possible
@@ -1752,10 +1782,20 @@ def calculate_execution_time(start_time, finish_time=None):
             try:  # Attempt to subtract (works for datetimes/timedeltas)
                 delta = finish_time - start_time  # Try subtracting (works for datetimes/timedeltas)
                 total_seconds = float(delta.total_seconds())  # Get seconds from the resulting timedelta
-            except Exception:  # Subtraction failed
+            except Exception as e:  # Subtraction failed
+                print(str(e))  # Print subtraction error to terminal for visibility
+                try:  # Attempt to notify about subtraction failure via Telegram
+                    send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full subtraction error via Telegram
+                except Exception:  # If notification fails, ignore to avoid cascading errors
+                    pass  # Ignore Telegram send errors and continue to numeric coercion
                 try:  # Final attempt: Numeric coercion
                     total_seconds = float(finish_time) - float(start_time)  # Final numeric coercion attempt
-                except Exception:  # Numeric coercion failed
+                except Exception as e:  # Numeric coercion failed
+                    print(str(e))  # Print numeric coercion error to terminal for visibility
+                    try:  # Attempt to notify about numeric coercion failure via Telegram
+                        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full coercion error via Telegram
+                    except Exception:  # If notification fails, ignore to avoid cascading errors
+                        pass  # Ignore Telegram send errors and fallback
                     total_seconds = 0.0  # Fallback to zero on failure
 
     if total_seconds is None:  # Ensure a numeric value
@@ -2194,4 +2234,12 @@ if __name__ == "__main__":
     :return: None
     """
 
-    main()  # Call the main function
+    try:  # Protect main execution to ensure errors are reported and notified
+        main()  # Call the main function
+    except Exception as e:  # Catch any unhandled exception from main
+        print(str(e))  # Print the exception message to terminal for logs
+        try:  # Attempt to send full exception via Telegram
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback and message
+        except Exception:  # If sending the notification fails, print traceback to stderr
+            traceback.print_exc()  # Print full traceback to stderr as final fallback
+        raise  # Re-raise to avoid silent failure and preserve original crash behavior
