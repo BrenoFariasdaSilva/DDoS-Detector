@@ -73,7 +73,7 @@ from mpl_toolkits.mplot3d import Axes3D  # For 3D plotting
 from pathlib import Path  # For handling file paths
 from sklearn.manifold import TSNE  # For t-SNE dimensionality reduction
 from sklearn.preprocessing import StandardScaler  # For feature scaling
-from telegram_bot import TelegramBot, send_telegram_message, send_exception_via_telegram, setup_global_exception_hook  # For sending progress messages and exceptions to Telegram
+from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages and exceptions to Telegram
 from tqdm import tqdm  # For progress bars
 from typing import Any, cast  # For type hinting
 
