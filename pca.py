@@ -120,6 +120,7 @@ PCA_RESULTS_CSV_COLUMNS = [  # Columns for the PCA results CSV
     "test_f1_score",
     "test_fpr",
     "test_fnr",
+    "feature_extraction_time_s",
     "training_time_s",
     "testing_time_s",
     "hardware",
@@ -318,22 +319,27 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
     :return: X_train, X_test, y_train, y_test, scaler
     """
 
-    stratify_param = y if len(np.unique(y)) > 1 else None
-    X_train_df, X_test_df, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state, stratify=stratify_param
-    )
+    stratify_param = y if len(np.unique(y)) > 1 else None  # Determine stratify param
+    X_train_df, X_test_df, y_train, y_test = train_test_split(  # Split dataset
+        X, y, test_size=test_size, random_state=random_state, stratify=stratify_param  # Split args
+    )  # End split
 
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train_df)
-    X_test = scaler.transform(X_test_df)
+    start_scaling = time.perf_counter()  # Start high-resolution scaling timer
+    scaler = StandardScaler()  # Create scaler instance
+    X_train = scaler.fit_transform(X_train_df)  # Fit scaler and transform train
+    X_test = scaler.transform(X_test_df)  # Transform test data with fitted scaler
+    scaling_time = round(time.perf_counter() - start_scaling, 6)  # End scaling timer and round to 6 decimals
+    try:  # Safely attach scaling time to scaler instance using setattr to avoid static attribute-access diagnostics
+        setattr(scaler, "_scaling_time", scaling_time)  # Store scaling time as dynamic attribute on scaler
+    except Exception:  # Preserve prior silent-failure behavior if attribute cannot be set
+        pass  # No-op on failure
 
     return X_train, X_test, y_train, y_test, scaler  # Return the split data and scaler
 
 
-def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_folds=10, workers=1):
+def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_folds=10, workers=1, scaling_time=0.0):
     """
     Applies PCA transformation and evaluates performance using 10-fold Stratified Cross-Validation
-    on the training set, then tests on the held-out test set.
 
     :param X_train: Training features (scaled)
     :param y_train: Training target
@@ -345,116 +351,119 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
     """
 
     if n_components <= 0:  # Validate n_components
-        raise ValueError(f"n_components must be positive, got {n_components}")
+        raise ValueError(f"n_components must be positive, got {n_components}")  # Raise on invalid
     if n_components > X_train.shape[1]:  # Validate n_components against number of features
-        raise ValueError(
+        raise ValueError(  # Raise descriptive error
             f"n_components ({n_components}) cannot be greater than number of features ({X_train.shape[1]})"
-        )
+        )  # End raise
 
-
-    send_telegram_message(TELEGRAM_BOT, f"Starting PCA training for n_components={n_components}")
+    send_telegram_message(TELEGRAM_BOT, f"Starting PCA training for n_components={n_components}")  # Notify
     pca = PCA(n_components=n_components, random_state=42)  # Initialize PCA
 
-    start_total = time.time()  # Start total training time (including PCA fit, CV, final fit)
+    start_pca = time.perf_counter()  # Start PCA timer (feature extraction part)
     X_train_pca = pca.fit_transform(X_train)  # Fit PCA on training data and transform
     X_test_pca = pca.transform(X_test)  # Transform test data using the fitted PCA
+    pca_time = round(time.perf_counter() - start_pca, 6)  # End PCA timer and round
+    feature_extraction_time_s = round((scaling_time or 0.0) + pca_time, 6)  # Sum scaling and PCA times
 
     explained_variance = pca.explained_variance_ratio_.sum()  # Total explained variance ratio
 
     rf_n_jobs = -1 if workers == 1 else 1  # Set n_jobs for RandomForest based on workers
-    model = RandomForestClassifier(
+    model = RandomForestClassifier(  # Initialize Random Forest model
         n_estimators=100, random_state=42, n_jobs=rf_n_jobs
-    )  # Initialize Random Forest model
+    )  # End model init
 
     skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)  # Stratified K-Fold cross-validator
 
     cv_accs, cv_precs, cv_recs, cv_f1s = [], [], [], []  # Lists to store CV metrics
+    total_training_time = 0.0  # Accumulator for all model.fit durations
+    total_testing_time = 0.0  # Accumulator for all prediction+metric durations
 
-    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_train_pca, y_train), start=1):  # Loop over each fold
-        send_telegram_message(TELEGRAM_BOT, f"Starting CV fold {fold_idx}/{cv_folds} for n_components={n_components}")
-        fold_start = time.time()
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_train_pca, y_train), start=1):  # Loop folds
+        send_telegram_message(TELEGRAM_BOT, f"Starting CV fold {fold_idx}/{cv_folds} for n_components={n_components}")  # Notify
         X_train_fold = X_train_pca[train_idx]  # Training data for this fold
         X_val_fold = X_train_pca[val_idx]  # Validation data for this fold
-        y_train_fold = (
+        y_train_fold = (  # Support both Series and ndarray
             y_train.iloc[train_idx] if isinstance(y_train, pd.Series) else y_train[train_idx]
-        )  # Training target for this fold
-        y_val_fold = (
+        )  # End y_train_fold
+        y_val_fold = (  # Support both Series and ndarray for validation
             y_train.iloc[val_idx] if isinstance(y_train, pd.Series) else y_train[val_idx]
-        )  # Validation target for this fold
+        )  # End y_val_fold
 
+        start_fit = time.perf_counter()  # Start timer immediately before model.fit for this fold
         model.fit(X_train_fold, y_train_fold)  # Fit model on training fold
-        y_pred_fold = model.predict(X_val_fold)  # Predict on validation fold
+        fit_elapsed = round(time.perf_counter() - start_fit, 6)  # Stop timer immediately after fit and round
+        total_training_time += fit_elapsed  # Accumulate training durations
 
-        cv_accs.append(accuracy_score(y_val_fold, y_pred_fold))  # Calculate and store metrics
+        start_pred = time.perf_counter()  # Start timer immediately before prediction+metrics for this fold
+        y_pred_fold = model.predict(X_val_fold)  # Predict on validation fold
+        cv_accs.append(accuracy_score(y_val_fold, y_pred_fold))  # Calculate and store accuracy
         cv_precs.append(
             precision_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
-        )  # Calculate and store metrics
+        )  # Calculate and store precision
         cv_recs.append(
             recall_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
-        )  # Calculate and store metrics
-        f1_fold = f1_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
-        cv_f1s.append(f1_fold)  # Calculate and store metrics
-        fold_elapsed = time.time() - fold_start
-        send_telegram_message(TELEGRAM_BOT, f"Finished CV fold {fold_idx}/{cv_folds} for n_components={n_components} with F1: {truncate_value(f1_fold)} in {calculate_execution_time(fold_start, time.time())}")
+        )  # Calculate and store recall
+        f1_fold = f1_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)  # Compute F1
+        cv_f1s.append(f1_fold)  # Store F1
+        pred_elapsed = round(time.perf_counter() - start_pred, 6)  # Stop timer after prediction+metrics and round
+        total_testing_time += pred_elapsed  # Accumulate testing durations for CV
+        send_telegram_message(TELEGRAM_BOT, f"Finished CV fold {fold_idx}/{cv_folds} for n_components={n_components} with F1: {truncate_value(f1_fold)}")  # Notify fold completion
 
-    cv_acc_mean = np.mean(cv_accs)  # Mean CV metrics
-    cv_prec_mean = np.mean(cv_precs)  # Mean CV metrics
-    cv_rec_mean = np.mean(cv_recs)  # Mean CV metrics
-    cv_f1_mean = np.mean(cv_f1s)  # Mean CV metrics
+    cv_acc_mean = np.mean(cv_accs)  # Mean CV accuracy
+    cv_prec_mean = np.mean(cv_precs)  # Mean CV precision
+    cv_rec_mean = np.mean(cv_recs)  # Mean CV recall
+    cv_f1_mean = np.mean(cv_f1s)  # Mean CV f1
 
-    total_elapsed = time.time() - start_total
-    send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} with CV F1: {truncate_value(cv_f1_mean)} in {calculate_execution_time(start_total, time.time())}")
+    send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} with CV F1: {truncate_value(cv_f1_mean)}")  # Notify completion
 
-    cv_acc_mean = np.mean(cv_accs)  # Mean CV metrics
-    cv_prec_mean = np.mean(cv_precs)  # Mean CV metrics
-    cv_rec_mean = np.mean(cv_recs)  # Mean CV metrics
-    cv_f1_mean = np.mean(cv_f1s)  # Mean CV metrics
-
+    start_final_fit = time.perf_counter()  # Start timer immediately before final model.fit
     model.fit(X_train_pca, y_train)  # Fit model on full training data
-    training_time_s = time.time() - start_total  # Training time (PCA fit, CV, final fit)
+    final_fit_elapsed = round(time.perf_counter() - start_final_fit, 6)  # Stop timer immediately after final fit and round
+    total_training_time += final_fit_elapsed  # Add final fit duration to training total
 
-    start_predict = time.time()  # Start timing for inference
+    start_test = time.perf_counter()  # Start timer immediately before test prediction+metrics
     y_pred = model.predict(X_test_pca)  # Predict on test data
-    testing_time_s = time.time() - start_predict  # Testing time (inference only)
-
-    acc = accuracy_score(y_test, y_pred)  # Calculate test metrics
-    prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test metrics
-    rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test metrics
-    f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test metrics
-
+    acc = accuracy_score(y_test, y_pred)  # Calculate test accuracy
+    prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test precision
+    rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test recall
+    f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test f1
     fpr, fnr = 0, 0  # Initialize FPR and FNR
     unique_classes = np.unique(y_test)  # Get unique classes in the test set
     if len(unique_classes) == 2:  # If binary classification
-        tn, fp, fn, tp = confusion_matrix(y_test, y_pred, labels=unique_classes).ravel()  # Get confusion matrix values
-        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # Calculate False Positive Rate
-        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # Calculate False Negative Rate
+        tn, fp, fn, tp = confusion_matrix(y_test, y_pred, labels=unique_classes).ravel()  # Get confusion matrix
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # Compute FPR
+        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # Compute FNR
+    test_pred_elapsed = round(time.perf_counter() - start_test, 6)  # Stop timer after test prediction+metrics and round
+    total_testing_time += test_pred_elapsed  # Add test prediction duration to testing total
 
-    scaler_export = StandardScaler().fit(np.vstack([X_train, X_test]))
-    
+    scaler_export = StandardScaler().fit(np.vstack([X_train, X_test]))  # Create scaler for export
+
     try:  # Try to get trained classifier parameters
         trained_classifier_params = model.get_params()  # Get model parameters
     except Exception:  # On failure
         trained_classifier_params = None  # Set to None
 
     return {
-        "n_components": n_components,
-        "explained_variance": explained_variance,
-        "cv_accuracy": cv_acc_mean,
-        "cv_precision": cv_prec_mean,
-        "cv_recall": cv_rec_mean,
-        "cv_f1_score": cv_f1_mean,
-        "test_accuracy": acc,
-        "test_precision": prec,
-        "test_recall": rec,
-        "test_f1_score": f1,
-        "test_fpr": fpr,
-        "test_fnr": fnr,
-        "training_time_s": training_time_s,
-        "testing_time_s": testing_time_s,
-        "pca_object": pca,
-        "scaler": scaler_export,
-        "trained_classifier": model,
-        "trained_classifier_params": trained_classifier_params,
+        "n_components": n_components,  # Components
+        "explained_variance": explained_variance,  # Explained variance
+        "cv_accuracy": cv_acc_mean,  # CV accuracy
+        "cv_precision": cv_prec_mean,  # CV precision
+        "cv_recall": cv_rec_mean,  # CV recall
+        "cv_f1_score": cv_f1_mean,  # CV f1
+        "test_accuracy": acc,  # Test accuracy
+        "test_precision": prec,  # Test precision
+        "test_recall": rec,  # Test recall
+        "test_f1_score": f1,  # Test f1
+        "test_fpr": fpr,  # Test FPR
+        "test_fnr": fnr,  # Test FNR
+        "feature_extraction_time_s": float(round(feature_extraction_time_s, 6)),  # Feature extraction time (scaling+PCA)
+        "training_time_s": float(round(total_training_time, 6)),  # Training time (sum of all model.fit durations)
+        "testing_time_s": float(round(total_testing_time, 6)),  # Testing time (sum of all prediction+metric durations)
+        "pca_object": pca,  # PCA object
+        "scaler": scaler_export,  # Scaler for export
+        "trained_classifier": model,  # Trained classifier object
+        "trained_classifier_params": trained_classifier_params,  # Trained classifier params
     }
 
 
@@ -654,8 +663,9 @@ def save_pca_results(csv_path, all_results):
             "test_f1_score": truncate_value(results.get("test_f1_score")),
             "test_fpr": truncate_value(results.get("test_fpr")),
             "test_fnr": truncate_value(results.get("test_fnr")),
-            "training_time_s": int(round(results.get("training_time_s"))) if results.get("training_time_s") is not None else None,
-            "testing_time_s": int(round(results.get("testing_time_s"))) if results.get("testing_time_s") is not None else None,
+            "training_time_s": results.get("training_time_s") if results.get("training_time_s") is not None else None,
+            "testing_time_s": results.get("testing_time_s") if results.get("testing_time_s") is not None else None,
+            "feature_extraction_time_s": results.get("feature_extraction_time_s") if results.get("feature_extraction_time_s") is not None else None,
         }
         rows.append(row)
 
@@ -812,9 +822,10 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
                 max_workers=workers
             ) as executor:  # Create a process pool executor
                 for n_components in n_components_list:  # Loop over each number of components
+                    scaling_time_val = getattr(scaler, "_scaling_time", 0.0)  # Retrieve scaling_time attached to scaler
                     fut = executor.submit(
-                        apply_pca_and_evaluate, X_train, y_train, X_test, y_test, n_components, workers=workers
-                    )  # Submit task to the executor
+                        apply_pca_and_evaluate, X_train, y_train, X_test, y_test, n_components, workers=workers, scaling_time=scaling_time_val
+                    )  # Submit task to the executor with scaling_time
                     future_to_ncomp[fut] = n_components  # Map future to n_components
 
                 pbar = tqdm(
@@ -858,12 +869,13 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
             print(
                 f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Testing PCA with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}"
             )
-            comp_start = time.time()
+            comp_start = time.perf_counter()  # Start high-resolution timer for this component config
+            scaling_time_val = getattr(scaler, "_scaling_time", 0.0)  # Retrieve scaling_time attached to scaler
             results = apply_pca_and_evaluate(
-                X_train, y_train, X_test, y_test, n_components, workers=1
+                X_train, y_train, X_test, y_test, n_components, workers=1, scaling_time=scaling_time_val
             )  # Apply PCA and evaluate (single worker)
-            comp_elapsed = time.time() - comp_start
-            send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} with CV F1: {truncate_value(results['cv_f1_score'])} in {calculate_execution_time(comp_start, time.time())}")
+            comp_elapsed = time.perf_counter() - comp_start  # Compute elapsed duration
+            send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} with CV F1: {truncate_value(results['cv_f1_score'])} in {calculate_execution_time(comp_start, time.perf_counter())}")
             all_results.append(results)  # Append results to the list
             print_pca_results(results) if VERBOSE else None
 
