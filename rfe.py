@@ -115,6 +115,7 @@ RFE_RESULTS_CSV_COLUMNS = [  # Columns for the RFE results CSV
     "test_f1_score",
     "test_fpr",
     "test_fnr",
+    "feature_extraction_time_s",
     "training_time_s",
     "testing_time_s",
     "hardware",
@@ -362,7 +363,7 @@ def run_rfe_selector(X_train, y_train, n_select=10, random_state=42):
     :param y_train: Training target
     :param n_select: Number of features to select
     :param random_state: Random seed for reproducibility
-    :return: selector (fitted RFE object)
+    :return: selector (fitted RFE object), model, feature_extraction_time_s
     """
 
     model = RandomForestClassifier(
@@ -372,9 +373,12 @@ def run_rfe_selector(X_train, y_train, n_select=10, random_state=42):
     n_select = n_select if n_features >= n_select else n_features  # Adjust n_select if more than available features
 
     selector = RFE(model, n_features_to_select=n_select, step=1)  # Initialize RFE
-    selector = selector.fit(X_train, y_train)  # Fit RFE
+    sel_start = time.perf_counter()  # Start perf_counter for selector fitting
+    selector = selector.fit(X_train, y_train)  # Fit RFE (feature selection) as part of feature extraction
+    sel_end = time.perf_counter()  # End perf_counter for selector fitting
+    feature_extraction_time_s = round(sel_end - sel_start, 6)  # Compute selector fit duration rounded to 6 decimals
 
-    return selector, model  # Return the fitted selector and model
+    return selector, model, feature_extraction_time_s  # Return the fitted selector, model and feature extraction time
 
 
 def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42):
@@ -387,7 +391,7 @@ def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state
     :param y_train: Training target
     :param y_test: Testing target
     :param random_state: Random seed for reproducibility
-    :return: metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
+    :return: metrics tuple (acc, prec, rec, f1, fpr, fnr, training_time_s, testing_time_s)
     """
 
     verbose_output(
@@ -400,9 +404,13 @@ def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state
 
     model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=N_JOBS)  # Initialize the model
 
-    start_time = time.time()  # Start time measurement
-    model.fit(X_train_selected, y_train)  # Fit the model on selected features
-    y_pred = model.predict(X_test_selected)  # Predict on selected test features
+    train_start = time.perf_counter()  # Start perf_counter immediately before model.fit (training window)
+    model.fit(X_train_selected, y_train)  # Fit the model on selected features (training)
+    train_end = time.perf_counter()  # End perf_counter immediately after model.fit
+    training_time_s = round(train_end - train_start, 6)  # Compute training time rounded to 6 decimals
+
+    test_start = time.perf_counter()  # Start perf_counter immediately before prediction (testing window)
+    y_pred = model.predict(X_test_selected)  # Predict on selected test features (testing)
     acc = accuracy_score(y_test, y_pred)  # Calculate accuracy
     prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate precision
     rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate recall
@@ -437,16 +445,18 @@ def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state
         total_support = float(supports.sum()) if supports.sum() > 0 else 1.0  # Total support across classes
         fpr = float(sum(v * s for v, s in fprs) / total_support)  # Weighted average FPR across classes
         fnr = float(sum(v * s for v, s in fnrs) / total_support)  # Weighted average FNR across classes
+    test_end = time.perf_counter()  # End perf_counter immediately after metrics computed
+    testing_time_s = round(test_end - test_start, 6)  # Compute testing time rounded to 6 decimals
 
-    elapsed_time = time.time() - start_time  # Calculate elapsed time
     return (
-        float(acc),
-        float(prec),
-        float(rec),
-        float(f1),
-        float(fpr),
-        float(fnr),
-        float(elapsed_time),
+        float(acc),  # Accuracy
+        float(prec),  # Precision
+        float(rec),  # Recall
+        float(f1),  # F1-score
+        float(fpr),  # False positive rate
+        float(fnr),  # False negative rate
+        float(training_time_s),  # Training time in seconds (rounded 6 decimals)
+        float(testing_time_s),  # Testing time in seconds (rounded 6 decimals)
     )  # Return the metrics as Python floats
 
 
@@ -505,7 +515,15 @@ def print_metrics(metrics_tuple):
     print(
         f"  {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{truncate_value(metrics_tuple[5])}{Style.RESET_ALL}"
     )
-    print(f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{int(round(metrics_tuple[6]))}s{Style.RESET_ALL}")
+    try:
+        if len(metrics_tuple) >= 8:  # If tuple has training and testing times
+            displayed_elapsed = int(round(float(metrics_tuple[6]) + float(metrics_tuple[7])))  # Sum training+testing
+        else:
+            displayed_elapsed = int(round(float(metrics_tuple[6])))  # Fallback to the single elapsed value
+    except Exception:
+        displayed_elapsed = 0  # On error, show zero
+
+    print(f"  {BackgroundColors.GREEN}Elapsed Time: {BackgroundColors.CYAN}{displayed_elapsed}s{Style.RESET_ALL}")
     
     send_telegram_message(
         TELEGRAM_BOT,
@@ -517,7 +535,7 @@ def print_metrics(metrics_tuple):
             f"  F1-Score: {truncate_value(metrics_tuple[3])}\n"
             f"  False Positive Rate (FPR): {truncate_value(metrics_tuple[4])}\n"
             f"  False Negative Rate (FNR): {truncate_value(metrics_tuple[5])}\n"
-            f"  Elapsed Time: {int(round(metrics_tuple[6]))}s"
+            f"  Elapsed Time: {displayed_elapsed}s"
         ],
     )  # Send metrics to Telegram
 
@@ -742,17 +760,23 @@ def save_rfe_results(csv_path, run_results):
                 except Exception:
                     data[col] = val
 
-        training_time = r.get("training_time_s")
+        feature_extraction_time = r.get("feature_extraction_time_s")  # Read feature extraction time if present
         try:
-            data["training_time_s"] = int(float(training_time)) if training_time is not None else None
+            data["feature_extraction_time_s"] = round(float(feature_extraction_time), 6) if feature_extraction_time is not None else None
         except Exception:
-            data["training_time_s"] = None
+            data["feature_extraction_time_s"] = None
 
-        testing_time = r.get("testing_time_s")
+        training_time = r.get("training_time_s")  # Read training time from result dict
         try:
-            data["testing_time_s"] = int(float(testing_time)) if testing_time is not None else None
+            data["training_time_s"] = round(float(training_time), 6) if training_time is not None else None  # Store as float rounded to 6 decimals
         except Exception:
-            data["testing_time_s"] = None
+            data["training_time_s"] = None  # On error leave as None
+
+        testing_time = r.get("testing_time_s")  # Read testing time from result dict
+        try:
+            data["testing_time_s"] = round(float(testing_time), 6) if testing_time is not None else None  # Store as float rounded to 6 decimals
+        except Exception:
+            data["testing_time_s"] = None  # On error leave as None
 
         try:
             data["top_features"] = json.dumps(r.get("top_features") or [], ensure_ascii=False)
@@ -883,10 +907,10 @@ def evaluate_exported_model(model, scaler, X_numeric, feature_columns, top_featu
     """Evaluate a loaded/trained model on the full numeric dataset and
     compute the same metrics used by the RFE pipeline.
 
-    :return: tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
+    :return: tuple (acc, prec, rec, f1, fpr, fnr, testing_time_s)
     """
 
-    start_time = time.time()  # Measure prediction/eval time
+    test_start = time.perf_counter()  # Start perf_counter immediately before prediction (testing window)
     X_scaled = scaler.transform(X_numeric.values)  # Scale full numeric data with provided scaler
     sel_indices = [i for i, f in enumerate(feature_columns) if f in top_features]  # Indices for chosen features
     X_eval = X_scaled[:, sel_indices] if sel_indices else X_scaled  # Selected eval array
@@ -927,8 +951,9 @@ def evaluate_exported_model(model, scaler, X_numeric, feature_columns, top_featu
         fpr = float(sum(v * s for v, s in fprs) / total_support)
         fnr = float(sum(v * s for v, s in fnrs) / total_support)
 
-    elapsed = time.time() - start_time
-    return float(acc), float(prec), float(rec), float(f1), float(fpr), float(fnr), float(elapsed)
+    test_end = time.perf_counter()  # End perf_counter immediately after evaluation metrics computed
+    testing_time_s = round(test_end - test_start, 6)  # Compute testing time rounded to 6 decimals
+    return float(acc), float(prec), float(rec), float(f1), float(fpr), float(fnr), float(testing_time_s)
 
 
 def get_final_model(csv_path, X_train, y_train, top_features, feature_columns):
@@ -978,7 +1003,7 @@ def get_final_model(csv_path, X_train, y_train, top_features, feature_columns):
     return final_model, scaler_full, top_features, loaded_hyperparams
 
 
-def build_run_results(final_model, csv_path, hyperparameters, cv_method, cv_metrics=None, test_metrics=None, training_time=None, top_features=None, rfe_ranking=None):
+def build_run_results(final_model, csv_path, hyperparameters, cv_method, cv_metrics=None, test_metrics=None, training_time=None, top_features=None, rfe_ranking=None, feature_extraction_time=None):
     """
     Helper function to build the run_results dictionary.
 
@@ -991,6 +1016,7 @@ def build_run_results(final_model, csv_path, hyperparameters, cv_method, cv_metr
     :param training_time: Training time
     :param top_features: List of top features
     :param rfe_ranking: Sorted RFE ranking
+    :param feature_extraction_time: Feature extraction time
     :return: List containing the results dict
     """
     
@@ -1021,16 +1047,21 @@ def build_run_results(final_model, csv_path, hyperparameters, cv_method, cv_metr
             "test_f1_score": truncate_value(test_metrics[3]) or "0.0",
             "test_fpr": truncate_value(test_metrics[4]) or "0.0",
             "test_fnr": truncate_value(test_metrics[5]) or "0.0",
-            "testing_time_s": int(round(test_metrics[6])),
+            "testing_time_s": round(float(test_metrics[6]), 6),
         })
 
     if training_time is not None:
-        result["training_time_s"] = int(round(training_time))
+        result["training_time_s"] = round(float(training_time), 6)
+
+    if feature_extraction_time is not None:
+        result["feature_extraction_time_s"] = round(float(feature_extraction_time), 6)
+    else:
+        result["feature_extraction_time_s"] = round(0.0, 6)
 
     return [result]
 
 
-def build_results_with_hyperparams(final_model, csv_path, loaded_hyperparams, fallback_hyperparameters, cv_method, cv_metrics=None, test_metrics=None, training_time=None, top_features=None, rfe_ranking=None):
+def build_results_with_hyperparams(final_model, csv_path, loaded_hyperparams, fallback_hyperparameters, cv_method, cv_metrics=None, test_metrics=None, training_time=None, top_features=None, rfe_ranking=None, feature_extraction_time=None):
     """
     Determine hyperparameters to save (prefer loaded_hyperparams, else model.get_params(), else fallback)
     and build the run_results via `build_run_results`.
@@ -1045,6 +1076,7 @@ def build_results_with_hyperparams(final_model, csv_path, loaded_hyperparams, fa
     :param training_time: optional training time
     :param top_features: optional list of top features
     :param rfe_ranking: optional rfe ranking mapping
+    :param feature_extraction_time: optional feature extraction time
     :return: list containing a single run_results dict
     """
     
@@ -1066,6 +1098,7 @@ def build_results_with_hyperparams(final_model, csv_path, loaded_hyperparams, fa
         training_time=training_time,
         top_features=top_features,
         rfe_ranking=rfe_ranking,
+        feature_extraction_time=feature_extraction_time,
     )
 
 
@@ -1087,8 +1120,8 @@ def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparamet
     X_train, X_test, y_train, y_test = train_test_split(
         X_numeric.values, y_array, test_size=0.2, random_state=42, stratify=None
     )  # Perform a single non-stratified train/test split
-    selector, model = run_rfe_selector(X_train, y_train, random_state=42)  # Run RFE on the single split
-    metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42)  # Compute metrics on split
+    selector, model, feature_extraction_time_s = run_rfe_selector(X_train, y_train, random_state=42)  # Run RFE on the single split and get feature extraction time
+    metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42)  # Compute metrics on split (returns training and testing times)
     top_features, rfe_ranking = extract_top_features(selector, feature_columns)  # Extract selected features and rankings
     sorted_rfe_ranking = sorted(rfe_ranking.items(), key=lambda x: x[1])  # Sort features by ranking (ascending)
 
@@ -1108,6 +1141,7 @@ def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparamet
         training_time=metrics_tuple[6],
         top_features=top_features,
         rfe_ranking=sorted_rfe_ranking,
+        feature_extraction_time=feature_extraction_time_s,
     )  # Build results dict
 
     save_rfe_results(csv_path, run_results)  # Save fallback run results
@@ -1133,9 +1167,12 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
         X_numeric, y_array, test_size=0.2, random_state=42, stratify=stratify_param
     )
 
-    scaler_for_run = StandardScaler()
-    X_train_scaled = scaler_for_run.fit_transform(X_train_df.values)
-    X_test_scaled = scaler_for_run.transform(X_test_df.values)
+    scaler_for_run = StandardScaler()  # Create scaler for the run
+    scale_start = time.perf_counter()  # Start perf_counter immediately before scaling (feature extraction window begins)
+    X_train_scaled = scaler_for_run.fit_transform(X_train_df.values)  # Fit scaler and transform training data (scaling)
+    X_test_scaled = scaler_for_run.transform(X_test_df.values)  # Transform test data using fitted scaler
+    scale_end = time.perf_counter()  # End perf_counter immediately after scaling (feature extraction window part)
+    scaling_time_s = round(scale_end - scale_start, 6)  # Compute scaling time rounded to 6 decimals
 
     unique_tr, counts_tr = np.unique(y_train_array, return_counts=True)
     min_class_count_tr = counts_tr.min() if counts_tr.size > 0 else 0
@@ -1147,7 +1184,8 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
     fold_metrics = []  # List to collect per-fold metric tuples
     fold_rankings = []  # List to collect per-fold ranking arrays
     fold_supports = []  # List to collect per-fold support masks
-    total_elapsed = 0.0  # Accumulator for elapsed times across folds
+    total_elapsed = 0.0  # Accumulator for training times across folds
+    total_feature_extraction = float(scaling_time_s)  # Accumulator for total feature extraction time (scaling + selector fits)
 
     for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X_train_scaled, y_train_array), start=1):
         verbose_output(f"{BackgroundColors.CYAN}Running fold {fold_idx}/{n_splits}{Style.RESET_ALL}")  # Optional fold progress
@@ -1157,13 +1195,14 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
         y_train_fold = y_train_array[train_idx]
         y_test_fold = y_train_array[test_idx]
 
-        selector, model = run_rfe_selector(X_train_fold, y_train_fold, random_state=42)  # Fit RFE on this fold's training data
+        selector, model, feat_time = run_rfe_selector(X_train_fold, y_train_fold, random_state=42)  # Fit RFE on this fold's training data and get selector fit time
 
-        metrics_tuple = compute_rfe_metrics(selector, X_train_fold, X_test_fold, y_train_fold, y_test_fold, random_state=42)  # Compute metrics for this fold
+        metrics_tuple = compute_rfe_metrics(selector, X_train_fold, X_test_fold, y_train_fold, y_test_fold, random_state=42)  # Compute metrics for this fold (returns training and testing times)
         fold_metrics.append(metrics_tuple)  # Append per-fold metrics tuple
         fold_rankings.append(selector.ranking_)  # Append per-fold ranking array
         fold_supports.append(selector.support_.astype(int))  # Append per-fold support mask as integers
-        total_elapsed += metrics_tuple[6]  # Accumulate elapsed time from this fold
+        total_elapsed += metrics_tuple[6]  # Accumulate training time from this fold
+        total_feature_extraction += float(feat_time)  # Accumulate selector fit time into total feature extraction
 
         send_telegram_message(
             TELEGRAM_BOT,
@@ -1199,6 +1238,7 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
         training_time=total_elapsed,
         top_features=top_features,
         rfe_ranking=sorted_rfe_ranking,
+        feature_extraction_time=total_feature_extraction,
     )  # Build results dict
 
     print_metrics(tuple(mean_metrics)) if VERBOSE else None  # Optionally print aggregated metrics
