@@ -60,7 +60,7 @@ from fastparquet import ParquetFile  # For handling Parquet file format
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from scipy.io import arff as scipy_arff  # Used to read ARFF files
-from telegram_bot import TelegramBot, send_telegram_message, send_exception_via_telegram, setup_global_exception_hook  # For Telegram utilities and global exception hook
+from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For Telegram utilities and global exception hook
 from tqdm import tqdm  # For showing a progress bar
 
 
