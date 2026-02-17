@@ -1321,10 +1321,10 @@ def split_dataset(df, csv_path, test_size=0.2):
     X_train_scaled = scaler.fit_transform(X_train)  # Fit scaler on training set and transform
     X_test_scaled = scaler.transform(X_test)  # Transform test set with the same scaler
     scaling_time = time.perf_counter() - start_scale  # Calculate scaling duration
-    try:
-        scaler._scaling_time = round(float(scaling_time), 6)
-    except Exception:
-        pass
+    try:  # Try to attach scaling time to scaler instance using setattr to avoid static attribute access warnings
+        setattr(scaler, "_scaling_time", round(float(scaling_time), 6))  # Set dynamic attribute safely
+    except Exception:  # On any error, silently ignore to preserve original behavior
+        pass  # No-op on failure
 
     y_train_np = np.array(y_train)  # Convert y_train and y_test to numpy arrays for fast indexing
     y_test_np = np.array(y_test)  # Convert y_train and y_test to numpy arrays for fast indexing
@@ -4047,10 +4047,10 @@ def train_and_save_final_model(best_feats_local, X, y, feature_names, X_test, mo
     start_scale_local = time.perf_counter()
     X_scaled_local = scaler_local.fit_transform(df_features_local.values)  # Fit scaler on features and transform to normalized values
     scaling_time_local = time.perf_counter() - start_scale_local
-    try:
-        scaler_local._scaling_time = round(float(scaling_time_local), 6)
-    except Exception:
-        pass
+    try:  # Attach scaling time to scaler_local using setattr to avoid Pylance attribute warning
+        setattr(scaler_local, "_scaling_time", round(float(scaling_time_local), 6))  # Store scaling time on scaler
+    except Exception:  # If setting attribute fails, continue without raising
+        pass  # Preserve prior silent failure behavior
     sel_indices_local = [i for i, f in enumerate(feature_names) if f in best_feats_local]  # Get indices of selected features
     X_final_local = X_scaled_local[:, sel_indices_local] if sel_indices_local else X_scaled_local  # Select only chosen feature columns from scaled data
     X_test_selected_local = X_test[:, sel_indices_local] if sel_indices_local and X_test is not None else X_test  # Select same feature columns from test data
