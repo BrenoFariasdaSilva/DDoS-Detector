@@ -94,7 +94,7 @@ FILES = [
     "Scripts/class_block_functions_committer.py",
     "Scripts/comments_standardizer.py",
     "Scripts/functions_committer.py",
-    "Scripts/function_order_validator.py",
+    "Scripts/functions_validator.py",
     "Scripts/imports_placement.py",
     "Scripts/main-template.py",
     "Scripts/readme_sections_committer.py",

@@ -1,6 +1,6 @@
 """
 ================================================================================
-Python Function Order Validator (function_order_validator.py)
+Python Functions Validator (functions_validator.py)
 ================================================================================
 Author      : Breno Farias da Silva
 Created     : 2026-01-27
@@ -20,7 +20,7 @@ Description :
 Usage:
     1. Edit ROOT_DIR if necessary to point to the target directory.
     2. Execute the script:
-        $ python function_order_validator.py
+        $ python functions_validator.py
     3. Verify the generated JSON report for function order issues.
 
 Outputs:
