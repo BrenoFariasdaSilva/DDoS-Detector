@@ -231,7 +231,7 @@ def get_default_config():
         },
         "multiprocessing": {
             "n_jobs": -1,  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
-            "cpu_processes": 1,  # Initial number of worker processes; can be updated by monitor
+            "cpu_processes": None,  # Initial number of worker processes; None -> use all available CPUs
         },
         "resource_monitor": {
             "enabled": True,  # Enable resource monitoring
