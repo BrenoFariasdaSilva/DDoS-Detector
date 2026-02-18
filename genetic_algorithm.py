@@ -178,6 +178,12 @@ def parse_cli_args():
         parser.add_argument("--n-jobs", type=int, help="Number of parallel jobs (-1 for all)")  # N jobs argument
         parser.add_argument("--cpu-processes", type=int, help="Initial CPU processes")  # CPU processes argument
 
+        parser.add_argument(
+            "--telegram-progress-pct",
+            type=int,
+            help="Send Telegram progress updates every N percent of generations (default from config)",
+        )  # Telegram progress percent
+
         parser.add_argument("--no-monitor", action="store_true", help="Disable resource monitoring")  # Disable monitor
         parser.add_argument("--monitor-interval", type=int, help="Monitor interval in seconds")  # Monitor interval
 
@@ -206,6 +212,10 @@ def get_default_config():
             "resume_progress": True,  # When True, attempt to resume progress from saved state files
             "progress_save_interval": 10,  # Save progress every N generations
             "play_sound": True,  # Set to True to play a sound when the program finishes
+        },
+        "telegram": {
+            "enabled": True,  # Enable Telegram progress notifications
+            "progress_pct": 10,  # Send Telegram updates every N percent of total generations (default 10%)
         },
         "dataset": {
             "files_to_ignore": [],  # List of files to ignore during processing
@@ -438,6 +448,12 @@ def merge_configs(defaults, file_config, cli_args):
 
         if cli_args.monitor_interval is not None:  # If monitor interval specified
             config["resource_monitor"]["interval_seconds"] = cli_args.monitor_interval  # Override monitor interval
+
+        if hasattr(cli_args, "telegram_progress_pct") and cli_args.telegram_progress_pct is not None:
+            try:
+                config["telegram"]["progress_pct"] = int(cli_args.telegram_progress_pct)
+            except Exception:
+                pass
 
         return config  # Return merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -2304,6 +2320,14 @@ def run_genetic_algorithm_loop(
             else range(start_gen, n_generations + 1)
         )  # Create generation range with progress bar if show_progress is enabled, otherwise use plain range
         gens_ran = 0  # Track how many generations were actually executed
+        # Telegram progress notification settings (percent-based milestones)
+        telegram_cfg = CONFIG.get("telegram", {}) if isinstance(CONFIG, dict) else {}
+        telegram_enabled = bool(telegram_cfg.get("enabled", True))
+        try:
+            telegram_progress_pct = int(telegram_cfg.get("progress_pct", 10))
+        except Exception:
+            telegram_progress_pct = 10
+        last_telegram_block = -1  # Track last percentage block notified so we don't repeat
 
         for gen in gen_range:  # Loop for the specified number of generations
             (
@@ -2434,10 +2458,26 @@ def run_genetic_algorithm_loop(
                         GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
                     break  # Stop the loop early
 
-            should_send = show_progress and (gen % max(1, n_generations // 100) == 0)  # Send updates to Telegram at configured intervals (every 1% of generations)
-            send_telegram_message(TELEGRAM_BOT, [
-                f"Pop Size {pop_size}: Generation {gen}/{n_generations}, Best F1-Score: {truncate_value(best_fitness)}, Features: {int(current_best_num_features) if current_best_num_features is not None else 'N/A'}"
-            ], should_send)  # Send periodic updates to Telegram with multi-objective fitness values
+            # Decide whether to send a Telegram update based on percent milestones
+            should_send = False
+            if telegram_enabled and show_progress and telegram_progress_pct > 0:
+                try:
+                    # Compute current percent (0-100)
+                    current_pct = (gen * 100) // max(1, int(n_generations))
+                    current_block = current_pct // telegram_progress_pct
+                    if current_block > last_telegram_block:
+                        should_send = True
+                        last_telegram_block = current_block
+                except Exception:
+                    should_send = False
+
+            send_telegram_message(
+                TELEGRAM_BOT,
+                [
+                    f"Pop Size {pop_size}: Generation {gen}/{n_generations}, Best F1-Score: {truncate_value(best_fitness)}, Features: {int(current_best_num_features) if current_best_num_features is not None else 'N/A'}"
+                ],
+                should_send,
+            )  # Send periodic updates to Telegram with multi-objective fitness values at configured percent milestones
 
             gens_ran = gen  # Update gens_ran each generation
             with global_state_lock:  # Thread-safe update to GA_GENERATIONS_COMPLETED
