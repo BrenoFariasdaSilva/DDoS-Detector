@@ -103,7 +103,7 @@ wgangp: dependencies
 	$(CLEAR_CMD)
 	@if [ -z "$(CSV_PATH)" ] && [ -z "$(MODE)" ] && [ -z "$(EPOCHS)" ] && [ -z "$(N_SAMPLES)" ] && [ -z "$(USE_AMP)" ] && [ -z "$(COMPILE)" ] && [ -z "$(FROM_SCRATCH)" ]; then \
 		echo "Running wgangp with no args (using script defaults)"; \
-		$(PYTHON) ./wgangp.py; \
+		$(PYTHON) ./wgangp.py $(ARGS); \
 	else \
 		if [ -z "$(CSV_PATH)" ]; then \
 			echo "Running in batch mode (processing all datasets from DATASETS dictionary)"; \
@@ -114,7 +114,7 @@ wgangp: dependencies
 				$(if $(N_SAMPLES),--n_samples $(N_SAMPLES),) \
 				$(if $(USE_AMP),--use_amp,) \
 				$(if $(COMPILE),--compile,) \
-				$(if $(FROM_SCRATCH),--from_scratch,); \
+				$(if $(FROM_SCRATCH),--from_scratch,) $(ARGS); \
 		else \
 			echo "Running on single file: $(CSV_PATH)"; \
 			$(PYTHON) ./wgangp.py --csv_path $(CSV_PATH) \
@@ -123,7 +123,7 @@ wgangp: dependencies
 				$(if $(N_SAMPLES),--n_samples $(N_SAMPLES),) \
 				$(if $(USE_AMP),--use_amp,) \
 				$(if $(COMPILE),--compile,) \
-				$(if $(FROM_SCRATCH),--from_scratch,); \
+				$(if $(FROM_SCRATCH),--from_scratch,) $(ARGS); \
 		fi; \
 	fi
 
