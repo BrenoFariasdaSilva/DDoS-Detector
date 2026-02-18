@@ -100,6 +100,7 @@ logging:
 telegram:
   enabled: true                       # Enable Telegram notifications
   verify_env: true                    # Verify .env file existence
+  progress_pct: 10                    # Percent interval for progress notifications (e.g., 10 => notify at 10%,20%,...)
 
 # --- Plotting / Visualization ---
 plotting:
