@@ -1,6 +1,6 @@
 <div align="center">
   
-# [DDoS-Detector.](https://github.com/BrenoFariasdaSilva/DDoS-Detector) <img src="https://github.com/devicons/devicon/blob/master/icons/python/python-original.svg"  width="3%" height="3%">
+# [DDoS-Detector.](https://github.com/BrenoFariasdaSilva/DDoS-Detector) <img src="https://github.com/BrenoFariasdaSilva/DDoS-Detector/blob/main/.assets/Icons/DDoS.png"  width="3%" height="3%">
 
 </div>
 
