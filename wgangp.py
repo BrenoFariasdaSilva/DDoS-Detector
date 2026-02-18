@@ -1500,6 +1500,23 @@ def train(args, config: Optional[Dict] = None):
             print(f"{BackgroundColors.CYAN}--from_scratch flag set, ignoring existing checkpoints{Style.RESET_ALL}")
             print(f"{BackgroundColors.CYAN}Starting training from scratch{Style.RESET_ALL}")
 
+        telegram_cfg = config.get("telegram", {}) if isinstance(config, dict) else {}  # Retrieve telegram config dict from merged config
+        telegram_enabled = bool(telegram_cfg.get("enabled", True))  # Whether telegram notifications are enabled
+        try:  # Parse progress_pct from config, ensuring it's a valid integer percentage between 1 and 100, with a default of 10%
+            progress_pct = int(telegram_cfg.get("progress_pct", 10) or 10)  # Percentage step for notifications (default 10)
+        except Exception:  # Catch any exception during parsing (e.g., invalid type, out of range, etc.)
+            progress_pct = 10  # Fallback to 10% on parse error
+        if progress_pct <= 0 or progress_pct > 100:
+            progress_pct = 10  # Sanitize invalid percentage values
+
+        next_notify = progress_pct  # Initialize next notification threshold
+        try:
+            percent_done = int((start_epoch / float(max(1, args.epochs))) * 100)  # Percent complete at resume point
+        except Exception:
+            percent_done = 0  # If anything fails, assume 0% done
+        while percent_done >= next_notify and next_notify <= 100:  # Advance next_notify to the next threshold above the current progress percentage
+            next_notify += progress_pct  # Skip thresholds already passed when resuming
+
         for epoch in range(start_epoch, args.epochs):  # Loop over epochs starting from resume point
             pbar = tqdm(
                 dataloader, 
@@ -1626,6 +1643,20 @@ def train(args, config: Optional[Dict] = None):
                     json.dump(metrics_history, f, indent=2)  # Save metrics as JSON
                 print(f"{BackgroundColors.GREEN}Saved metrics history to {BackgroundColors.CYAN}{metrics_path}{Style.RESET_ALL}")  # Print metrics save message
                 print(f"{BackgroundColors.GREEN}Saved generator to {BackgroundColors.CYAN}{g_path}{Style.RESET_ALL}")  # Print checkpoint save message
+
+            try:
+                if telegram_enabled and args.epochs > 0:  # Only notify when enabled and epochs is positive
+                    percent = int(((epoch + 1) / float(args.epochs)) * 100)  # Compute percent completed after this epoch
+                    # Send one or more notifications if multiple thresholds were crossed
+                    while percent >= next_notify and next_notify <= 100:  # While we've passed the next threshold
+                        msg = (
+                            f"WGAN-GP training progress: {next_notify}% "  # Short progress message text
+                            f"({epoch+1}/{args.epochs} epochs) on {Path(args.csv_path).name if args.csv_path else 'unknown file'}"  # Include filename and epoch info
+                        )
+                        send_telegram_message(TELEGRAM_BOT, msg)  # Send message via shared helper
+                        next_notify += progress_pct  # Advance to next threshold to avoid duplicate sends
+            except Exception as _err:  # Catch any notification errors and continue training
+                pass  # Intentionally ignore notification failures to not interrupt training
         
         print(f"{BackgroundColors.GREEN}Training finished!{Style.RESET_ALL}")  # Print training completion message
         
