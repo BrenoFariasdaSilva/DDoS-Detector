@@ -5196,6 +5196,27 @@ def calculate_execution_time(start_time, finish_time=None):
         raise  # Re-raise to preserve original failure semantics
 
 
+def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str, Path]):
+    """
+    Generate a zebra-striped PNG table image from an in-memory DataFrame.
+
+    :param df: In-memory DataFrame to render
+    :param output_path: Target PNG path (same directory as CSV)
+    :raises: PermissionError if directory is not writable, or other export errors
+    """
+    try:
+        out_p = Path(output_path)  # Convert to Path for convenience
+        parent = out_p.parent  # Get parent directory
+        if not parent.exists():  # If parent doesn't exist
+            parent.mkdir(parents=True, exist_ok=True)  # Try to create it
+        if not os.access(str(parent), os.W_OK):  # Check parent directory is writable
+            raise PermissionError(f"Directory not writable: {parent}")  # Raise on non-writable directory
+        styled = apply_zebra_style(df)  # Create styled DataFrame with zebra stripes
+        export_dataframe_image(styled, out_p)  # Export styled DataFrame to PNG
+    except Exception:
+        raise  # Propagate any exception (no silent failures)
+
+
 def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visualizable: bool = True):
     """
     Save DataFrame to CSV and optionally generate a corresponding zebra-striped PNG image.
