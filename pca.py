@@ -50,6 +50,7 @@ Dependencies:
 import argparse  # For command-line argument parsing
 import atexit  # For playing a sound when the program finishes
 import concurrent.futures  # For parallel execution
+import dataframe_image as dfi  # For exporting DataFrame styled tables as PNG images
 import datetime  # For timestamping
 import glob  # For file pattern matching
 import json  # For serializing hyperparameters and other metadata
@@ -82,6 +83,7 @@ from sklearn.model_selection import train_test_split, StratifiedKFold  # For spl
 from sklearn.preprocessing import StandardScaler  # For scaling the data (standardization)
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
+from typing import Union  # For type hints used by helper functions
 
 
 # Macros:
@@ -677,7 +679,30 @@ def truncate_value(value):
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
-            
+
+
+def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+    """
+    Apply zebra-striping style to a DataFrame using pandas Styler.
+
+    :param df: DataFrame to style
+    :return: pandas Styler with alternating row background colors
+    """
+    try:
+        def _row_style(row):  # Define row-wise styling helper
+            bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # white/light-gray alternation
+            return [f"background-color: {bg};" for _ in row.index]  # Return style per cell preserving order
+
+        styled = df.style.apply(_row_style, axis=1)  # Apply zebra styling row-wise to preserve column order
+        styled = styled.set_table_attributes('style="border-collapse:collapse; width:100%;"')  # Tight table rendering
+        styled = styled.set_properties(**{"border": "1px solid #ddd", "padding": "6px"})  # Add cell padding and border
+        return styled  # Return the pandas Styler object
+    except Exception as e:
+        print(str(e))  # Print exception for visibility
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram about the failure
+        raise  # Propagate exception (no silent failures)
+
+
 def save_pca_results(csv_path, all_results):
     """
     Saves PCA results to a single CSV file containing evaluation metadata
