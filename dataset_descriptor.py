@@ -1612,6 +1612,22 @@ def export_dataframe_image(styled_df, output_path):
         raise  # Re-raise to indicate failure
 
 
+def generate_table_image_from_dataframe(df, output_path):
+    """
+    Generate a zebra-striped PNG table image from a DataFrame and save to output_path.
+
+    :param df: pandas.DataFrame to render
+    :param output_path: Path for output PNG image
+    :return: None
+    """
+
+    try:  # Wrap to preserve module's error handling conventions
+        styled = apply_zebra_style(df)  # Create a styled DataFrame with zebra striping
+        export_dataframe_image(styled, output_path)  # Export the styled DataFrame to PNG
+    except Exception:  # Do not swallow exceptions here per spec
+        raise  # Re-raise any exception to caller
+
+
 def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME):
     """
     Generates a CSV report for the specified input path.
