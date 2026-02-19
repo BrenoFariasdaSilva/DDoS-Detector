@@ -1803,7 +1803,7 @@ def save_augmentation_comparison_results(file_path, comparison_results, config=N
 
         df = add_hardware_column(df, existing_columns)  # Add hardware specifications column
 
-        df.to_csv(output_path, index=False)  # Save to CSV file
+        generate_csv_and_image(df, output_path, is_visualizable=True, index=False)  # Save CSV and generate PNG image
         print(
             f"{BackgroundColors.GREEN}Saved augmentation comparison results to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
         )  # Output success message
@@ -3572,7 +3572,7 @@ def generate_combined_importance_report(shap_result, lime_result, perm_result, m
                 report_df = report_df.sort_values("average_rank")  # Sort by average rank
 
             report_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_combined_importance.csv")  # Build report path
-            report_df.to_csv(report_path, index=False)  # Save report to CSV
+            generate_csv_and_image(report_df, report_path, is_visualizable=True, index=False)  # Save report CSV and generate PNG image
 
             verbose_output(
                 f"{BackgroundColors.GREEN}Combined importance report saved to {BackgroundColors.CYAN}{report_path}{Style.RESET_ALL}",
@@ -3840,7 +3840,7 @@ def save_stacking_results(csv_path, results_list, config=None):
         df = add_hardware_column(df, existing_columns)
 
         try:
-            df.to_csv(str(output_path), index=False, encoding="utf-8")
+            generate_csv_and_image(df, str(output_path), is_visualizable=True, index=False, encoding="utf-8")
             print(
                 f"\n{BackgroundColors.GREEN}Stacking classifier results successfully saved to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
             )
@@ -3852,7 +3852,8 @@ def save_stacking_results(csv_path, results_list, config=None):
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
-    
+
+
 def get_cache_file_path(csv_path, config=None):
     """
     Generate the cache file path for a given dataset CSV path.
@@ -4688,7 +4689,7 @@ def export_automl_search_history(study, output_dir, study_name):
 
         df = pd.DataFrame(trials_data)  # Convert trials data to DataFrame
         output_path = os.path.join(output_dir, f"{study_name}_search_history.csv")  # Build output file path
-        df.to_csv(output_path, index=False)  # Save to CSV
+        generate_csv_and_image(df, output_path, is_visualizable=True, index=False)  # Save to CSV and generate PNG image
 
         print(
             f"{BackgroundColors.GREEN}AutoML search history exported to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
@@ -4915,7 +4916,7 @@ def save_automl_results(csv_path, results_list, config=None):
 
         df = add_hardware_column(df, existing_columns)  # Add hardware specifications column
 
-        df.to_csv(str(output_path), index=False, encoding="utf-8")  # Save to CSV file
+        generate_csv_and_image(df, str(output_path), is_visualizable=True, index=False, encoding="utf-8")  # Save AutoML results CSV and generate PNG image
 
         print(
             f"\n{BackgroundColors.GREEN}AutoML results saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
