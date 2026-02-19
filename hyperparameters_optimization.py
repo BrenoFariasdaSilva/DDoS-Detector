@@ -1110,7 +1110,7 @@ def get_models_and_param_grids():
             "SVM": (
                 get_thundersvm_estimator(),  # ThunderSVM (GPU preferred) or fallback to sklearn SVC
                 {
-                    "C": [0.1, 1, 10, 100],  # Regularization parameter
+                    "C": [0.0001, 0.001, 0.1, 1, 10, 100],  # Regularization parameter
                     "kernel": ["linear", "rbf", "poly"],  # Kernel type to be used in the algorithm
                     "gamma": ["scale", "auto", 0.001, 0.01, 0.1, 1],  # Kernel coefficient
                 },
