@@ -230,6 +230,9 @@ stacking:
     - "classifier_type"        # Classifier family (e.g., "tree", "ensemble", "neural")
     - "model_name"             # Full model class name
     - "data_source"            # Data source type: "original", "augmented", "combined"
+    - "feature_selection_enabled"   # NEW: True/False for FS toggle
+    - "hyperparameters_enabled"    # NEW: True/False for HP toggle
+    - "data_augmentation_enabled"  # NEW: True/False for DA toggle
     - "experiment_id"          # Unique experiment identifier (timestamp-based)
     - "experiment_mode"        # Experiment type: "baseline", "augmentation", "comparison"
     - "augmentation_ratio"     # Ratio of augmented-to-original samples (null for baseline)
@@ -250,6 +253,7 @@ stacking:
     - "features_list"          # Complete feature list (comma-separated or JSON)
     - "Hardware"               # Hardware specification (CPU/GPU model)
 
+  use_suffix_filenames: false         # When true, write separate CSVs per combo with suffix
 
 # ==============================================================================
 # EVALUATION CONFIGURATION — Used by stacking.py and other classifiers
