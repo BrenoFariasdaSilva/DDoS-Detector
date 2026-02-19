@@ -132,6 +132,45 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def extract_imports_from_file(filepath):
+    """
+    Extract top-level import module names from a Python file using ast.
+
+    :param filepath: Path to the Python file
+    :return: A set with top-level module names
+    """
+
+    try:  # Try to open and read the file
+        text = Path(filepath).read_text(encoding="utf-8")  # Read file contents as text
+    except Exception:  # If reading fails
+        return set()  # Return empty set on error
+
+    try:  # Try to parse the file into an AST
+        node = ast.parse(text, filename=str(filepath))  # Parse source into AST
+    except SyntaxError:  # If the file contains syntax errors
+        return set()  # Skip files with syntax errors
+    except Exception:  # Any other parsing error
+        return set()  # Return empty set on error
+
+    libs = set()  # Prepare a set to collect libraries
+    for child in ast.walk(node):  # Walk the AST nodes
+        if isinstance(child, ast.Import):  # Handle 'import x' nodes
+            for alias in child.names:  # Iterate over imported aliases
+                name = alias.name.split(".")[0]  # Take the top-level module name
+                if name:  # If a name was found
+                    libs.add(name)  # Add it to the set
+        elif isinstance(child, ast.ImportFrom):  # Handle 'from x import y' nodes
+            if getattr(child, "level", 0) and child.level > 0:  # Skip relative imports
+                continue  # Continue to next node when relative import
+            module = child.module  # Get the module attribute from the node
+            if module:  # If module is present (not a relative bare import)
+                name = module.split(".")[0]  # Take the top-level module name
+                if name:  # If a name was found
+                    libs.add(name)  # Add it to the set
+
+    return libs  # Return the collected libraries
+
+
 def to_seconds(obj):
     """
     Converts various time-like objects to seconds.
