@@ -62,6 +62,7 @@ import subprocess  # For executing system commands
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import time  # For measuring elapsed time
+import yaml  # For loading configuration from YAML files
 from colorama import Style  # For coloring the terminal
 from joblib import dump, load  # For exporting and loading trained models and scalers
 from Logger import Logger  # For logging output to both terminal and file
@@ -165,6 +166,55 @@ def verbose_output(true_string="", false_string=""):
             print(true_string)  # Output the true statement string
         elif false_string != "":  # If a false_string was provided
             print(false_string)  # Output the false statement string
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def get_config(config_path=None):
+    """
+    Load RFE-related configuration from config.yaml or config.yaml.example.
+
+    Precedence: CLI args (handled in __main__) > config file > hard-coded defaults.
+
+    :param config_path: Optional path to a YAML config file
+    :return: dict with keys under 'rfe' merged with defaults
+    """
+    
+    try:
+        defaults = {
+            "rfe": {
+                "n_features_to_select": None,  # None means auto / majority selection
+                "step": 1,
+                "estimator": "random_forest",
+                "random_state": 42,
+            },
+        }
+
+        cfg_file = None
+        if config_path:
+            cfg_file = Path(config_path)
+        else:
+            candidate = Path(__file__).parent / "config.yaml"
+            candidate_example = Path(__file__).parent / "config.yaml.example"
+            if candidate.exists():
+                cfg_file = candidate
+            elif candidate_example.exists():
+                cfg_file = candidate_example
+
+        if cfg_file is None or not cfg_file.exists():
+            verbose_output(f"RFE config file not found, using defaults: {defaults['rfe']}")
+            return defaults
+
+        with open(cfg_file, "r", encoding="utf-8") as f:
+            loaded = yaml.safe_load(f) or {}
+
+        cfg = dict(defaults)
+        if "rfe" in loaded and isinstance(loaded["rfe"], dict):
+            cfg["rfe"].update(loaded["rfe"])
+
+        return cfg
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -404,7 +454,7 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
         raise
 
 
-def run_rfe_selector(X_train, y_train, n_select=10, random_state=42):
+def run_rfe_selector(X_train, y_train, n_select=10, step=1, estimator_name="random_forest", random_state=42):
     """
     Runs RFE with RandomForestClassifier and returns the selector object.
 
@@ -416,13 +466,21 @@ def run_rfe_selector(X_train, y_train, n_select=10, random_state=42):
     """
     
     try:
-        model = RandomForestClassifier(
-            n_estimators=100, random_state=random_state, n_jobs=N_JOBS
-        )  # Initialize the Random Forest model
+        estimator_name_l = (estimator_name or "random_forest").lower()
+        if "random" in estimator_name_l:
+            model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=N_JOBS)
+        else:
+            raise ValueError(f"Unsupported estimator '{estimator_name}'. Supported: 'random_forest'")
+
         n_features = X_train.shape[1]  # Get the number of features
+        if n_select is None:
+            n_select = n_features  # default to all (caller may reduce later)
+        n_select = int(n_select)
+        if n_select <= 0:
+            raise ValueError(f"n_features_to_select must be > 0, got {n_select}")
         n_select = n_select if n_features >= n_select else n_features  # Adjust n_select if more than available features
 
-        selector = RFE(model, n_features_to_select=n_select, step=1)  # Initialize RFE
+        selector = RFE(model, n_features_to_select=n_select, step=int(step))  # Initialize RFE
         sel_start = time.perf_counter()  # Start perf_counter for selector fitting
         selector = selector.fit(X_train, y_train)  # Fit RFE (feature selection) as part of feature extraction
         sel_end = time.perf_counter()  # End perf_counter for selector fitting
@@ -435,7 +493,7 @@ def run_rfe_selector(X_train, y_train, n_select=10, random_state=42):
         raise
 
 
-def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42):
+def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42, estimator_name="random_forest"):
     """
     Computes performance metrics using the RFE-selected features.
 
@@ -457,7 +515,11 @@ def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state
         X_train_selected = X_train[:, support]  # Select training features
         X_test_selected = X_test[:, support]  # Select testing features
 
-        model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=N_JOBS)  # Initialize the model
+        estimator_name_l = (estimator_name or "random_forest").lower()
+        if "random" in estimator_name_l:
+            model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=N_JOBS)  # Initialize the model
+        else:
+            raise ValueError(f"Unsupported estimator '{estimator_name}' for compute_rfe_metrics. Supported: 'random_forest'")
 
         train_start = time.perf_counter()  # Start perf_counter immediately before model.fit (training window)
         model.fit(X_train_selected, y_train)  # Fit the model on selected features (training)
@@ -1316,7 +1378,7 @@ def build_results_with_hyperparams(final_model, csv_path, loaded_hyperparams, fa
         raise
 
 
-def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
+def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n_features_to_select=None, step=1, estimator_name="random_forest", random_state=42):
     """
     Handles RFE for datasets with insufficient samples for stratified CV (fallback to single train/test split).
 
@@ -1333,10 +1395,12 @@ def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparamet
         send_telegram_message(TELEGRAM_BOT, f"RFE: Falling back to single train/test split for dataset {Path(csv_path).stem}")
         
         X_train, X_test, y_train, y_test = train_test_split(
-            X_numeric.values, y_array, test_size=0.2, random_state=42, stratify=None
+            X_numeric.values, y_array, test_size=0.2, random_state=int(random_state), stratify=None
         )  # Perform a single non-stratified train/test split
-        selector, model, feature_extraction_time_s = run_rfe_selector(X_train, y_train, random_state=42)  # Run RFE on the single split and get feature extraction time
-        metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42)  # Compute metrics on split (returns training and testing times)
+        selector, model, feature_extraction_time_s = run_rfe_selector(
+            X_train, y_train, n_select=n_features_to_select or X_train.shape[1], step=step, estimator_name=estimator_name, random_state=random_state
+        )  # Run RFE on the single split and get feature extraction time
+        metrics_tuple = compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=random_state, estimator_name=estimator_name)  # Compute metrics on split (returns training and testing times)
         top_features, rfe_ranking = extract_top_features(selector, feature_columns)  # Extract selected features and rankings
         sorted_rfe_ranking = sorted(rfe_ranking.items(), key=lambda x: x[1])  # Sort features by ranking (ascending)
 
@@ -1367,7 +1431,7 @@ def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparamet
         raise
 
 
-def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
+def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n_features_to_select=None, step=1, estimator_name="random_forest", random_state=42):
     """
     Handles RFE with stratified cross-validation.
 
@@ -1384,7 +1448,7 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
         
         stratify_param = y_array if len(np.unique(y_array)) > 1 else None
         X_train_df, X_test_df, y_train_array, y_test_array = train_test_split(
-            X_numeric, y_array, test_size=0.2, random_state=42, stratify=stratify_param
+            X_numeric, y_array, test_size=0.2, random_state=int(random_state), stratify=stratify_param
         )
 
         scaler_for_run = StandardScaler()  # Create scaler for the run
@@ -1399,7 +1463,7 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
         n_splits = min(10, len(y_train_array), min_class_count_tr)  # Up to 10 splits but not more than samples or smallest class in train
         n_splits = max(2, int(n_splits))  # Ensure at least 2 splits
 
-        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)  # Create stratified K-Fold iterator
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=int(random_state))  # Create stratified K-Fold iterator
 
         fold_metrics = []  # List to collect per-fold metric tuples
         fold_rankings = []  # List to collect per-fold ranking arrays
@@ -1415,9 +1479,13 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
             y_train_fold = y_train_array[train_idx]
             y_test_fold = y_train_array[test_idx]
 
-            selector, model, feat_time = run_rfe_selector(X_train_fold, y_train_fold, random_state=42)  # Fit RFE on this fold's training data and get selector fit time
+            selector, model, feat_time = run_rfe_selector(
+                X_train_fold, y_train_fold, n_select=n_features_to_select or X_train_fold.shape[1], step=step, estimator_name=estimator_name, random_state=random_state
+            )  # Fit RFE on this fold's training data and get selector fit time
 
-            metrics_tuple = compute_rfe_metrics(selector, X_train_fold, X_test_fold, y_train_fold, y_test_fold, random_state=42)  # Compute metrics for this fold (returns training and testing times)
+            metrics_tuple = compute_rfe_metrics(
+                selector, X_train_fold, X_test_fold, y_train_fold, y_test_fold, random_state=random_state, estimator_name=estimator_name
+            )  # Compute metrics for this fold (returns training and testing times)
             fold_metrics.append(metrics_tuple)  # Append per-fold metrics tuple
             fold_rankings.append(selector.ranking_)  # Append per-fold ranking array
             fold_supports.append(selector.support_.astype(int))  # Append per-fold support mask as integers
@@ -1472,7 +1540,7 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters):
         raise
 
 
-def run_rfe(csv_path):
+def run_rfe(csv_path, n_features_to_select=None, step=None, estimator_name=None, random_state=None):
     """
     Runs Recursive Feature Elimination on the provided dataset, prints the single
     set of top features selected, computes and prints performance metrics, and
@@ -1488,6 +1556,20 @@ def run_rfe(csv_path):
         )
 
         hyperparameters = {}  # Default hyperparameters (to be extended later)
+
+        cfg = get_config()
+        rfe_cfg = cfg.get("rfe", {}) if isinstance(cfg, dict) else {}
+
+        cfg_n_select = rfe_cfg.get("n_features_to_select")
+        cfg_step = rfe_cfg.get("step", 1)
+        cfg_estimator = rfe_cfg.get("estimator", "random_forest")
+        cfg_random_state = int(rfe_cfg.get("random_state", 42))
+
+
+        default_n_select = n_features_to_select if n_features_to_select is not None else cfg_n_select
+        default_step = step if step is not None else cfg_step
+        default_estimator = estimator_name if estimator_name is not None else cfg_estimator
+        default_random_state = int(random_state) if random_state is not None else cfg_random_state
 
         df = load_dataset(csv_path)  # Load dataset
 
@@ -1522,9 +1604,29 @@ def run_rfe(csv_path):
         min_class_count = counts.min() if counts.size > 0 else 0  # Minimum samples in any class
 
         if min_class_count < 2:  # If any class has fewer than 2 samples
-            run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparameters)  # Run fallback RFE
+            run_rfe_fallback(
+                csv_path,
+                X_numeric,
+                y_array,
+                feature_columns,
+                hyperparameters,
+                n_features_to_select=default_n_select,
+                step=default_step,
+                estimator_name=default_estimator,
+                random_state=default_random_state,
+            )  # Run fallback RFE
         else:  # If sufficient samples for stratified CV
-            run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters)  # Run RFE with CV
+            run_rfe_cv(
+                csv_path,
+                X_numeric,
+                y_array,
+                feature_columns,
+                hyperparameters,
+                n_features_to_select=default_n_select,
+                step=default_step,
+                estimator_name=default_estimator,
+                random_state=default_random_state,
+            )  # Run RFE with CV
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -1649,7 +1751,7 @@ def play_sound():
         raise
 
 
-def main():
+def main(n_features_to_select=None, step=None, estimator_name=None, random_state=None, config_path=None):
     """
     Main function.
 
@@ -1669,7 +1771,7 @@ def main():
 
         send_telegram_message(TELEGRAM_BOT, [f"Starting RFE Feature Selection on {dataset_name} at {start_time.strftime('%d/%m/%Y - %H:%M:%S')}"])  # Send starting message
 
-        run_rfe(CSV_FILE)  # Run RFE on the specified CSV file
+        run_rfe(CSV_FILE, n_features_to_select=n_features_to_select, step=step, estimator_name=estimator_name, random_state=random_state)
 
         finish_time = datetime.datetime.now()  # Get the finish time of the program
         print(
@@ -1692,6 +1794,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run RFE pipeline and optionally load existing exported models."
     )  # CLI description
+    parser.add_argument("--config", type=str, default=None, help="Path to config.yaml (overrides auto-detection)")
     parser.add_argument(
         "--skip-train-if-model-exists",
         dest="skip_train",
@@ -1711,10 +1814,27 @@ if __name__ == "__main__":
         default=None,
         help="Optional: path to dataset CSV to analyze. If omitted, uses the default in main().",
     )  # Optional CSV override
+    parser.add_argument("--n_features_to_select", type=int, default=None, help="Number of features to select (overrides config)")
+    parser.add_argument("--step", type=int, default=None, help="RFE step (number of features to remove per iteration)")
+    parser.add_argument("--estimator", type=str, default=None, help="Estimator name for RFE (default: random_forest)")
+    parser.add_argument("--random_state", type=int, default=None, help="Random seed for reproducibility (overrides config)")
     args = parser.parse_args()  # Parse CLI args
 
     SKIP_TRAIN_IF_MODEL_EXISTS = bool(args.skip_train)  # Respect the user's CLI choice
     VERBOSE = bool(args.verbose)  # Respect the user's request to print verbose output
     CSV_FILE = args.csv if args.csv else CSV_FILE  # Use provided CSV or default
 
-    main()  # Call the main function
+    # Load config to determine defaults (if any)
+    cfg = get_config(args.config)
+    rfe_cfg = cfg.get("rfe", {}) if isinstance(cfg, dict) else {}
+
+    # Resolve parameters precedence: CLI > config > defaults
+    n_features_to_select = args.n_features_to_select if args.n_features_to_select is not None else rfe_cfg.get("n_features_to_select")
+    step = args.step if args.step is not None else rfe_cfg.get("step", 1)
+    estimator_name = args.estimator if args.estimator is not None else rfe_cfg.get("estimator", "random_forest")
+    random_state = int(args.random_state) if args.random_state is not None else int(rfe_cfg.get("random_state", 42))
+
+    # Log resolved sources
+    print(f"RFE params: n_features_to_select={n_features_to_select} (cli/config/default), step={step}, estimator={estimator_name}, random_state={random_state}")
+
+    main(n_features_to_select=n_features_to_select, step=step, estimator_name=estimator_name, random_state=random_state, config_path=args.config)
