@@ -1903,14 +1903,14 @@ def generate(args, config: Optional[Dict] = None):
                         row.append(total_generated)  # Append total generated
                     elif col == "generated_ratio":
                         row.append(generated_ratio)  # Append generated ratio
-                    elif col == "training_time_s":
-                        row.append(training_time_val)  # Append training time seconds
-                    elif col == "testing_time_s":
-                        row.append(testing_time_val)  # Append testing time (empty by default)
                     elif col == "critic_loss":
                         row.append(critic_loss_val)  # Append critic loss
                     elif col == "generator_loss":
                         row.append(generator_loss_val)  # Append generator loss
+                    elif col == "training_time_s":
+                        row.append(training_time_val)  # Append training time seconds
+                    elif col == "testing_time_s":
+                        row.append(testing_time_val)  # Append testing time (empty by default)
                     else:
                         row.append("")  # Unknown columns are left blank to preserve order
 
