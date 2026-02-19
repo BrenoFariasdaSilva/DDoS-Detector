@@ -55,6 +55,7 @@ Assumptions & Notes:
 import argparse  # For CLI argument parsing
 import atexit  # For playing a sound when the program finishes
 import csv  # For writing per-directory results CSV
+import dataframe_image as dfi  # For exporting DataFrame to PNG images
 import datetime  # For tracking execution time
 import json  # For saving/loading metrics history
 import matplotlib.pyplot as plt  # For plotting training metrics
@@ -1953,6 +1954,31 @@ def train(args, config: Optional[Dict] = None):
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
+
+
+def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+    """
+    Apply zebra-striping style to a DataFrame using pandas Styler.
+
+    :param df: Input DataFrame to style
+    :return: pandas Styler with zebra row background colors applied
+    """
+    try:
+        # Define row styling function that returns a list of styles for each cell in the row
+        def _row_style(row):  # Define helper used by Styler.apply
+            # Compute background color based on row index parity
+            bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # white and light gray
+            # Return style for every column in the row preserving column order
+            return [f"background-color: {bg};" for _ in row.index]  # Preserve columns
+
+        styled = df.style.apply(_row_style, axis=1)  # Apply zebra function row-wise
+        styled = styled.set_table_attributes('style="border-collapse:collapse; width:100%;"')  # Tight table style
+        styled = styled.set_properties(**{"border": "1px solid #ddd", "padding": "6px"})  # Cell padding/border
+        return styled  # Return the styled object
+    except Exception as e:
+        print(str(e))  # Print error for visibility
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram
+        raise  # Propagate error to caller
 
 
 def generate(args, config: Optional[Dict] = None):
