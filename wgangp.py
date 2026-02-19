@@ -1404,7 +1404,8 @@ def train(args, config: Optional[Dict] = None):
         file_start_time = training_start_time  # Record this file processing start timestamp
         set_seed(args.seed)  # Set random seed for reproducibility
 
-        send_telegram_message(TELEGRAM_BOT, f"Starting WGAN-GP training on {Path(args.csv_path).name} for {args.epochs} epochs")
+        file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Build colored prefix (default single-file)
+        send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Starting WGAN-GP training on {Path(args.csv_path).name} for {args.epochs} epochs")  # Telegram start with colored prefix
 
         print(f"{BackgroundColors.GREEN}Device: {BackgroundColors.CYAN}{device.type.upper()}{Style.RESET_ALL}")
         if args.use_amp and device.type == "cuda":
@@ -1859,7 +1860,7 @@ def train(args, config: Optional[Dict] = None):
             print(f"{BackgroundColors.YELLOW}Warning: failed to write final file row to results CSV: {_fw}{Style.RESET_ALL}")  # Warn about failure
         
         if len(metrics_history["steps"]) > 0:  # If metrics were collected
-            print(f"{BackgroundColors.GREEN}Generating training metrics plots...{Style.RESET_ALL}")  # Print plotting message
+            print(f"{file_progress_prefix} {BackgroundColors.GREEN}Generating training metrics plots...{Style.RESET_ALL}")  # Print plotting message with prefix
             if args.csv_path:  # If CSV path is provided
                 csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
                 plot_dir = csv_path_obj.parent / "Data_Augmentation"  # Create Data_Augmentation subdirectory
@@ -1873,7 +1874,7 @@ def train(args, config: Optional[Dict] = None):
             else:  # No CSV path, use default out_dir
                 plot_training_metrics(metrics_history, args.out_dir, "training_metrics.png", config)  # Create and save plots with config
 
-        send_telegram_message(TELEGRAM_BOT, f"Finished WGAN-GP training on {Path(args.csv_path).name} after {args.epochs} epochs")
+        send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Finished WGAN-GP training on {Path(args.csv_path).name} after {args.epochs} epochs")  # Telegram finish with prefix
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -1908,7 +1909,8 @@ def generate(args, config: Optional[Dict] = None):
             "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
         )  # Select device for generation
 
-        send_telegram_message(TELEGRAM_BOT, f"Starting WGAN-GP generation from {Path(args.checkpoint).name}")
+        file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Build colored prefix (default single-file)
+        send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Starting WGAN-GP generation from {Path(args.checkpoint).name}")  # Telegram start with colored prefix
         ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)  # Load checkpoint from disk with sklearn objects
         args_ck = ckpt.get("args", {})  # Retrieve saved arguments from checkpoint
         scaler = ckpt.get("scaler", None)  # Try to get scaler from checkpoint
@@ -2032,7 +2034,7 @@ def generate(args, config: Optional[Dict] = None):
         df = pd.DataFrame(X_orig, columns=feature_cols)  # Create DataFrame with original feature names
         df[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
         df.to_csv(args.out_file, index=False)  # Save generated data to CSV file
-        print(f"{BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} generated samples to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message
+        print(f"{file_progress_prefix} {BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} generated samples to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message with prefix
 
         try:  # Safely compute and print sample generation elapsed time
             sample_generation_elapsed = time.time() - sample_generation_start_time  # Calculate sample generation elapsed seconds
@@ -2042,7 +2044,7 @@ def generate(args, config: Optional[Dict] = None):
             print(f"{BackgroundColors.YELLOW}Warning: failed to measure sample generation time: {_sg}{Style.RESET_ALL}")  # Warn but continue
             args._last_sample_generation_time = ""  # Ensure attribute exists even on failure
 
-        send_telegram_message(TELEGRAM_BOT, f"Finished WGAN-GP generation, saved {n} samples to {Path(args.out_file).name}")
+        send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Finished WGAN-GP generation, saved {n} samples to {Path(args.out_file).name}")  # Telegram finish with prefix
         
         try:  # Wrap result writing in try/except to avoid breaking generation on failures
             results_cols_cfg = config.get("wgangp", {}).get("results_csv_columns", [])  # Read configured results columns list
@@ -2674,25 +2676,27 @@ def main():
                     files_to_process = get_files_to_process(
                         input_path, file_extension=".csv", config=config
                     )  # Get list of CSV files to process
-                    
-                    for file in files_to_process:  # For each file to process
+                    total_files = len(files_to_process)  # Compute total files once per input_path
+                    for index, file in enumerate(files_to_process, start=1):  # Iterate with index and file
                         try:  # Wrap per-file processing so exceptions are caught by the outer handler
+                            file_progress_prefix = f"{BackgroundColors.CYAN}[{index}/{total_files}]{Style.RESET_ALL}"  # Build colored per-file prefix once per file
+                            args.file_progress_prefix = file_progress_prefix  # Attach colored prefix to args for train/gen functions
                             try:  # Guard path resolution and membership check
                                 resolved_path = str(Path(file).resolve())  # Resolve to absolute path string
                             except Exception:
                                 resolved_path = str(Path(file))  # Fallback to given path string on failure
                             if resolved_path in PROCESSED_FILES:  # If file already processed
-                                print(f"{BackgroundColors.YELLOW}Skipping already-processed file: {resolved_path}{Style.RESET_ALL}")  # Warn and skip duplicate
+                                print(f"{BackgroundColors.YELLOW}{file_progress_prefix} Skipping already-processed file: {resolved_path}{Style.RESET_ALL}")  # Warn and skip duplicate with prefix
                                 continue  # Skip to next file
                             print(
                                 f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}"
-                            )
+                            )  # Decorative separator
                             print(
-                                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
-                            )
+                                f"{file_progress_prefix} {BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
+                            )  # High-level processing message with prefix
                             print(
                                 f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}\n"
-                            )
+                            )  # Decorative separator
                             
                             csv_path_obj = Path(file)  # Create Path object from file path
                             data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get subdir name
