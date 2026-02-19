@@ -1407,6 +1407,51 @@ def write_report(report_rows, base_dir, output_filename):
         raise  # Re-raise to preserve original failure semantics
 
 
+def collect_preprocessing_metrics(filepath, original_num_rows, rows_after_preprocessing, original_num_features, features_after_preprocessing):
+    """
+    Collect preprocessing metrics for a single file and return a dict matching the required CSV schema.
+
+    :param filepath: Path to the processed CSV file
+    :param original_num_rows: Number of rows immediately after reading the CSV
+    :param rows_after_preprocessing: Number of rows after preprocessing steps
+    :param original_num_features: Number of features before preprocessing
+    :param features_after_preprocessing: Number of features after preprocessing
+    :return: Dict with keys matching preprocessing_summary.csv columns
+    """
+
+    try:  # Wrap logic to preserve existing error handling conventions
+        filename = os.path.basename(filepath)  # Extract filename from filepath
+        removed_rows = original_num_rows - rows_after_preprocessing  # Compute removed rows count
+        removed_rows = removed_rows if removed_rows >= 0 else 0  # Clamp negative to zero for safety
+        if original_num_rows > 0:  # If original rows non-zero compute proportion
+            removed_rows_proportion = round(removed_rows / float(original_num_rows), 6)  # Compute proportion and round
+        else:  # Avoid division by zero when original is zero
+            removed_rows_proportion = 0.0  # Set proportion to 0.0 per spec
+
+        removed_features = original_num_features - features_after_preprocessing  # Compute removed features count
+        removed_features = removed_features if removed_features >= 0 else 0  # Clamp negative to zero for safety
+        if original_num_features > 0:  # If original features non-zero compute proportion
+            removed_features_proportion = round(removed_features / float(original_num_features), 6)  # Compute proportion and round
+        else:  # Avoid division by zero when original is zero
+            removed_features_proportion = 0.0  # Set proportion to 0.0 per spec
+
+        return {  # Return metrics dict matching required output columns and order
+            "filename": filename,  # Base filename
+            "original_num_rows": int(original_num_rows),  # Cast to int for CSV
+            "rows_after_preprocessing": int(rows_after_preprocessing),  # Cast to int
+            "removed_rows": int(removed_rows),  # Cast to int
+            "removed_rows_proportion": float(removed_rows_proportion),  # Float rounded to 6 decimals
+            "original_num_features": int(original_num_features),  # Cast to int
+            "features_after_preprocessing": int(features_after_preprocessing),  # Cast to int
+            "removed_features": int(removed_features),  # Cast to int
+            "removed_features_proportion": float(removed_features_proportion),  # Float rounded to 6 decimals
+        }  # End dict
+    except Exception as e:  # Preserve exception handling style
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME):
     """
     Generates a CSV report for the specified input path.
