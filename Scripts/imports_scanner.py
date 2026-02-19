@@ -171,6 +171,27 @@ def extract_imports_from_file(filepath):
     return libs  # Return the collected libraries
 
 
+def collect_python_files():
+    """
+    Collect .py files in the current directory and recursively inside Scripts/.
+
+    :return: A list of pathlib.Path objects for found Python files
+    """
+
+    base_dir = Path(__file__).parent  # Determine the base directory of this script
+    files = []  # Initialize the list of files found
+
+    for p in base_dir.glob("*.py"):  # Gather .py files in the current directory
+        files.append(p)  # Append the found file to the list
+
+    scripts_dir = base_dir / "Scripts"  # Reference the Scripts directory
+    if scripts_dir.exists() and scripts_dir.is_dir():  # Only traverse when Scripts exists
+        for p in scripts_dir.rglob("*.py"):  # Recursively gather .py files under Scripts/
+            files.append(p)  # Append each found script file to the list
+
+    return files  # Return the list of collected Python files
+
+
 def to_seconds(obj):
     """
     Converts various time-like objects to seconds.
