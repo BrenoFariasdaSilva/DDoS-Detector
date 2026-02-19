@@ -354,6 +354,20 @@ pca:
   remove_zero_variance: true          # Drop zero-variance numeric features during preprocessing (bool)
 
 # ==============================================================================
+# DATASET DESCRIPTOR — Used by dataset_descriptor.py
+# ==============================================================================
+dataset_descriptor:
+  include_preprocessing_metrics: true        # Include preprocessing statistics
+  include_data_augmentation_info: true      # Include WGANGP augmentation summary column
+  generate_table_image: true                # Export table image using dataframe_image
+  table_image_format: "png"                # Table image format (png/jpg)
+  csv_output_suffix: "_description"        # Suffix for generated descriptor CSV
+  class_column_name: "Label"               # Target/class column name
+  dropna_before_analysis: false             # Drop NaN rows before computing metrics
+  compute_class_distribution: true          # Compute per-class counts and proportions
+  compute_feature_statistics: true          # Compute feature-level summary statistics
+  round_decimals: 4                         # Number of decimal places for floats
+
 # RFE — Used by rfe.py
 # ==============================================================================
 rfe:
