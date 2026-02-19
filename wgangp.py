@@ -1441,7 +1441,10 @@ def train(args, config: Optional[Dict] = None):
         if getattr(args, "csv_path", None):  # If csv_path provided, prepare persistent results CSV handle
             try:  # Attempt to open results CSV once with header written if needed
                 csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
-                results_csv_path = csv_path_obj.parent / "data_augmentation_results.csv"  # Determine results CSV path
+                data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read Data_Augmentation subdir from config
+                data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation directory under dataset folder
+                os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before writing
+                results_csv_path = data_aug_dir / "data_augmentation_results.csv"  # Place results CSV inside Data_Augmentation dir
                 results_csv_file, results_csv_writer = open_results_csv(results_csv_path, results_cols_cfg)  # Open and cache writer
             except Exception as _rw:  # On failure, warn and continue without persistent csv
                 print(f"{BackgroundColors.YELLOW}Warning: could not initialize results CSV writer: {_rw}{Style.RESET_ALL}")  # Warn and continue
@@ -2048,11 +2051,19 @@ def generate(args, config: Optional[Dict] = None):
                 raise ValueError("'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration")  # Stop safely
             results_csv_path = None  # Initialize results CSV path variable
             if getattr(args, "csv_path", None):  # If csv_path available on args
-                results_csv_path = Path(args.csv_path).parent / "data_augmentation_results.csv"  # Use dataset directory root
+                csv_path_obj = Path(args.csv_path)  # Create Path object from args.csv_path
+                data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read configured subdir name
+                data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation directory under dataset folder
+                os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before writing
+                results_csv_path = data_aug_dir / "data_augmentation_results.csv"  # Use results CSV inside Data_Augmentation dir
             else:  # Try to recover original csv_path from checkpoint args saved in checkpoint
                 try:
                     if args_ck and args_ck.get("csv_path"):  # Use saved args from checkpoint (args_ck defined earlier)
-                        results_csv_path = Path(args_ck.get("csv_path")).parent / "data_augmentation_results.csv"  # Use saved csv_path parent
+                        ck_csv_path = Path(args_ck.get("csv_path"))  # Path object for saved csv_path from checkpoint
+                        ck_data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read subdir name from config
+                        ck_data_aug_dir = ck_csv_path.parent / ck_data_aug_subdir  # Construct Data_Augmentation directory for checkpoint csv_path
+                        os.makedirs(ck_data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists for checkpoint recover
+                        results_csv_path = ck_data_aug_dir / "data_augmentation_results.csv"  # Use results CSV inside Data_Augmentation dir for checkpoint
                 except Exception:
                     results_csv_path = None  # Leave as None if recovery fails
 
@@ -2596,7 +2607,10 @@ def main():
                 output_filename = f"{csv_path_obj.stem}{results_suffix}{csv_path_obj.suffix}"  # Use input name with suffix
                 args.out_file = str(data_aug_dir / output_filename)  # Set output file path to Data_Augmentation subdirectory
             # Ensure per-dataset results CSV exists at dataset directory root
-            results_csv_path = csv_path_obj.parent / "data_augmentation_results.csv"  # Path for per-directory results CSV
+            data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get subdir name from config
+            data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Build Data_Augmentation directory path for this dataset
+            os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before creating results CSV
+            results_csv_path = data_aug_dir / "data_augmentation_results.csv"  # Path for per-directory results CSV inside Data_Augmentation
             if not results_csv_path.exists():  # Only write header if file does not exist
                 with open(results_csv_path, "w", newline="", encoding="utf-8") as _f:  # Open file for writing header
                     writer = csv.writer(_f)  # Create CSV writer
@@ -2648,10 +2662,11 @@ def main():
                         )
                         continue  # Skip to the next path if the current one doesn't exist
 
-                    # Ensure per-dataset results CSV exists at dataset directory root
-                    per_dir_results_csv = Path(input_path) / "data_augmentation_results.csv"  # Results CSV path for this dataset directory
+                    data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get data augmentation subdir name from config
+                    data_aug_dir = Path(input_path) / data_aug_subdir  # Construct Data_Augmentation directory path for this input_path
+                    per_dir_results_csv = data_aug_dir / "data_augmentation_results.csv"  # Results CSV path for this dataset inside Data_Augmentation
                     if not per_dir_results_csv.exists():  # Only write header if file does not exist
-                        os.makedirs(Path(input_path), exist_ok=True)  # Ensure dataset directory exists (no-op if exists)
+                        os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before header write
                         with open(per_dir_results_csv, "w", newline="", encoding="utf-8") as _f:  # Open file for header writing
                             writer = csv.writer(_f)  # Create CSV writer
                             writer.writerow(results_cols)  # Write header exactly in configured order
