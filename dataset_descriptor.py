@@ -1595,6 +1595,23 @@ def apply_zebra_style(df):
         raise  # Re-raise exception to surface failure
 
 
+def export_dataframe_image(styled_df, output_path):
+    """
+    Export a pandas.Styler to a PNG image using dataframe_image.
+
+    :param styled_df: pandas.Styler object to export
+    :param output_path: Path to write PNG image
+    :return: None
+    """
+
+    try:  # Wrap to ensure exceptions bubble with logging consistent with module
+        dfi.export(styled_df, output_path)  # Export styled DataFrame to PNG using dataframe_image
+    except Exception as e:  # If export fails, do not swallow the error
+        print(str(e))  # Print export error for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to indicate failure
+
+
 def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME):
     """
     Generates a CSV report for the specified input path.
