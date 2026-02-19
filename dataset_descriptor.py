@@ -856,6 +856,48 @@ def prepare_numeric_dataset(filepath, low_memory=True, sample_size=5000, random_
         raise  # Re-raise to preserve original failure semantics
 
 
+def prepare_numeric_dataset_from_df(df, sample_size=5000, random_state=42):
+    """
+    Prepare numeric DataFrame and labels from an already-loaded DataFrame.
+
+    Mirrors `prepare_numeric_dataset` behaviour but operates on `df` to
+    avoid rereading the CSV from disk.
+    """
+    
+    try:
+        if df is None:
+            return None, None
+
+        cleaned = preprocess_dataframe(df, remove_zero_variance=False)  # Basic cleaning
+        if cleaned is None:
+            return None, None
+
+        numeric_df = coerce_numeric_columns(cleaned)  # Extract numeric features
+        if numeric_df is None:
+            return None, None
+
+        numeric_df = fill_replace_and_drop(numeric_df)  # Clean numeric frame
+        if numeric_df is None:
+            return None, None
+
+        if numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0:
+            return None, None
+
+        label_col = detect_label_column(cleaned.columns)  # Detect label column
+        labels = cleaned[label_col] if label_col in cleaned.columns else None
+
+        if numeric_df.shape[0] > sample_size:
+            numeric_df, labels = downsample_with_class_awareness(
+                numeric_df, labels, sample_size, random_state
+            )
+
+        return numeric_df, labels
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def scale_features(numeric_df):
     """
     Standardize numeric features to zero mean and unit variance. Fall back to
@@ -1203,7 +1245,7 @@ def save_tsne_3d_plot(X_emb, labels, output_path, title):
 
 
 def generate_tsne_plot(
-    filepath, low_memory=True, sample_size=5000, perplexity=30, n_iter=1000, random_state=42, output_dir=None
+    filepath, df=None, low_memory=True, sample_size=5000, perplexity=30, n_iter=1000, random_state=42, output_dir=None
 ):
     """
     Generate and save both 2D and 3D t-SNE visualizations of a CSV dataset.
@@ -1233,9 +1275,14 @@ def generate_tsne_plot(
         )  # Output start message for t-SNE generation
 
         try:  # Main try-catch block for overall failure handling
-            numeric_df, labels = prepare_numeric_dataset(
-                filepath, low_memory, sample_size, random_state
-            )  # Prepare numeric dataset
+            if df is not None:
+                numeric_df, labels = prepare_numeric_dataset_from_df(
+                    df, sample_size=sample_size, random_state=random_state
+                )
+            else:
+                numeric_df, labels = prepare_numeric_dataset(
+                    filepath, low_memory, sample_size, random_state
+                )  # Prepare numeric dataset
             if numeric_df is None:  # Abort if preparation failed
                 return None, None  # Indicate failure
 
@@ -1341,7 +1388,7 @@ def get_augmented_sample_count(original_csv_path, config=None) -> int:
         raise
 
 
-def get_dataset_file_info(filepath, low_memory=True):
+def get_dataset_file_info(filepath, df=None, low_memory=True):
     """
     Extracts dataset information from a CSV file and returns it as a dictionary.
 
@@ -1355,7 +1402,8 @@ def get_dataset_file_info(filepath, low_memory=True):
             f"{BackgroundColors.GREEN}Extracting dataset information from: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
         )  # Output start message for dataset info extraction
 
-        df = load_dataset(filepath, low_memory)  # Load the dataset
+        if df is None:
+            df = load_dataset(filepath, low_memory)  # Load the dataset
 
         if df is None:  # If the dataset could not be loaded
             return None  # Return None
@@ -1403,12 +1451,6 @@ def get_dataset_file_info(filepath, low_memory=True):
         except Exception:
             raise
         result["data_augmentation_samples"] = int(aug_count)
-
-        try:  # Try to delete the DataFrame
-            del df  # Delete the DataFrame
-        except Exception:  # Ignore any exceptions during deletion
-            pass  # Do nothing
-        gc.collect()  # Force garbage collection
 
         return result  # Return the dataset information
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -1743,12 +1785,17 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
             print(f"{BackgroundColors.RED}No matching {file_extension} files found in: {input_path}{Style.RESET_ALL}")
             return False  # Exit the function
 
-        headers_map = build_headers_map(
-            sorted_matching_files, low_memory=low_memory
-        )  # Build headers map for all matching files
-        common_features, headers_match_all = compute_common_features(
-            headers_map
-        )  # Compute common features and header match status
+        file_dfs = {}  # filepath -> DataFrame (loaded once)
+        headers_map = {}  # filepath -> list(columns)
+        for fp in sorted_matching_files:
+            df = load_dataset(fp, low_memory)
+            if df is None:
+                print(f"{BackgroundColors.YELLOW}Warning: failed to load {fp}; skipping.{Style.RESET_ALL}")
+                continue
+            file_dfs[fp] = df
+            headers_map[fp] = list(df.columns)
+
+        common_features, headers_match_all = compute_common_features(headers_map)
 
         progress = tqdm(
             sorted_matching_files,
@@ -1761,7 +1808,7 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
             progress.set_description(
                 f"{BackgroundColors.GREEN}Processing file {BackgroundColors.CYAN}{idx}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{len(sorted_matching_files)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{file_basename[:30]}{BackgroundColors.GREEN}"
             )  # Update progress bar description (truncate long names)
-            info = get_dataset_file_info(filepath, low_memory)  # Get dataset info
+            info = get_dataset_file_info(filepath, df=file_dfs.get(filepath), low_memory=low_memory)  # Get dataset info (reuse in-memory DF)
             if info:  # If info was successfully retrieved
                 relative_path = os.path.relpath(filepath, base_dir)  # Get path relative to base_dir
                 info["Dataset Name"] = relative_path.replace(
@@ -1784,10 +1831,11 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
 
                 tsne_file = generate_tsne_plot(
                     filepath,
+                    df=file_dfs.get(filepath),
                     low_memory=low_memory,
                     sample_size=2000,
                     output_dir=os.path.join(os.path.dirname(os.path.abspath(filepath)), "Data_Separability"),
-                )  # Generate t-SNE plot
+                )  # Generate t-SNE plot (uses in-memory DF when available)
                 info["t-SNE Plot"] = tsne_file if tsne_file else "None"  # Add t-SNE plot filename or "None"
 
                 report_rows.append(info)  # Add the info to the report rows
