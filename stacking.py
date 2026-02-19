@@ -1132,10 +1132,13 @@ def find_data_augmentation_file(original_file_path, config=None):
             config=config
         )  # Output the verbose message
 
-        data_augmentation_suffix = config.get("stacking", {}).get("data_augmentation_suffix", "_data_augmented")  # Get suffix from config
+        data_augmentation_suffix = config.get("execution", {}).get("results_suffix", None)  # Try execution-level suffix first
+        if not data_augmentation_suffix:  # If not set at execution level
+            data_augmentation_suffix = config.get("stacking", {}).get("data_augmentation_suffix", "_data_augmented")  # Fallback to stacking config
         original_path = Path(original_file_path)  # Create Path object from the original file path
-        augmented_dir = original_path.parent / "Data_Augmentation"  # Build Data_Augmentation subdirectory path
-        augmented_filename = f"{original_path.stem}{data_augmentation_suffix}{original_path.suffix}"  # Build augmented filename with wgangp.py suffix convention
+        data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Use configured Data_Augmentation subdir name
+        augmented_dir = original_path.parent / data_aug_subdir  # Build Data_Augmentation subdirectory path using config
+        augmented_filename = f"{original_path.stem}{data_augmentation_suffix}{original_path.suffix}"  # Build augmented filename with configured suffix
         augmented_file = augmented_dir / augmented_filename  # Construct the full augmented file path
 
         if augmented_file.exists():  # If the expected augmented file exists at the constructed path
@@ -5729,6 +5732,78 @@ def prepare_models_with_hyperparameters(file_path, config=None):
         raise
 
 
+def locate_and_verify_artifacts(file_path, config=None):
+    """
+    Locate and verify artifacts for feature selection, hyperparameters and data augmentation.
+
+    :param file_path: Path to the dataset CSV file
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Dict with keys: 'ga', 'pca', 'rfe', 'hyperparams', 'augmented_file'
+    """
+    
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Verifying artifacts for: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
+            config=config,
+        )  # Inform which file we're verifying
+
+        artifacts = {}  # Prepare return mapping
+
+        ga_features = None  # Placeholder for GA features
+        try:
+            ga_features = extract_genetic_algorithm_features(file_path, config=config)  # Try extracting GA features
+        except Exception as e:  # Guard extraction to avoid raising
+            print(f"{BackgroundColors.YELLOW}Warning: GA extraction failed for {file_path}: {e}{Style.RESET_ALL}")  # Warn on failure
+            ga_features = None  # Normalize to None on failure
+        artifacts["ga"] = ga_features  # Store GA features (or None)
+
+        pca_n = None  # Placeholder for PCA components
+        try:
+            pca_n = extract_principal_component_analysis_features(file_path, config=config)  # Try extracting PCA n_components
+        except Exception as e:  # Guard extraction
+            print(f"{BackgroundColors.YELLOW}Warning: PCA extraction failed for {file_path}: {e}{Style.RESET_ALL}")  # Warn on failure
+            pca_n = None  # Normalize to None
+        artifacts["pca"] = pca_n  # Store PCA components (or None)
+
+        rfe_sel = None  # Placeholder for RFE selected features
+        try:
+            rfe_sel = extract_recursive_feature_elimination_features(file_path, config=config)  # Try extracting RFE features
+        except Exception as e:  # Guard extraction
+            print(f"{BackgroundColors.YELLOW}Warning: RFE extraction failed for {file_path}: {e}{Style.RESET_ALL}")  # Warn on failure
+            rfe_sel = None  # Normalize to None
+        artifacts["rfe"] = rfe_sel  # Store RFE selection (or None)
+
+        hyperparams = None  # Placeholder for hyperparameters mapping
+        try:
+            hyperparams = extract_hyperparameter_optimization_results(file_path, config=config)  # Try locating HP CSV and parsing
+        except Exception as e:  # Guard extraction
+            print(f"{BackgroundColors.YELLOW}Warning: Hyperparameter extraction failed for {file_path}: {e}{Style.RESET_ALL}")  # Warn on failure
+            hyperparams = None  # Normalize to None
+        artifacts["hyperparams"] = hyperparams  # Store HP mapping (or None)
+
+        augmented = None  # Placeholder for augmented CSV path
+        try:
+            augmented = find_data_augmentation_file(file_path, config=config)  # Try locating augmented CSV using config-aware finder
+            if augmented:  # If found
+                # Also collect PNG image path with same stem if present
+                aug_png = Path(augmented).with_suffix(".png")  # Build PNG path by changing suffix
+                if aug_png.exists():  # If PNG exists
+                    artifacts["augmented_image"] = str(aug_png)  # Store image path
+        except Exception as e:  # Guard finder
+            print(f"{BackgroundColors.YELLOW}Warning: Data augmentation lookup failed for {file_path}: {e}{Style.RESET_ALL}")  # Warn on failure
+            augmented = None  # Normalize to None
+        artifacts["augmented_file"] = augmented  # Store augmented CSV path (or None)
+
+        return artifacts  # Return mapping of discovered artifacts
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def extract_metrics_from_result(result):
     """
     Extracts metrics from a result dictionary into a list.
@@ -6439,14 +6514,13 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     for mode in modes:  # For each mode
         for file in files_to_process:  # For each file in the input path
             try:  # Protect individual-file orchestration
-                fs_ga, fs_pca, fs_rfe = load_feature_selection_results(file, config=config)  # Load GA/PCA/RFE
-
+                # Consolidate artifact discovery into a single helper for clarity
+                artifacts = locate_and_verify_artifacts(file, config=config)  # Locate feature/HP/DA artifacts
+                fs_ga, fs_pca, fs_rfe = artifacts.get("ga"), artifacts.get("pca"), artifacts.get("rfe")  # Unpack feature artifacts
                 fs_available = bool(fs_ga or fs_rfe or fs_pca)  # True when at least one artifact exists
-
-                hp_raw = extract_hyperparameter_optimization_results(file, config=config)  # Try to load HP CSV results
+                hp_raw = artifacts.get("hyperparams")  # Get hyperparameter mapping if present
                 hp_available = bool(hp_raw)  # True if HP results exist
-
-                aug_file = find_data_augmentation_file(file, config=config)  # Find augmented file path
+                aug_file = artifacts.get("augmented_file")  # Get augmented file path if present
                 aug_available = bool(aug_file)  # True when augmented file exists
 
                 for fs_flag, hp_flag, da_flag in itertools.product([True, False], repeat=3):  # Cartesian product of FS/HP/DA flags
