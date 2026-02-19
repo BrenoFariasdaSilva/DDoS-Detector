@@ -2001,6 +2001,28 @@ def export_dataframe_image(styled_df: pd.io.formats.style.Styler, output_path: U
         raise  # Do not swallow errors; propagate to caller
 
 
+def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str, Path]):
+    """
+    Generate a zebra-striped table image (.png) from an in-memory DataFrame.
+
+    :param df: DataFrame in memory (must not be re-read from disk)
+    :param output_path: Target PNG path (will be overwritten if exists)
+    :raises: PermissionError if directory not writable, or any dataframe_image error
+    """
+    try:
+        out_p = Path(output_path)  # Convert to Path for manipulation
+        parent = out_p.parent  # Parent directory
+        if not parent.exists():  # If parent directory does not exist
+            parent.mkdir(parents=True, exist_ok=True)  # Try to create it
+        # Verify directory is writable
+        if not os.access(str(parent), os.W_OK):  # Check write permission
+            raise PermissionError(f"Directory not writable: {parent}")  # Raise on non-writable
+        styled = apply_zebra_style(df)  # Create a zebra-styled Styler from df
+        export_dataframe_image(styled, out_p)  # Export styled DataFrame to PNG
+    except Exception:
+        raise  # Propagate all exceptions to caller (no silent failures)
+
+
 def generate(args, config: Optional[Dict] = None):
     """
     Generate synthetic samples from a saved generator checkpoint.
