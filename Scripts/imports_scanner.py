@@ -244,7 +244,36 @@ def main():
     )  # Output the welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
     
-    # Implement logic here
+    verbose_output(
+        f"{BackgroundColors.GREEN}Scanning for Python files and extracting imports...{Style.RESET_ALL}",
+        "",
+    )  # Optional verbose message about starting the scan
+    num_files_scanned, libraries = get_all_libraries()  # Scan files and collect libraries
+
+    if num_files_scanned == 0:  # If no Python files were found
+        print(
+            f"{BackgroundColors.YELLOW}Warning: No Python files found in the current directory or Scripts/ directory.{Style.RESET_ALL}"
+        )  # Print a warning when no files are found
+    else:  # When one or more Python files were found
+        print(
+            f"{BackgroundColors.GREEN}Files scanned: {BackgroundColors.CYAN}{num_files_scanned}{Style.RESET_ALL}"
+        )  # Print the count of files scanned
+
+    unique_lib_count = len(libraries)  # Compute number of unique libraries found
+    if unique_lib_count == 0:  # If no libraries were detected
+        print(
+            f"{BackgroundColors.YELLOW}No libraries detected in the scanned Python files.{Style.RESET_ALL}"
+        )  # Notify when no libraries were found
+    else:  # When one or more libraries were detected
+        print(
+            f"{BackgroundColors.GREEN}Libraries detected: {BackgroundColors.CYAN}{unique_lib_count}{Style.RESET_ALL}"
+        )  # Print the count of unique libraries detected
+
+    if unique_lib_count > 0:  # If there are libraries to list
+        sorted_libs = sorted(libraries)  # Sort the library names alphabetically
+        print(f"{BackgroundColors.GREEN}Library list:{Style.RESET_ALL}")  # Header for the library list
+        for lib in sorted_libs:  # Iterate over sorted libraries
+            print(f"  {BackgroundColors.CYAN}{lib}{Style.RESET_ALL}")  # Print each library name
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
