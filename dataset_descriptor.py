@@ -1308,7 +1308,13 @@ def get_dataset_file_info(filepath, low_memory=True):
         if df is None:  # If the dataset could not be loaded
             return None  # Return None
 
+        original_num_rows = len(df)  # Capture original number of rows immediately after read
+        original_num_features = df.shape[1] if hasattr(df, "shape") else 0  # Capture original feature count
+
         cleaned_df = preprocess_dataframe(df)  # Preprocess the DataFrame
+
+        rows_after_preprocessing = len(cleaned_df)  # Capture rows after preprocessing
+        features_after_preprocessing = cleaned_df.shape[1] if hasattr(cleaned_df, "shape") else 0  # Capture features after preprocessing
 
         label_col = detect_label_column(cleaned_df.columns)  # Try to detect the label column
         n_samples, n_features, n_numeric, n_int, n_categorical, n_other, categorical_cols_str = summarize_features(
@@ -1329,6 +1335,10 @@ def get_dataset_file_info(filepath, low_memory=True):
             "Size (GB)": size_gb_str,
             "Number of Samples": f"{n_samples:,}",  # Format with commas for readability
             "Number of Features": f"{n_features:,}",  # Format with commas for readability
+            "original_num_rows": original_num_rows,  # Rows immediately after reading CSV
+            "rows_after_preprocessing": rows_after_preprocessing,  # Rows after preprocessing
+            "original_num_features": original_num_features,  # Features before preprocessing
+            "features_after_preprocessing": features_after_preprocessing,  # Features after preprocessing
             "Feature Types": f"{n_numeric} numeric (float64), {n_int} integer (int64), {n_categorical} categorical (object/category/bool/string), {n_other} other",
             "Categorical Features (object/string)": categorical_cols_str,
             "Missing Values": missing_summary,
@@ -1401,6 +1411,7 @@ def write_report(report_rows, base_dir, output_filename):
         os.makedirs(results_dir, exist_ok=True)  # Create results directory if it doesn't exist
         report_csv_path = os.path.join(results_dir, output_filename)  # Path to save the report CSV
         report_df.to_csv(report_csv_path, index=False)  # Save the report to a CSV file
+        pass  # No-op here; preprocessing summary handling is performed by the caller to avoid globals
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -1575,6 +1586,7 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
     try:  # Wrap full function logic to ensure production-safe monitoring
         report_rows = []  # List to store report rows
         sorted_matching_files = []  # List to store matching files
+        preprocessing_metrics = []  # List to collect per-file preprocessing metric dicts
 
         if os.path.isdir(input_path):  # If the input path is a directory
             print(
@@ -1647,12 +1659,31 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
                 info["t-SNE Plot"] = tsne_file if tsne_file else "None"  # Add t-SNE plot filename or "None"
 
                 report_rows.append(info)  # Add the info to the report rows
+                try:  # Collect preprocessing metrics for this file when available
+                    metrics_row = collect_preprocessing_metrics(
+                        filepath,  # File path being processed
+                        info.get("original_num_rows", 0),  # Original rows captured earlier
+                        info.get("rows_after_preprocessing", 0),  # Rows after preprocessing captured earlier
+                        info.get("original_num_features", 0),  # Original features captured earlier
+                        info.get("features_after_preprocessing", 0),  # Features after preprocessing captured earlier
+                    )  # Create metrics row dict
+                    preprocessing_metrics.append(metrics_row)  # Append metrics row to list for this directory
+                except Exception as _pm:  # If metrics collection fails
+                    print(f"{BackgroundColors.YELLOW}Warning: failed to collect preprocessing metrics for {file_basename}: {_pm}{Style.RESET_ALL}")  # Warn but continue
 
         if report_rows:  # If there are report rows to write
             for i, row in enumerate(report_rows, start=1):  # For each report row
                 row["#"] = i  # Add the counter value
 
             write_report(report_rows, base_dir, output_filename)
+            try:  # After writing main report, handle preprocessing summary generation if metrics collected
+                if preprocessing_metrics:  # Only proceed when metrics were collected
+                    pre_df = build_preprocessing_summary_dataframe(preprocessing_metrics)  # Build DataFrame from metrics list
+                    out_path = save_preprocessing_summary_csv(pre_df, base_dir)  # Save CSV to results dir and get path
+                    print(f"{BackgroundColors.GREEN}Saved preprocessing summary to {BackgroundColors.CYAN}{out_path}{Style.RESET_ALL}")  # Inform user of saved path
+                    print_preprocessing_summary_table(pre_df) if VERBOSE else None  # Print the summary table if verbose mode is enabled
+            except Exception as _ps:  # If summary generation fails, warn but do not abort
+                print(f"{BackgroundColors.YELLOW}Warning: failed to generate preprocessing summary: {_ps}{Style.RESET_ALL}")  # Warn and continue
             return True  # Return True indicating success
         else:  # If no report rows were generated
             return False  # Return False indicating failure
