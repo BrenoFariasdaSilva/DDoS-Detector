@@ -65,6 +65,7 @@ Outputs (summary):
 
 import arff as liac_arff  # For loading ARFF files
 import atexit  # For registering a function to run at exit
+import dataframe_image as dfi  # For exporting DataFrame styled tables as PNG images
 import datetime  # For timestamping
 import lightgbm as lgb  # For LightGBM model
 import math  # For mathematical operations
@@ -830,6 +831,23 @@ def evaluate_model(model, X_test, y_test, duration_str):
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
+
+
+def apply_zebra_style(df):
+    """
+    Apply zebra-striping style to a pandas DataFrame using Styler.
+
+    :param df: pandas DataFrame to style
+    :return: pandas.io.formats.style.Styler styled object ready for export
+    """
+    try:
+        def _zebra(row):  # Define row-wise zebra function
+            return ["background-color: #ffffff" if i % 2 == 0 else "background-color: #f2f2f2" for i in range(len(row))]  # Return CSS list per column
+
+        styled = df.style.apply(_zebra, axis=1)  # Create Styler with zebra striping applied
+        return styled  # Return styled object
+    except Exception as e:  # If styling fails
+        raise  # Propagate exception without swallowing
 
 
 def save_results(report, metrics_df, results_dir, index, model_name, feat_extraction_method=""):
