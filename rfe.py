@@ -95,7 +95,12 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
-N_JOBS = -1  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
+N_JOBS = None  # Number of parallel jobs for estimators/CV. Resolved from config/CLI below.
+CROSS_N_FOLDS = None  # Number of folds for cross-validation. Resolved from config/CLI below.
+CPU_PROCESSES = None  # Number of CPU processes to use for multiprocessing. Resolved from config/CLI below.
+CACHING_ENABLED = None  # Whether to enable caching of intermediate results. Resolved from config/CLI below.
+PICKLE_PROTOCOL = None  # Pickle protocol version to use for caching. Resolved from config/CLI below.
+CONFIG_FILE = None  # Path to the configuration file specified via CLI. Set in __main__ after argument parsing.
 SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, try loading exported models instead of retraining
 CSV_FILE = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Path to the CSV dataset file (set in main)
 RFE_RESULTS_CSV_COLUMNS = [  # Columns for the RFE results CSV
@@ -190,6 +195,17 @@ def get_config(config_path=None):
                 "estimator": "random_forest",
                 "random_state": 42,
             },
+            "cross_validation": {
+                "n_folds": 10,
+            },
+            "multiprocessing": {
+                "n_jobs": -1,  # -1 uses all processors
+                "cpu_processes": 1,
+            },
+            "caching": {
+                "enabled": True,
+                "pickle_protocol": 4,
+            },
         }
 
         cfg_file = None
@@ -211,8 +227,9 @@ def get_config(config_path=None):
             loaded = yaml.safe_load(f) or {}
 
         cfg = dict(defaults)
-        if "rfe" in loaded and isinstance(loaded["rfe"], dict):
-            cfg["rfe"].update(loaded["rfe"])
+        for topk in ("rfe", "cross_validation", "multiprocessing", "caching"):
+            if topk in loaded and isinstance(loaded[topk], dict):
+                cfg[topk].update(loaded[topk])
 
         return cfg
     except Exception as e:
@@ -1460,10 +1477,15 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n
 
         unique_tr, counts_tr = np.unique(y_train_array, return_counts=True)
         min_class_count_tr = counts_tr.min() if counts_tr.size > 0 else 0
-        n_splits = min(10, len(y_train_array), min_class_count_tr)  # Up to 10 splits but not more than samples or smallest class in train
-        n_splits = max(2, int(n_splits))  # Ensure at least 2 splits
 
-        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=int(random_state))  # Create stratified K-Fold iterator
+        resolved_n = int(CROSS_N_FOLDS) if CROSS_N_FOLDS is not None else 10
+        n_splits = int(min(resolved_n, len(y_train_array), min_class_count_tr))
+        if n_splits < 2:
+            raise ValueError(
+                f"Effective number of CV splits is {n_splits}; must be >= 2 and <= number of training samples and smallest class count"
+            )
+
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=int(random_state))
 
         fold_metrics = []  # List to collect per-fold metric tuples
         fold_rankings = []  # List to collect per-fold ranking arrays
@@ -1557,8 +1579,34 @@ def run_rfe(csv_path, n_features_to_select=None, step=None, estimator_name=None,
 
         hyperparameters = {}  # Default hyperparameters (to be extended later)
 
-        cfg = get_config()
+        cfg = get_config(CONFIG_FILE) if CONFIG_FILE else get_config()
         rfe_cfg = cfg.get("rfe", {}) if isinstance(cfg, dict) else {}
+
+        global N_JOBS, CROSS_N_FOLDS, CPU_PROCESSES, CACHING_ENABLED, PICKLE_PROTOCOL
+        if N_JOBS is None:
+            multi_cfg = cfg.get("multiprocessing", {}) if isinstance(cfg, dict) else {}
+            try:
+                N_JOBS = int(multi_cfg.get("n_jobs", -1))
+            except Exception:
+                N_JOBS = -1
+        if CROSS_N_FOLDS is None:
+            cv_cfg = cfg.get("cross_validation", {}) if isinstance(cfg, dict) else {}
+            try:
+                CROSS_N_FOLDS = int(cv_cfg.get("n_folds", 10))
+            except Exception:
+                CROSS_N_FOLDS = 10
+        if CPU_PROCESSES is None:
+            try:
+                CPU_PROCESSES = int(cfg.get("multiprocessing", {}).get("cpu_processes", 1))
+            except Exception:
+                CPU_PROCESSES = 1
+        if CACHING_ENABLED is None:
+            CACHING_ENABLED = bool(cfg.get("caching", {}).get("enabled", True))
+        if PICKLE_PROTOCOL is None:
+            try:
+                PICKLE_PROTOCOL = int(cfg.get("caching", {}).get("pickle_protocol", 4))
+            except Exception:
+                PICKLE_PROTOCOL = 4
 
         cfg_n_select = rfe_cfg.get("n_features_to_select")
         cfg_step = rfe_cfg.get("step", 1)
@@ -1818,6 +1866,17 @@ if __name__ == "__main__":
     parser.add_argument("--step", type=int, default=None, help="RFE step (number of features to remove per iteration)")
     parser.add_argument("--estimator", type=str, default=None, help="Estimator name for RFE (default: random_forest)")
     parser.add_argument("--random_state", type=int, default=None, help="Random seed for reproducibility (overrides config)")
+    # Cross-validation / multiprocessing / caching CLI overrides
+    parser.add_argument("--n_folds", type=int, default=None, help="Number of CV folds (overrides config.cross_validation.n_folds)")
+    parser.add_argument("--n_jobs", type=int, default=None, help="Number of parallel jobs for estimators/CV (-1 uses all cores)")
+    parser.add_argument("--cpu_processes", type=int, default=None, help="Number of CPU processes for multiprocessing (overrides config.multiprocessing.cpu_processes)")
+    parser.add_argument(
+        "--cache_enabled",
+        type=lambda s: str(s).lower() in ("1", "true", "yes", "y"),
+        default=None,
+        help="Enable/disable caching (true/false). Overrides config.caching.enabled",
+    )
+    parser.add_argument("--pickle_protocol", type=int, default=None, help="Pickle protocol (0-5) to use when caching")
     args = parser.parse_args()  # Parse CLI args
 
     SKIP_TRAIN_IF_MODEL_EXISTS = bool(args.skip_train)  # Respect the user's CLI choice
@@ -1826,6 +1885,11 @@ if __name__ == "__main__":
 
     # Load config to determine defaults (if any)
     cfg = get_config(args.config)
+    CONFIG_FILE = args.config  # remember chosen config path for run-time config lookups
+    # extract top-level sections for easier precedence resolution
+    cross_cfg = cfg.get("cross_validation", {}) if isinstance(cfg, dict) else {}
+    multi_cfg = cfg.get("multiprocessing", {}) if isinstance(cfg, dict) else {}
+    cache_cfg = cfg.get("caching", {}) if isinstance(cfg, dict) else {}
     rfe_cfg = cfg.get("rfe", {}) if isinstance(cfg, dict) else {}
 
     # Resolve parameters precedence: CLI > config > defaults
@@ -1834,7 +1898,31 @@ if __name__ == "__main__":
     estimator_name = args.estimator if args.estimator is not None else rfe_cfg.get("estimator", "random_forest")
     random_state = int(args.random_state) if args.random_state is not None else int(rfe_cfg.get("random_state", 42))
 
-    # Log resolved sources
+    resolved_n_folds = int(args.n_folds) if args.n_folds is not None else int(cross_cfg.get("n_folds", 10))
+    if resolved_n_folds < 2:
+        raise ValueError(f"cross_validation.n_folds must be >= 2, got {resolved_n_folds}")
+
+    resolved_n_jobs = args.n_jobs if args.n_jobs is not None else multi_cfg.get("n_jobs", -1)
+    if not isinstance(resolved_n_jobs, int):
+        raise ValueError("multiprocessing.n_jobs must be an integer (use -1 for all cores)")
+    if resolved_n_jobs != -1 and resolved_n_jobs < 1:
+        raise ValueError("multiprocessing.n_jobs must be -1 or >= 1")
+
+    resolved_cpu_procs = int(args.cpu_processes) if args.cpu_processes is not None else int(multi_cfg.get("cpu_processes", 1))
+    if resolved_cpu_procs < 1:
+        raise ValueError("multiprocessing.cpu_processes must be >= 1")
+
+    resolved_cache_enabled = bool(args.cache_enabled) if args.cache_enabled is not None else bool(cache_cfg.get("enabled", True))
+    resolved_pickle_protocol = int(args.pickle_protocol) if args.pickle_protocol is not None else int(cache_cfg.get("pickle_protocol", 4))
+    if not (0 <= resolved_pickle_protocol <= 5):
+        raise ValueError("caching.pickle_protocol must be an integer between 0 and 5")
+
+    N_JOBS = resolved_n_jobs
+    CROSS_N_FOLDS = resolved_n_folds
+    CPU_PROCESSES = resolved_cpu_procs
+    CACHING_ENABLED = resolved_cache_enabled
+    PICKLE_PROTOCOL = resolved_pickle_protocol
+
     print(f"RFE params: n_features_to_select={n_features_to_select} (cli/config/default), step={step}, estimator={estimator_name}, random_state={random_state}")
 
     main(n_features_to_select=n_features_to_select, step=step, estimator_name=estimator_name, random_state=random_state, config_path=args.config)
