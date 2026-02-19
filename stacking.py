@@ -167,6 +167,7 @@ def parse_cli_args():
         parser.add_argument("--multi-class", action="store_true", help="Enable multi-class classification mode (combine all attacks)")
         parser.add_argument("--binary", dest="multi_class", action="store_false", help="Enable binary classification mode (default)")
         parser.add_argument("--both", action="store_true", help="Run both binary and multi-class pipelines sequentially")
+        parser.add_argument("--top-n-features", dest="top_n_features", type=int, default=None, help="Number of top features to show in heatmap (overrides config)")
         
         return parser.parse_args()  # Return parsed arguments
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -224,6 +225,7 @@ def get_default_config():
                 "cv_method", "top_features", "rfe_ranking", "hyperparameters",
                 "features_list", "Hardware",
             ],
+            "top_n_features_heatmap": 15,
             "match_filenames_to_process": [""],
             "ignore_files": ["Stacking_Classifiers_Results.csv"],
             "ignore_dirs": [
@@ -345,7 +347,8 @@ def load_config_file(config_path=None):
 
 
 def deep_merge_dicts(base, override):
-    """Recursively merge override dict into base dict.
+    """
+    Recursively merge override dict into base dict.
     
     :param base: Base dictionary
     :param override: Override dictionary
@@ -402,6 +405,11 @@ def merge_configs(defaults, file_config, cli_args):
             config["execution"]["execution_mode"] = "both"
         elif hasattr(cli_args, "multi_class"):  # Multi-class mode flag
             config["execution"]["execution_mode"] = "multi-class" if cli_args.multi_class else "binary"
+
+        if hasattr(cli_args, "top_n_features") and cli_args.top_n_features is not None:  # CLI override for top-N features
+            if not isinstance(cli_args.top_n_features, int) or cli_args.top_n_features <= 0:  # Validate positive integer
+                raise ValueError("--top-n-features must be an integer greater than 0")  # Raise for invalid value
+            config.setdefault("stacking", {})["top_n_features_heatmap"] = cli_args.top_n_features  # Apply override to config
         
         return config  # Return final merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
