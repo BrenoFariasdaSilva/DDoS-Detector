@@ -51,8 +51,10 @@ Assumptions & Notes:
     - CUDA is used if available; use --force_cpu to disable
 """
 
+
 import argparse  # For CLI argument parsing
 import atexit  # For playing a sound when the program finishes
+import csv  # For writing per-directory results CSV
 import datetime  # For tracking execution time
 import json  # For saving/loading metrics history
 import matplotlib.pyplot as plt  # For plotting training metrics
@@ -63,6 +65,7 @@ import platform  # For getting the operating system name
 import random  # For reproducibility
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
+import time  # For elapsed time tracking
 import torch  # PyTorch core
 import torch.nn as nn  # Neural network modules
 import traceback  # For printing tracebacks on exceptions
@@ -1836,6 +1839,94 @@ def generate(args, config: Optional[Dict] = None):
         print(f"{BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} generated samples to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message
 
         send_telegram_message(TELEGRAM_BOT, f"Finished WGAN-GP generation, saved {n} samples to {Path(args.out_file).name}")
+        
+        try:  # Wrap result writing in try/except to avoid breaking generation on failures
+            results_cols_cfg = config.get("wgangp", {}).get("results_csv_columns", [])  # Read configured results columns list
+            results_csv_path = None  # Initialize results CSV path variable
+            if getattr(args, "csv_path", None):  # If csv_path available on args
+                results_csv_path = Path(args.csv_path).parent / "data_augmentation_results.csv"  # Use dataset directory root
+            else:  # Try to recover original csv_path from checkpoint args saved in checkpoint
+                try:
+                    if args_ck and args_ck.get("csv_path"):  # Use saved args from checkpoint (args_ck defined earlier)
+                        results_csv_path = Path(args_ck.get("csv_path")).parent / "data_augmentation_results.csv"  # Use saved csv_path parent
+                except Exception:
+                    results_csv_path = None  # Leave as None if recovery fails
+
+            if results_csv_path is not None:  # If we have a place to record results
+                # Compute common metric values used in CSV columns
+                original_file_name = Path(args.csv_path).name if getattr(args, "csv_path", None) else ((args_ck and args_ck.get("csv_path") and Path(args_ck.get("csv_path")).name) or "")  # Original file name
+                generated_file_name = Path(args.out_file).name if getattr(args, "out_file", None) else ""  # Generated file name
+                try:
+                    original_num = None  # Default original count
+                    if getattr(args, "csv_path", None):  # If csv_path provided, try reading length
+                        original_num = len(pd.read_csv(args.csv_path))  # Count original CSV rows
+                except Exception:
+                    original_num = None  # Leave as None if reading fails
+
+                total_generated = int(n) if n is not None else ""  # Total generated samples
+                generated_ratio = ""  # Default generated ratio
+                try:
+                    if original_num and original_num > 0:  # If original count available
+                        generated_ratio = float(total_generated) / float(original_num)  # Compute ratio
+                except Exception:
+                    generated_ratio = ""  # Leave blank on failure
+
+                training_time_val = getattr(args, "_last_training_time", "")  # Training time stored on args if available
+                testing_time_val = ""  # No testing time available by default
+
+                # Extract last known critic/generator losses from checkpoint metrics if present
+                critic_loss_val = ""  # Default critic loss
+                generator_loss_val = ""  # Default generator loss
+                try:
+                    metrics_history = ckpt.get("metrics_history")  # Try to get metrics history from checkpoint (may be None)
+                    if isinstance(metrics_history, dict):  # If metrics_history is a dict
+                        ld = metrics_history.get("loss_D") or []  # Safe list for discriminator losses
+                        lg = metrics_history.get("loss_G") or []  # Safe list for generator losses
+                        if isinstance(ld, (list, tuple)) and len(ld) > 0:  # If list-like and non-empty
+                            critic_loss_val = ld[-1]  # Use last recorded discriminator loss
+                        if isinstance(lg, (list, tuple)) and len(lg) > 0:  # If list-like and non-empty
+                            generator_loss_val = lg[-1]  # Use last recorded generator loss
+                except Exception:
+                    critic_loss_val = ""  # Ignore failures and leave blank
+                    generator_loss_val = ""  # Ignore failures and leave blank
+
+                # Build row values in exact order defined by config
+                row = []  # Row list to append
+                for col in results_cols_cfg:  # For each configured column name
+                    if col == "original_file":  # Map known column names
+                        row.append(original_file_name)  # Append original file name
+                    elif col == "generated_file":
+                        row.append(generated_file_name)  # Append generated file name
+                    elif col == "original_num_samples":
+                        row.append(original_num if original_num is not None else "")  # Append original sample count
+                    elif col == "total_generated_samples":
+                        row.append(total_generated)  # Append total generated
+                    elif col == "generated_ratio":
+                        row.append(generated_ratio)  # Append generated ratio
+                    elif col == "training_time_s":
+                        row.append(training_time_val)  # Append training time seconds
+                    elif col == "testing_time_s":
+                        row.append(testing_time_val)  # Append testing time (empty by default)
+                    elif col == "critic_loss":
+                        row.append(critic_loss_val)  # Append critic loss
+                    elif col == "generator_loss":
+                        row.append(generator_loss_val)  # Append generator loss
+                    else:
+                        row.append("")  # Unknown columns are left blank to preserve order
+
+                # Append the row to per-directory results CSV, creating file with header if it doesn't exist
+                try:
+                    if not results_csv_path.exists():  # If file somehow doesn't exist, create and write header
+                        with open(results_csv_path, "w", newline="", encoding="utf-8") as _f:  # Open for writing
+                            writer = csv.writer(_f)  # Create CSV writer
+                            writer.writerow(results_cols_cfg)  # Write header in configured order
+                    with open(results_csv_path, "a", newline="", encoding="utf-8") as _f:  # Open file for appending
+                        writer = csv.writer(_f)  # Create CSV writer
+                        writer.writerow(row)  # Append row
+                except Exception as e:
+                    print(f"{BackgroundColors.YELLOW}Warning: failed to write results CSV at {results_csv_path}: {e}{Style.RESET_ALL}")  # Warn but do not fail generation
+        except Exception as e:
+            print(f"{BackgroundColors.YELLOW}Warning: could not prepare results CSV entry: {e}{Style.RESET_ALL}")  # Warn on top-level failures
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -2067,6 +2158,11 @@ def run_wgangp(config: Optional[Union [Dict, str]] = None, **kwargs):
 
         CONFIG = final_config  # Update global config
 
+        # Validate results_csv_columns existence and type in config for wgangp module
+        results_cols_chk = final_config.get("wgangp", {}).get("results_csv_columns")  # Read configured results columns list
+        if not isinstance(results_cols_chk, list):  # Ensure the value exists and is a list
+            print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Print clear error message
+            raise ValueError("'results_csv_columns' missing or not a list under 'wgangp' section in configuration")  # Stop execution safely with clear error
         initialize_logger(final_config)  # Initialize logger with final configuration
 
         setup_telegram_bot(final_config)  # Setup Telegram bot with final configuration
@@ -2121,6 +2217,7 @@ def run_wgangp(config: Optional[Union [Dict, str]] = None, **kwargs):
                 if self.feature_dim is not None:  # If feature_dim is not None
                     self.feature_dim = int(self.feature_dim)  # Cast to int
                 self.num_workers = int(config_dict.get("dataloader", {}).get("num_workers", 8))  # Cast to int
+                self._last_training_time = 0.0  # Placeholder for last training elapsed time (set after train)
 
         args = ConfigNamespace(final_config)  # Create namespace from config
 
@@ -2129,13 +2226,17 @@ def run_wgangp(config: Optional[Union [Dict, str]] = None, **kwargs):
 
         try:  # Execute with error handling
             if args.mode == "train":  # Training mode
+                training_start_time = time.time()  # Record training start time using time.time()
                 train(args, final_config)  # Train model
+                args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
             elif args.mode == "gen":  # Generation mode
                 if args.checkpoint is None:  # Verify checkpoint provided
                     raise ValueError("Generation mode requires checkpoint path")
                 generate(args, final_config)  # Generate samples
             elif args.mode == "both":  # Combined mode
+                training_start_time = time.time()  # Record training start time using time.time()
                 train(args, final_config)  # Train first
+                args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
                 if args.csv_path:  # If CSV provided
                     csv_path_obj = Path(args.csv_path)
                     checkpoint_dir = csv_path_obj.parent / final_config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / final_config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")
@@ -2246,17 +2347,30 @@ def main():
                 if self.feature_dim is not None:  # If feature_dim is not None
                     self.feature_dim = int(self.feature_dim)  # Cast to int
                 self.num_workers = int(cfg.get("dataloader", {}).get("num_workers", 8))  # Cast to int
+                self._last_training_time = 0.0  # Placeholder for last training elapsed time (set after train)
 
         args = ConfigNamespace(config)  # Create args namespace
+        # Validate results_csv_columns existence and type for CLI runs
+        results_cols = config.get("wgangp", {}).get("results_csv_columns")  # Read configured results columns list
+        if not isinstance(results_cols, list):  # Ensure the value exists and is a list
+            print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Print clear error message
+            raise ValueError("'results_csv_columns' missing or not a list under 'wgangp' section in configuration")  # Stop execution safely with clear error
         
         if csv_path is not None:  # Single file mode (csv_path provided):
+            csv_path_obj = Path(csv_path)  # Create Path object from csv_path (always available in this branch)
+            # Ensure results CSV header columns configuration is available
             if args.out_file == "generated.csv" and mode in ["gen", "both"]:  # If using default output file
-                csv_path_obj = Path(csv_path)  # Create Path object from csv_path
                 data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get subdir name
                 data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Create Data_Augmentation subdirectory path
                 os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists
                 output_filename = f"{csv_path_obj.stem}{results_suffix}{csv_path_obj.suffix}"  # Use input name with suffix
                 args.out_file = str(data_aug_dir / output_filename)  # Set output file path to Data_Augmentation subdirectory
+            # Ensure per-dataset results CSV exists at dataset directory root
+            results_csv_path = csv_path_obj.parent / "data_augmentation_results.csv"  # Path for per-directory results CSV
+            if not results_csv_path.exists():  # Only write header if file does not exist
+                with open(results_csv_path, "w", newline="", encoding="utf-8") as _f:  # Open file for writing header
+                    writer = csv.writer(_f)  # Create CSV writer
+                    writer.writerow(results_cols)  # Write header exactly in configured order
             
             if mode == "train":  # Training mode
                 train(args, config)  # Train the model
@@ -2265,7 +2379,9 @@ def main():
                 generate(args, config)  # Generate synthetic samples
             elif mode == "both":  # Combined mode
                 print(f"{BackgroundColors.GREEN}[1/2] Training model...{Style.RESET_ALL}")
+                training_start_time = time.time()  # Record training start time using time.time()
                 train(args, config)  # Train the model
+                args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
                 
                 csv_path_obj = Path(csv_path)  # Create Path object from csv_path
                 checkpoint_prefix = csv_path_obj.stem  # Use CSV filename as prefix
@@ -2302,6 +2418,14 @@ def main():
                         )
                         continue  # Skip to the next path if the current one doesn't exist
 
+                    # Ensure per-dataset results CSV exists at dataset directory root
+                    per_dir_results_csv = Path(input_path) / "data_augmentation_results.csv"  # Results CSV path for this dataset directory
+                    if not per_dir_results_csv.exists():  # Only write header if file does not exist
+                        os.makedirs(Path(input_path), exist_ok=True)  # Ensure dataset directory exists (no-op if exists)
+                        with open(per_dir_results_csv, "w", newline="", encoding="utf-8") as _f:  # Open file for header writing
+                            writer = csv.writer(_f)  # Create CSV writer
+                            writer.writerow(results_cols)  # Write header exactly in configured order
+
                     files_to_process = get_files_to_process(
                         input_path, file_extension=".csv", config=config
                     )  # Get list of CSV files to process
@@ -2327,13 +2451,17 @@ def main():
                         
                         try:  # Try to execute the specified mode for the current file
                             if mode == "train":  # Training mode
+                                training_start_time = time.time()  # Record training start time using time.time()
                                 train(args, config)  # Train the model only
+                                args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
                             elif mode == "gen":  # Generation mode
                                 assert args.checkpoint is not None, "Generation requires --checkpoint"
                                 generate(args, config)  # Generate synthetic samples only
                             elif mode == "both":  # Combined mode
                                 print(f"{BackgroundColors.GREEN}[1/2] Training model on {BackgroundColors.CYAN}{csv_path_obj.name}{BackgroundColors.GREEN}...{Style.RESET_ALL}")
+                                training_start_time = time.time()  # Record training start time using time.time()
                                 train(args, config)  # Train the model
+                                args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
                                 
                                 checkpoint_prefix = csv_path_obj.stem  # Use CSV filename as prefix
                                 checkpoint_subdir = config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")  # Get checkpoint subdir
