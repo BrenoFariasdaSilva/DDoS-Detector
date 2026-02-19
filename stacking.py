@@ -1828,6 +1828,27 @@ def aggregate_feature_usage(results_df, top_n=None):
         raise  # Propagate exceptions to caller (no silent failures)
 
 
+def export_top_features_csv(feature_counts_df, csv_path):
+    """
+    Export aggregated top-N feature counts to CSV.
+
+    :param feature_counts_df: DataFrame produced by aggregate_feature_usage()
+    :param csv_path: Destination CSV path
+    :return: Path to saved CSV file
+    """
+    
+    try:
+        if feature_counts_df is None or feature_counts_df.empty:  # Validate presence
+            feature_counts_df = pd.DataFrame()  # Create empty DataFrame for consistent output
+
+        out_path = Path(csv_path)  # Normalize to Path object
+        out_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure parent directory exists
+        feature_counts_df.to_csv(str(out_path), index=True)  # Write DataFrame to CSV including index (feature names)
+        return str(out_path)  # Return string path to caller
+    except Exception:
+        raise  # Propagate exceptions
+
+
 def save_augmentation_comparison_results(file_path, comparison_results, config=None):
     """
     Save data augmentation comparison results to CSV file.
