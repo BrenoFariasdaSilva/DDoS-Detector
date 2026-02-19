@@ -39,6 +39,15 @@ Notes & conventions:
     - Defaults assume CSV input; Parquet support can be added as needed.
     - Toggle `VERBOSE = True` for additional diagnostic output.
 
+Execution Modes:
+    - `binary`: Standard binary classification where every attack is treated as
+        a single positive class and non-attack as negative.
+    - `multi-class`: Multi-class classification where each distinct attack type
+        is treated as its own class label for per-attack evaluation.
+    - `both`: Run both `binary` and `multi-class` evaluations; outputs are
+        written under separate subfolders (`binary` and `multi-class`).
+    - Default: `both` (configurable via CLI or `CONFIG['execution']['execution_mode']`).
+
 TODOs:
     - Add CLI argument parsing for dataset paths and runtime flags.
     - Add native Parquet support and safer large-file streaming.
