@@ -23,24 +23,19 @@
 
 
 # ==============================================================================
-# SHARED SECTIONS — Used by multiple scripts
+# EXECUTION — Used by multiple scripts
 # ==============================================================================
-
-# --- Execution Control (shared + per-script keys) ---
-execution:
+execution:  # Execution control and per-script overrides
   verbose: false                      # Enable verbose output messages
   play_sound: true                    # Play sound notification when complete
-  # genetic_algorithm.py specific:
   skip_train_if_model_exists: false   # Skip training if model artifacts exist
   runs: 5                             # Number of GA runs per population size
   resume_progress: true               # Resume from saved state files
   progress_save_interval: 10          # Save progress every N generations
-  # stacking.py specific:
   csv_file: null                      # Optional single CSV file to process (null = process all)
   process_entire_dataset: false       # Process all files in dataset (true) or single file (false)
   test_data_augmentation: true        # Enable data augmentation testing experiments
   execution_mode: both                # Execution mode: "both" (default, runs binary and multi-class sequentially), "binary" (one file per eval), or "multi-class" (combined attacks)
-  # wgangp.py specific:
   results_suffix: "_data_augmented"   # Suffix to add to generated filenames
   match_filenames_to_process: [""]    # List of specific filenames to match
   ignore_files: ["_data_augmented"]   # List of filename substrings to ignore
@@ -51,15 +46,15 @@ execution:
     - "Data_Separability"
     - "Feature_Analysis"
 
-# --- Dataset Configuration (shared + per-script keys) ---
-dataset:
+# ==============================================================================
+# DATASET — Used by multiple scripts
+# ==============================================================================
+dataset:  # Dataset-level settings and paths
   remove_zero_variance: true          # Remove zero-variance features during preprocessing
-  # genetic_algorithm.py specific:
   files_to_ignore: []                 # List of files to ignore during processing
   test_size: 0.2                      # Test set size for train-test split
   min_test_fraction: 0.05             # Minimum acceptable test fraction
   max_test_fraction: 0.50             # Maximum acceptable test fraction
-  # wgangp.py specific:
   label_candidates:                   # Common label column names for auto-detection
     - "label"
     - "class"
@@ -69,20 +64,22 @@ dataset:
       - "./Datasets/CICDDoS2019/01-12/"
       - "./Datasets/CICDDoS2019/03-11/"
 
-# --- File Paths (shared + per-script keys) ---
-paths:
+# ==============================================================================
+# PATHS — Used by multiple scripts
+# ==============================================================================
+paths:  # File and directory paths used across scripts
   logs_dir: "./Logs"                  # Directory for log files (shared)
-  # genetic_algorithm.py specific:
   datasets_dir: null                  # Directory containing datasets (null for auto-detect)
   output_dir: "Feature_Analysis"      # Output directory for GA results
   csv_path: null                      # Default dataset CSV path (null for auto-detect)
-  # wgangp.py specific:
   out_dir: "outputs"                  # Output directory for WGAN-GP models/logs
   checkpoint_subdir: "Checkpoints"    # Checkpoints subdirectory name
   data_augmentation_subdir: "Data_Augmentation"  # Data augmentation subdirectory name
 
-# --- Sound Notifications ---
-sound:
+# ==============================================================================
+# SOUND — Used by multiple scripts
+# ==============================================================================
+sound:  # Sound notification settings
   enabled: true                       # Enable sound notifications
   commands:                           # Commands to play sound for each operating system
     Darwin: "afplay"
@@ -90,20 +87,26 @@ sound:
     Windows: "start"
   file: "./.assets/Sounds/NotificationSound.wav"  # Path to the sound file
 
-# --- Logging ---
-logging:
+# ==============================================================================
+# LOGGING — Used by multiple scripts
+# ==============================================================================
+logging:  # Logging configuration
   enabled: true                       # Enable file logging
   clean: true                         # Clear log file on start
   tqdm_bar_format: "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"  # Progress bar format
 
-# --- Telegram Notifications ---
-telegram:
+# ==============================================================================
+# TELEGRAM — Used by multiple scripts
+# ==============================================================================
+telegram:  # Telegram notification settings
   enabled: true                       # Enable Telegram notifications
   verify_env: true                    # Verify .env file existence
   progress_pct: 10                    # Percent interval for progress notifications (e.g., 10 => notify at 10%,20%,...)
 
-# --- Plotting / Visualization ---
-plotting:
+# ==============================================================================
+# PLOTTING — Used by multiple scripts
+# ==============================================================================
+plotting:  # Plotting defaults and sizes
   enabled: true                       # Enable plot generation
   filename: "training_metrics.png"    # Plot filename
   subdir: "plots"                     # Subdirectory under data augmentation outputs for plots
@@ -117,7 +120,7 @@ plotting:
 
 
 # ==============================================================================
-# GENETIC ALGORITHM SECTIONS — Used by genetic_algorithm.py
+# GENETIC ALGORITHM — Used by genetic_algorithm.py
 # ==============================================================================
 
 genetic_algorithm:
@@ -191,40 +194,34 @@ export:
 
 
 # ==============================================================================
-# STACKING SECTIONS — Used by stacking.py
+# STACKING — Used by stacking.py
 # ==============================================================================
 
-stacking:
-  # --- Output Filenames ---
-  results_filename: "Stacking_Classifiers_Results.csv"  # Main results CSV filename for binary mode
+stacking:  # Stacking experiment settings
+  results_filename: "Stacking_Classifiers_Results.csv"   # Main results CSV filename for binary mode
   multiclass_results_filename: "Stacking_Classifiers_MultiClass_Results.csv"  # Results CSV filename for multi-class mode
   augmentation_comparison_filename: "Data_Augmentation_Comparison_Results.csv"  # Data augmentation experiments results CSV
   hyperparameters_filename: "Hyperparameter_Optimization_Results.csv"  # Hyperparameter tuning results filename
 
-  # --- Data Augmentation Configuration ---
   data_augmentation_suffix: "_data_augmented"  # Suffix for augmented files (matches wgangp.py output)
   augmentation_ratios: [0.10, 0.25, 0.50, 0.75, 1.00]  # Augmented-to-original sample ratios for experiments
 
-  # Number of top features to show in generated heatmaps and CSV exports
-  top_n_features_heatmap: 15            # Default number of top features to show in heatmap
+  top_n_features_heatmap: 15            # Number of top features to show in generated heatmaps and CSV exports (int)
 
-  # --- File Processing Configuration ---
   cache_prefix: "Cache_"              # Prefix for cached preprocessing artifacts
   model_export_base: "Feature_Analysis/Stacking/Models/"  # Base directory for model exports
   match_filenames_to_process: [""]    # List of specific filenames to match (empty = process all)
-  ignore_files:                       # List of result filenames to ignore during processing
+  ignore_files:                         # Result filenames to ignore during processing
     - "Stacking_Classifiers_Results.csv"
     - "Hyperparameter_Optimization_Results.csv"
-  ignore_dirs:                        # List of directory names to ignore during processing
+  ignore_dirs:                          # Directory names to ignore during processing
     - "Classifiers"
     - "Classifiers_Hyperparameters"
     - "Dataset_Description"
     - "Data_Separability"
     - "Feature_Analysis"
 
-  # --- Results CSV Schema ---
-  # Column ordering for results CSV export. Each evaluated model writes one row with these fields.
-  results_csv_columns:
+  results_csv_columns:                 # Column ordering for results CSV export
     - "model"                  # Model identifier (e.g., "RandomForest", "SVM")
     - "dataset"                # Dataset name extracted from file path
     - "execution_mode"         # Execution mode: "binary" or "multi-class"
@@ -259,10 +256,10 @@ stacking:
   use_suffix_filenames: false         # When true, write separate CSVs per combo with suffix
 
 # ==============================================================================
-# EVALUATION CONFIGURATION — Used by stacking.py and other classifiers
+# EVALUATION — Used by stacking.py and other classifiers
 # ==============================================================================
 
-evaluation:
+evaluation:  # Evaluation and CV defaults
   n_jobs: -1                          # Number of parallel jobs for model training (-1 = use all available CPUs)
   threads_limit: 2                    # Thread limit for parallel classifier evaluation (prevents resource exhaustion)
   cv_folds: 10                        # Number of cross-validation folds for model evaluation
@@ -274,49 +271,44 @@ evaluation:
 # MODEL HYPERPARAMETERS — Used by stacking.py
 # ==============================================================================
 
-models:
-  # Random Forest classifier hyperparameters
-  random_forest:
-    n_estimators: 100                 # Number of trees in the forest
-    random_state: 42                  # Random seed for reproducibility
-  
-  # Support Vector Machine hyperparameters
-  svm:
+models:  # Model hyperparameters for classifiers
+  random_forest:                       # Random Forest classifier hyperparameters
+    n_estimators: 100                  # Number of trees in the forest
+    random_state: 42                   # Random seed for reproducibility
+
+  svm:                                 # Support Vector Machine hyperparameters
     kernel: "rbf"                     # Kernel type: "linear", "poly", "rbf", "sigmoid"
-    probability: true                 # Enable probability estimates for predict_proba()
-    random_state: 42                  # Random seed for reproducibility
-  
-  # XGBoost classifier hyperparameters
-  xgboost:
+    probability: true                   # Enable probability estimates for predict_proba()
+    random_state: 42                    # Random seed for reproducibility
+
+  xgboost:                             # XGBoost classifier hyperparameters
     eval_metric: "mlogloss"           # Evaluation metric: "mlogloss" for multi-class, "logloss" for binary
-    random_state: 42                  # Random seed for reproducibility
-  
-  # Logistic Regression hyperparameters
-  logistic_regression:
-    max_iter: 1000                    # Maximum number of iterations for solver convergence
-    random_state: 42                  # Random seed for reproducibility
-  
-  # K-Nearest Neighbors hyperparameters
-  knn:
-    n_neighbors: 5                    # Number of neighbors to consider
-  
-  # Gradient Boosting classifier hyperparameters
-  gradient_boosting:
-    random_state: 42                  # Random seed for reproducibility
-  
-  # LightGBM classifier hyperparameters
-  lightgbm:
-    force_row_wise: true              # Force row-wise histogram construction (faster for wide datasets)
-    min_gain_to_split: 0.01           # Minimum information gain to make a split
-    random_state: 42                  # Random seed for reproducibility
-    verbosity: -1                     # Suppress warnings
-  mlp:
-    hidden_layer_sizes: [100]
-    max_iter: 500
-    random_state: 42
-  stacking_meta:                      # Meta-estimator for stacking classifier
-    n_estimators: 50
-    random_state: 42
+    random_state: 42                    # Random seed for reproducibility
+
+  logistic_regression:                 # Logistic Regression hyperparameters
+    max_iter: 1000                      # Maximum iterations for solver convergence
+    random_state: 42                    # Random seed for reproducibility
+
+  knn:                                 # K-Nearest Neighbors hyperparameters
+    n_neighbors: 5                      # Number of neighbors to consider
+
+  gradient_boosting:                   # Gradient Boosting classifier hyperparameters
+    random_state: 42                    # Random seed for reproducibility
+
+  lightgbm:                            # LightGBM classifier hyperparameters
+    force_row_wise: true                # Force row-wise histogram construction (bool)
+    min_gain_to_split: 0.01             # Minimum information gain to make a split (float)
+    random_state: 42                    # Random seed for reproducibility
+    verbosity: -1                       # Suppress warnings (int)
+
+  mlp:                                 # Multi-layer Perceptron hyperparameters
+    hidden_layer_sizes: [100]           # Hidden layer sizes (list[int])
+    max_iter: 500                       # Maximum training iterations (int)
+    random_state: 42                    # Random seed for reproducibility
+
+  stacking_meta:                       # Meta-estimator for stacking classifier
+    n_estimators: 50                    # Number of estimators for stacking meta-estimator
+    random_state: 42                    # Random seed for the stacking meta-estimator
 
 automl:
   enabled: false                      # Enable AutoML Optuna pipeline
@@ -351,9 +343,9 @@ explainability:
   shap_max_samples: 100               # Maximum test samples to use for SHAP (reduces computation time)
   random_state: 42                    # Random seed for explainability reproducibility
 
-# ------------------------------------------------------------------------------
-# PCA (Principal Component Analysis) — settings used by `pca.py`
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# PCA — Used by pca.py
+# ==============================================================================
 pca:
   n_components: 8                     # Number of principal components to use (int)
   n_components_list: [8, 16, 32, 64]  # List of component counts to evaluate (list[int])
@@ -361,9 +353,9 @@ pca:
   scale_data: true                    # Whether to standardize numeric features before PCA (bool)
   remove_zero_variance: true          # Drop zero-variance numeric features during preprocessing (bool)
 
-# ------------------------------------------------------------------------------
-# RFE (Recursive Feature Elimination) — settings used by `rfe.py`
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# RFE — Used by rfe.py
+# ==============================================================================
 rfe:
   n_features_to_select: 10            # Number of features to select (int, null = auto)
   step: 1                             # Number of features removed at each iteration (int)
@@ -372,7 +364,7 @@ rfe:
 
 
 # ==============================================================================
-# WGAN-GP SECTIONS — Used by wgangp.py
+# WGAN-GP — Used by wgangp.py
 # ==============================================================================
 
 wgangp:
