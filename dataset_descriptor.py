@@ -1485,6 +1485,29 @@ def build_preprocessing_summary_dataframe(metrics_list):
         raise  # Re-raise to preserve original failure semantics
 
 
+def save_preprocessing_summary_csv(df, base_dir, filename="preprocessing_summary.csv"):
+    """
+    Save the preprocessing summary DataFrame to the results directory for the given base_dir.
+
+    :param df: DataFrame produced by `build_preprocessing_summary_dataframe`
+    :param base_dir: Base directory where dataset results are stored
+    :param filename: Output CSV filename (default: preprocessing_summary.csv)
+    :return: Absolute path to saved CSV file
+    """
+
+    try:  # Wrap function body for robust error reporting per module conventions
+        results_dir = os.path.join(base_dir, RESULTS_DIR)  # Compute results directory path
+        if not os.path.exists(results_dir):  # If results directory doesn't exist
+            os.makedirs(results_dir, exist_ok=True)  # Create it to ensure save succeeds
+        out_path = os.path.join(results_dir, filename)  # Build full output path
+        df.to_csv(out_path, index=False)  # Persist DataFrame to CSV without index
+        return out_path  # Return path for potential logging
+    except Exception as e:  # Preserve exception handling style
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME):
     """
     Generates a CSV report for the specified input path.
