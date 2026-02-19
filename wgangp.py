@@ -1428,6 +1428,9 @@ def train(args, config: Optional[Dict] = None):
         results_csv_file = None  # Placeholder for per-dataset open results CSV file object
         results_csv_writer = None  # Placeholder for per-dataset CSV writer
         results_cols_cfg = config.get("wgangp", {}).get("results_csv_columns", [])  # Read configured results columns list
+        if not isinstance(results_cols_cfg, list) or len(results_cols_cfg) == 0:  # Validate list exists and is non-empty
+            print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Clear error message
+            raise ValueError("'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration")  # Stop safely
         if getattr(args, "csv_path", None):  # If csv_path provided, prepare persistent results CSV handle
             try:  # Attempt to open results CSV once with header written if needed
                 csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
@@ -2033,6 +2036,9 @@ def generate(args, config: Optional[Dict] = None):
         
         try:  # Wrap result writing in try/except to avoid breaking generation on failures
             results_cols_cfg = config.get("wgangp", {}).get("results_csv_columns", [])  # Read configured results columns list
+            if not isinstance(results_cols_cfg, list) or len(results_cols_cfg) == 0:  # Validate list exists and is non-empty
+                print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Clear error message
+                raise ValueError("'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration")  # Stop safely
             results_csv_path = None  # Initialize results CSV path variable
             if getattr(args, "csv_path", None):  # If csv_path available on args
                 results_csv_path = Path(args.csv_path).parent / "data_augmentation_results.csv"  # Use dataset directory root
@@ -2359,9 +2365,9 @@ def run_wgangp(config: Optional[Union [Dict, str]] = None, **kwargs):
 
         # Validate results_csv_columns existence and type in config for wgangp module
         results_cols_chk = final_config.get("wgangp", {}).get("results_csv_columns")  # Read configured results columns list
-        if not isinstance(results_cols_chk, list):  # Ensure the value exists and is a list
-            print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Print clear error message
-            raise ValueError("'results_csv_columns' missing or not a list under 'wgangp' section in configuration")  # Stop execution safely with clear error
+        if not isinstance(results_cols_chk, list) or len(results_cols_chk) == 0:  # Ensure the value exists, is a list, and is non-empty
+            print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Print clear error message
+            raise ValueError("'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration")  # Stop execution safely with clear error
         initialize_logger(final_config)  # Initialize logger with final configuration
 
         setup_telegram_bot(final_config)  # Setup Telegram bot with final configuration
@@ -2569,9 +2575,9 @@ def main():
         args = ConfigNamespace(config)  # Create args namespace
         # Validate results_csv_columns existence and type for CLI runs
         results_cols = config.get("wgangp", {}).get("results_csv_columns")  # Read configured results columns list
-        if not isinstance(results_cols, list):  # Ensure the value exists and is a list
-            print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Print clear error message
-            raise ValueError("'results_csv_columns' missing or not a list under 'wgangp' section in configuration")  # Stop execution safely with clear error
+        if not isinstance(results_cols, list) or len(results_cols) == 0:  # Ensure the value exists, is a list, and is non-empty
+            print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Print clear error message
+            raise ValueError("'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration")  # Stop execution safely with clear error
         
         if csv_path is not None:  # Single file mode (csv_path provided):
             csv_path_obj = Path(csv_path)  # Create Path object from csv_path (always available in this branch)
