@@ -2023,6 +2023,34 @@ def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str
         raise  # Propagate all exceptions to caller (no silent failures)
 
 
+def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visualizable: bool = True):
+    """
+    Save DataFrame to CSV and optionally generate a zebra-striped PNG table image.
+
+    This function centralizes CSV saving and image generation to avoid duplicating
+    CSV writing logic across the codebase.
+
+    :param df: DataFrame to save
+    :param csv_path: Destination CSV file path
+    :param is_visualizable: Flag indicating whether to generate PNG image
+    :raises: Propagates IO and dataframe_image exceptions
+    """
+    try:
+        csv_p = Path(csv_path)  # Convert csv_path to Path
+        parent = csv_p.parent  # Parent directory for CSV
+        parent.mkdir(parents=True, exist_ok=True)  # Ensure parent exists
+        # Verify parent directory is writable before attempting to write CSV
+        if not os.access(str(parent), os.W_OK):  # If not writable
+            raise PermissionError(f"Directory not writable: {parent}")  # Raise permission error
+        df.to_csv(str(csv_p), index=False)  # Save CSV to disk preserving DataFrame content/order
+        # Only generate image when explicitly requested
+        if is_visualizable:  # If a visual representation is desired
+            png_path = csv_p.with_suffix('.png')  # Replace CSV extension with PNG
+            generate_table_image_from_dataframe(df, png_path)  # Generate PNG from in-memory DataFrame
+    except Exception:
+        raise  # Propagate exceptions to caller (do not swallow)
+
+
 def generate(args, config: Optional[Dict] = None):
     """
     Generate synthetic samples from a saved generator checkpoint.
