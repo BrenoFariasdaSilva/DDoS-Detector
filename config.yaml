@@ -351,6 +351,25 @@ explainability:
   shap_max_samples: 100               # Maximum test samples to use for SHAP (reduces computation time)
   random_state: 42                    # Random seed for explainability reproducibility
 
+# ------------------------------------------------------------------------------
+# PCA (Principal Component Analysis) — settings used by `pca.py`
+# ------------------------------------------------------------------------------
+pca:
+  n_components: 8                     # Number of principal components to use (int)
+  n_components_list: [8, 16, 32, 64]  # List of component counts to evaluate (list[int])
+  random_state: 42                    # Random seed for reproducibility (int)
+  scale_data: true                    # Whether to standardize numeric features before PCA (bool)
+  remove_zero_variance: true          # Drop zero-variance numeric features during preprocessing (bool)
+
+# ------------------------------------------------------------------------------
+# RFE (Recursive Feature Elimination) — settings used by `rfe.py`
+# ------------------------------------------------------------------------------
+rfe:
+  n_features_to_select: 10            # Number of features to select (int, null = auto)
+  step: 1                             # Number of features removed at each iteration (int)
+  estimator: "random_forest"          # Base estimator for RFE (string, allowed: "random_forest")
+  random_state: 42                    # Random seed for reproducibility (int)
+
 
 # ==============================================================================
 # WGAN-GP SECTIONS — Used by wgangp.py
