@@ -1418,7 +1418,9 @@ def train(args, config: Optional[Dict] = None):
         )  # Load dataset from CSV
         
         num_workers = int(config.get("dataloader", {}).get("num_workers", 8))  # Get num_workers from config and cast to int
-        pin_memory = config.get("dataloader", {}).get("pin_memory", True) if device.type == "cuda" else False  # Get pin_memory from config
+        if device.type == "cuda" and num_workers == 0:  # If CUDA available but user set 0 workers
+            num_workers = max(1, (os.cpu_count() or 1))  # Ensure at least one worker for CUDA to improve throughput
+        pin_memory = True if device.type == "cuda" else False  # Always enable pin_memory on CUDA for faster host->device transfers
         persistent_workers = config.get("dataloader", {}).get("persistent_workers", True) if num_workers > 0 else False  # Get persistent_workers from config
         prefetch_factor = int(config.get("dataloader", {}).get("prefetch_factor", 2)) if num_workers > 0 else None  # Get prefetch_factor from config and cast to int
         
@@ -1630,8 +1632,8 @@ def train(args, config: Optional[Dict] = None):
             )
             
             for real_x_np, labels_np in pbar:  # Loop over batches in dataloader with progress bar
-                real_x = real_x_np.to(device)  # Move real features to device
-                labels = labels_np.to(device, dtype=torch.long)  # Move labels to device and set type
+                real_x = real_x_np.to(device, non_blocking=True)  # Move real features to device with non_blocking when pinned
+                labels = labels_np.to(device, dtype=torch.long, non_blocking=True)  # Move labels to device with non_blocking when pinned
 
                 loss_D = torch.tensor(0.0, device=device)  # Initialize discriminator loss
                 gp = torch.tensor(0.0, device=device)  # Initialize gradient penalty
