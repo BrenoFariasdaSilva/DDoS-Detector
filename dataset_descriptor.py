@@ -1628,6 +1628,24 @@ def generate_table_image_from_dataframe(df, output_path):
         raise  # Re-raise any exception to caller
 
 
+def generate_csv_and_image(df, csv_path):
+    """
+    Save a DataFrame to CSV and generate a corresponding PNG table image next to it.
+
+    :param df: pandas.DataFrame to save and render
+    :param csv_path: Full path for CSV output
+    :return: Tuple (csv_path, image_path)
+    """
+
+    try:  # Wrap whole function for consistent error handling
+        df.to_csv(csv_path, index=False)  # Persist DataFrame to CSV without index
+        image_path = os.path.splitext(csv_path)[0] + ".png"  # Build image path by replacing extension
+        generate_table_image_from_dataframe(df, image_path)  # Generate PNG image from DataFrame
+        return csv_path, image_path  # Return both paths for caller use
+    except Exception:  # Do not swallow errors; let caller handle them
+        raise  # Re-raise exception to indicate failure
+
+
 def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME):
     """
     Generates a CSV report for the specified input path.
