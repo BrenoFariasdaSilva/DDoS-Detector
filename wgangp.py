@@ -2212,7 +2212,7 @@ def generate(args, config: Optional[Dict] = None):
                 df = populate_hardware_column(df, column_name="hardware", device_used=device)  # Populate hardware column
             except Exception:
                 pass  # Ignore hardware population errors and continue
-        df.to_csv(args.out_file, index=False)  # Save generated data to CSV file
+        generate_csv_and_image(df, args.out_file, is_visualizable=True)  # Save CSV and generate PNG image when appropriate
         print(f"{file_progress_prefix} {BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} generated samples to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message with prefix
 
         try:  # Safely compute and print sample generation elapsed time
