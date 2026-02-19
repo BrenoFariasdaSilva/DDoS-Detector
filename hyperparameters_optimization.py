@@ -2328,6 +2328,28 @@ def calculate_execution_time(start_time, finish_time=None):
         raise
 
 
+def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+    """
+    Apply zebra-striping style to a DataFrame using pandas Styler.
+
+    :param df: DataFrame to style
+    :return: pandas Styler with alternating row background colors
+    """
+    try:
+        def _row_style(row):  # Define row-wise styling helper
+            bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # white/light-gray alternation
+            return [f"background-color: {bg};" for _ in row.index]  # Return style per cell preserving order
+
+        styled = df.style.apply(_row_style, axis=1)  # Apply zebra styling row-wise to preserve column order
+        styled = styled.set_table_attributes('style="border-collapse:collapse; width:100%;"')  # Tight table rendering
+        styled = styled.set_properties(**{"border": "1px solid #ddd", "padding": "6px"})  # Add cell padding and border
+        return styled  # Return the pandas Styler object
+    except Exception as e:
+        print(str(e))  # Print exception for visibility
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram about the failure
+        raise  # Propagate exception (no silent failures)
+
+
 def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str, Path]):
     """
     Generate a zebra-striped PNG table image from an in-memory DataFrame.
