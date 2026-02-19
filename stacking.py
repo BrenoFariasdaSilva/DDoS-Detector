@@ -1706,6 +1706,23 @@ def export_dataframe_image(styled_df, output_path):
         raise  # Propagate any exception (do not swallow)
 
 
+def generate_table_image_from_dataframe(df, csv_path):
+    """
+    Generate a zebra-striped PNG table image for a DataFrame, saved beside the CSV.
+
+    :param df: pandas DataFrame in memory to render
+    :param csv_path: Path to the CSV file (image will be same base name with .png)
+    :return: Path to generated PNG image
+    """
+    try:
+        png_path = str(Path(csv_path).with_suffix('.png'))  # Build PNG path by replacing extension
+        styled = apply_zebra_style(df)  # Apply zebra styling to DataFrame
+        export_dataframe_image(styled, png_path)  # Export styled DataFrame as PNG image
+        return png_path  # Return path to generated PNG
+    except Exception:
+        raise  # Propagate exceptions to caller
+
+
 def save_augmentation_comparison_results(file_path, comparison_results, config=None):
     """
     Save data augmentation comparison results to CSV file.
