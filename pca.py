@@ -66,6 +66,7 @@ import subprocess  # For fetching CPU model on some OSes
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import time  # For measuring elapsed time
+import yaml  # For loading configuration from YAML files
 from colorama import Style  # For coloring the terminal
 from joblib import dump  # For saving scalers and models
 from Logger import Logger  # For logging output to both terminal and file
@@ -169,6 +170,58 @@ def verbose_output(true_string="", false_string=""):
             print(true_string)  # Output the true statement string
         elif false_string != "":  # If a false_string was provided
             print(false_string)  # Output the false statement string
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def get_config(config_path=None):
+    """
+    Load PCA-related configuration from config.yaml or config.yaml.example.
+
+    Precedence: CLI args (handled in main) > config file > hard-coded defaults.
+
+    :param config_path: Optional path to a YAML config file
+    :return: dict with keys under 'pca' and 'execution' merged with defaults
+    """
+    
+    try:
+        defaults = {
+            "pca": {
+                "n_components_list": [8, 16, 32, 64],
+                "random_state": 42,
+                "scale_data": True,
+                "remove_zero_variance": True,
+            },
+            "execution": {"verbose": False},
+        }
+
+        cfg_file = None
+        if config_path:
+            cfg_file = Path(config_path)
+        else:
+            candidate = Path(__file__).parent / "config.yaml"
+            candidate_example = Path(__file__).parent / "config.yaml.example"
+            if candidate.exists():
+                cfg_file = candidate
+            elif candidate_example.exists():
+                cfg_file = candidate_example
+
+        if cfg_file is None or not cfg_file.exists():
+            verbose_output(f"Config file not found, using defaults: {defaults['pca']}")
+            return defaults
+
+        with open(cfg_file, "r", encoding="utf-8") as f:
+            loaded = yaml.safe_load(f) or {}
+
+        cfg = dict(defaults)
+        if "pca" in loaded and isinstance(loaded["pca"], dict):
+            cfg["pca"].update(loaded["pca"])
+        if "execution" in loaded and isinstance(loaded["execution"], dict):
+            cfg["execution"].update(loaded["execution"])
+
+        return cfg
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -348,7 +401,7 @@ def preprocess_dataframe(df, remove_zero_variance=True):
         raise
 
 
-def scale_and_split(X, y, test_size=0.2, random_state=42):
+def scale_and_split(X, y, test_size=0.2, random_state=42, scale_data=True):
     """
     Scales numeric features and splits into train/test sets.
 
@@ -365,24 +418,30 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
             X, y, test_size=test_size, random_state=random_state, stratify=stratify_param  # Split args
         )  # End split
 
-        start_scaling = time.perf_counter()  # Start high-resolution scaling timer
-        scaler = StandardScaler()  # Create scaler instance
-        X_train = scaler.fit_transform(X_train_df)  # Fit scaler and transform train
-        X_test = scaler.transform(X_test_df)  # Transform test data with fitted scaler
-        scaling_time = round(time.perf_counter() - start_scaling, 6)  # End scaling timer and round to 6 decimals
-        try:  # Safely attach scaling time to scaler instance using setattr to avoid static attribute-access diagnostics
-            setattr(scaler, "_scaling_time", scaling_time)  # Store scaling time as dynamic attribute on scaler
-        except Exception:  # Preserve prior silent-failure behavior if attribute cannot be set
-            pass  # No-op on failure
+        scaler = None
+        scaling_time = 0.0
+        if scale_data:
+            start_scaling = time.perf_counter()  # Start high-resolution scaling timer
+            scaler = StandardScaler()  # Create scaler instance
+            X_train = scaler.fit_transform(X_train_df)  # Fit scaler and transform train
+            X_test = scaler.transform(X_test_df)  # Transform test data with fitted scaler
+            scaling_time = round(time.perf_counter() - start_scaling, 6)  # End scaling timer and round to 6 decimals
+            try:  # Safely attach scaling time to scaler instance using setattr to avoid static attribute-access diagnostics
+                setattr(scaler, "_scaling_time", scaling_time)  # Store scaling time as dynamic attribute on scaler
+            except Exception:  # Preserve prior silent-failure behavior if attribute cannot be set
+                pass  # No-op on failure
+        else:
+            X_train = X_train_df.values if hasattr(X_train_df, "values") else np.asarray(X_train_df)
+            X_test = X_test_df.values if hasattr(X_test_df, "values") else np.asarray(X_test_df)
 
-        return X_train, X_test, y_train, y_test, scaler  # Return the split data and scaler
+        return X_train, X_test, y_train, y_test, scaler  # Return the split data and optional scaler
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
 
 
-def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_folds=10, workers=1, scaling_time=0.0):
+def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_folds=10, workers=1, scaling_time=0.0, random_state=42):
     """
     Applies PCA transformation and evaluates performance using 10-fold Stratified Cross-Validation
 
@@ -404,7 +463,10 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
             )  # End raise
 
         send_telegram_message(TELEGRAM_BOT, f"Starting PCA training for n_components={n_components}")  # Notify
-        pca = PCA(n_components=n_components, random_state=42)  # Initialize PCA
+
+        if random_state is None:
+            random_state = 42
+        pca = PCA(n_components=n_components, random_state=random_state)  # Initialize PCA
 
         start_pca = time.perf_counter()  # Start PCA timer (feature extraction part)
         X_train_pca = pca.fit_transform(X_train)  # Fit PCA on training data and transform
@@ -416,10 +478,10 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
 
         rf_n_jobs = -1 if workers == 1 else 1  # Set n_jobs for RandomForest based on workers
         model = RandomForestClassifier(  # Initialize Random Forest model
-            n_estimators=100, random_state=42, n_jobs=rf_n_jobs
+            n_estimators=100, random_state=random_state, n_jobs=rf_n_jobs
         )  # End model init
 
-        skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)  # Stratified K-Fold cross-validator
+        skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)  # Stratified K-Fold cross-validator
 
         cv_accs, cv_precs, cv_recs, cv_f1s = [], [], [], []  # Lists to store CV metrics
         total_training_time = 0.0  # Accumulator for all model.fit durations
@@ -908,7 +970,7 @@ def save_pca_results(csv_path, all_results):
         raise
 
 
-def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=True, max_workers=None):
+def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=True, max_workers=None, random_state=42, scale_data=True, remove_zero_variance=True):
     """
     Runs PCA analysis with different numbers of components and evaluates performance.
 
@@ -938,7 +1000,7 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
         if df is None:  # If dataset loading failed
             return {}  # Return empty dictionary
 
-        cleaned_df = preprocess_dataframe(df)  # Preprocess the DataFrame
+        cleaned_df = preprocess_dataframe(df, remove_zero_variance=remove_zero_variance)  # Preprocess the DataFrame
 
         X = cleaned_df.select_dtypes(include=["number"]).iloc[:, :-1]  # Select numeric features (all columns except last)
         y = cleaned_df.iloc[:, -1]  # Select target variable (last column)
@@ -963,7 +1025,9 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
         print(f"  {BackgroundColors.GREEN}• Model: {BackgroundColors.CYAN}Random Forest (100 estimators){Style.RESET_ALL}")
         print(f"  {BackgroundColors.GREEN}• Split: {BackgroundColors.CYAN}80/20 (train/test){Style.RESET_ALL}\\n")
 
-        X_train, X_test, y_train, y_test, scaler = scale_and_split(X, y)  # Scale and split the data
+        X_train, X_test, y_train, y_test, scaler = scale_and_split(
+            X, y, random_state=random_state, scale_data=scale_data
+        )  # Scale and split the data
 
         all_results = []  # List to store all results
 
@@ -985,7 +1049,15 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
                     for n_components in n_components_list:  # Loop over each number of components
                         scaling_time_val = getattr(scaler, "_scaling_time", 0.0)  # Retrieve scaling_time attached to scaler
                         fut = executor.submit(
-                            apply_pca_and_evaluate, X_train, y_train, X_test, y_test, n_components, workers=workers, scaling_time=scaling_time_val
+                            apply_pca_and_evaluate,
+                            X_train,
+                            y_train,
+                            X_test,
+                            y_test,
+                            n_components,
+                            workers=workers,
+                            scaling_time=scaling_time_val,
+                            random_state=random_state,
                         )  # Submit task to the executor with scaling_time
                         future_to_ncomp[fut] = n_components  # Map future to n_components
 
@@ -1033,7 +1105,14 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
                 comp_start = time.perf_counter()  # Start high-resolution timer for this component config
                 scaling_time_val = getattr(scaler, "_scaling_time", 0.0)  # Retrieve scaling_time attached to scaler
                 results = apply_pca_and_evaluate(
-                    X_train, y_train, X_test, y_test, n_components, workers=1, scaling_time=scaling_time_val
+                    X_train,
+                    y_train,
+                    X_test,
+                    y_test,
+                    n_components,
+                    workers=1,
+                    scaling_time=scaling_time_val,
+                    random_state=random_state,
                 )  # Apply PCA and evaluate (single worker)
                 comp_elapsed = time.perf_counter() - comp_start  # Compute elapsed duration
                 send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} with CV F1: {truncate_value(results['cv_f1_score'])} in {calculate_execution_time(comp_start, time.perf_counter())}")
@@ -1195,18 +1274,74 @@ def main():
     try:
         global VERBOSE, SKIP_TRAIN_IF_MODEL_EXISTS, CSV_FILE
         parser = argparse.ArgumentParser(description="PCA Feature Extraction & Evaluation Tool")
+        parser.add_argument("--config", type=str, default=None, help="Path to config.yaml (overrides auto-detection)")
         parser.add_argument("--csv_file", type=str, default=CSV_FILE, help="Path to the CSV dataset file")
         parser.add_argument("--skip_train_if_model_exists", action="store_true", help="Skip training if exported model exists")
         parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-        parser.add_argument("--n_components_list", type=str, default="8,16,32,64", help="Comma-separated list of PCA component counts to test")
-        parser.add_argument("--max_workers", type=int, default=-1, help="Number of parallel workers (default: -1)")
+        default_components_str = "8,16,32,64"
+        parser.add_argument("--n_components_list", type=str, default=default_components_str, help="Comma-separated list of PCA component counts to test")
+        parser.add_argument("--n_components", type=int, default=None, help="Single number of PCA components to test (overrides n_components_list)")
+        parser.add_argument("--random_state", type=int, default=None, help="Random seed for reproducibility (overrides config)")
+        parser.add_argument("--scale_data", dest="scale_data", action="store_true", default=None, help="Enable scaling (overrides config)")
+        parser.add_argument("--no-scale_data", dest="scale_data", action="store_false", help="Disable scaling (overrides config)")
+        parser.add_argument("--remove_zero_variance", dest="remove_zero_variance", action="store_true", default=None, help="Remove zero-variance features (overrides config)")
+        parser.add_argument("--no-remove_zero_variance", dest="remove_zero_variance", action="store_false", help="Do not remove zero-variance features (overrides config)")
+        parser.add_argument("--max_workers", type=int, default=None, help="Number of parallel workers (default: from config or auto)")
         args = parser.parse_args()
 
-        VERBOSE = args.verbose
+        cfg = get_config(args.config)
+
+        VERBOSE = args.verbose or cfg.get("execution", {}).get("verbose", False)
         SKIP_TRAIN_IF_MODEL_EXISTS = args.skip_train_if_model_exists
         CSV_FILE = args.csv_file
-        n_components_list = [int(x) for x in args.n_components_list.split(",") if x.strip().isdigit()]
-        max_workers = args.max_workers
+
+        if args.n_components is not None:
+            n_components_list = [int(args.n_components)]
+            print(f"Using n_components from CLI (--n_components): {n_components_list}")
+            source_ncomp = "cli"
+        elif args.n_components_list != default_components_str:
+            n_components_list = [int(x) for x in args.n_components_list.split(",") if x.strip().isdigit()]
+            print(f"Using n_components_list from CLI (--n_components_list): {n_components_list}")
+            source_ncomp = "cli"
+        else:
+            cfg_n = cfg.get("pca", {}).get("n_components_list")
+            if cfg_n:
+                n_components_list = cfg_n
+                print(f"Using n_components_list from config.yaml: {n_components_list}")
+                source_ncomp = "config"
+            else:
+                n_components_list = cfg.get("pca", {}).get("n_components_list", [8, 16, 32, 64])
+                print(f"Using default n_components_list: {n_components_list}")
+                source_ncomp = "default"
+
+        if args.random_state is not None:
+            random_state = int(args.random_state)
+            print(f"Using random_state from CLI: {random_state}")
+            source_rs = "cli"
+        else:
+            random_state = cfg.get("pca", {}).get("random_state", 42)
+            source_rs = "config" if "random_state" in cfg.get("pca", {}) else "default"
+            print(f"Using random_state from {source_rs}: {random_state}")
+
+        if args.scale_data is not None:
+            scale_data = bool(args.scale_data)
+            print(f"Using scale_data from CLI: {scale_data}")
+            source_scale = "cli"
+        else:
+            scale_data = cfg.get("pca", {}).get("scale_data", True)
+            print(f"Using scale_data from config/default: {scale_data}")
+            source_scale = "config/default"
+
+        if args.remove_zero_variance is not None:
+            remove_zero_variance = bool(args.remove_zero_variance)
+            print(f"Using remove_zero_variance from CLI: {remove_zero_variance}")
+            source_rzv = "cli"
+        else:
+            remove_zero_variance = cfg.get("pca", {}).get("remove_zero_variance", True)
+            print(f"Using remove_zero_variance from config/default: {remove_zero_variance}")
+            source_rzv = "config/default"
+
+        max_workers = args.max_workers if args.max_workers is not None else None
 
         print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}PCA Feature Extraction{BackgroundColors.GREEN} program!{Style.RESET_ALL}")
         start_time = datetime.datetime.now()  # Get the start time of the program
@@ -1215,7 +1350,14 @@ def main():
         
         send_telegram_message(TELEGRAM_BOT, [f"Starting PCA Feature Extraction on {CSV_FILE} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])
 
-        run_pca_analysis(CSV_FILE, n_components_list, max_workers=max_workers)  # Run the PCA analysis
+        run_pca_analysis(
+            CSV_FILE,
+            n_components_list,
+            max_workers=max_workers,
+            random_state=random_state,
+            scale_data=scale_data,
+            remove_zero_variance=remove_zero_variance,
+        )  # Run the PCA analysis
 
         finish_time = datetime.datetime.now()  # Get the finish time of the program
         print(
