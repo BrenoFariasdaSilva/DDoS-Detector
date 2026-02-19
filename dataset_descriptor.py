@@ -1508,6 +1508,58 @@ def save_preprocessing_summary_csv(df, base_dir, filename="preprocessing_summary
         raise  # Re-raise to preserve original failure semantics
 
 
+def print_preprocessing_summary_table(df):
+    """
+    Print a formatted table of the preprocessing summary DataFrame to the terminal.
+
+    :param df: DataFrame in the exact schema produced by `build_preprocessing_summary_dataframe`
+    :return: None
+    """
+
+    try:  # Wrap printing to preserve module error handling conventions
+        if df is None or df.empty:  # If DataFrame is empty or None
+            print(f"{BackgroundColors.YELLOW}No preprocessing summary to display.{Style.RESET_ALL}")  # Inform the user
+            return  # Nothing to print
+
+        cols = [
+            "filename",
+            "original_num_rows",
+            "rows_after_preprocessing",
+            "removed_rows",
+            "removed_rows_proportion",
+            "original_num_features",
+            "features_after_preprocessing",
+            "removed_features",
+            "removed_features_proportion",
+        ]  # Column order for printing
+
+        col_widths = {}  # Prepare dict to hold widths
+        for c in cols:  # For each column compute width
+            header_w = len(c)  # Header width
+            max_data_w = max([len(str(x)) for x in df[c].fillna("")]) if c in df.columns and not df[c].isnull().all() else 0  # Max width of data
+            col_widths[c] = max(header_w, max_data_w)  # Choose the max
+
+        header_parts = []  # Parts for header
+        for c in cols:  # For each column append formatted header
+            header_parts.append(c.ljust(col_widths[c]))  # Left-justify header text
+        header_line = " | ".join(header_parts)  # Join header parts with separators
+        sep_line = "-" * len(header_line)  # Separator line of matching length
+
+        print(header_line)  # Print header
+        print(sep_line)  # Print separator
+
+        for _, row in df.iterrows():  # Iterate DataFrame rows
+            parts = []  # Parts for this row
+            for c in cols:  # For each column format the cell
+                val = row.get(c, "")  # Get value with fallback
+                parts.append(str(val).ljust(col_widths[c]))  # Left-justify cell text
+            print(" | ".join(parts))  # Print joined row
+    except Exception as e:  # Preserve exception handling
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME):
     """
     Generates a CSV report for the specified input path.
