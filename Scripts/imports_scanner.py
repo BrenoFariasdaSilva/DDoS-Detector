@@ -198,6 +198,27 @@ def collect_python_files():
     return files  # Return the list of collected Python files
 
 
+def build_relative_files_list_string(files):
+    """
+    Build a project-root-relative, alphabetically-sorted, comma-separated
+    single-line representation of collected Python files.
+
+    :param files: Iterable of pathlib.Path objects to format
+    :return: A single-line string with comma-separated relative paths
+    """
+
+    project_root = Path(__file__).resolve().parent.parent  # Project root directory
+    rel_paths = []  # Prepare list of relative path strings
+    for fp in files:  # Iterate over provided file paths
+        try:  # Try to compute a path relative to the project root
+            rel = fp.relative_to(project_root)  # Relative path from project root
+        except Exception:  # If relative conversion fails, fall back to the original path
+            rel = fp  # Use absolute/path fallback
+        rel_paths.append(str(rel))  # Append the stringified path to the list
+    rel_paths.sort(key=lambda s: s.lower())  # Sort case-insensitively for deterministic output
+    return ", ".join(rel_paths)  # Return the joined single-line string
+
+
 def get_all_libraries():
     """
     Scan collected Python files and return the set of unique top-level libraries.
