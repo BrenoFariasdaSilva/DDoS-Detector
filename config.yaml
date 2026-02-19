@@ -372,8 +372,10 @@ wgangp:
     - latent_dim
     - critic_loss
     - generator_loss
+    - hardware
     - training_time_s
     - testing_time_s
+  hardware_tracking: true
 
 training:
   epochs: 60                          # Number of training epochs
