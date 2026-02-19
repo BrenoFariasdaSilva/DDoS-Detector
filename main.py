@@ -935,12 +935,8 @@ def save_results(report, metrics_df, results_dir, index, model_name, feat_extrac
             f"{results_dir}/{index:02d}-{model_name_clean}{feat_extraction_method}"  # Base filename for saving results
         )
 
-        pd.DataFrame(report).transpose().to_csv(
-            f"{filename_base}-Classification_report.csv", float_format="%.4f", index_label="Class"
-        )  # Save classification report
-        metrics_df.to_csv(
-            f"{filename_base}-Extended_metrics.csv", index=False, float_format="%.2f"
-        )  # Save extended confusion matrix
+        generate_csv_and_image(pd.DataFrame(report).transpose(), f"{filename_base}-Classification_report.csv", is_visualizable=True, float_format="%.4f", index_label="Class")  # Save classification report and generate PNG
+        generate_csv_and_image(metrics_df, f"{filename_base}-Extended_metrics.csv", is_visualizable=True, index=False, float_format="%.2f")  # Save extended confusion matrix and generate PNG
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -1069,7 +1065,7 @@ def generate_overall_performance_summary(all_model_scores, output_path=".", feat
         output_file = os.path.join(
             output_path, f"Overall_Performance{feat_extraction_method}.csv"
         )  # Define the output file path with feature suffix
-        output_df.to_csv(output_file, index=False)  # Save the DataFrame to CSV without including the index
+        generate_csv_and_image(output_df, output_file, is_visualizable=True, index=False)  # Save the DataFrame to CSV and generate PNG image
 
         verbose_output(
             true_string=f"{BackgroundColors.GREEN}Overall performance summary saved to: {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}"
@@ -1142,7 +1138,7 @@ def generate_feature_selection_comparison(
         output_file = os.path.join(
             output_path, f"{feat_extraction_method}-Feature_Selection_Comparison.csv"
         )  # Define output file path
-        comparison_df.to_csv(output_file, index=False)  # Save comparison DataFrame to CSV
+        generate_csv_and_image(comparison_df, output_file, is_visualizable=True, index=False)  # Save comparison DataFrame to CSV and generate PNG image
 
         print(
             f"{BackgroundColors.GREEN}Feature selection comparison saved to: {BackgroundColors.CYAN}{output_file}{Style.RESET_ALL}"
@@ -1333,9 +1329,7 @@ def explain_predictions_with_tree_shap(model, X_train, X_test, feature_names, mo
             shap_df = pd.DataFrame(
                 {"feature": feature_names, "shap_value": shap_val.flatten(), "feature_value": feat_val}
             )  # Create a DataFrame for SHAP values
-            shap_df.to_csv(
-                f"{model_name}_tree_shap_instance_{i+1}.csv", index=False, float_format="%.2f"
-            )  # Save SHAP values to CSV
+            generate_csv_and_image(shap_df, f"{model_name}_tree_shap_instance_{i+1}.csv", is_visualizable=True, index=False, float_format="%.2f")  # Save SHAP values to CSV and generate PNG image
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -1376,7 +1370,7 @@ def explain_predictions_with_shap(model, X_train, X_test, feature_names):
                 {"feature": feature_names, "shap_value": shap_val, "feature_value": feat_val}
             )  # Create a DataFrame for SHAP values
 
-            shap_df.to_csv(f"shap_values_instance_{i+1}.csv", index=False)  # Save SHAP values to CSV
+            generate_csv_and_image(shap_df, f"shap_values_instance_{i+1}.csv", is_visualizable=True, index=False)  # Save SHAP values to CSV and generate PNG image
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -1416,9 +1410,7 @@ def explain_predictions_with_lime(model, X_train, X_test, feature_names, model_n
                 num_features=len(feature_names),  # Number of features to include in the explanation
             )
             lime_df = pd.DataFrame(exp.as_list(), columns=["feature", "weight"])  # Create a DataFrame for LIME explanation
-            lime_df.to_csv(
-                f"{model_name}_lime_instance_{i+1}.csv", index=False, float_format="%.2f"
-            )  # Save LIME explanation to CSV
+            generate_csv_and_image(lime_df, f"{model_name}_lime_instance_{i+1}.csv", is_visualizable=True, index=False, float_format="%.2f")  # Save LIME explanation to CSV and generate PNG image
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
