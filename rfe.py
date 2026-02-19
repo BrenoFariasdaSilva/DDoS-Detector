@@ -839,6 +839,29 @@ def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str
         raise  # Propagate any exception (no silent failures)
 
 
+def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visualizable: bool = True):
+    """
+    Save DataFrame to CSV and optionally generate a corresponding zebra-striped PNG image.
+
+    :param df: DataFrame to save
+    :param csv_path: Destination CSV path
+    :param is_visualizable: Whether to generate PNG image alongside CSV
+    :raises: Propagates IO and export errors (no silent failures)
+    """
+    try:
+        csv_p = Path(csv_path)  # Normalize csv_path to Path
+        parent = csv_p.parent  # Directory for CSV
+        parent.mkdir(parents=True, exist_ok=True)  # Ensure parent directory exists
+        if not os.access(str(parent), os.W_OK):  # Verify write permission on parent
+            raise PermissionError(f"Directory not writable: {parent}")  # Raise when not writable
+        df.to_csv(str(csv_p), index=False, encoding="utf-8", quoting=csv.QUOTE_ALL)  # Persist DataFrame to CSV preserving column order and content
+        if is_visualizable:  # Only generate image when flagged as visualizable
+            png_path = csv_p.with_suffix('.png')  # Construct PNG path by replacing extension
+            generate_table_image_from_dataframe(df, png_path)  # Generate PNG from in-memory DataFrame
+    except Exception:
+        raise  # Propagate exceptions to caller
+
+
 def save_rfe_results(csv_path, run_results):
     """
     Saves results from RFE run to a structured CSV file.
