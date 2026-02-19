@@ -1322,6 +1322,8 @@ def train(args, config: Optional[Dict] = None):
         device = torch.device(
             "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
         )  # Select device for training
+        training_start_time = time.time()  # Record training session start timestamp
+        file_start_time = training_start_time  # Record this file processing start timestamp
         set_seed(args.seed)  # Set random seed for reproducibility
 
         send_telegram_message(TELEGRAM_BOT, f"Starting WGAN-GP training on {Path(args.csv_path).name} for {args.epochs} epochs")
@@ -1521,6 +1523,7 @@ def train(args, config: Optional[Dict] = None):
             next_notify += progress_pct  # Skip thresholds already passed when resuming
 
         for epoch in range(start_epoch, args.epochs):  # Loop over epochs starting from resume point
+            epoch_start_time = time.time()  # Record epoch start timestamp
             pbar = tqdm(
                 dataloader, 
                 desc=f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL}", 
@@ -1597,6 +1600,13 @@ def train(args, config: Optional[Dict] = None):
                     metrics_history["wasserstein"].append(wasserstein_dist)  # Record Wasserstein distance
                 step += 1  # Increment global step counter
 
+            try:  # Safely compute and print epoch elapsed time without interrupting training
+                epoch_elapsed = time.time() - epoch_start_time  # Calculate epoch elapsed seconds
+                print(f"{BackgroundColors.GREEN}Epoch {epoch+1} elapsed: {BackgroundColors.CYAN}{epoch_elapsed:.2f}s{Style.RESET_ALL}")  # Print epoch elapsed time
+                args._last_epoch_time = float(epoch_elapsed)  # Store last epoch elapsed on args for external use
+            except Exception as _te:  # If timing calculation fails
+                print(f"{BackgroundColors.YELLOW}Warning: failed to measure epoch time: {_te}{Style.RESET_ALL}")  # Warn but continue
+
             if (epoch + 1) % args.save_every == 0 or epoch == args.epochs - 1:  # Save checkpoints periodically
                 if args.csv_path:  # If CSV path is provided
                     csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
@@ -1629,17 +1639,25 @@ def train(args, config: Optional[Dict] = None):
                 if scaler is not None:  # If using AMP
                     g_checkpoint["scaler_state"] = scaler.state_dict()  # Save scaler state
                 
-                torch.save(g_checkpoint, str(g_path))  # Save generator checkpoint to disk
-                
-                d_checkpoint = {
+                try:  # Time model saving to measure save phase duration
+                    model_save_start_time = time.time()  # Record model save start timestamp
+                    torch.save(g_checkpoint, str(g_path))  # Save generator checkpoint to disk
+                    
+                    d_checkpoint = {
                     "epoch": epoch + 1,  # Save current epoch number
                     "state_dict": cast(Any, D).state_dict(),  # Save discriminator state dict
                     "opt_D_state": cast(Any, opt_D).state_dict(),  # Save discriminator optimizer state
                     "args": vars(args),  # Save training arguments
                 }
-                torch.save(d_checkpoint, str(d_path))  # Save discriminator checkpoint to disk
-                latest_path = checkpoint_dir / f"{checkpoint_prefix}_generator_latest.pt"  # Path for latest generator
-                torch.save(cast(Any, G).state_dict(), str(latest_path))  # Save latest generator weights
+                    torch.save(d_checkpoint, str(d_path))  # Save discriminator checkpoint to disk
+                    latest_path = checkpoint_dir / f"{checkpoint_prefix}_generator_latest.pt"  # Path for latest generator
+                    torch.save(cast(Any, G).state_dict(), str(latest_path))  # Save latest generator weights
+                    model_save_elapsed = time.time() - model_save_start_time  # Compute model save elapsed seconds
+                    args._last_model_save_time = float(model_save_elapsed)  # Store last model save elapsed on args
+                    print(f"{BackgroundColors.GREEN}Model save elapsed: {BackgroundColors.CYAN}{model_save_elapsed:.2f}s{Style.RESET_ALL}")  # Print model save elapsed
+                except Exception as _ms:  # If saving failed, warn but continue
+                    print(f"{BackgroundColors.YELLOW}Warning: model save failed: {_ms}{Style.RESET_ALL}")  # Warn about save failure
+                    args._last_model_save_time = ""  # Ensure attribute exists even on failure
                 
                 metrics_path = checkpoint_dir / f"{checkpoint_prefix}_metrics_history.json"  # Path for metrics JSON
                 with open(metrics_path, "w") as f:  # Open file for writing
@@ -1661,7 +1679,17 @@ def train(args, config: Optional[Dict] = None):
             except Exception as _err:  # Catch any notification errors and continue training
                 pass  # Intentionally ignore notification failures to not interrupt training
         
-        print(f"{BackgroundColors.GREEN}Training finished!{Style.RESET_ALL}")  # Print training completion message
+        try:  # Safely compute total training and file elapsed times
+            training_elapsed = time.time() - training_start_time  # Calculate total training elapsed seconds
+            args._last_training_time = float(training_elapsed)  # Store total training elapsed on args for downstream use
+            file_elapsed = time.time() - file_start_time  # Calculate file processing elapsed seconds
+            args._last_file_time = float(file_elapsed)  # Store file elapsed on args for downstream use
+            print(f"{BackgroundColors.GREEN}Training finished! Total training elapsed: {BackgroundColors.CYAN}{training_elapsed:.2f}s{Style.RESET_ALL}")  # Print total training elapsed message
+            print(f"{BackgroundColors.GREEN}File processing elapsed: {BackgroundColors.CYAN}{file_elapsed:.2f}s{Style.RESET_ALL}")  # Print per-file elapsed message
+        except Exception as _tt:  # If timing calculation fails, warn but do not interrupt
+            print(f"{BackgroundColors.YELLOW}Warning: failed to compute final training/file elapsed times: {_tt}{Style.RESET_ALL}")  # Warn on failure
+            args._last_training_time = ""  # Ensure attribute exists even on failure
+            args._last_file_time = ""  # Ensure attribute exists even on failure
         
         if len(metrics_history["steps"]) > 0:  # If metrics were collected
             print(f"{BackgroundColors.GREEN}Generating training metrics plots...{Style.RESET_ALL}")  # Print plotting message
@@ -1819,6 +1847,7 @@ def generate(args, config: Optional[Dict] = None):
                 pass  # Ignore Telegram send errors and continue generation
         all_fake = []  # List to store generated feature batches
         all_labels = []  # List to store corresponding labels
+        sample_generation_start_time = time.time()  # Record sample generation start timestamp
         with torch.no_grad():  # Disable gradient computation for generation
             for i in range(0, n, batch_size):  # Loop over batches for generation
                 b = min(batch_size, n - i)  # Calculate current batch size
@@ -1837,6 +1866,14 @@ def generate(args, config: Optional[Dict] = None):
         df[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
         df.to_csv(args.out_file, index=False)  # Save generated data to CSV file
         print(f"{BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} generated samples to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message
+
+        try:  # Safely compute and print sample generation elapsed time
+            sample_generation_elapsed = time.time() - sample_generation_start_time  # Calculate sample generation elapsed seconds
+            args._last_sample_generation_time = float(sample_generation_elapsed)  # Store sample generation elapsed on args for downstream use
+            print(f"{BackgroundColors.GREEN}Sample generation elapsed: {BackgroundColors.CYAN}{sample_generation_elapsed:.2f}s{Style.RESET_ALL}")  # Print sample generation elapsed
+        except Exception as _sg:  # If timing calculation fails
+            print(f"{BackgroundColors.YELLOW}Warning: failed to measure sample generation time: {_sg}{Style.RESET_ALL}")  # Warn but continue
+            args._last_sample_generation_time = ""  # Ensure attribute exists even on failure
 
         send_telegram_message(TELEGRAM_BOT, f"Finished WGAN-GP generation, saved {n} samples to {Path(args.out_file).name}")
         
@@ -1871,7 +1908,14 @@ def generate(args, config: Optional[Dict] = None):
                 except Exception:
                     generated_ratio = ""  # Leave blank on failure
 
-                training_time_val = getattr(args, "_last_training_time", "")  # Training time stored on args if available
+                timing_values = {  # Map common column names to stored timing attributes
+                    "training_time_s": getattr(args, "_last_training_time", ""),  # Total training elapsed seconds
+                    "file_time_s": getattr(args, "_last_file_time", ""),  # Per-file processing elapsed seconds
+                    "epoch_time_s": getattr(args, "_last_epoch_time", ""),  # Last epoch elapsed seconds
+                    "sample_generation_time_s": getattr(args, "_last_sample_generation_time", ""),  # Sample generation elapsed seconds
+                    "model_save_time_s": getattr(args, "_last_model_save_time", ""),  # Model save phase elapsed seconds
+                }  # End timing values map
+                training_time_val = timing_values.get("training_time_s", "")  # Pull training time in case caller expects that key
                 testing_time_val = ""  # No testing time available by default
 
                 # Extract last known critic/generator losses from checkpoint metrics if present
@@ -1890,29 +1934,34 @@ def generate(args, config: Optional[Dict] = None):
                     critic_loss_val = ""  # Ignore failures and leave blank
                     generator_loss_val = ""  # Ignore failures and leave blank
 
-                # Build row values in exact order defined by config
                 row = []  # Row list to append
                 for col in results_cols_cfg:  # For each configured column name
-                    if col == "original_file":  # Map known column names
+                    # Prefer dynamic timing values when the configured column matches a timing key
+                    if col in timing_values:  # If this configured column is a timing metric
+                        row.append(timing_values.get(col, ""))  # Append the timing value (could be blank)
+                        continue  # Move to next column
+                    if col == "original_file":  # Known metadata: original file name
                         row.append(original_file_name)  # Append original file name
-                    elif col == "generated_file":
+                        continue  # Next
+                    if col == "generated_file":  # Known metadata: generated file name
                         row.append(generated_file_name)  # Append generated file name
-                    elif col == "original_num_samples":
+                        continue  # Next
+                    if col == "original_num_samples":  # Known metadata: original sample count
                         row.append(original_num if original_num is not None else "")  # Append original sample count
-                    elif col == "total_generated_samples":
+                        continue  # Next
+                    if col == "total_generated_samples":  # Known metadata: how many were generated
                         row.append(total_generated)  # Append total generated
-                    elif col == "generated_ratio":
+                        continue  # Next
+                    if col == "generated_ratio":  # Known metadata: ratio generated/original
                         row.append(generated_ratio)  # Append generated ratio
-                    elif col == "critic_loss":
+                        continue  # Next
+                    if col == "critic_loss":  # Known metric: critic loss
                         row.append(critic_loss_val)  # Append critic loss
-                    elif col == "generator_loss":
+                        continue  # Next
+                    if col == "generator_loss":  # Known metric: generator loss
                         row.append(generator_loss_val)  # Append generator loss
-                    elif col == "training_time_s":
-                        row.append(training_time_val)  # Append training time seconds
-                    elif col == "testing_time_s":
-                        row.append(testing_time_val)  # Append testing time (empty by default)
-                    else:
-                        row.append("")  # Unknown columns are left blank to preserve order
+                        continue  # Next
+                    row.append("")  # Unknown columns are left blank to preserve order
 
                 # Append the row to per-directory results CSV, creating file with header if it doesn't exist
                 try:
