@@ -1452,6 +1452,39 @@ def collect_preprocessing_metrics(filepath, original_num_rows, rows_after_prepro
         raise  # Re-raise to preserve original failure semantics
 
 
+def build_preprocessing_summary_dataframe(metrics_list):
+    """
+    Build a DataFrame for preprocessing summary from a list of metrics dicts.
+
+    :param metrics_list: List of dicts produced by `collect_preprocessing_metrics`
+    :return: pandas.DataFrame with fixed column order
+    """
+
+    try:  # Wrap function body for consistency with module style
+        cols = [
+            "filename",
+            "original_num_rows",
+            "rows_after_preprocessing",
+            "removed_rows",
+            "removed_rows_proportion",
+            "original_num_features",
+            "features_after_preprocessing",
+            "removed_features",
+            "removed_features_proportion",
+        ]  # Define exact column order required by spec
+
+        df = pd.DataFrame(metrics_list)  # Create DataFrame from provided metrics list
+        for c in cols:  # Ensure all expected columns exist in DataFrame
+            if c not in df.columns:  # If missing column
+                df[c] = None  # Add column filled with None to preserve schema
+        df = df[cols]  # Reorder columns to the required fixed order
+        return df  # Return the prepared DataFrame
+    except Exception as e:  # Preserve exception handling
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME):
     """
     Generates a CSV report for the specified input path.
