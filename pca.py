@@ -863,7 +863,7 @@ def save_pca_results(csv_path, all_results):
             pass
 
         try:  # Attempt to save the CSV
-            df_out.to_csv(csv_output, index=False)  # Save the DataFrame to CSV
+            generate_csv_and_image(df_out, csv_output, is_visualizable=True)  # Save CSV and generate PNG image
             print(f"{BackgroundColors.GREEN}PCA results saved to {BackgroundColors.CYAN}{csv_output}{Style.RESET_ALL}")
         except Exception as e:  # Handle exceptions during file saving
             print(f"{BackgroundColors.RED}Failed to save PCA CSV: {e}{Style.RESET_ALL}")
