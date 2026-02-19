@@ -850,6 +850,32 @@ def apply_zebra_style(df):
         raise  # Propagate exception without swallowing
 
 
+def export_dataframe_image(styled_df, output_path):
+    """
+    Export a pandas Styler object to a PNG file using dataframe_image.
+
+    :param styled_df: pandas Styler object to export
+    :param output_path: Path to PNG file to write
+    :return: None
+    """
+    import os  # Local import to keep top-level imports minimal
+    from pathlib import Path  # Local import for Path handling
+
+    try:
+        out_path = Path(output_path)  # Create Path object for output
+        parent = out_path.parent  # Get parent directory
+        if not parent.exists():  # Ensure parent exists
+            parent.mkdir(parents=True, exist_ok=True)  # Create parent directories if missing
+
+        if not os.access(str(parent), os.W_OK):  # Check write permission on parent
+            raise PermissionError(f"Directory not writable: {parent}")  # Raise if not writable
+
+        dfi.export(styled_df, str(out_path))  # Use dataframe_image to export styled DataFrame to PNG
+        return  # Return None explicitly
+    except Exception:
+        raise  # Propagate any exception (do not swallow)
+
+
 def save_results(report, metrics_df, results_dir, index, model_name, feat_extraction_method=""):
     """
     Saves the classification report and extended metrics to disk.
