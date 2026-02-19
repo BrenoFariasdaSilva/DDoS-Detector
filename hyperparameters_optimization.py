@@ -90,7 +90,7 @@ from sklearn.svm import SVC  # For Support Vector Machine model
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from thundersvm import SVC as ThunderSVC  # For ThunderSVM classifier (imported in try/except)
 from tqdm import tqdm  # For progress bars
-from typing import Any, cast, Dict  # For type hints
+from typing import Any, cast, Dict, Union  # For type hints
 from xgboost import XGBClassifier  # For XGBoost classifier
 
 try:  # Attempt to import ThunderSVM
@@ -2326,6 +2326,27 @@ def calculate_execution_time(start_time, finish_time=None):
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
+
+
+def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str, Path]):
+    """
+    Generate a zebra-striped PNG table image from an in-memory DataFrame.
+
+    :param df: In-memory DataFrame to render
+    :param output_path: Target PNG path (same directory as CSV)
+    :raises: PermissionError if directory is not writable, or other export errors
+    """
+    try:
+        out_p = Path(output_path)  # Convert to Path for convenience
+        parent = out_p.parent  # Get parent directory
+        if not parent.exists():  # If parent doesn't exist
+            parent.mkdir(parents=True, exist_ok=True)  # Try to create it
+        if not os.access(str(parent), os.W_OK):  # Check parent directory is writable
+            raise PermissionError(f"Directory not writable: {parent}")  # Raise on non-writable directory
+        styled = apply_zebra_style(df)  # Create styled DataFrame with zebra stripes
+        export_dataframe_image(styled, out_p)  # Export styled DataFrame to PNG
+    except Exception:
+        raise  # Propagate any exception (no silent failures)
 
 
 def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visualizable: bool = True):
