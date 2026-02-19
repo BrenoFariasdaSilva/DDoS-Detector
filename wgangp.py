@@ -107,6 +107,9 @@ class BackgroundColors:  # Colors for the terminal
 # Global Configuration Container:
 CONFIG = None  # Will be initialized by load_configuration() - holds all runtime settings
 
+# Results CSV Handles Registry:
+RESULTS_CSV_HANDLES = {}  # Registry mapping results CSV path -> (file_obj, csv_writer) for progressive writes
+
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
 
@@ -1288,6 +1291,37 @@ def autocast(device_type: str, enabled: bool = True):
         raise
 
 
+def open_results_csv(results_csv_path, results_cols_cfg):
+    """
+    Open results CSV in append mode and return (file_obj, writer); write header if absent.
+
+    This function memoizes file handles in RESULTS_CSV_HANDLES to avoid
+    repeated open/close operations and to ensure header is written once.
+
+    :param results_csv_path: Path object to results CSV
+    :param results_cols_cfg: List of column names in desired order
+    :return: (file_obj, csv.writer)
+    """
+    
+    try:
+        key = str(results_csv_path)  # Use string path as registry key
+        if key in RESULTS_CSV_HANDLES:  # If already opened, reuse handle
+            return RESULTS_CSV_HANDLES[key]  # Return cached (file_obj, writer)
+
+        existed = results_csv_path.exists()  # Check whether file exists already
+        os.makedirs(results_csv_path.parent, exist_ok=True)  # Ensure parent dir exists
+        f = open(results_csv_path, "a", newline="", encoding="utf-8")  # Open file in append mode once
+        writer = csv.writer(f)  # Create CSV writer for append operations
+        if not existed:  # If file did not exist previously
+            writer.writerow(results_cols_cfg)  # Write header row in configured order
+            f.flush()  # Flush header to disk immediately
+        RESULTS_CSV_HANDLES[key] = (f, writer)  # Cache file handle and writer for reuse
+        return (f, writer)  # Return created handle and writer
+    except Exception as _e:  # On failure, print warning and return None tuple
+        print(f"{BackgroundColors.YELLOW}Warning: could not open results CSV {results_csv_path}: {_e}{Style.RESET_ALL}")  # Warn about inability to open
+        return (None, None)  # Return sentinel values so callers can continue
+
+
 def train(args, config: Optional[Dict] = None):
     """
     Train the WGAN-GP model using the provided arguments and configuration.
@@ -1353,6 +1387,17 @@ def train(args, config: Optional[Dict] = None):
             persistent_workers=persistent_workers,  # Keep workers alive between epochs
             prefetch_factor=prefetch_factor,  # Prefetch batches for better GPU utilization
         )  # Create dataloader for batching
+
+        results_csv_file = None  # Placeholder for per-dataset open results CSV file object
+        results_csv_writer = None  # Placeholder for per-dataset CSV writer
+        results_cols_cfg = config.get("wgangp", {}).get("results_csv_columns", [])  # Read configured results columns list
+        if getattr(args, "csv_path", None):  # If csv_path provided, prepare persistent results CSV handle
+            try:  # Attempt to open results CSV once with header written if needed
+                csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
+                results_csv_path = csv_path_obj.parent / "data_augmentation_results.csv"  # Determine results CSV path
+                results_csv_file, results_csv_writer = open_results_csv(results_csv_path, results_cols_cfg)  # Open and cache writer
+            except Exception as _rw:  # On failure, warn and continue without persistent csv
+                print(f"{BackgroundColors.YELLOW}Warning: could not initialize results CSV writer: {_rw}{Style.RESET_ALL}")  # Warn and continue
 
         feature_dim = dataset.feature_dim  # Get feature dimensionality from dataset
         n_classes = dataset.n_classes  # Get number of label classes from dataset
@@ -1607,6 +1652,31 @@ def train(args, config: Optional[Dict] = None):
             except Exception as _te:  # If timing calculation fails
                 print(f"{BackgroundColors.YELLOW}Warning: failed to measure epoch time: {_te}{Style.RESET_ALL}")  # Warn but continue
 
+            try:  # Wrap CSV write to avoid crashing on I/O errors
+                if results_csv_writer and results_cols_cfg:  # Only write if we have a valid writer and columns
+                    row_dict = {}  # Build dictionary of values keyed by configured column names
+                    row_dict["original_file"] = Path(args.csv_path).name if getattr(args, "csv_path", None) else ""  # Original file name
+                    row_dict["epoch"] = epoch + 1  # Current epoch number
+                    row_dict["epoch_time_s"] = getattr(args, "_last_epoch_time", "")  # Epoch elapsed seconds
+                    row_dict["training_time_s"] = getattr(args, "_last_training_time", "")  # Total training elapsed seconds
+                    row_dict["file_time_s"] = getattr(args, "_last_file_time", "")  # File processing elapsed seconds
+                    # Fill recognized metric placeholders safely
+                    row_dict["loss_D"] = metrics_history.get("loss_D", [])[-1] if metrics_history.get("loss_D") else ""  # Last discriminator loss
+                    row_dict["loss_G"] = metrics_history.get("loss_G", [])[-1] if metrics_history.get("loss_G") else ""  # Last generator loss
+                    # Compose ordered row following config order and write+flush immediately
+                    ordered = [row_dict.get(c, "") for c in results_cols_cfg]  # Create ordered list matching schema
+                    results_csv_writer.writerow(ordered)  # Write row in configured column order
+                    try:  # Flush to disk right away to persist progressively
+                        if results_csv_file is not None:  # Only call flush when file handle exists
+                            try:  # Guard flush call to avoid raising
+                                results_csv_file.flush()  # Flush OS buffer for safety
+                            except Exception:
+                                pass  # Ignore flush errors
+                    except Exception:
+                        pass  # Ignore outer errors as well
+            except Exception as _cw:  # If writing fails, warn and continue training
+                print(f"{BackgroundColors.YELLOW}Warning: failed to write epoch row to results CSV: {_cw}{Style.RESET_ALL}")  # Warn but do not abort
+
             if (epoch + 1) % args.save_every == 0 or epoch == args.epochs - 1:  # Save checkpoints periodically
                 if args.csv_path:  # If CSV path is provided
                     csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
@@ -1690,6 +1760,26 @@ def train(args, config: Optional[Dict] = None):
             print(f"{BackgroundColors.YELLOW}Warning: failed to compute final training/file elapsed times: {_tt}{Style.RESET_ALL}")  # Warn on failure
             args._last_training_time = ""  # Ensure attribute exists even on failure
             args._last_file_time = ""  # Ensure attribute exists even on failure
+
+        try:  # Wrap writes to avoid crashing on I/O errors
+            if results_csv_writer and results_cols_cfg:  # Only write if writer and schema are available
+                final_row = {}  # Dictionary to collect final values for configured columns
+                final_row["original_file"] = Path(args.csv_path).name if getattr(args, "csv_path", None) else ""  # Original filename
+                final_row["total_generated_samples"] = ""  # Placeholder, generation may fill this later
+                final_row["training_time_s"] = getattr(args, "_last_training_time", "")  # Total training elapsed
+                final_row["file_time_s"] = getattr(args, "_last_file_time", "")  # Per-file processing elapsed
+                ordered_final = [final_row.get(c, "") for c in results_cols_cfg]  # Create ordered list matching schema
+                results_csv_writer.writerow(ordered_final)  # Write final per-file row
+                try:  # Flush buffer to persist row immediately
+                    if results_csv_file is not None:  # Only call flush when file handle exists
+                        try:  # Guard flush call to avoid raising
+                            results_csv_file.flush()  # Flush file buffer to disk
+                        except Exception:
+                            pass  # Ignore flush errors
+                except Exception:
+                    pass  # Ignore outer errors as well
+        except Exception as _fw:  # If writing fails, warn and continue
+            print(f"{BackgroundColors.YELLOW}Warning: failed to write final file row to results CSV: {_fw}{Style.RESET_ALL}")  # Warn about failure
         
         if len(metrics_history["steps"]) > 0:  # If metrics were collected
             print(f"{BackgroundColors.GREEN}Generating training metrics plots...{Style.RESET_ALL}")  # Print plotting message
@@ -1934,46 +2024,28 @@ def generate(args, config: Optional[Dict] = None):
                     critic_loss_val = ""  # Ignore failures and leave blank
                     generator_loss_val = ""  # Ignore failures and leave blank
 
-                row = []  # Row list to append
-                for col in results_cols_cfg:  # For each configured column name
-                    # Prefer dynamic timing values when the configured column matches a timing key
-                    if col in timing_values:  # If this configured column is a timing metric
-                        row.append(timing_values.get(col, ""))  # Append the timing value (could be blank)
-                        continue  # Move to next column
-                    if col == "original_file":  # Known metadata: original file name
-                        row.append(original_file_name)  # Append original file name
-                        continue  # Next
-                    if col == "generated_file":  # Known metadata: generated file name
-                        row.append(generated_file_name)  # Append generated file name
-                        continue  # Next
-                    if col == "original_num_samples":  # Known metadata: original sample count
-                        row.append(original_num if original_num is not None else "")  # Append original sample count
-                        continue  # Next
-                    if col == "total_generated_samples":  # Known metadata: how many were generated
-                        row.append(total_generated)  # Append total generated
-                        continue  # Next
-                    if col == "generated_ratio":  # Known metadata: ratio generated/original
-                        row.append(generated_ratio)  # Append generated ratio
-                        continue  # Next
-                    if col == "critic_loss":  # Known metric: critic loss
-                        row.append(critic_loss_val)  # Append critic loss
-                        continue  # Next
-                    if col == "generator_loss":  # Known metric: generator loss
-                        row.append(generator_loss_val)  # Append generator loss
-                        continue  # Next
-                    row.append("")  # Unknown columns are left blank to preserve order
+                row_dict = {}  # Dictionary to hold values for configured columns
+                row_dict["original_file"] = original_file_name  # Original CSV filename
+                row_dict["generated_file"] = generated_file_name  # Generated output filename
+                row_dict["original_num_samples"] = original_num if original_num is not None else ""  # Original sample count
+                row_dict["total_generated_samples"] = total_generated  # Total generated count
+                row_dict["generated_ratio"] = generated_ratio  # Generated/original ratio
+                row_dict["critic_loss"] = critic_loss_val  # Last critic loss from checkpoint metrics
+                row_dict["generator_loss"] = generator_loss_val  # Last generator loss from checkpoint metrics
+                for k, v in timing_values.items():  # For each timing key known
+                    row_dict[k] = v  # Store timing value under the timing key
 
-                # Append the row to per-directory results CSV, creating file with header if it doesn't exist
-                try:
-                    if not results_csv_path.exists():  # If file somehow doesn't exist, create and write header
-                        with open(results_csv_path, "w", newline="", encoding="utf-8") as _f:  # Open for writing
-                            writer = csv.writer(_f)  # Create CSV writer
-                            writer.writerow(results_cols_cfg)  # Write header in configured order
-                    with open(results_csv_path, "a", newline="", encoding="utf-8") as _f:  # Open file for appending
-                        writer = csv.writer(_f)  # Create CSV writer
-                        writer.writerow(row)  # Append row
-                except Exception as e:
-                    print(f"{BackgroundColors.YELLOW}Warning: failed to write results CSV at {results_csv_path}: {e}{Style.RESET_ALL}")  # Warn but do not fail generation
+                try:  # Wrap open/write in try/except to avoid crashing on I/O issues
+                    f_handle, writer = open_results_csv(results_csv_path, results_cols_cfg)  # Get persistent handle and writer
+                    if f_handle and writer:  # If we successfully opened or reused a writer
+                        ordered = [row_dict.get(c, "") for c in results_cols_cfg]  # Build ordered list following config schema
+                        writer.writerow(ordered)  # Write the ordered row to CSV
+                        try:  # Flush to persist immediately
+                            f_handle.flush()  # Flush file buffer to disk
+                        except Exception:
+                            pass  # Ignore flush errors
+                except Exception as _we:  # On any write/open failure, warn and continue
+                    print(f"{BackgroundColors.YELLOW}Warning: failed to persist generation row: {_we}{Style.RESET_ALL}")  # Warn but do not abort
         except Exception as e:
             print(f"{BackgroundColors.YELLOW}Warning: could not prepare results CSV entry: {e}{Style.RESET_ALL}")  # Warn on top-level failures
     except Exception as e:
@@ -2311,6 +2383,24 @@ def run_wgangp(config: Optional[Union [Dict, str]] = None, **kwargs):
         raise
 
 
+def close_all_results_csv_handles():
+    """
+    Close all opened results CSV file handles at process exit.
+    
+    This function is registered with atexit to ensure that all file handles in RESULTS_CSV_HANDLES are properly closed when the program terminates, preventing resource leaks.
+    
+    :param None
+    :return: None
+    """
+    
+    for key, (f, _) in list(RESULTS_CSV_HANDLES.items()):  # Iterate over cached handles
+        try:
+            if f and not f.closed:  # If file object exists and is open
+                f.close()  # Close the file
+        except Exception:
+            pass  # Ignore close errors
+
+
 def main():
     """
     Main CLI entry point.
@@ -2549,6 +2639,7 @@ def main():
 
         if config.get("sound", {}).get("enabled", True):  # If sound enabled
             atexit.register(lambda: play_sound(config))  # Register the play_sound function to be called when the program finishes
+        atexit.register(close_all_results_csv_handles)  # Ensure handles are closed at program exit
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
