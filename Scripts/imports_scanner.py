@@ -1,50 +1,56 @@
 """
 ================================================================================
-<PROJECT OR SCRIPT TITLE>
+Imports Scanner
 ================================================================================
 Author      : Breno Farias da Silva
-Created     : <YYYY-MM-DD>
+Created     : 2026-02-19
 Description :
-    <Provide a concise and complete overview of what this script does.>
-    <Mention its purpose, scope, and relevance to the larger project.>
+    Scans Python source files in the current directory and under a `Scripts/`
+    subdirectory and extracts top-level imported libraries using the standard
+    library `ast` module. Only top-level module names are collected (for
+    example, `pandas.core.frame` -> `pandas`) and relative imports are ignored.
+    The script prints counts and a sorted unique list of detected libraries and
+    preserves the project's logger redirection, execution timing, and sound
+    behaviors.
 
     Key features include:
-        - <Feature 1 — e.g., automatic data loading and preprocessing>
-        - <Feature 2 — e.g., model training and evaluation>
-        - <Feature 3 — e.g., visualization or report generation>
-        - <Feature 4 — e.g., logging or notification system>
-        - <Feature 5 — e.g., integration with other modules or datasets>
+        - Scans all .py files in the current directory
+        - Recursively scans all .py files under Scripts/
+        - Parses source with `ast` to discover `import` and `from ... import ...`
+        - Collects only top-level module names and ignores relative imports
+        - Skips files with SyntaxError and continues scanning
+        - Prints counts and a sorted unique list of libraries
 
 Usage:
-    1. <Explain any configuration steps before running, such as editing variables or paths.>
-    2. <Describe how to execute the script — typically via Makefile or Python.>
-        $ make <target>   or   $ python <script_name>.py
-    3. <List what outputs are expected or where results are saved.>
+    1. Optionally create a `Scripts/` folder to include additional scripts.
+    2. Run the script with Python:
+        $ python main.py
+    3. Inspect printed output and the log file in `./Logs/`.
 
 Outputs:
-    - <Output file or directory 1 — e.g., results.csv>
-    - <Output file or directory 2 — e.g., Feature_Analysis/plots/>
-    - <Output file or directory 3 — e.g., logs/output.txt>
+    - Printed number of Python files scanned
+    - Printed number of unique libraries detected
+    - Printed sorted list of detected top-level libraries
+    - Log file at `./Logs/main.log`
 
 TODOs:
-    - <Add a task or improvement — e.g., implement CLI argument parsing.>
-    - <Add another improvement — e.g., extend support to Parquet files.>
-    - <Add optimization — e.g., parallelize evaluation loop.>
-    - <Add robustness — e.g., error handling or data validation.>
+    - Add CLI flags to choose scan paths and toggle sound output
+    - Optionally export detected libraries to a requirements-style file
 
 Dependencies:
-    - Python >= <version>
-    - <Library 1 — e.g., pandas>
-    - <Library 2 — e.g., numpy>
-    - <Library 3 — e.g., scikit-learn>
-    - <Library 4 — e.g., matplotlib, seaborn, tqdm, colorama>
+    - Python >= 3.8
+    - ast (stdlib)
+    - os (stdlib)
+    - pathlib (stdlib)
+    - colorama
+    - Logger (project local module)
 
 Assumptions & Notes:
-    - <List any key assumptions — e.g., last column is the target variable.>
-    - <Mention data format — e.g., CSV files only.>
-    - <Mention platform or OS-specific notes — e.g., sound disabled on Windows.>
-    - <Note on output structure or reusability.>
+    - Relative imports (for example `from . import x`) are ignored.
+    - If `Scripts/` does not exist scanning continues silently.
+    - Files with `SyntaxError` are skipped safely and do not abort execution.
 """
+
 
 import atexit  # For playing a sound when the program finishes
 import datetime  # For getting the current date and time
