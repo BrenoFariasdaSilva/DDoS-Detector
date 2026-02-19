@@ -357,6 +357,16 @@ wgangp:
   seed: 42                            # Random seed for reproducibility
   force_cpu: false                    # Force CPU usage even if CUDA available
   from_scratch: false                 # Force training from scratch, ignore checkpoints
+  results_csv_columns:                # Columns for per-directory data augmentation results CSV
+    - original_file
+    - generated_file
+    - original_num_samples
+    - total_generated_samples
+    - generated_ratio
+    - critic_loss
+    - generator_loss
+    - training_time_s
+    - testing_time_s
 
 training:
   epochs: 60                          # Number of training epochs
