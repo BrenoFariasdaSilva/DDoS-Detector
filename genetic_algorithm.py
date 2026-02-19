@@ -3420,7 +3420,7 @@ def generate_run_comparison_table(results_dict, csv_path, dataset_name, min_pop,
             comparison_filename = f"{base_dataset_name}_multi_run_comparison.csv"  # Deterministic filename
             comparison_path = os.path.join(comparison_dir, comparison_filename)  # Full path
 
-            df_comparison.to_csv(comparison_path, index=False)  # Save DataFrame to CSV without index
+            generate_csv_and_image(df_comparison, comparison_path, is_visualizable=True)  # Save CSV and generate PNG image
 
             verbose_output(
                 f"{BackgroundColors.GREEN}Saved multi-run comparison table to {BackgroundColors.CYAN}{comparison_path}{Style.RESET_ALL}"
@@ -4341,7 +4341,7 @@ def write_consolidated_csv(rows, output_dir):
                     except Exception:  # On any error
                         pass  # Ignore errors and continue
 
-                df_out.to_csv(csv_out, index=False, encoding="utf-8")  # Persist the consolidated CSV to disk
+                generate_csv_and_image(df_out, csv_out, is_visualizable=True)  # Persist consolidated CSV and generate PNG image
                 print(
                     f"\n{BackgroundColors.GREEN}Genetic Algorithm consolidated results saved to {BackgroundColors.CYAN}{csv_out}{Style.RESET_ALL}"
                 )  # Notify user of success
@@ -4872,7 +4872,7 @@ def analyze_top_features(df, y, top_features, csv_path="."):
         summary.columns = [f"{col}_{stat}" for col, stat in summary.columns]  # Flatten MultiIndex columns
 
         summary_csv_path = f"{output_dir}/{base_dataset_name}_feature_summary.csv"  # Path to save the summary CSV
-        summary.to_csv(summary_csv_path, encoding="utf-8")  # Save the summary to a CSV file
+        generate_csv_and_image(summary, summary_csv_path, is_visualizable=True)  # Save summary CSV and generate PNG image
         print(
             f"\n{BackgroundColors.GREEN}Features summary saved to {BackgroundColors.CYAN}{summary_csv_path}{Style.RESET_ALL}"
         )  # Notify user
