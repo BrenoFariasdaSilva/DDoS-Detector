@@ -81,6 +81,7 @@ import pickle  # For loading PCA objects
 import platform  # For getting the operating system name
 import psutil  # For checking system RAM
 import re  # For regular expressions
+import seaborn as sns  # For generating feature usage heatmaps
 import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
@@ -1758,6 +1759,73 @@ def generate_csv_and_image(df, csv_path, is_visualizable=True, **to_csv_kwargs):
         return csv_path  # Return CSV path
     except Exception:
         raise  # Propagate exceptions (no silent failures)
+
+
+def aggregate_feature_usage(results_df, top_n=None):
+    """
+    Aggregate feature usage counts from a results DataFrame.
+
+    :param results_df: DataFrame containing at least `features_list` and `model` columns
+    :param top_n: Optional integer for number of top features to return (None => use config)
+    :return: DataFrame indexed by feature with columns per model and a `total` column, limited to top-N features
+    """
+    
+    try:
+        if results_df is None or results_df.empty:  # Validate input presence
+            raise ValueError("results_df is empty or None")  # Signal caller about empty input
+
+        cfg_top_n = CONFIG.get("stacking", {}).get("top_n_features_heatmap", 15)  # Read default from config
+        n = top_n if top_n is not None else cfg_top_n  # Determine effective top-N
+        n = int(n)  # Ensure integer type for downstream logic
+
+        counts = {}  # Dictionary to accumulate counts per model per feature
+
+        for _, row in results_df.iterrows():  # Iterate rows to parse feature lists
+            raw = row.get("features_list", None)  # Extract raw features_list value
+            model_name = row.get("model", "AllModels")  # Extract model identifier or fallback
+
+            if pd.isna(raw) or raw is None:  # Skip empty feature lists
+                continue  # Nothing to count for this row
+
+            features = []  # Prepare list of parsed feature names
+
+            if isinstance(raw, str) and raw.strip().startswith("["):  # JSON-array string
+                try:
+                    features = json.loads(raw)  # Parse JSON list into Python list
+                except Exception:
+                    features = [f.strip() for f in raw.strip().strip('[]').split(",") if f.strip()]  # Fallback split
+            elif isinstance(raw, str):
+                features = [f.strip() for f in raw.split(",") if f.strip()]  # Comma-separated string parsing
+            elif isinstance(raw, (list, tuple)):  # Already a list/tuple
+                features = list(raw)  # Normalize to list
+            else:
+                features = [str(raw)]  # Convert unexpected types to single-item list
+
+            for feat in features:  # Count each feature occurrence
+                if feat == "":  # Skip empty strings
+                    continue  # Ignore empty tokens
+                counts.setdefault(feat, {}).setdefault(model_name, 0)  # Ensure nested dict entry exists
+                counts[feat][model_name] += 1  # Increment count for this feature-model pair
+
+        if not counts:  # If still empty after processing
+            return pd.DataFrame()  # Return empty DataFrame to caller
+
+        feature_index = sorted(list(counts.keys()))  # Sorted feature list for deterministic ordering
+        model_names = sorted({m for feat in counts.values() for m in feat.keys()})  # Sorted model list
+
+        matrix = []  # Rows for building DataFrame
+        for feat in feature_index:  # Build each row of counts
+            row_vals = [counts[feat].get(m, 0) for m in model_names]  # Get counts per model with zero fill
+            matrix.append(row_vals)  # Append the row values
+
+        df_counts = pd.DataFrame(matrix, index=feature_index, columns=model_names)  # Build counts DataFrame
+        df_counts["total"] = df_counts.sum(axis=1)  # Compute total occurrences across models
+        df_counts = df_counts.sort_values("total", ascending=False)  # Sort by total descending for top-N selection
+
+        top_n_effective = min(n, len(df_counts))  # Cap top-N to available features
+        return df_counts.head(top_n_effective)  # Return top-N slice
+    except Exception:
+        raise  # Propagate exceptions to caller (no silent failures)
 
 
 def save_augmentation_comparison_results(file_path, comparison_results, config=None):
