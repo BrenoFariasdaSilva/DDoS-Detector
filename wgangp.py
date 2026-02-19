@@ -1404,7 +1404,25 @@ def train(args, config: Optional[Dict] = None):
         file_start_time = training_start_time  # Record this file processing start timestamp
         set_seed(args.seed)  # Set random seed for reproducibility
 
+        gpu_count = torch.cuda.device_count() if (torch.cuda.is_available() and not args.force_cpu) else 0  # Detect number of CUDA devices available
+        use_dataparallel = gpu_count > 1  # Whether to use DataParallel when multiple GPUs present
+        if gpu_count > 0:  # If at least one GPU is available
+            torch.backends.cudnn.benchmark = True  # Enable cuDNN autotuner for potential speedups
+        # Batch-size scaling heuristic: scale by 2x per GPU but cap multiplier to 8x to avoid OOM
+        batch_multiplier = min(8, max(1, 2 * gpu_count)) if gpu_count > 0 else 1  # Compute safe multiplier
+        scaled_batch = int(args.batch_size) * batch_multiplier  # Compute scaled batch size
+        args.batch_size = int(scaled_batch)  # Apply scaled batch size to args
+        # Auto-enable AMP on CUDA if available (safe, falls back on CPU since _torch_autocast may be None)
+        args.use_amp = bool(args.use_amp or (gpu_count > 0 and _torch_autocast is not None))  # Enable AMP when CUDA + autocast available
+        suggested_workers = min(max(1, (os.cpu_count() or 1) // 2), 32)  # Suggest a conservative default for num_workers
         file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Build colored prefix (default single-file)
+        # Print startup hardware and runtime configuration summary for visibility
+        print(f"{BackgroundColors.GREEN}Detected {gpu_count} GPUs.{Style.RESET_ALL}")  # Print GPU count
+        print(f"{BackgroundColors.GREEN}Using DataParallel: {use_dataparallel}{Style.RESET_ALL}")  # Print whether DataParallel will be used
+        print(f"{BackgroundColors.GREEN}Batch size: {BackgroundColors.CYAN}{args.batch_size}{Style.RESET_ALL}")  # Print effective batch size after scaling
+        print(f"{BackgroundColors.GREEN}Suggested num_workers: {BackgroundColors.CYAN}{suggested_workers}{Style.RESET_ALL}")  # Print suggested workers value
+        print(f"{BackgroundColors.GREEN}AMP enabled: {BackgroundColors.CYAN}{args.use_amp}{Style.RESET_ALL}")  # Print AMP usage
+        print(f"{BackgroundColors.GREEN}cuDNN benchmark: {BackgroundColors.CYAN}{torch.backends.cudnn.benchmark}{Style.RESET_ALL}")  # Print cuDNN benchmark status
         send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Starting WGAN-GP training on {Path(args.csv_path).name} for {args.epochs} epochs")  # Telegram start with colored prefix
 
         print(f"{BackgroundColors.GREEN}Device: {BackgroundColors.CYAN}{device.type.upper()}{Style.RESET_ALL}")
@@ -1476,13 +1494,18 @@ def train(args, config: Optional[Dict] = None):
             device
         )  # Initialize discriminator model
 
-        if args.compile:  # If torch.compile() enabled, attempt to compile models for faster execution (requires PyTorch 2.0+ and compatible hardware)
+        if torch.cuda.is_available() and not args.force_cpu and torch.cuda.device_count() > 1:  # Check multi-GPU condition
+            G = torch.nn.DataParallel(G)  # Wrap generator in DataParallel to utilize multiple GPUs
+            D = torch.nn.DataParallel(D)  # Wrap discriminator in DataParallel to utilize multiple GPUs
+            print(f"{BackgroundColors.GREEN}Wrapped models using DataParallel across {torch.cuda.device_count()} GPUs{Style.RESET_ALL}")  # Notify wrapping
+
+        if args.compile and not isinstance(G, torch.nn.DataParallel):  # Only compile when not using DataParallel (compile may not be compatible)
             try:  # Try compiling models, but catch exceptions if torch.compile() is not available or fails
-                G = torch.compile(G, mode="reduce-overhead")  # Compile generator
-                D = torch.compile(D, mode="reduce-overhead")  # Compile discriminator
-                print(f"{BackgroundColors.GREEN}Models compiled successfully{Style.RESET_ALL}")
-            except Exception as e:  # Catch any exception during compilation (e.g., torch.compile not available, unsupported model features, etc.)
-                print(f"{BackgroundColors.YELLOW}torch.compile() not available or failed: {e}{Style.RESET_ALL}")
+                G = torch.compile(G, mode="reduce-overhead")  # Compile generator for performance
+                D = torch.compile(D, mode="reduce-overhead")  # Compile discriminator for performance
+                print(f"{BackgroundColors.GREEN}Models compiled successfully{Style.RESET_ALL}")  # Notify successful compilation
+            except Exception as e:  # Catch any exception during compilation (e.g., torch.compile not available)
+                print(f"{BackgroundColors.YELLOW}torch.compile() not available or failed: {e}{Style.RESET_ALL}")  # Warn but continue
 
         scaler = torch.cuda.amp.GradScaler() if args.use_amp and device.type == "cuda" else None  # Initialize gradient scaler for AMP if enabled and on CUDA
 
@@ -1532,7 +1555,10 @@ def train(args, config: Optional[Dict] = None):
                         try:  # Try to load checkpoint
                             print(f"{BackgroundColors.GREEN}Loading generator checkpoint: {g_checkpoint_path.name}{Style.RESET_ALL}")
                             g_checkpoint = torch.load(g_checkpoint_path, map_location=device, weights_only=False)  # Load generator checkpoint with sklearn objects
-                            cast(Any, G).load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights
+                            if hasattr(cast(Any, G), "module"):  # If model wrapped by DataParallel
+                                cast(Any, G).module.load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights into module
+                            else:  # Not DataParallel
+                                cast(Any, G).load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights
                             start_epoch = g_checkpoint["epoch"]  # Set starting epoch
                             
                             if "opt_G_state" in g_checkpoint:  # If optimizer state saved
@@ -1564,7 +1590,10 @@ def train(args, config: Optional[Dict] = None):
                             if d_checkpoint_path.exists():  # If discriminator checkpoint exists
                                 print(f"{BackgroundColors.GREEN}Loading discriminator checkpoint: {d_checkpoint_path.name}{Style.RESET_ALL}")
                                 d_checkpoint = torch.load(d_checkpoint_path, map_location=device, weights_only=False)  # Load discriminator checkpoint
-                                cast(Any, D).load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights
+                                if hasattr(cast(Any, D), "module"):  # If discriminator wrapped by DataParallel
+                                    cast(Any, D).module.load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights into module
+                                else:  # Not DataParallel
+                                    cast(Any, D).load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights
                                 
                                 if "opt_D_state" in d_checkpoint:  # If optimizer state saved
                                     opt_D.load_state_dict(d_checkpoint["opt_D_state"])  # Restore discriminator optimizer
@@ -1762,7 +1791,7 @@ def train(args, config: Optional[Dict] = None):
                 
                 g_checkpoint = {
                     "epoch": epoch + 1,  # Save current epoch number
-                    "state_dict": cast(Any, G).state_dict(),  # Save generator state dict
+                    "state_dict": (cast(Any, G).module.state_dict() if hasattr(cast(Any, G), "module") else cast(Any, G).state_dict()),  # Save generator state dict (unwrap DataParallel.module if present)
                     "opt_G_state": cast(Any, opt_G).state_dict(),  # Save generator optimizer state
                     "scaler": dataset.scaler,  # Save scaler for inverse transform
                     "label_encoder": dataset.label_encoder,  # Save label encoder for mapping
@@ -1781,7 +1810,7 @@ def train(args, config: Optional[Dict] = None):
                     
                     d_checkpoint = {
                     "epoch": epoch + 1,  # Save current epoch number
-                    "state_dict": cast(Any, D).state_dict(),  # Save discriminator state dict
+                    "state_dict": (cast(Any, D).module.state_dict() if hasattr(cast(Any, D), "module") else cast(Any, D).state_dict()),  # Save discriminator state dict (unwrap DataParallel.module if present)
                     "opt_D_state": cast(Any, opt_D).state_dict(),  # Save discriminator optimizer state
                     "args": vars(args),  # Save training arguments
                 }
@@ -1965,7 +1994,10 @@ def generate(args, config: Optional[Dict] = None):
         ).to(
             device
         )  # Initialize generator model
-        G.load_state_dict(ckpt["state_dict"] if "state_dict" in ckpt else ckpt)  # Load generator weights from checkpoint
+        if hasattr(G, "module"):  # If generator wrapped by DataParallel
+            G.module.load_state_dict(ckpt["state_dict"] if "state_dict" in ckpt else ckpt)  # Load into underlying module
+        else:  # Not DataParallel
+            G.load_state_dict(ckpt["state_dict"] if "state_dict" in ckpt else ckpt)  # Load generator weights from checkpoint
         G.eval()  # Set generator to evaluation mode
 
         small_class_threshold = int(config.get("generation", {}).get("small_class_threshold", 100))  # Get small class threshold and cast to int
