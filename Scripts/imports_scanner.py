@@ -348,7 +348,7 @@ def main():
 
     print(
         f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Imports Scanner{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
-        end="\n\n",
+        end="\n",
     )  # Output the welcome message
     start_time = datetime.datetime.now()  # Get the start time of the program
     
@@ -356,26 +356,30 @@ def main():
         f"{BackgroundColors.GREEN}Scanning for Python files and extracting imports...{Style.RESET_ALL}",
         "",
     )  # Optional verbose message about starting the scan
+    
     num_files_scanned, libraries = get_all_libraries()  # Scan files and collect libraries
 
     if num_files_scanned == 0:  # If no Python files were found
         print(
             f"{BackgroundColors.YELLOW}Warning: No Python files found in the current directory or Scripts/ directory.{Style.RESET_ALL}"
-        )  # Print a warning when no files are found
+        )
     else:  # When one or more Python files were found
         print(
-            f"{BackgroundColors.GREEN}Files scanned: {BackgroundColors.CYAN}{num_files_scanned}{Style.RESET_ALL}"
-        )  # Print the count of files scanned
+            f"{BackgroundColors.GREEN}Files scanned: {BackgroundColors.CYAN}{num_files_scanned}{BackgroundColors.GREEN}:{Style.RESET_ALL}"
+        )
+        files = collect_python_files()  # Collect the file Path objects to format output
+        joined = build_relative_files_list_string(files)  # Build the formatted files list string
+        print(f"{BackgroundColors.CYAN}[{joined}]{Style.RESET_ALL}")  # Print the single-line list of files
 
     unique_lib_count = len(libraries)  # Compute number of unique libraries found
     if unique_lib_count == 0:  # If no libraries were detected
         print(
             f"{BackgroundColors.YELLOW}No libraries detected in the scanned Python files.{Style.RESET_ALL}"
-        )  # Notify when no libraries were found
+        )
     else:  # When one or more libraries were detected
         print(
             f"{BackgroundColors.GREEN}Libraries detected: {BackgroundColors.CYAN}{unique_lib_count}{Style.RESET_ALL}"
-        )  # Print the count of unique libraries detected
+        )
 
     if unique_lib_count > 0:  # If there are libraries to list
         sorted_libs = sorted(libraries)  # Sort the library names alphabetically
