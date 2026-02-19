@@ -110,6 +110,9 @@ CONFIG = None  # Will be initialized by load_configuration() - holds all runtime
 # Results CSV Handles Registry:
 RESULTS_CSV_HANDLES = {}  # Registry mapping results CSV path -> (file_obj, csv_writer) for progressive writes
 
+# Processed files registry to avoid duplicate processing in a single run
+PROCESSED_FILES = set()  # Set of absolute file paths already processed in this execution
+
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
 
@@ -2654,6 +2657,13 @@ def main():
                     )  # Get list of CSV files to process
                     
                     for file in files_to_process:  # For each file to process
+                        try:  # Guard path resolution and membership check
+                            resolved_path = str(Path(file).resolve())  # Resolve to absolute path string
+                        except Exception:
+                            resolved_path = str(Path(file))  # Fallback to given path string on failure
+                        if resolved_path in PROCESSED_FILES:  # If file already processed
+                            print(f"{BackgroundColors.YELLOW}Skipping already-processed file: {resolved_path}{Style.RESET_ALL}")  # Warn and skip duplicate
+                            continue  # Skip to next file
                         print(
                             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}"
                         )
@@ -2701,6 +2711,11 @@ def main():
                                 print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")
                                 print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")
                                 generate(args, config)  # Generate synthetic samples
+                        finally:  # Always mark file as processed even if generation/training raised (prevents re-entry)
+                            try:  # Guard adding to registry
+                                PROCESSED_FILES.add(resolved_path)  # Remember that this file was processed in this run
+                            except Exception:
+                                pass  # Ignore any errors when recording processed file
                                 
                         except Exception as e:  #   
                             print(
