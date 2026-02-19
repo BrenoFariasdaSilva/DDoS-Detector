@@ -150,6 +150,13 @@ RUN_FUNCTIONS = {
     "Play Sound": True,  # Set to True to play a sound when the program finishes
 }
 
+N_JOBS = None
+CROSS_N_FOLDS = None
+CPU_PROCESSES = None
+CACHING_ENABLED = None
+PICKLE_PROTOCOL = None
+CONFIG_FILE = None
+
 # Functions Definitions:
 
 
@@ -195,6 +202,9 @@ def get_config(config_path=None):
                 "remove_zero_variance": True,
             },
             "execution": {"verbose": False},
+            "cross_validation": {"n_folds": 10},
+            "multiprocessing": {"n_jobs": -1, "cpu_processes": 1},
+            "caching": {"enabled": True, "pickle_protocol": 4},
         }
 
         cfg_file = None
@@ -216,16 +226,21 @@ def get_config(config_path=None):
             loaded = yaml.safe_load(f) or {}
 
         cfg = dict(defaults)
-        if "pca" in loaded and isinstance(loaded["pca"], dict):
-            cfg["pca"].update(loaded["pca"])
-        if "execution" in loaded and isinstance(loaded["execution"], dict):
-            cfg["execution"].update(loaded["execution"])
+        for topk in ("pca", "execution", "cross_validation", "multiprocessing", "caching"):
+            if topk in loaded and isinstance(loaded[topk], dict):
+                cfg[topk].update(loaded[topk])
 
         return cfg
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
+
+
+try:
+    cfg = get_config(CONFIG_FILE)
+except Exception:
+    cfg = {}
 
 
 def verify_dot_env_file():
@@ -476,12 +491,17 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
 
         explained_variance = pca.explained_variance_ratio_.sum()  # Total explained variance ratio
 
-        rf_n_jobs = -1 if workers == 1 else 1  # Set n_jobs for RandomForest based on workers
-        model = RandomForestClassifier(  # Initialize Random Forest model
+        global N_JOBS
+        rf_n_jobs = N_JOBS if (N_JOBS is not None) else (-1 if workers == 1 else 1)
+        model = RandomForestClassifier(
             n_estimators=100, random_state=random_state, n_jobs=rf_n_jobs
-        )  # End model init
+        )
 
-        skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)  # Stratified K-Fold cross-validator
+        if not isinstance(cv_folds, int) or cv_folds < 2:
+            raise ValueError(f"cv_folds must be integer >= 2, got {cv_folds}")
+        if cv_folds > len(X_train):
+            raise ValueError(f"cv_folds ({cv_folds}) cannot exceed number of training samples ({len(X_train)})")
+        skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
 
         cv_accs, cv_precs, cv_recs, cv_f1s = [], [], [], []  # Lists to store CV metrics
         total_training_time = 0.0  # Accumulator for all model.fit durations
@@ -940,8 +960,9 @@ def save_pca_results(csv_path, all_results):
             if pca_obj:
                 pca_file = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}.pkl"
                 try:
+                    proto = PICKLE_PROTOCOL if PICKLE_PROTOCOL is not None else cfg.get("caching", {}).get("pickle_protocol", 4)
                     with open(pca_file, "wb") as f:
-                        pickle.dump(pca_obj, f)
+                        pickle.dump(pca_obj, f, protocol=int(proto))
                     verbose_output(f"{BackgroundColors.GREEN}PCA object saved to {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")
                 except Exception as e:
                     print(f"{BackgroundColors.RED}Failed to save PCA object: {e}{Style.RESET_ALL}")
@@ -950,14 +971,16 @@ def save_pca_results(csv_path, all_results):
             if scaler is not None:
                 scaler_path = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}-scaler.joblib"
                 try:
-                    dump(scaler, scaler_path)
+                    proto = PICKLE_PROTOCOL if PICKLE_PROTOCOL is not None else cfg.get("caching", {}).get("pickle_protocol", 4)
+                    dump(scaler, scaler_path, protocol=int(proto))
                     verbose_output(f"{BackgroundColors.GREEN}Scaler saved to {BackgroundColors.CYAN}{scaler_path}{Style.RESET_ALL}")
                 except Exception as e:
                     print(f"{BackgroundColors.RED}Failed to save scaler: {e}{Style.RESET_ALL}")
             if clf is not None:
                 model_path = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}-model.joblib"
                 try:
-                    dump(clf, model_path)
+                    proto = PICKLE_PROTOCOL if PICKLE_PROTOCOL is not None else cfg.get("caching", {}).get("pickle_protocol", 4)
+                    dump(clf, model_path, protocol=int(proto))
                     verbose_output(f"{BackgroundColors.GREEN}Trained classifier saved to {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}")
                 except Exception as e:
                     print(f"{BackgroundColors.RED}Failed to save classifier: {e}{Style.RESET_ALL}")
@@ -1019,8 +1042,9 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
         print(
             f"  {BackgroundColors.GREEN}• Testing components: {BackgroundColors.CYAN}{n_components_list}{Style.RESET_ALL}"
         )
+        cv_display = CROSS_N_FOLDS if CROSS_N_FOLDS is not None else cfg.get("cross_validation", {}).get("n_folds", 10)
         print(
-            f"  {BackgroundColors.GREEN}• Evaluation: {BackgroundColors.CYAN}10-Fold Stratified Cross-Validation{Style.RESET_ALL}"
+            f"  {BackgroundColors.GREEN}• Evaluation: {BackgroundColors.CYAN}{cv_display}-Fold Stratified Cross-Validation{Style.RESET_ALL}"
         )
         print(f"  {BackgroundColors.GREEN}• Model: {BackgroundColors.CYAN}Random Forest (100 estimators){Style.RESET_ALL}")
         print(f"  {BackgroundColors.GREEN}• Split: {BackgroundColors.CYAN}80/20 (train/test){Style.RESET_ALL}\\n")
@@ -1036,7 +1060,10 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
         if parallel and len(n_components_list) > 1:  # If parallel execution is enabled and multiple configurations
             try:  # Attempt parallel execution
                 cpu_count = os.cpu_count() or 1  # Get the number of CPU cores
-                workers = max_workers or min(len(n_components_list), cpu_count)  # Determine number of workers
+                workers = max_workers or min(len(n_components_list), cpu_count)
+                global CPU_PROCESSES
+                if CPU_PROCESSES is not None:
+                    workers = min(workers, int(CPU_PROCESSES))
                 print(
                     f"{BackgroundColors.GREEN}Running {BackgroundColors.CYAN}PCA Analysis{BackgroundColors.GREEN} in Parallel with {BackgroundColors.CYAN}{workers}{BackgroundColors.GREEN} Worker(s)...{Style.RESET_ALL}"
                 )
@@ -1055,6 +1082,7 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
                             X_test,
                             y_test,
                             n_components,
+                            cv_folds=CROSS_N_FOLDS if CROSS_N_FOLDS is not None else cfg.get("cross_validation", {}).get("n_folds", 10),
                             workers=workers,
                             scaling_time=scaling_time_val,
                             random_state=random_state,
@@ -1110,6 +1138,7 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
                     X_test,
                     y_test,
                     n_components,
+                    cv_folds=CROSS_N_FOLDS if CROSS_N_FOLDS is not None else cfg.get("cross_validation", {}).get("n_folds", 10),
                     workers=1,
                     scaling_time=scaling_time_val,
                     random_state=random_state,
@@ -1287,9 +1316,50 @@ def main():
         parser.add_argument("--remove_zero_variance", dest="remove_zero_variance", action="store_true", default=None, help="Remove zero-variance features (overrides config)")
         parser.add_argument("--no-remove_zero_variance", dest="remove_zero_variance", action="store_false", help="Do not remove zero-variance features (overrides config)")
         parser.add_argument("--max_workers", type=int, default=None, help="Number of parallel workers (default: from config or auto)")
+        parser.add_argument("--n_folds", type=int, default=None, help="Number of CV folds (overrides config.cross_validation.n_folds)")
+        parser.add_argument("--n_jobs", type=int, default=None, help="Number of parallel jobs for estimators/CV (-1 uses all cores)")
+        parser.add_argument("--cpu_processes", type=int, default=None, help="Number of CPU processes for multiprocessing (overrides config.multiprocessing.cpu_processes)")
+        parser.add_argument(
+            "--cache_enabled",
+            type=lambda s: str(s).lower() in ("1", "true", "yes", "y"),
+            default=None,
+            help="Enable/disable caching (true/false). Overrides config.caching.enabled",
+        )
+        parser.add_argument("--pickle_protocol", type=int, default=None, help="Pickle protocol (0-5) to use when caching")
         args = parser.parse_args()
 
         cfg = get_config(args.config)
+        CONFIG_FILE = args.config  # prefer explicit config path when loading programmatically
+
+        cross_cfg = cfg.get("cross_validation", {}) if isinstance(cfg, dict) else {}
+        multi_cfg = cfg.get("multiprocessing", {}) if isinstance(cfg, dict) else {}
+        cache_cfg = cfg.get("caching", {}) if isinstance(cfg, dict) else {}
+
+        resolved_n_folds = int(args.n_folds) if args.n_folds is not None else int(cross_cfg.get("n_folds", 10))
+        if resolved_n_folds < 2:
+            raise ValueError(f"cross_validation.n_folds must be >= 2, got {resolved_n_folds}")
+
+        resolved_n_jobs = args.n_jobs if args.n_jobs is not None else multi_cfg.get("n_jobs", -1)
+        if not isinstance(resolved_n_jobs, int):
+            raise ValueError("multiprocessing.n_jobs must be an integer (use -1 for all cores)")
+        if resolved_n_jobs != -1 and resolved_n_jobs < 1:
+            raise ValueError("multiprocessing.n_jobs must be -1 or >= 1")
+
+        resolved_cpu_procs = int(args.cpu_processes) if args.cpu_processes is not None else int(multi_cfg.get("cpu_processes", 1))
+        if resolved_cpu_procs < 1:
+            raise ValueError("multiprocessing.cpu_processes must be >= 1")
+
+        resolved_cache_enabled = bool(args.cache_enabled) if args.cache_enabled is not None else bool(cache_cfg.get("enabled", True))
+        resolved_pickle_protocol = int(args.pickle_protocol) if args.pickle_protocol is not None else int(cache_cfg.get("pickle_protocol", 4))
+        if not (0 <= resolved_pickle_protocol <= 5):
+            raise ValueError("caching.pickle_protocol must be an integer between 0 and 5")
+
+        global N_JOBS, CROSS_N_FOLDS, CPU_PROCESSES, CACHING_ENABLED, PICKLE_PROTOCOL
+        N_JOBS = resolved_n_jobs
+        CROSS_N_FOLDS = resolved_n_folds
+        CPU_PROCESSES = resolved_cpu_procs
+        CACHING_ENABLED = resolved_cache_enabled
+        PICKLE_PROTOCOL = resolved_pickle_protocol
 
         VERBOSE = args.verbose or cfg.get("execution", {}).get("verbose", False)
         SKIP_TRAIN_IF_MODEL_EXISTS = args.skip_train_if_model_exists
