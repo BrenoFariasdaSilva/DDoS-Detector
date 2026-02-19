@@ -205,6 +205,9 @@ stacking:
   data_augmentation_suffix: "_data_augmented"  # Suffix for augmented files (matches wgangp.py output)
   augmentation_ratios: [0.10, 0.25, 0.50, 0.75, 1.00]  # Augmented-to-original sample ratios for experiments
 
+  # Number of top features to show in generated heatmaps and CSV exports
+  top_n_features_heatmap: 15            # Default number of top features to show in heatmap
+
   # --- File Processing Configuration ---
   cache_prefix: "Cache_"              # Prefix for cached preprocessing artifacts
   model_export_base: "Feature_Analysis/Stacking/Models/"  # Base directory for model exports

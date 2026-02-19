@@ -255,6 +255,8 @@ stacking:
 
   # --- Optional filename behavior for per-combination files ---
   use_suffix_filenames: false         # When true, write separate CSVs per combo with suffix
+  # Number of top features to show in generated heatmaps and CSV exports
+  top_n_features_heatmap: 15         # Default number of top features to show in heatmap
 
 # ==============================================================================
 # EVALUATION CONFIGURATION — Used by stacking.py and other classifiers
