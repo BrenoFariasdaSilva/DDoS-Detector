@@ -54,6 +54,7 @@ import argparse  # For parsing command-line arguments
 import ast  # For safely evaluating Python literals
 import atexit  # For playing a sound when the program finishes
 import concurrent.futures  # For parallel execution
+import dataframe_image as dfi  # For exporting DataFrame styled tables as PNG images
 import datetime  # For getting the current date and time
 import glob  # For file pattern matching
 import json  # Import json for handling JSON strings within the CSV
@@ -1661,6 +1662,23 @@ def generate_augmentation_tsne_visualization(original_file, original_df, augment
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
+
+
+def apply_zebra_style(df):
+    """
+    Apply zebra-striping style to a pandas DataFrame using Styler.
+
+    :param df: pandas DataFrame to style
+    :return: pandas.io.formats.style.Styler styled object ready for export
+    """
+    try:
+        def _zebra(row):  # Define row-wise zebra function
+            return ["background-color: #ffffff" if i % 2 == 0 else "background-color: #f2f2f2" for i in range(len(row))]  # Return CSS list per column
+
+        styled = df.style.apply(_zebra, axis=1)  # Create Styler with zebra striping applied
+        return styled  # Return styled object
+    except Exception as e:  # If styling fails
+        raise  # Propagate exception without swallowing
 
 
 def save_augmentation_comparison_results(file_path, comparison_results, config=None):
