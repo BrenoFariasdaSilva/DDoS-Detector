@@ -5033,8 +5033,8 @@ def run_population_sweep(
                 f1_msg = f" - F1: {f1_score:.4f}" if f1_score is not None else ""  # Prepare F1 score message if available
                 send_telegram_message(
                     TELEGRAM_BOT,
-                    f"Completed run {run + 1}/{runs} - population size {pop_size}/{max_pop} {f1_msg} in {int(calculate_execution_time(elapsed_pop_time))}"
-                )  # Send completion message for this run and population size
+                    f"Completed run {run + 1}/{runs} - population size {pop_size}/{max_pop} {f1_msg} in {calculate_execution_time(elapsed_pop_time)}"
+                )  # Send completion message for this run and population size (no int cast on formatted time)
 
         try:  # Close the shared pool after all GA iterations are complete
             shared_pool.close()  # Signal no more work will be submitted
