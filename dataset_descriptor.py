@@ -66,6 +66,7 @@ import re  # For regex operations
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import traceback  # For printing full exception tracebacks
+import yaml  # For optional config.yaml loading when locating WGANGP outputs
 import warnings  # For suppressing pandas warnings when requested
 from colorama import Style  # For coloring the terminal
 from inspect import signature  # For inspecting function signatures
@@ -1290,6 +1291,56 @@ def generate_tsne_plot(
         raise  # Re-raise to preserve original failure semantics
 
 
+def get_augmented_sample_count(original_csv_path, config=None) -> int:
+    """
+    Determine the total number of augmented samples produced for a given original
+    CSV by inspecting the WGANGP output directory for that dataset.
+
+    Detection logic:
+    - Use `config` if provided; otherwise try to load `config.yaml` next to this file.
+    - The augmented file is expected under: <original_parent>/Data_Augmentation/
+        with filename: <stem>{results_suffix}{suffix} where `results_suffix` defaults
+        to `_data_augmented` (per wgangp defaults).
+    - If the exact-stem file exists and is a CSV, read and return its row count.
+    - If not found, return 0 (no augmentation for this dataset).
+
+    Raises RuntimeError if the augmented CSV exists but cannot be read (corrupted).
+    """
+    
+    try:
+        p = Path(original_csv_path)
+
+        cfg = {}
+        if config and isinstance(config, dict):
+            cfg = config
+        else:
+            cfg_path = Path(__file__).parent / "config.yaml"
+            if cfg_path.exists():
+                try:
+                    with open(cfg_path, "r", encoding="utf-8") as _f:
+                        cfg = yaml.safe_load(_f) or {}
+                except Exception:
+                    cfg = {}
+
+        data_aug_subdir = cfg.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")
+        results_suffix = cfg.get("execution", {}).get("results_suffix", "_data_augmented")
+
+        data_aug_dir = p.parent / data_aug_subdir
+
+        candidate = data_aug_dir / f"{p.stem}{results_suffix}{p.suffix}"
+
+        if candidate.exists() and candidate.is_file() and candidate.suffix.lower() == ".csv":
+            try:
+                df = pd.read_csv(candidate)
+                return int(len(df)) if len(df) > 0 else 0
+            except Exception as e:
+                raise RuntimeError(f"Failed to read augmented CSV '{candidate}': {e}")
+
+        return 0
+    except Exception:
+        raise
+
+
 def get_dataset_file_info(filepath, low_memory=True):
     """
     Extracts dataset information from a CSV file and returns it as a dictionary.
@@ -1346,6 +1397,12 @@ def get_dataset_file_info(filepath, low_memory=True):
             "Classes": classes_str,
             "Class Distribution": class_dist_str,
         }
+
+        try:
+            aug_count = get_augmented_sample_count(filepath, None)
+        except Exception:
+            raise
+        result["data_augmentation_samples"] = int(aug_count)
 
         try:  # Try to delete the DataFrame
             del df  # Delete the DataFrame
