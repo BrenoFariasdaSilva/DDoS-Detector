@@ -178,16 +178,22 @@ def collect_python_files():
     :return: A list of pathlib.Path objects for found Python files
     """
 
-    base_dir = Path(__file__).parent  # Determine the base directory of this script
+    project_root = Path(__file__).resolve().parent.parent  # Project root directory (parent of Scripts)
     files = []  # Initialize the list of files found
 
-    for p in base_dir.glob("*.py"):  # Gather .py files in the current directory
+    for p in project_root.glob("*.py"):  # Gather .py files in the project root
         files.append(p)  # Append the found file to the list
 
-    scripts_dir = base_dir / "Scripts"  # Reference the Scripts directory
+    scripts_dir = project_root / "Scripts"  # Reference the Scripts directory under project root
     if scripts_dir.exists() and scripts_dir.is_dir():  # Only traverse when Scripts exists
         for p in scripts_dir.rglob("*.py"):  # Recursively gather .py files under Scripts/
             files.append(p)  # Append each found script file to the list
+
+    local_dir = Path(__file__).parent  # Directory containing this script
+    if local_dir.exists() and local_dir.is_dir():  # Ensure the local dir exists
+        for p in local_dir.glob("*.py"):  # Gather immediate .py files in the local Scripts dir
+            if p not in files:  # Avoid duplicates
+                files.append(p)  # Append each local script file to the list
 
     return files  # Return the list of collected Python files
 
