@@ -54,6 +54,7 @@ Limitations / TODO
 """
 
 import atexit  # For playing a sound when the program finishes
+import dataframe_image as dfi  # For exporting DataFrame as PNG images
 import datetime  # For timestamping
 import gc  # For explicit garbage collection
 import matplotlib.pyplot as plt  # For plotting t-SNE results
@@ -1569,6 +1570,29 @@ def print_preprocessing_summary_table(df):
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
         raise  # Re-raise to preserve original failure semantics
+
+
+def apply_zebra_style(df):
+    """
+    Apply zebra-striping pandas Styler to the provided DataFrame.
+
+    :param df: pandas.DataFrame to style
+    :return: pandas.Styler with zebra styling applied
+    """
+
+    try:  # Wrap function body for consistent error handling
+        def _stripe(row):  # Small helper to produce row-wise styles
+            return [
+                "background-color: #ffffff" if row.name % 2 == 0 else "background-color: #f2f2f2"
+                for _ in row
+            ]  # Return alternating colors per column in the row
+
+        styled = df.style.apply(_stripe, axis=1)  # Apply zebra striping across rows
+        return styled  # Return the styled DataFrame
+    except Exception as e:  # Preserve exception handling style
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise exception to surface failure
 
 
 def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename=RESULTS_FILENAME):
