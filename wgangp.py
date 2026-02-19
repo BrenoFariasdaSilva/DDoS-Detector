@@ -1765,6 +1765,25 @@ def train(args, config: Optional[Dict] = None):
                             else:  # Neither runtime nor config provided the column value
                                 print(f"{BackgroundColors.YELLOW}Warning: results CSV column '{c}' not found in runtime metrics or config; writing None{Style.RESET_ALL}")  # Warn about missing column
                                 ordered.append(None)  # Use None to indicate missing value explicitly
+                    # Inject hardware string into ordered row when hardware tracking is enabled in config
+                    if config.get("hardware_tracking", False):  # If hardware tracking requested
+                        try:  # Guard hardware detection to avoid breaking training
+                            hw_specs = get_hardware_specifications(device_used=device)  # Query hardware specs dict
+                            hw_part = hw_specs.get("gpu", "None") if hw_specs.get("gpu", None) is not None else "None"  # GPU part
+                            hardware_str = (  # Build human-readable hardware string
+                                f"{hw_specs.get('cpu_model','Unknown')} | Cores: {hw_specs.get('cores','N/A')}"
+                                f" | RAM: {hw_specs.get('ram_gb','N/A')} GB | OS: {hw_specs.get('os','Unknown')}"
+                                f" | GPU: {hw_part} | CUDA: {hw_specs.get('cuda','No')} | Device Used: {hw_specs.get('device_used','Unknown')}"
+                            )  # End hardware string
+                            if "hardware" in results_cols_cfg:  # If a hardware column exists in configured schema
+                                try:  # Protect index operations
+                                    idx_hw = results_cols_cfg.index("hardware")  # Find hardware column index
+                                    if idx_hw < len(ordered):  # Ensure index is within the ordered list
+                                        ordered[idx_hw] = hardware_str  # Place hardware string in row
+                                except Exception:
+                                    pass  # Ignore hardware insertion errors
+                        except Exception:
+                            pass  # Ignore any hardware detection errors to keep training running
                     results_csv_writer.writerow(ordered)  # Write ordered row following configured schema
                     try:  # Flush to disk right away to persist progressively
                         if results_csv_file is not None:  # Only call flush when file handle exists
@@ -1883,6 +1902,25 @@ def train(args, config: Optional[Dict] = None):
                         else:  # Not found anywhere; warn and use None
                             print(f"{BackgroundColors.YELLOW}Warning: results CSV column '{c}' not found in runtime metrics or config; writing None{Style.RESET_ALL}")  # Warn about missing column
                             ordered_final.append(None)  # Explicit None for missing value
+                # Inject hardware string into final ordered row when hardware tracking is enabled in config
+                if config.get("hardware_tracking", False):  # If hardware tracking requested
+                    try:  # Guard hardware detection to avoid breaking flow
+                        hw_specs = get_hardware_specifications(device_used=device)  # Query hardware specs dict
+                        hw_part = hw_specs.get("gpu", "None") if hw_specs.get("gpu", None) is not None else "None"  # GPU part
+                        hardware_str = (  # Build human-readable hardware string
+                            f"{hw_specs.get('cpu_model','Unknown')} | Cores: {hw_specs.get('cores','N/A')}"
+                            f" | RAM: {hw_specs.get('ram_gb','N/A')} GB | OS: {hw_specs.get('os','Unknown')}"
+                            f" | GPU: {hw_part} | CUDA: {hw_specs.get('cuda','No')} | Device Used: {hw_specs.get('device_used','Unknown')}"
+                        )  # End hardware string
+                        if "hardware" in results_cols_cfg:  # If a hardware column exists in configured schema
+                            try:  # Protect index operations
+                                idx_hw = results_cols_cfg.index("hardware")  # Find hardware column index
+                                if idx_hw < len(ordered_final):  # Ensure index is within the ordered_final list
+                                    ordered_final[idx_hw] = hardware_str  # Place hardware string in final row
+                            except Exception:
+                                pass  # Ignore hardware insertion errors
+                    except Exception:
+                        pass  # Ignore any hardware detection errors to keep flow
                 results_csv_writer.writerow(ordered_final)  # Write final per-file ordered row to CSV
                 try:  # Flush buffer to persist row immediately
                     if results_csv_file is not None:  # Only call flush when file handle exists
@@ -2072,6 +2110,12 @@ def generate(args, config: Optional[Dict] = None):
 
         df = pd.DataFrame(X_orig, columns=feature_cols)  # Create DataFrame with original feature names
         df[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
+        # Optionally populate hardware column on generated DataFrame when hardware tracking is enabled
+        if config.get("hardware_tracking", False):  # If enabled in config
+            try:  # Guard hardware population to avoid breaking generation
+                df = populate_hardware_column(df, column_name="hardware", device_used=device)  # Populate hardware column
+            except Exception:
+                pass  # Ignore hardware population errors and continue
         df.to_csv(args.out_file, index=False)  # Save generated data to CSV file
         print(f"{file_progress_prefix} {BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} generated samples to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message with prefix
 
@@ -2401,6 +2445,38 @@ def get_hardware_specifications(device_used=None):
             "device_used": device_used_str,  # Device used label
             "gpu_count": gpu_count,  # Number of GPUs detected
         }
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def populate_hardware_column(df, column_name="hardware", device_used=None):
+    """
+    Populate "df[column_name]" with a readable hardware description built from
+    "get_hardware_specifications()". On failure the column will be set to None.
+
+    :param df: pandas.DataFrame to modify in-place
+    :param column_name: Name of the column to set (default: "hardware")
+    :param device_used: Optional `torch.device` indicating which device the program is using
+    :return: The modified DataFrame
+    """
+
+    try:
+        try:  # Try to fetch hardware specifications
+            hardware_specs = get_hardware_specifications(device_used=device_used)  # Get system specs with device info
+            # Build readable hardware string including GPU, CUDA and device used
+            gpu_part = hardware_specs.get('gpu', 'None') if hardware_specs.get('gpu', None) is not None else 'None'  # GPU part
+            hardware_str = (  # Build readable hardware string
+                f"{hardware_specs.get('cpu_model','Unknown')} | Cores: {hardware_specs.get('cores', 'N/A')}"
+                f" | RAM: {hardware_specs.get('ram_gb', 'N/A')} GB | OS: {hardware_specs.get('os','Unknown')}"
+                f" | GPU: {gpu_part} | CUDA: {hardware_specs.get('cuda','No')} | Device Used: {hardware_specs.get('device_used','Unknown')}"
+            )
+            df[column_name] = hardware_str  # Set the hardware column
+        except Exception:  # On any failure
+            df[column_name] = None  # Set hardware column to None
+
+        return df  # Return the modified DataFrame
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
