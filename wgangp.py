@@ -1251,7 +1251,11 @@ def plot_training_metrics(metrics_history, out_dir, filename=None, config: Optio
 
         data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get data augmentation subdir from config
         plotting_subdir = config.get("plotting", {}).get("subdir", "plots")  # Get plotting subdir from config
-        save_dir = Path(out_dir) / data_aug_subdir / plotting_subdir  # Construct save directory path
+        out_path = Path(out_dir)  # Convert provided out_dir to a Path object for safe operations
+        if out_path.name == data_aug_subdir:  # If out_dir already ends with the data_augmentation subdir
+            save_dir = out_path / plotting_subdir  # Use out_dir plus plotting subdir (avoid duplicating Data_Augmentation)
+        else:  # Otherwise, out_dir does not include data_augmentation yet
+            save_dir = out_path / data_aug_subdir / plotting_subdir  # Append Data_Augmentation then plotting subdir
         try:  # Try to create the save directory, but catch exceptions (e.g., permission issues, invalid path, etc.)
             save_dir.mkdir(parents=True, exist_ok=True)  # Create save directory with parents if it doesn't exist, but don't raise error if it already exists
         except Exception as e:  # Catch any exception during directory creation
@@ -1260,7 +1264,7 @@ def plot_training_metrics(metrics_history, out_dir, filename=None, config: Optio
                 send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full directory creation error via Telegram
             except Exception:  # If notification fails, ignore to avoid cascading errors
                 pass  # Ignore Telegram send errors during directory creation fallback
-            save_dir = Path(out_dir)  # Fallback to out_dir if subdirectories cannot be created
+            save_dir = out_path  # Fallback to out_dir if subdirectories cannot be created
 
         plot_path = str(save_dir / filename)  # Construct full path for the plot file
         plt.savefig(plot_path, dpi=dpi, bbox_inches="tight")  # Save figure to file
