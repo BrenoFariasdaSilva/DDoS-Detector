@@ -1411,7 +1411,7 @@ def write_report(report_rows, base_dir, output_filename):
         results_dir = os.path.join(base_dir, RESULTS_DIR)  # Create results directory path
         os.makedirs(results_dir, exist_ok=True)  # Create results directory if it doesn't exist
         report_csv_path = os.path.join(results_dir, output_filename)  # Path to save the report CSV
-        report_df.to_csv(report_csv_path, index=False)  # Save the report to a CSV file
+        generate_csv_and_image(report_df, report_csv_path)  # Save CSV and generate corresponding PNG image
         pass  # No-op here; preprocessing summary handling is performed by the caller to avoid globals
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -1512,7 +1512,7 @@ def save_preprocessing_summary_csv(df, base_dir, filename="preprocessing_summary
         if not os.path.exists(results_dir):  # If results directory doesn't exist
             os.makedirs(results_dir, exist_ok=True)  # Create it to ensure save succeeds
         out_path = os.path.join(results_dir, filename)  # Build full output path
-        df.to_csv(out_path, index=False)  # Persist DataFrame to CSV without index
+        generate_csv_and_image(df, out_path)  # Save CSV and generate corresponding PNG image
         return out_path  # Return path for potential logging
     except Exception as e:  # Preserve exception handling style
         print(str(e))  # Print error to terminal for server logs
