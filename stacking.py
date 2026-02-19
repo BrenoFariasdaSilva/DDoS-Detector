@@ -348,8 +348,7 @@ def load_config_file(config_path=None):
 
 
 def deep_merge_dicts(base, override):
-    """
-    Recursively merge override dict into base dict.
+    """Recursively merge override dict into base dict.
     
     :param base: Base dictionary
     :param override: Override dictionary
@@ -3998,10 +3997,30 @@ def save_stacking_results(csv_path, results_list, config=None):
         df = add_hardware_column(df, existing_columns)
 
         try:
-            generate_csv_and_image(df, str(output_path), is_visualizable=True, index=False, encoding="utf-8")
+            generate_csv_and_image(df, str(output_path), is_visualizable=True, index=False, encoding="utf-8")  # Persist results CSV and generate PNG
             print(
                 f"\n{BackgroundColors.GREEN}Stacking classifier results successfully saved to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
-            )
+            )  # Notify user of success
+
+            try:
+                feature_counts_df = aggregate_feature_usage(df, None)  # Aggregate feature usage (None => use config)
+            except ValueError as ve:
+                print(f"{BackgroundColors.YELLOW}No features to aggregate: {ve}{Style.RESET_ALL}")  # Warn when no features present
+                feature_counts_df = pd.DataFrame()  # Ensure downstream code gets an empty DataFrame
+            except Exception as e:
+                print(f"{BackgroundColors.RED}Feature aggregation failed: {e}{Style.RESET_ALL}")  # Print error for debugging
+                send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+                feature_counts_df = pd.DataFrame()  # Continue without crashing
+
+            try:
+                dataset_base = file_path_obj.stem  # Compute dataset base name for output filenames
+                top_csv = stacking_dir / f"{dataset_base}_top_features.csv"  # Build CSV path for top features
+                top_png = stacking_dir / f"{dataset_base}_top_features.png"  # Build PNG path for heatmap
+                export_top_features_csv(feature_counts_df, str(top_csv))  # Export aggregated counts to CSV
+                generate_feature_usage_heatmap(feature_counts_df, str(top_png))  # Generate heatmap PNG
+            except Exception as e:
+                print(f"{BackgroundColors.RED}Failed to export top-features CSV or heatmap: {e}{Style.RESET_ALL}")  # Print failure details
+                send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram but do not interrupt main flow
         except Exception as e:
             print(
                 f"{BackgroundColors.RED}Failed to write Stacking Classifier CSV to {BackgroundColors.CYAN}{output_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
