@@ -703,6 +703,24 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
         raise  # Propagate exception (no silent failures)
 
 
+def export_dataframe_image(styled_df: pd.io.formats.style.Styler, output_path: Union[str, Path]):
+    """
+    Export a pandas Styler to a PNG image using dataframe_image.
+
+    :param styled_df: pandas Styler to export
+    :param output_path: Destination PNG file path
+    :raises: Propagates exceptions from dataframe_image (no silent failures)
+    """
+    try:
+        out_p = Path(output_path)  # Normalize output path to Path
+        out_p.parent.mkdir(parents=True, exist_ok=True)  # Ensure parent directory exists
+        dfi.export(styled_df, str(out_p))  # Use dataframe_image to export styled DataFrame to PNG
+    except Exception as e:
+        print(str(e))  # Print export error for visibility
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram about export failure
+        raise  # Propagate exception to caller
+
+
 def save_pca_results(csv_path, all_results):
     """
     Saves PCA results to a single CSV file containing evaluation metadata
