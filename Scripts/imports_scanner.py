@@ -192,6 +192,22 @@ def collect_python_files():
     return files  # Return the list of collected Python files
 
 
+def get_all_libraries():
+    """
+    Scan collected Python files and return the set of unique top-level libraries.
+
+    :return: Tuple (number_of_files_scanned, set_of_library_names)
+    """
+
+    files = collect_python_files()  # Collect Python files to scan
+    all_libs = set()  # Initialize the set of all libraries found
+    for fp in files:  # Iterate over each file path
+        libs = extract_imports_from_file(fp)  # Extract imports from the file
+        all_libs.update(libs)  # Merge found libraries into the global set
+
+    return len(files), all_libs  # Return count of files and the set of libraries
+
+
 def to_seconds(obj):
     """
     Converts various time-like objects to seconds.
