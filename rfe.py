@@ -1004,7 +1004,7 @@ def save_rfe_results(csv_path, run_results):
         df_out = populate_hardware_column_and_order(df_out, column_name="hardware")
 
         try:
-            df_out.to_csv(run_csv_path, index=False, encoding="utf-8", quoting=csv.QUOTE_ALL)
+            generate_csv_and_image(df_out, run_csv_path, is_visualizable=True)  # Save CSV and generate PNG image
             print(f"{BackgroundColors.GREEN}Run results saved to {BackgroundColors.CYAN}{run_csv_path}{Style.RESET_ALL}")
         except Exception as e:
             print(f"{BackgroundColors.RED}Failed to save run results to CSV: {e}{Style.RESET_ALL}")
