@@ -382,10 +382,10 @@ def main():
         )
 
     if unique_lib_count > 0:  # If there are libraries to list
-        sorted_libs = sorted(libraries)  # Sort the library names alphabetically
+        sorted_libs = sorted(libraries, key=lambda s: s.lower())  # Sort names case-insensitively
         print(f"{BackgroundColors.GREEN}Library list:{Style.RESET_ALL}")  # Header for the library list
-        for lib in sorted_libs:  # Iterate over sorted libraries
-            print(f"  {BackgroundColors.CYAN}{lib}{Style.RESET_ALL}")  # Print each library name
+        libs_lines = [f"  {BackgroundColors.CYAN}{lib}{Style.RESET_ALL}" for lib in sorted_libs]  # Build colored lines
+        print("\n".join(libs_lines))  # Print all libraries joined by single newlines (no empty lines)
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
