@@ -1322,6 +1322,43 @@ def open_results_csv(results_csv_path, results_cols_cfg):
         return (None, None)  # Return sentinel values so callers can continue
 
 
+def find_config_value(cfg, key):
+    """
+    Search `cfg` recursively for `key` and return first found value or None.
+    
+    :param cfg: Configuration dictionary or list to search through
+    :param key: The key to search for in the configuration
+    :return: The value associated with the key if found, otherwise None
+    """
+    
+    try:
+        if cfg is None:  # If no configuration provided
+            return None  # Nothing to search
+        if isinstance(cfg, dict):  # If current node is a mapping
+            if key in cfg:  # If key directly exists here
+                return cfg[key]  # Return direct match
+            for v in cfg.values():  # Iterate values to search deeper
+                try:  # Guard recursive call
+                    found = find_config_value(v, key)  # Recurse into nested value
+                except Exception:
+                    found = None  # Ignore recursion errors
+                if found is not None:  # If found in nested value
+                    return found  # Return the first match
+            return None  # Not found in this mapping
+        if isinstance(cfg, (list, tuple)):  # If current node is a sequence
+            for item in cfg:  # Iterate sequence items
+                try:  # Guard recursive call
+                    found = find_config_value(item, key)  # Recurse into item
+                except Exception:
+                    found = None  # Ignore recursion errors
+                if found is not None:  # If a match is found
+                    return found  # Return it
+            return None  # Not found in sequence
+        return None  # Base case: not a container type
+    except Exception:
+        return None  # On unexpected errors return None
+
+
 def train(args, config: Optional[Dict] = None):
     """
     Train the WGAN-GP model using the provided arguments and configuration.
@@ -1654,18 +1691,31 @@ def train(args, config: Optional[Dict] = None):
 
             try:  # Wrap CSV write to avoid crashing on I/O errors
                 if results_csv_writer and results_cols_cfg:  # Only write if we have a valid writer and columns
-                    row_dict = {}  # Build dictionary of values keyed by configured column names
-                    row_dict["original_file"] = Path(args.csv_path).name if getattr(args, "csv_path", None) else ""  # Original file name
-                    row_dict["epoch"] = epoch + 1  # Current epoch number
-                    row_dict["epoch_time_s"] = getattr(args, "_last_epoch_time", "")  # Epoch elapsed seconds
-                    row_dict["training_time_s"] = getattr(args, "_last_training_time", "")  # Total training elapsed seconds
-                    row_dict["file_time_s"] = getattr(args, "_last_file_time", "")  # File processing elapsed seconds
-                    # Fill recognized metric placeholders safely
-                    row_dict["loss_D"] = metrics_history.get("loss_D", [])[-1] if metrics_history.get("loss_D") else ""  # Last discriminator loss
-                    row_dict["loss_G"] = metrics_history.get("loss_G", [])[-1] if metrics_history.get("loss_G") else ""  # Last generator loss
-                    # Compose ordered row following config order and write+flush immediately
-                    ordered = [row_dict.get(c, "") for c in results_cols_cfg]  # Create ordered list matching schema
-                    results_csv_writer.writerow(ordered)  # Write row in configured column order
+                    row_runtime = {}  # Collect runtime-derived metrics into a dedicated mapping
+                    row_runtime["original_file"] = Path(args.csv_path).name if getattr(args, "csv_path", None) else ""  # Original file name
+                    row_runtime["epoch"] = epoch + 1  # Current epoch number
+                    row_runtime["epoch_time_s"] = getattr(args, "_last_epoch_time", "")  # Epoch elapsed seconds
+                    row_runtime["training_time_s"] = getattr(args, "_last_training_time", "")  # Total training elapsed seconds
+                    row_runtime["file_time_s"] = getattr(args, "_last_file_time", "")  # File processing elapsed seconds
+                    # Fill recognized metric placeholders safely into runtime mapping
+                    row_runtime["loss_D"] = metrics_history.get("loss_D", [])[-1] if metrics_history.get("loss_D") else ""  # Last discriminator loss
+                    row_runtime["loss_G"] = metrics_history.get("loss_G", [])[-1] if metrics_history.get("loss_G") else ""  # Last generator loss
+                    ordered = []  # Prepare ordered list following config order
+                    for c in results_cols_cfg:  # For each configured column name
+                        if c in row_runtime:  # If runtime metric provides this column
+                            ordered.append(row_runtime.get(c))  # Use runtime value
+                        else:  # Otherwise attempt to find value in configuration
+                            cfg_val = None  # Default when not found
+                            try:  # Guard config lookup
+                                cfg_val = find_config_value(config, c)  # Search config recursively for key
+                            except Exception:
+                                cfg_val = None  # On failure, treat as missing
+                            if cfg_val is not None:  # If config provided a value
+                                ordered.append(cfg_val)  # Use configured hyperparameter value
+                            else:  # Neither runtime nor config provided the column value
+                                print(f"{BackgroundColors.YELLOW}Warning: results CSV column '{c}' not found in runtime metrics or config; writing None{Style.RESET_ALL}")  # Warn about missing column
+                                ordered.append(None)  # Use None to indicate missing value explicitly
+                    results_csv_writer.writerow(ordered)  # Write ordered row following configured schema
                     try:  # Flush to disk right away to persist progressively
                         if results_csv_file is not None:  # Only call flush when file handle exists
                             try:  # Guard flush call to avoid raising
@@ -1763,13 +1813,27 @@ def train(args, config: Optional[Dict] = None):
 
         try:  # Wrap writes to avoid crashing on I/O errors
             if results_csv_writer and results_cols_cfg:  # Only write if writer and schema are available
-                final_row = {}  # Dictionary to collect final values for configured columns
-                final_row["original_file"] = Path(args.csv_path).name if getattr(args, "csv_path", None) else ""  # Original filename
-                final_row["total_generated_samples"] = ""  # Placeholder, generation may fill this later
-                final_row["training_time_s"] = getattr(args, "_last_training_time", "")  # Total training elapsed
-                final_row["file_time_s"] = getattr(args, "_last_file_time", "")  # Per-file processing elapsed
-                ordered_final = [final_row.get(c, "") for c in results_cols_cfg]  # Create ordered list matching schema
-                results_csv_writer.writerow(ordered_final)  # Write final per-file row
+                final_runtime = {}  # Build runtime-only values for final per-file row
+                final_runtime["original_file"] = Path(args.csv_path).name if getattr(args, "csv_path", None) else ""  # Original filename
+                final_runtime["total_generated_samples"] = ""  # Placeholder, generation may fill this later
+                final_runtime["training_time_s"] = getattr(args, "_last_training_time", "")  # Total training elapsed
+                final_runtime["file_time_s"] = getattr(args, "_last_file_time", "")  # Per-file processing elapsed
+                ordered_final = []  # Prepare ordered list according to configured schema
+                for c in results_cols_cfg:  # For each configured column name
+                    if c in final_runtime:  # If runtime mapping contains key
+                        ordered_final.append(final_runtime.get(c))  # Use runtime value
+                    else:  # Attempt to obtain from configuration when not a runtime metric
+                        cfg_val = None  # Default missing
+                        try:  # Guard recursive lookup
+                            cfg_val = find_config_value(config, c)  # Search config for matching key
+                        except Exception:
+                            cfg_val = None  # On error treat as missing
+                        if cfg_val is not None:  # If found in config
+                            ordered_final.append(cfg_val)  # Use configured hyperparameter value
+                        else:  # Not found anywhere; warn and use None
+                            print(f"{BackgroundColors.YELLOW}Warning: results CSV column '{c}' not found in runtime metrics or config; writing None{Style.RESET_ALL}")  # Warn about missing column
+                            ordered_final.append(None)  # Explicit None for missing value
+                results_csv_writer.writerow(ordered_final)  # Write final per-file ordered row to CSV
                 try:  # Flush buffer to persist row immediately
                     if results_csv_file is not None:  # Only call flush when file handle exists
                         try:  # Guard flush call to avoid raising
@@ -2024,21 +2088,35 @@ def generate(args, config: Optional[Dict] = None):
                     critic_loss_val = ""  # Ignore failures and leave blank
                     generator_loss_val = ""  # Ignore failures and leave blank
 
-                row_dict = {}  # Dictionary to hold values for configured columns
-                row_dict["original_file"] = original_file_name  # Original CSV filename
-                row_dict["generated_file"] = generated_file_name  # Generated output filename
-                row_dict["original_num_samples"] = original_num if original_num is not None else ""  # Original sample count
-                row_dict["total_generated_samples"] = total_generated  # Total generated count
-                row_dict["generated_ratio"] = generated_ratio  # Generated/original ratio
-                row_dict["critic_loss"] = critic_loss_val  # Last critic loss from checkpoint metrics
-                row_dict["generator_loss"] = generator_loss_val  # Last generator loss from checkpoint metrics
+                row_runtime = {}  # Dictionary to hold runtime values for configured columns
+                row_runtime["original_file"] = original_file_name  # Original CSV filename
+                row_runtime["generated_file"] = generated_file_name  # Generated output filename
+                row_runtime["original_num_samples"] = original_num if original_num is not None else ""  # Original sample count
+                row_runtime["total_generated_samples"] = total_generated  # Total generated count
+                row_runtime["generated_ratio"] = generated_ratio  # Generated/original ratio
+                row_runtime["critic_loss"] = critic_loss_val  # Last critic loss from checkpoint metrics
+                row_runtime["generator_loss"] = generator_loss_val  # Last generator loss from checkpoint metrics
                 for k, v in timing_values.items():  # For each timing key known
-                    row_dict[k] = v  # Store timing value under the timing key
+                    row_runtime[k] = v  # Store timing value under the timing key
 
                 try:  # Wrap open/write in try/except to avoid crashing on I/O issues
                     f_handle, writer = open_results_csv(results_csv_path, results_cols_cfg)  # Get persistent handle and writer
                     if f_handle and writer:  # If we successfully opened or reused a writer
-                        ordered = [row_dict.get(c, "") for c in results_cols_cfg]  # Build ordered list following config schema
+                        ordered = []  # Build ordered list following configured schema
+                        for c in results_cols_cfg:  # For each configured column name
+                            if c in row_runtime:  # If runtime has this value
+                                ordered.append(row_runtime.get(c))  # Use runtime value
+                            else:  # Otherwise attempt to fetch from configuration
+                                cfg_val = None  # Default to missing
+                                try:  # Guard recursive lookup
+                                    cfg_val = find_config_value(config, c)  # Search config for matching key
+                                except Exception:
+                                    cfg_val = None  # On error treat as missing
+                                if cfg_val is not None:  # If found in config
+                                    ordered.append(cfg_val)  # Use configured hyperparameter value
+                                else:  # Not found anywhere; warn and use None
+                                    print(f"{BackgroundColors.YELLOW}Warning: results CSV column '{c}' not found in runtime metrics or config; writing None{Style.RESET_ALL}")  # Warn about missing column
+                                    ordered.append(None)  # Explicit None for missing value
                         writer.writerow(ordered)  # Write the ordered row to CSV
                         try:  # Flush to persist immediately
                             f_handle.flush()  # Flush file buffer to disk
