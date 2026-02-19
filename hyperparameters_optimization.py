@@ -2231,7 +2231,7 @@ def save_optimization_results(csv_path, results_list):
             except Exception:  # If truncation fails
                 pass  # Keep original value
 
-        df_results.to_csv(output_path, index=False, encoding="utf-8")  # Save to CSV
+        generate_csv_and_image(df_results, output_path, is_visualizable=True)  # Save results CSV and generate PNG image
         print(f"{BackgroundColors.GREEN}Results saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Print success message
 
         remove_cache_file(csv_path)  # Clean up cache
