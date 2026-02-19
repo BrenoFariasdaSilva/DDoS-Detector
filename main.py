@@ -893,6 +893,25 @@ def generate_table_image_from_dataframe(df, csv_path):
         raise  # Propagate exceptions to caller
 
 
+def generate_csv_and_image(df, csv_path, is_visualizable=True, **to_csv_kwargs):
+    """
+    Save DataFrame to CSV and optionally generate a zebra-striped PNG image beside it.
+
+    :param df: pandas DataFrame to save
+    :param csv_path: Destination CSV file path
+    :param is_visualizable: Whether to generate the PNG image (default True)
+    :param to_csv_kwargs: Additional keyword args forwarded to pandas.DataFrame.to_csv
+    :return: Path to saved CSV file
+    """
+    try:
+        df.to_csv(csv_path, **to_csv_kwargs)  # Save DataFrame to CSV with original kwargs
+        if is_visualizable:  # Generate image only if flagged
+            generate_table_image_from_dataframe(df, csv_path)  # Generate PNG from in-memory DataFrame
+        return csv_path  # Return CSV path
+    except Exception:
+        raise  # Propagate exceptions (no silent failures)
+
+
 def save_results(report, metrics_df, results_dir, index, model_name, feat_extraction_method=""):
     """
     Saves the classification report and extended metrics to disk.
