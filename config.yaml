@@ -363,6 +363,13 @@ wgangp:
     - original_num_samples
     - total_generated_samples
     - generated_ratio
+    - epochs
+    - batch_size
+    - critic_iterations
+    - lambda_gp
+    - learning_rate_generator
+    - learning_rate_critic
+    - latent_dim
     - critic_loss
     - generator_loss
     - training_time_s
