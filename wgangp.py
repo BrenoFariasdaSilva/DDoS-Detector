@@ -2657,66 +2657,66 @@ def main():
                     )  # Get list of CSV files to process
                     
                     for file in files_to_process:  # For each file to process
-                        try:  # Guard path resolution and membership check
-                            resolved_path = str(Path(file).resolve())  # Resolve to absolute path string
-                        except Exception:
-                            resolved_path = str(Path(file))  # Fallback to given path string on failure
-                        if resolved_path in PROCESSED_FILES:  # If file already processed
-                            print(f"{BackgroundColors.YELLOW}Skipping already-processed file: {resolved_path}{Style.RESET_ALL}")  # Warn and skip duplicate
-                            continue  # Skip to next file
-                        print(
-                            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}"
-                        )
-                        print(
-                            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
-                        )
-                        print(
-                            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}\n"
-                        )
-                        
-                        csv_path_obj = Path(file)  # Create Path object from file path
-                        data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get subdir name
-                        data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Create Data_Augmentation subdirectory path
-                        os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists
-                        output_filename = f"{csv_path_obj.stem}{results_suffix}{csv_path_obj.suffix}"  # Use input name with RESULTS_SUFFIX
-                        args.out_file = str(data_aug_dir / output_filename)  # Set output file path to Data_Augmentation subdirectory
-                        args.csv_path = file  # Set CSV path to current file
-                        
-                        try:  # Try to execute the specified mode for the current file
-                            if mode == "train":  # Training mode
-                                training_start_time = time.time()  # Record training start time using time.time()
-                                train(args, config)  # Train the model only
-                                args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
-                            elif mode == "gen":  # Generation mode
-                                assert args.checkpoint is not None, "Generation requires --checkpoint"
-                                generate(args, config)  # Generate synthetic samples only
-                            elif mode == "both":  # Combined mode
-                                print(f"{BackgroundColors.GREEN}[1/2] Training model on {BackgroundColors.CYAN}{csv_path_obj.name}{BackgroundColors.GREEN}...{Style.RESET_ALL}")
-                                training_start_time = time.time()  # Record training start time using time.time()
-                                train(args, config)  # Train the model
-                                args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
-                                
-                                checkpoint_prefix = csv_path_obj.stem  # Use CSV filename as prefix
-                                checkpoint_subdir = config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")  # Get checkpoint subdir
-                                checkpoint_dir = data_aug_dir / checkpoint_subdir  # Checkpoints in Data_Augmentation/Checkpoints
-                                checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{args.epochs}.pt"
-                                if not checkpoint_path.exists():  # If specific epoch checkpoint not found, find the latest one
-                                    checkpoints = sorted(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))  # Find all checkpoints for this dataset
-                                    if checkpoints:  # If checkpoints found
-                                        checkpoint_path = checkpoints[-1]  # Use the latest checkpoint
-                                    else:  # No checkpoints found
-                                        raise FileNotFoundError(f"No generator checkpoint found for {csv_path_obj.name} in {checkpoint_dir}")
-                                
-                                args.checkpoint = str(checkpoint_path)  # Set checkpoint path for generation
-                                print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")
-                                print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")
-                                generate(args, config)  # Generate synthetic samples
-                        finally:  # Always mark file as processed even if generation/training raised (prevents re-entry)
-                            try:  # Guard adding to registry
-                                PROCESSED_FILES.add(resolved_path)  # Remember that this file was processed in this run
+                        try:  # Wrap per-file processing so exceptions are caught by the outer handler
+                            try:  # Guard path resolution and membership check
+                                resolved_path = str(Path(file).resolve())  # Resolve to absolute path string
                             except Exception:
-                                pass  # Ignore any errors when recording processed file
-                                
+                                resolved_path = str(Path(file))  # Fallback to given path string on failure
+                            if resolved_path in PROCESSED_FILES:  # If file already processed
+                                print(f"{BackgroundColors.YELLOW}Skipping already-processed file: {resolved_path}{Style.RESET_ALL}")  # Warn and skip duplicate
+                                continue  # Skip to next file
+                            print(
+                                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}"
+                            )
+                            print(
+                                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
+                            )
+                            print(
+                                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}\n"
+                            )
+                            
+                            csv_path_obj = Path(file)  # Create Path object from file path
+                            data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get subdir name
+                            data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Create Data_Augmentation subdirectory path
+                            os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists
+                            output_filename = f"{csv_path_obj.stem}{results_suffix}{csv_path_obj.suffix}"  # Use input name with RESULTS_SUFFIX
+                            args.out_file = str(data_aug_dir / output_filename)  # Set output file path to Data_Augmentation subdirectory
+                            args.csv_path = file  # Set CSV path to current file
+                            
+                            try:  # Try to execute the specified mode for the current file
+                                if mode == "train":  # Training mode
+                                    training_start_time = time.time()  # Record training start time using time.time()
+                                    train(args, config)  # Train the model only
+                                    args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
+                                elif mode == "gen":  # Generation mode
+                                    assert args.checkpoint is not None, "Generation requires --checkpoint"
+                                    generate(args, config)  # Generate synthetic samples only
+                                elif mode == "both":  # Combined mode
+                                    print(f"{BackgroundColors.GREEN}[1/2] Training model on {BackgroundColors.CYAN}{csv_path_obj.name}{BackgroundColors.GREEN}...{Style.RESET_ALL}")
+                                    training_start_time = time.time()  # Record training start time using time.time()
+                                    train(args, config)  # Train the model
+                                    args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
+                                    
+                                    checkpoint_prefix = csv_path_obj.stem  # Use CSV filename as prefix
+                                    checkpoint_subdir = config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")  # Get checkpoint subdir
+                                    checkpoint_dir = data_aug_dir / checkpoint_subdir  # Checkpoints in Data_Augmentation/Checkpoints
+                                    checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{args.epochs}.pt"
+                                    if not checkpoint_path.exists():  # If specific epoch checkpoint not found, find the latest one
+                                        checkpoints = sorted(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))  # Find all checkpoints for this dataset
+                                        if checkpoints:  # If checkpoints found
+                                            checkpoint_path = checkpoints[-1]  # Use the latest checkpoint
+                                        else:  # No checkpoints found
+                                            raise FileNotFoundError(f"No generator checkpoint found for {csv_path_obj.name} in {checkpoint_dir}")
+                                    
+                                    args.checkpoint = str(checkpoint_path)  # Set checkpoint path for generation
+                                    print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")
+                                    print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")
+                                    generate(args, config)  # Generate synthetic samples
+                            finally:  # Always mark file as processed even if generation/training raised (prevents re-entry)
+                                try:  # Guard adding to registry
+                                    PROCESSED_FILES.add(resolved_path)  # Remember that this file was processed in this run
+                                except Exception:
+                                    pass  # Ignore any errors when recording processed file
                         except Exception as e:  #   
                             print(
                                 f"{BackgroundColors.RED}Error processing {BackgroundColors.CYAN}{file}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
