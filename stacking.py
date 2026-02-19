@@ -1849,6 +1849,50 @@ def export_top_features_csv(feature_counts_df, csv_path):
         raise  # Propagate exceptions
 
 
+def generate_feature_usage_heatmap(feature_counts_df, output_path):
+    """
+    Generate and save a heatmap PNG from feature counts DataFrame.
+
+    :param feature_counts_df: DataFrame indexed by feature with per-model columns and a `total` column
+    :param output_path: Destination PNG path
+    :return: Path to saved PNG file
+    """
+    
+    try:
+        if feature_counts_df is None or feature_counts_df.empty:  # If no data, create a minimal empty heatmap
+            fig, ax = plt.subplots(figsize=(6, 2))  # Create small figure for empty state
+            ax.text(0.5, 0.5, "No features available", ha="center", va="center")  # Informative message
+            ax.set_axis_off()  # Hide axes for empty message
+            out_png = str(Path(output_path))  # Compute output path
+            Path(out_png).parent.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
+            plt.savefig(out_png, bbox_inches="tight")  # Save PNG to disk
+            plt.close(fig)  # Close the figure to free memory
+            return out_png  # Return path to generated PNG
+
+        data = feature_counts_df.drop(columns=[c for c in feature_counts_df.columns if c == "total"], errors="ignore")  # Drop total for heatmap columns
+        data = data.astype(int)  # Ensure integer type for plotting annotations
+
+        n_rows = data.shape[0]  # Number of features (rows)
+        n_cols = data.shape[1]  # Number of models (columns)
+        height = max(2, 0.4 * n_rows)  # Heuristic height for readability
+        width = max(4, 0.8 * n_cols)  # Heuristic width for readability
+
+        fig, ax = plt.subplots(figsize=(width, height))  # Create figure with computed size
+        sns.heatmap(data, annot=True, fmt="d", cmap="YlGnBu", cbar=True, ax=ax)  # Draw annotated heatmap
+        ax.set_ylabel("")  # Keep y-axis label minimal
+        ax.set_xlabel("")  # Keep x-axis label minimal
+        plt.yticks(rotation=0)  # Ensure feature labels horizontal for readability
+        plt.xticks(rotation=45, ha="right")  # Rotate column labels for space
+        out_png = str(Path(output_path))  # Normalize output path to string
+        Path(out_png).parent.mkdir(parents=True, exist_ok=True)  # Ensure parent directory exists
+        plt.tight_layout()  # Tighten layout before saving
+        plt.savefig(out_png, dpi=300)  # Save figure to PNG with good resolution
+        plt.close(fig)  # Close the figure to release resources
+        return out_png  # Return saved PNG path
+    except Exception:
+        raise  # Propagate exceptions to caller
+
+
 def save_augmentation_comparison_results(file_path, comparison_results, config=None):
     """
     Save data augmentation comparison results to CSV file.
