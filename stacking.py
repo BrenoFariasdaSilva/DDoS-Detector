@@ -2455,6 +2455,64 @@ def sanitize_feature_names(columns):
         raise
 
 
+def verify_selected_features_exist(selected_features: list, dataset_columns: list, method_name: str) -> list:
+    """
+    Verify that features selected by a feature-selection method exist in the dataset columns.
+
+    - Prints a structured warning if any selected features are missing.
+    - Returns the filtered list of valid features (preserving original order, removing duplicates).
+    - Raises ValueError if ALL selected features are missing, or if inputs are invalid/empty.
+
+    :param selected_features: list of selected feature names (strings)
+    :param dataset_columns: list of dataset column names (strings)
+    :param method_name: human-friendly method name (e.g., 'GA', 'RFE', 'PCA')
+    :return: filtered list of valid feature names
+    """
+
+    if selected_features is None:
+        raise ValueError(f"No selected features provided for {method_name}.")
+    if not isinstance(selected_features, (list, tuple)):
+        raise ValueError("selected_features must be a list or tuple")
+    if not selected_features:
+        raise ValueError(f"selected_features is empty for {method_name}")
+    if dataset_columns is None or not isinstance(dataset_columns, (list, tuple)):
+        raise ValueError("dataset_columns must be a non-empty list or tuple")
+    if not dataset_columns:
+        raise ValueError("dataset_columns is empty")
+
+    mn = (method_name or "").strip().lower()
+    is_pca = mn == "pca"
+    if is_pca:
+        if all(isinstance(f, str) and f.strip().upper().startswith("PC") for f in selected_features):
+            return list(dict.fromkeys(selected_features))  # preserve order, remove duplicates
+
+    dataset_set = set(dataset_columns)
+    valid_features = []
+    seen = set()
+    for f in selected_features:
+        if f in dataset_set and f not in seen:
+            valid_features.append(f)
+            seen.add(f)
+
+    missing = [f for f in selected_features if f not in dataset_set]
+
+    if missing and len(valid_features) > 0:
+        print(f"[WARNING] Missing features detected for {method_name}:")
+        for m in missing:
+            print(f"- {m}")
+        print(f"Using {len(valid_features)} out of {len(selected_features)} selected features.")
+        return valid_features
+
+    if missing and len(valid_features) == 0:
+        print(f"[WARNING] Missing features detected for {method_name}:")
+        for m in missing:
+            print(f"- {m}")
+        print(f"Using 0 out of {len(selected_features)} selected features.")
+        raise ValueError(f"All selected features for {method_name} are missing from dataset columns")
+
+    return list(dict.fromkeys(selected_features))
+
+
 def preprocess_dataframe(df, remove_zero_variance=True, config=None):
     """
     Preprocess a DataFrame by removing rows with NaN or infinite values and
@@ -5287,6 +5345,23 @@ def evaluate_on_dataset(
             ga_selected_features = sanitize_feature_names(ga_selected_features)
         if rfe_selected_features:
             rfe_selected_features = sanitize_feature_names(rfe_selected_features)
+
+        # Verify selected features exist in the dataset. Do not crash; handle gracefully.
+        try:
+            if ga_selected_features:
+                ga_selected_features = verify_selected_features_exist(ga_selected_features, feature_names, "GA")
+        except ValueError as e:
+            # All GA features missing: warn and treat as no GA features selected
+            verbose_output(str(e), config=config)
+            ga_selected_features = []
+
+        try:
+            if rfe_selected_features:
+                rfe_selected_features = verify_selected_features_exist(rfe_selected_features, feature_names, "RFE")
+        except ValueError as e:
+            # All RFE features missing: warn and treat as no RFE features selected
+            verbose_output(str(e), config=config)
+            rfe_selected_features = []
 
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}"
