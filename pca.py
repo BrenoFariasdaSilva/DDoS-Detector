@@ -721,6 +721,27 @@ def export_dataframe_image(styled_df: pd.io.formats.style.Styler, output_path: U
         raise  # Propagate exception to caller
 
 
+def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str, Path]):
+    """
+    Generate a zebra-striped PNG table image from an in-memory DataFrame.
+
+    :param df: In-memory DataFrame to render
+    :param output_path: Target PNG path (same directory as CSV)
+    :raises: PermissionError if directory is not writable, or other export errors
+    """
+    try:
+        out_p = Path(output_path)  # Convert to Path for convenience
+        parent = out_p.parent  # Get parent directory
+        if not parent.exists():  # If parent doesn't exist
+            parent.mkdir(parents=True, exist_ok=True)  # Try to create it
+        if not os.access(str(parent), os.W_OK):  # Check parent directory is writable
+            raise PermissionError(f"Directory not writable: {parent}")  # Raise on non-writable directory
+        styled = apply_zebra_style(df)  # Create styled DataFrame with zebra stripes
+        export_dataframe_image(styled, out_p)  # Export styled DataFrame to PNG
+    except Exception:
+        raise  # Propagate any exception (no silent failures)
+
+
 def save_pca_results(csv_path, all_results):
     """
     Saves PCA results to a single CSV file containing evaluation metadata
