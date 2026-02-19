@@ -1981,6 +1981,26 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
         raise  # Propagate error to caller
 
 
+def export_dataframe_image(styled_df: pd.io.formats.style.Styler, output_path: Union[str, Path]):
+    """
+    Export a pandas Styler to a PNG image using dataframe_image.
+
+    :param styled_df: pandas Styler object to export
+    :param output_path: Path to output PNG file
+    :raises: Any exception raised by dataframe_image.export will be propagated
+    """
+    try:
+        out_p = Path(output_path)  # Ensure Path object for output
+        # Ensure parent directory exists before writing
+        out_p.parent.mkdir(parents=True, exist_ok=True)  # Create directories as needed
+        # Use dataframe_image to export the styled dataframe to PNG
+        dfi.export(styled_df, str(out_p))  # Export to PNG using dataframe_image
+    except Exception as e:
+        print(str(e))  # Print export error for visibility
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram
+        raise  # Do not swallow errors; propagate to caller
+
+
 def generate(args, config: Optional[Dict] = None):
     """
     Generate synthetic samples from a saved generator checkpoint.
