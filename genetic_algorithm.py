@@ -293,6 +293,7 @@ def get_default_config():
                 "elapsed_run_time",
                 "hardware",
                 "best_features",
+                "union_features_across_runs",
                 "rfe_ranking",
             ],
         },
@@ -3869,6 +3870,33 @@ def print_metrics(metrics):
         raise  # Re-raise to preserve original failure semantics
 
 
+def compute_union_features_across_runs(runs_list):
+    """
+    Compute the sorted union of feature names selected across multiple GA runs.
+
+    This helper centralizes the previously inlined logic that built a set of
+    ``best_features`` from each run and returned a sorted list. It preserves
+    the original behavior of swallowing exceptions and returning an empty
+    list on error so callers do not need to handle failures.
+
+    :param runs_list: Iterable of per-run dictionaries which may contain the
+                      key "best_features" mapping to a list of feature names.
+    :return: Sorted list of unique feature names present in any run, or an
+             empty list if input is falsy or an error occurs.
+    """
+
+    try:
+        union_feats_local = []  # Default empty result if nothing to process
+        if runs_list:  # Only attempt work when runs_list is truthy
+            union_set = set()  # Initialize an empty set to collect unique names
+            for r in runs_list:  # Iterate every run dict in the provided list
+                union_set.update(r.get("best_features", []) or [])  # Add features from this run to the set, using empty list if key is missing or falsy
+            union_feats_local = sorted(list(union_set))  # Produce a stable, sorted list
+        return union_feats_local  # Return the computed union list
+    except Exception:
+        return []
+
+
 def extract_rfe_ranking(csv_path):
     """
     Extract RFE rankings from the RFE results file.
@@ -4630,6 +4658,7 @@ def build_and_write_run_results(
     output_dir,
     csv_path,
     feature_extraction_time_s=None,
+    union_features_across_runs=None,
 ):
     """
     Build the consolidated run row dictionary for the best GA individual and
@@ -4683,6 +4712,7 @@ def build_and_write_run_results(
             "elapsed_run_time": round(float(elapsed_run_time), 6) if elapsed_run_time is not None else None,
             "hardware": json.dumps(get_hardware_specifications()),
             "best_features": json.dumps(best_features),
+            "union_features_across_runs": json.dumps(union_features_across_runs) if union_features_across_runs is not None else None,
             "rfe_ranking": json.dumps(rfe_ranking),
         }
         
@@ -4704,6 +4734,7 @@ def save_results(
     n_generations=None,
     best_pop_size=None,
     runs_list=None,
+    union_features_across_runs=None,
     cxpb=None,
     mutpb=None,
     elapsed_run_time=None,
@@ -4793,6 +4824,7 @@ def save_results(
             output_dir,
             csv_path,
             feature_extraction_time_s,
+            union_features_across_runs,
         )
 
         return {
@@ -5079,6 +5111,9 @@ def run_population_sweep(
             best_run = max(runs_list, key=lambda r: r["metrics"][3])  # Select the run with the best F1-Score
             best_ind = best_run["best_ind"]  # Get the best individual from the best run
             best_metrics = best_run["metrics"]  # Get the metrics from the best run
+
+            union_feats = compute_union_features_across_runs(runs_list)  # Compute the union of features across all runs for this population size
+
             saved = save_results(
                 best_ind,
                 feature_names,
@@ -5091,6 +5126,7 @@ def run_population_sweep(
                 n_generations=n_generations,
                 best_pop_size=best_pop_size,
                 runs_list=runs_list,
+                union_features_across_runs=union_feats,
                 cxpb=cxpb,
                 mutpb=mutpb,
                 elapsed_run_time=elapsed_run_time,
