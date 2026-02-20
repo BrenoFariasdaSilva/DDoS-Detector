@@ -79,7 +79,7 @@ from sklearn.metrics import (  # For performance metrics
 from sklearn.model_selection import StratifiedKFold, train_test_split  # For train/test split and stratified K-Fold CV
 from sklearn.preprocessing import StandardScaler  # For scaling the data (standardization)
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
-from typing import Any, Dict, Optional, Union  # For type hinting
+from typing import Any, Dict, Optional, Union, Tuple  # For type hinting
 
 
 # Macros:
@@ -93,68 +93,26 @@ class BackgroundColors:  # Colors for the terminal
     CLEAR_TERMINAL = "\033[H\033[J"  # Clear the terminal
 
 
-# Execution Constants:
-VERBOSE = False  # Set to True to output verbose messages
-N_JOBS = None  # Number of parallel jobs for estimators/CV. Resolved from config/CLI below.
-CROSS_N_FOLDS = None  # Number of folds for cross-validation. Resolved from config/CLI below.
-CPU_PROCESSES = None  # Number of CPU processes to use for multiprocessing. Resolved from config/CLI below.
-CACHING_ENABLED = None  # Whether to enable caching of intermediate results. Resolved from config/CLI below.
-PICKLE_PROTOCOL = None  # Pickle protocol version to use for caching. Resolved from config/CLI below.
-CONFIG_FILE = None  # Path to the configuration file specified via CLI. Set in __main__ after argument parsing.
-SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, try loading exported models instead of retraining
-CSV_FILE = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Path to the CSV dataset file (set in main)
-RFE_RESULTS_CSV_COLUMNS = [  # Columns for the RFE results CSV
-    "timestamp",
-    "tool",
-    "model",
-    "dataset",
-    "hyperparameters",
-    "cv_method",
-    "train_test_split",
-    "scaling",
-    "cv_accuracy",
-    "cv_precision",
-    "cv_recall",
-    "cv_f1_score",
-    "test_accuracy",
-    "test_precision",
-    "test_recall",
-    "test_f1_score",
-    "test_fpr",
-    "test_fnr",
-    "feature_extraction_time_s",
-    "training_time_s",
-    "testing_time_s",
-    "hardware",
-    "top_features",
-    "rfe_ranking",
-]
+# Global state (initialized in main)
+CONFIG: Dict[str, Any] = {}
+CLI_ARGS: Dict[str, Any] = {}
+TELEGRAM_BOT = None
+logger = None
 
-# Telegram Bot Setup:
-TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
-
-# Logger Setup:
-logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
-sys.stdout = logger  # Redirect stdout to the logger
-sys.stderr = logger  # Redirect stderr to the logger
-
-# Sound Constants:
 SOUND_COMMANDS = {
     "Darwin": "afplay",
     "Linux": "aplay",
     "Windows": "start",
-}  # The commands to play a sound for each operating system
-SOUND_FILE = "./.assets/Sounds/NotificationSound.wav"  # The path to the sound file
-
-# RUN_FUNCTIONS:
-RUN_FUNCTIONS = {
-    "Play Sound": True,  # Set to True to play a sound when the program finishes
 }
+
+SOUND_FILE = "./.assets/Sounds/NotificationSound.wav"
+
+RUN_FUNCTIONS = {"Play Sound": True}
 
 # Functions Definitions:
 
 
-setup_global_exception_hook()  # Set up global exception hook to send exceptions via Telegram
+# setup_global_exception_hook() will be called from main() after configuration
 
 
 def verbose_output(true_string="", false_string=""):
@@ -167,75 +125,276 @@ def verbose_output(true_string="", false_string=""):
     """
     
     try:
-        if VERBOSE and true_string != "":  # If VERBOSE is True and a true_string was provided
-            print(true_string)  # Output the true statement string
-        elif false_string != "":  # If a false_string was provided
-            print(false_string)  # Output the false statement string
+        if is_verbose():
+            if true_string:
+                print(true_string)
+        else:
+            if false_string:
+                print(false_string)
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
 
 
-def get_config(config_path=None):
+def get_default_config() -> Dict[str, Any]:
     """
-    Load RFE-related configuration from config.yaml or config.yaml.example.
-
-    Precedence: CLI args (handled in __main__) > config file > hard-coded defaults.
-
-    :param config_path: Optional path to a YAML config file
-    :return: dict with keys under 'rfe' merged with defaults
+    Return the default configuration for the RFE tool.
+    Must match config.yaml.example exactly.
+    
+    :param: None
+    :return: Dict with default configuration values
     """
     
-    try:
-        defaults = {
-            "rfe": {
-                "n_features_to_select": None,  # None means auto / majority selection
-                "step": 1,
-                "estimator": "random_forest",
-                "random_state": 42,
+    return {
+        "rfe": {
+            "execution": {
+                "verbose": False,
+                "skip_train_if_model_exists": False,
+                "dataset_path": None,
             },
-            "cross_validation": {
-                "n_folds": 10,
-            },
-            "multiprocessing": {
-                "n_jobs": -1,  # -1 uses all processors
-                "cpu_processes": 1,
-            },
-            "caching": {
-                "enabled": True,
-                "pickle_protocol": 4,
+            "model": {"estimator": "random_forest", "random_state": 42},
+            "selection": {"n_features_to_select": 10, "step": 1},
+            "cross_validation": {"n_folds": 10},
+            "multiprocessing": {"n_jobs": -1, "cpu_processes": 1},
+            "caching": {"enabled": True, "pickle_protocol": 4},
+            "export": {
+                "results_csv_columns": [
+                    "timestamp",
+                    "tool",
+                    "model",
+                    "dataset",
+                    "hyperparameters",
+                    "cv_method",
+                    "train_test_split",
+                    "scaling",
+                    "cv_accuracy",
+                    "cv_precision",
+                    "cv_recall",
+                    "cv_f1_score",
+                    "test_accuracy",
+                    "test_precision",
+                    "test_recall",
+                    "test_f1_score",
+                    "test_fpr",
+                    "test_fnr",
+                    "feature_extraction_time_s",
+                    "training_time_s",
+                    "testing_time_s",
+                    "hardware",
+                    "top_features",
+                    "rfe_ranking",
+                ]
             },
         }
+    }
 
-        cfg_file = None
-        if config_path:
-            cfg_file = Path(config_path)
+
+def load_config_file(path: Optional[str]) -> Dict[str, Any]:
+    """
+    Load YAML config file. Returns empty dict if none found.
+    
+    :param path: Optional path to the config file. If None, will look for config.yaml or config.yaml.example in the script directory.
+    :return: Dict with the loaded configuration, or empty dict if no file found
+    """
+    
+    candidate = None
+    if path:
+        candidate = Path(path)
+    else:
+        p = Path(__file__).parent
+        c = p / "config.yaml"
+        e = p / "config.yaml.example"
+        if c.exists():
+            candidate = c
+        elif e.exists():
+            candidate = e
+
+    if candidate is None or not candidate.exists():
+        return {}
+
+    with open(candidate, "r", encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or {}
+
+
+def parse_cli_args() -> Dict[str, Any]:
+    """
+    Parse command-line arguments and return them as a dictionary.
+    
+    :param: None
+    :return: Dict with the parsed command-line arguments
+    """
+    
+    parser = argparse.ArgumentParser(description="Run RFE pipeline")
+    parser.add_argument("--config", type=str, default=None)
+    parser.add_argument("--dataset_path", type=str, default=None)
+    parser.add_argument("--n_features_to_select", type=int, default=None)
+    parser.add_argument("--step", type=int, default=None)
+    parser.add_argument("--estimator", type=str, default=None)
+    parser.add_argument("--random_state", type=int, default=None)
+    parser.add_argument("--n_folds", type=int, default=None)
+    parser.add_argument("--n_jobs", type=int, default=None)
+    parser.add_argument("--cpu_processes", type=int, default=None)
+    parser.add_argument("--caching_enabled", type=lambda s: str(s).lower() in ("1", "true", "yes", "y"), default=None)
+    parser.add_argument("--pickle_protocol", type=int, default=None)
+    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--skip_train_if_model_exists", action="store_true")
+    args = parser.parse_args()
+    return vars(args)
+
+
+def deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Recursively merge two dictionaries, with values from the override taking precedence.
+    
+    :param base: The base dictionary to merge into
+    :param override: The dictionary with values to override in the base
+    :return: A new dictionary resulting from the deep merge of base and override
+    """
+    
+    result = dict(base)
+    for k, v in (override or {}).items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = deep_merge_dicts(result[k], v)
         else:
-            candidate = Path(__file__).parent / "config.yaml"
-            candidate_example = Path(__file__).parent / "config.yaml.example"
-            if candidate.exists():
-                cfg_file = candidate
-            elif candidate_example.exists():
-                cfg_file = candidate_example
+            result[k] = v
+    return result
 
-        if cfg_file is None or not cfg_file.exists():
-            verbose_output(f"RFE config file not found, using defaults: {defaults['rfe']}")
-            return defaults
 
-        with open(cfg_file, "r", encoding="utf-8") as f:
-            loaded = yaml.safe_load(f) or {}
+def validate_config_structure(config: Dict[str, Any]) -> None:
+    """
+    Validates the structure and types of the configuration dictionary. Raises ValueError if any required section or key is missing or has an invalid type.
+    
+    :param config: The configuration dictionary to validate
+    :return: None
+    """
+    
+    if not isinstance(config, dict):
+        raise ValueError("config must be a dict")
+    if "rfe" not in config or not isinstance(config["rfe"], dict):
+        raise ValueError("Missing required top-level 'rfe' section in config")
+    r = config["rfe"]
+    required = ["execution", "model", "selection", "cross_validation", "multiprocessing", "caching", "export"]
+    for key in required:
+        if key not in r or not isinstance(r[key], dict):
+            raise ValueError(f"Missing required 'rfe.{key}' section in config or wrong type")
+    cols = r["export"].get("results_csv_columns")
+    if not isinstance(cols, list) or not cols:
+        raise ValueError("rfe.export.results_csv_columns must be a non-empty list in config")
+    sel = r["selection"]
+    if sel.get("n_features_to_select") is not None:
+        if not isinstance(sel["n_features_to_select"], int) or sel["n_features_to_select"] <= 0:
+            raise ValueError("rfe.selection.n_features_to_select must be an int > 0 or null")
+    if not isinstance(sel.get("step", 1), int) or sel.get("step", 1) <= 0:
+        raise ValueError("rfe.selection.step must be an int > 0")
+    cv = r["cross_validation"].get("n_folds")
+    if not isinstance(cv, int) or cv <= 1:
+        raise ValueError("rfe.cross_validation.n_folds must be an int > 1")
+    mp = r["multiprocessing"]
+    if not isinstance(mp.get("n_jobs"), int):
+        raise ValueError("rfe.multiprocessing.n_jobs must be an integer")
+    if not isinstance(mp.get("cpu_processes"), int) or mp.get("cpu_processes") < 1:
+        raise ValueError("rfe.multiprocessing.cpu_processes must be an int >= 1")
+    cache = r["caching"]
+    if not isinstance(cache.get("enabled"), bool):
+        raise ValueError("rfe.caching.enabled must be a boolean")
+    pp = cache.get("pickle_protocol")
+    if not isinstance(pp, int) or not (0 <= pp <= 5):
+        raise ValueError("rfe.caching.pickle_protocol must be int between 0 and 5")
 
-        cfg = dict(defaults)
-        for topk in ("rfe", "cross_validation", "multiprocessing", "caching"):
-            if topk in loaded and isinstance(loaded[topk], dict):
-                cfg[topk].update(loaded[topk])
 
-        return cfg
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+def get_config(cli_args: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Dict[str, str]]:
+    """
+    Returns the merged configuration dictionary and a dictionary of sources for each key in the merged config.
+    
+    :param cli_args: Optional dictionary of command-line arguments to override config values
+    :return: Tuple of (merged_config, sources_dict) where merged_config is the final configuration dictionary and sources_dict maps config sections to their source ('default', 'file', 'cli')
+    """
+    
+    defaults = get_default_config()
+    file_cfg = load_config_file((cli_args or {}).get("config"))
+
+    file_rfe = file_cfg.get("rfe") if isinstance(file_cfg, dict) and "rfe" in file_cfg else file_cfg
+    merged = deep_merge_dicts(defaults["rfe"], file_rfe or {})
+
+
+    cli = cli_args or {}
+    exec_cfg = merged.get("execution", {})
+    if cli.get("dataset_path") is not None:
+        exec_cfg["dataset_path"] = cli.get("dataset_path")
+    if cli.get("verbose"):
+        exec_cfg["verbose"] = True
+    if cli.get("skip_train_if_model_exists"):
+        exec_cfg["skip_train_if_model_exists"] = True
+
+    model_cfg = merged.get("model", {})
+    if cli.get("estimator") is not None:
+        model_cfg["estimator"] = cli.get("estimator")
+    if cli.get("random_state") is not None:
+        model_cfg["random_state"] = cli.get("random_state")
+
+    sel = merged.get("selection", {})
+    if cli.get("n_features_to_select") is not None:
+        sel["n_features_to_select"] = cli.get("n_features_to_select")
+    if cli.get("step") is not None:
+        sel["step"] = cli.get("step")
+
+    cv = merged.get("cross_validation", {})
+    if cli.get("n_folds") is not None:
+        cv["n_folds"] = cli.get("n_folds")
+
+    mp = merged.get("multiprocessing", {})
+    if cli.get("n_jobs") is not None:
+        mp["n_jobs"] = cli.get("n_jobs")
+    if cli.get("cpu_processes") is not None:
+        mp["cpu_processes"] = cli.get("cpu_processes")
+
+    cache = merged.get("caching", {})
+    if cli.get("caching_enabled") is not None:
+        cache["enabled"] = bool(cli.get("caching_enabled"))
+    if cli.get("pickle_protocol") is not None:
+        cache["pickle_protocol"] = int(cli.get("pickle_protocol"))
+
+    merged["execution"] = exec_cfg
+    merged["model"] = model_cfg
+    merged["selection"] = sel
+    merged["cross_validation"] = cv
+    merged["multiprocessing"] = mp
+    merged["caching"] = cache
+
+    final = {"rfe": merged}
+    validate_config_structure(final)
+    sources = {"rfe": "merged"}
+    return final, sources
+
+
+def get_results_csv_columns(config: Optional[Dict[str, Any]] = None) -> list:
+    """
+    Get the list of columns to be used in the results CSV export from the configuration.
+    
+    :param config: Optional configuration dictionary to read the columns from. If None, will use the global CONFIG variable.
+    :return: List of column names to be used in the results CSV export
+    """
+    
+    cfg = config or CONFIG
+    try:
+        cols = cfg["rfe"]["export"]["results_csv_columns"]
+    except Exception:
+        raise ValueError("rfe.export.results_csv_columns missing from configuration")
+    if not isinstance(cols, list) or not cols:
+        raise ValueError("rfe.export.results_csv_columns must be a non-empty list")
+    return cols
+
+
+def is_verbose() -> bool:
+    """
+    Verify if verbose output is enabled based on the CLI arguments or configuration.
+    
+    :param: None
+    :return: True if verbose output is enabled, False otherwise
+    """
+    
+    return bool((CLI_ARGS.get("verbose") if isinstance(CLI_ARGS, dict) else False) or (CONFIG.get("rfe", {}).get("execution", {}).get("verbose") if isinstance(CONFIG, dict) else False))
 
 
 def verify_dot_env_file():
@@ -485,7 +644,8 @@ def run_rfe_selector(X_train, y_train, n_select=10, step=1, estimator_name="rand
     try:
         estimator_name_l = (estimator_name or "random_forest").lower()
         if "random" in estimator_name_l:
-            model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=N_JOBS)
+            n_jobs_val = CONFIG.get("rfe", {}).get("multiprocessing", {}).get("n_jobs") if isinstance(CONFIG, dict) else -1
+            model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=int(n_jobs_val) if n_jobs_val is not None else -1)
         else:
             raise ValueError(f"Unsupported estimator '{estimator_name}'. Supported: 'random_forest'")
 
@@ -534,7 +694,8 @@ def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state
 
         estimator_name_l = (estimator_name or "random_forest").lower()
         if "random" in estimator_name_l:
-            model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=N_JOBS)  # Initialize the model
+            n_jobs_val = CONFIG.get("rfe", {}).get("multiprocessing", {}).get("n_jobs") if isinstance(CONFIG, dict) else -1
+            model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=int(n_jobs_val) if n_jobs_val is not None else -1)  # Initialize the model
         else:
             raise ValueError(f"Unsupported estimator '{estimator_name}' for compute_rfe_metrics. Supported: 'random_forest'")
 
@@ -747,7 +908,7 @@ def get_hardware_specifications():
         raise
 
 
-def populate_hardware_column_and_order(df, column_name="hardware"):
+def populate_hardware_column_and_order(df, config: Optional[Dict[str, Any]] = None, column_name="hardware"):
     """
     Add a hardware-specs column to `df` and reorder columns so the hardware
     column appears immediately after `elapsed_time_s`.
@@ -770,11 +931,9 @@ def populate_hardware_column_and_order(df, column_name="hardware"):
             + hardware_specs["os"]
         )  # Add hardware specs column
 
-        columns_order = [
-            (column_name if str(c).lower() == "hardware" else c) for c in RFE_RESULTS_CSV_COLUMNS
-        ]
-
-        return df_results.reindex(columns=columns_order)  # Reorder columns
+        cols = get_results_csv_columns(config)
+        columns_order = [(column_name if str(c).lower() == "hardware" else c) for c in cols]
+        return df_results.reindex(columns=columns_order)
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -802,7 +961,9 @@ def export_final_model(X_numeric, feature_columns, top_features, y_array, csv_pa
         X_full_scaled = scaler_full.fit_transform(X_numeric.values)  # Scale all numeric features
         sel_indices = [i for i, f in enumerate(feature_columns) if f in top_features]  # Get indices for top features
         X_final = X_full_scaled[:, sel_indices] if sel_indices else X_full_scaled  # Select columns or keep all if none
-        final_model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=N_JOBS)  # Instantiate final RF
+        model_rs = CONFIG.get("rfe", {}).get("model", {}).get("random_state") if isinstance(CONFIG, dict) else 42
+        n_jobs_val = CONFIG.get("rfe", {}).get("multiprocessing", {}).get("n_jobs") if isinstance(CONFIG, dict) else -1
+        final_model = RandomForestClassifier(n_estimators=100, random_state=int(model_rs) if model_rs is not None else 42, n_jobs=int(n_jobs_val) if n_jobs_val is not None else -1)  # Instantiate final RF
         final_model.fit(X_final, y_array)  # Fit final model on entire dataset using selected features
 
         models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE/Models/"  # Models output directory under RFE/Models subdir
@@ -956,7 +1117,8 @@ def save_rfe_results(csv_path, run_results):
 
         rows = []
         for r in runs:
-            data: Dict[str, Optional[Any]] = {c: None for c in RFE_RESULTS_CSV_COLUMNS}
+            cols = get_results_csv_columns(CONFIG if CONFIG else None)
+            data: Dict[str, Optional[Any]] = {c: None for c in cols}
             ts = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
             data["timestamp"] = ts
             data["tool"] = "RFE"
@@ -1048,7 +1210,8 @@ def save_rfe_results(csv_path, run_results):
 
             rows.append(data)
 
-        df_new = pd.DataFrame(rows, columns=RFE_RESULTS_CSV_COLUMNS)
+        cols = get_results_csv_columns(CONFIG if CONFIG else None)
+        df_new = pd.DataFrame(rows, columns=cols)
         output_dir = os.path.join(os.path.dirname(csv_path), "Feature_Analysis", "RFE")
         os.makedirs(output_dir, exist_ok=True)
         run_csv_path = os.path.join(output_dir, "RFE_Run_Results.csv")
@@ -1061,11 +1224,11 @@ def save_rfe_results(csv_path, run_results):
                     back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")
                     df_existing["timestamp"] = back_ts
 
-                for c in RFE_RESULTS_CSV_COLUMNS:
+                for c in cols:
                     if c not in df_existing.columns:
                         df_existing[c] = None
 
-                df_combined = pd.concat([df_existing[RFE_RESULTS_CSV_COLUMNS], df_new], ignore_index=True, sort=False)
+                df_combined = pd.concat([df_existing[cols], df_new], ignore_index=True, sort=False)
 
                 try:
                     df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")
@@ -1080,7 +1243,7 @@ def save_rfe_results(csv_path, run_results):
         else:
             df_out = df_new
 
-        df_out = populate_hardware_column_and_order(df_out, column_name="hardware")
+        df_out = populate_hardware_column_and_order(df_out, CONFIG if CONFIG else None, column_name="hardware")
 
         try:
             generate_csv_and_image(df_out, run_csv_path, is_visualizable=True)  # Save CSV and generate PNG image
@@ -1247,7 +1410,8 @@ def get_final_model(csv_path, X_train, y_train, top_features, feature_columns):
     
     try:
         loaded_hyperparams = None
-        if SKIP_TRAIN_IF_MODEL_EXISTS:
+        skip_train = CONFIG.get("rfe", {}).get("execution", {}).get("skip_train_if_model_exists") if isinstance(CONFIG, dict) else False
+        if skip_train:
             loaded = load_exported_artifacts(csv_path)
             if loaded is not None:
                 final_model, scaler_full, loaded_features, loaded_params = loaded
@@ -1421,8 +1585,9 @@ def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparamet
         top_features, rfe_ranking = extract_top_features(selector, feature_columns)  # Extract selected features and rankings
         sorted_rfe_ranking = sorted(rfe_ranking.items(), key=lambda x: x[1])  # Sort features by ranking (ascending)
 
-        print_metrics(metrics_tuple) if VERBOSE else None  # Optionally print metrics
-        print_top_features(top_features, rfe_ranking) if VERBOSE else None  # Optionally print top features
+        if is_verbose():
+            print_metrics(metrics_tuple)
+            print_top_features(top_features, rfe_ranking)
 
         final_model, scaler_full, top_features, loaded_hyperparams = get_final_model(csv_path, X_numeric, y_array, top_features, feature_columns)  # Get final model/scaler
         eval_metrics = evaluate_exported_model(final_model, scaler_full, X_numeric, feature_columns, top_features, y_array)  # Evaluate on full dataset
@@ -1478,7 +1643,7 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n
         unique_tr, counts_tr = np.unique(y_train_array, return_counts=True)
         min_class_count_tr = counts_tr.min() if counts_tr.size > 0 else 0
 
-        resolved_n = int(CROSS_N_FOLDS) if CROSS_N_FOLDS is not None else 10
+        resolved_n = int(CONFIG.get("rfe", {}).get("cross_validation", {}).get("n_folds", 10))
         n_splits = int(min(resolved_n, len(y_train_array), min_class_count_tr))
         if n_splits < 2:
             raise ValueError(
@@ -1551,8 +1716,9 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n
             feature_extraction_time=total_feature_extraction,
         )  # Build results dict
 
-        print_metrics(tuple(mean_metrics)) if VERBOSE else None  # Optionally print aggregated metrics
-        print_top_features(top_features, avg_rfe_ranking) if VERBOSE else None  # Optionally print aggregated top features and avg ranks
+        if is_verbose():
+            print_metrics(tuple(mean_metrics))
+            print_top_features(top_features, avg_rfe_ranking)
 
         save_rfe_results(csv_path, run_results)  # Save aggregated run results to CSV
         print_run_summary(run_results)  # Concise terminal summary
@@ -1577,42 +1743,30 @@ def run_rfe(csv_path, n_features_to_select=None, step=None, estimator_name=None,
             f"{BackgroundColors.GREEN}Starting RFE analysis on dataset: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}"
         )
 
-        hyperparameters = {}  # Default hyperparameters (to be extended later)
+        hyperparameters = {}
 
-        cfg = get_config(CONFIG_FILE) if CONFIG_FILE else get_config()
-        rfe_cfg = cfg.get("rfe", {}) if isinstance(cfg, dict) else {}
+        if not CONFIG or "rfe" not in CONFIG:
+            raise ValueError("Configuration not initialized. Call get_config() and set CONFIG before running.")
+        rfe_cfg = CONFIG["rfe"]
 
-        global N_JOBS, CROSS_N_FOLDS, CPU_PROCESSES, CACHING_ENABLED, PICKLE_PROTOCOL
-        if N_JOBS is None:
-            multi_cfg = cfg.get("multiprocessing", {}) if isinstance(cfg, dict) else {}
-            try:
-                N_JOBS = int(multi_cfg.get("n_jobs", -1))
-            except Exception:
-                N_JOBS = -1
-        if CROSS_N_FOLDS is None:
-            cv_cfg = cfg.get("cross_validation", {}) if isinstance(cfg, dict) else {}
-            try:
-                CROSS_N_FOLDS = int(cv_cfg.get("n_folds", 10))
-            except Exception:
-                CROSS_N_FOLDS = 10
-        if CPU_PROCESSES is None:
-            try:
-                CPU_PROCESSES = int(cfg.get("multiprocessing", {}).get("cpu_processes", 1))
-            except Exception:
-                CPU_PROCESSES = 1
-        if CACHING_ENABLED is None:
-            CACHING_ENABLED = bool(cfg.get("caching", {}).get("enabled", True))
-        if PICKLE_PROTOCOL is None:
-            try:
-                PICKLE_PROTOCOL = int(cfg.get("caching", {}).get("pickle_protocol", 4))
-            except Exception:
-                PICKLE_PROTOCOL = 4
+        multi_cfg = rfe_cfg.get("multiprocessing", {})
+        n_jobs = int(multi_cfg.get("n_jobs", -1))
+        cpu_procs = int(multi_cfg.get("cpu_processes", 1))
 
-        cfg_n_select = rfe_cfg.get("n_features_to_select")
-        cfg_step = rfe_cfg.get("step", 1)
-        cfg_estimator = rfe_cfg.get("estimator", "random_forest")
-        cfg_random_state = int(rfe_cfg.get("random_state", 42))
+        cv_cfg = rfe_cfg.get("cross_validation", {})
+        n_folds = int(cv_cfg.get("n_folds", 10))
 
+        cache_cfg = rfe_cfg.get("caching", {})
+        caching_enabled = bool(cache_cfg.get("enabled", True))
+        pickle_protocol = int(cache_cfg.get("pickle_protocol", 4))
+
+        sel_cfg = rfe_cfg.get("selection", {})
+        cfg_n_select = sel_cfg.get("n_features_to_select")
+        cfg_step = sel_cfg.get("step", 1)
+
+        model_cfg = rfe_cfg.get("model", {})
+        cfg_estimator = model_cfg.get("estimator", "random_forest")
+        cfg_random_state = int(model_cfg.get("random_state", 42))
 
         default_n_select = n_features_to_select if n_features_to_select is not None else cfg_n_select
         default_step = step if step is not None else cfg_step
@@ -1799,7 +1953,7 @@ def play_sound():
         raise
 
 
-def main(n_features_to_select=None, step=None, estimator_name=None, random_state=None, config_path=None):
+def main(n_features_to_select=None, step=None, estimator_name=None, random_state=None, csv_path=None):
     """
     Main function.
 
@@ -1811,15 +1965,16 @@ def main(n_features_to_select=None, step=None, estimator_name=None, random_state
         print(
             f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Recursive Feature Elimination (RFE){BackgroundColors.GREEN} program!{Style.RESET_ALL}"
         )  # Output the welcome message
-        start_time = datetime.datetime.now()  # Get the start time of the program
-        
-        setup_telegram_bot()  # Setup Telegram bot if configured
+        start_time = datetime.datetime.now()
+        setup_telegram_bot()
 
-        dataset_name = os.path.splitext(os.path.basename(CSV_FILE))[0]  # Get dataset name for messages
+        dataset_to_use = csv_path or CONFIG.get("rfe", {}).get("execution", {}).get("dataset_path")
+        if not dataset_to_use:
+            raise ValueError("No dataset path provided. Use --dataset_path or set rfe.execution.dataset_path in config.")
 
-        send_telegram_message(TELEGRAM_BOT, [f"Starting RFE Feature Selection on {dataset_name} at {start_time.strftime('%d/%m/%Y - %H:%M:%S')}"])  # Send starting message
-
-        run_rfe(CSV_FILE, n_features_to_select=n_features_to_select, step=step, estimator_name=estimator_name, random_state=random_state)
+        dataset_name = os.path.splitext(os.path.basename(dataset_to_use))[0]
+        send_telegram_message(TELEGRAM_BOT, [f"Starting RFE Feature Selection on {dataset_name} at {start_time.strftime('%d/%m/%Y - %H:%M:%S')}"])
+        run_rfe(dataset_to_use, n_features_to_select=n_features_to_select, step=step, estimator_name=estimator_name, random_state=random_state)
 
         finish_time = datetime.datetime.now()  # Get the finish time of the program
         print(
@@ -1839,90 +1994,30 @@ def main(n_features_to_select=None, step=None, estimator_name=None, random_state
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Run RFE pipeline and optionally load existing exported models."
-    )  # CLI description
-    parser.add_argument("--config", type=str, default=None, help="Path to config.yaml (overrides auto-detection)")
-    parser.add_argument(
-        "--skip-train-if-model-exists",
-        dest="skip_train",
-        action="store_true",
-        help="If set, do not retrain; load existing exported artifacts and evaluate.",
-    )  # Flag to skip training when exported artifacts exist
-    parser.add_argument(
-        "--verbose",
-        dest="verbose",
-        action="store_true",
-        help="Enable verbose output during the run.",
-    )  # Flag to enable verbose logging
-    parser.add_argument(
-        "--csv",
-        dest="csv",
-        type=str,
-        default=None,
-        help="Optional: path to dataset CSV to analyze. If omitted, uses the default in main().",
-    )  # Optional CSV override
-    parser.add_argument("--n_features_to_select", type=int, default=None, help="Number of features to select (overrides config)")
-    parser.add_argument("--step", type=int, default=None, help="RFE step (number of features to remove per iteration)")
-    parser.add_argument("--estimator", type=str, default=None, help="Estimator name for RFE (default: random_forest)")
-    parser.add_argument("--random_state", type=int, default=None, help="Random seed for reproducibility (overrides config)")
-    # Cross-validation / multiprocessing / caching CLI overrides
-    parser.add_argument("--n_folds", type=int, default=None, help="Number of CV folds (overrides config.cross_validation.n_folds)")
-    parser.add_argument("--n_jobs", type=int, default=None, help="Number of parallel jobs for estimators/CV (-1 uses all cores)")
-    parser.add_argument("--cpu_processes", type=int, default=None, help="Number of CPU processes for multiprocessing (overrides config.multiprocessing.cpu_processes)")
-    parser.add_argument(
-        "--cache_enabled",
-        type=lambda s: str(s).lower() in ("1", "true", "yes", "y"),
-        default=None,
-        help="Enable/disable caching (true/false). Overrides config.caching.enabled",
-    )
-    parser.add_argument("--pickle_protocol", type=int, default=None, help="Pickle protocol (0-5) to use when caching")
-    args = parser.parse_args()  # Parse CLI args
+    """
+    This is the standard boilerplate that calls the main() function.
 
-    SKIP_TRAIN_IF_MODEL_EXISTS = bool(args.skip_train)  # Respect the user's CLI choice
-    VERBOSE = bool(args.verbose)  # Respect the user's request to print verbose output
-    CSV_FILE = args.csv if args.csv else CSV_FILE  # Use provided CSV or default
+    :return: None
+    """
+    
+    cli = parse_cli_args()
+    CLI_ARGS.update(cli)
+    cfg, sources = get_config(cli)
+    CONFIG.update(cfg)
 
-    # Load config to determine defaults (if any)
-    cfg = get_config(args.config)
-    CONFIG_FILE = args.config  # remember chosen config path for run-time config lookups
-    # extract top-level sections for easier precedence resolution
-    cross_cfg = cfg.get("cross_validation", {}) if isinstance(cfg, dict) else {}
-    multi_cfg = cfg.get("multiprocessing", {}) if isinstance(cfg, dict) else {}
-    cache_cfg = cfg.get("caching", {}) if isinstance(cfg, dict) else {}
-    rfe_cfg = cfg.get("rfe", {}) if isinstance(cfg, dict) else {}
+    # initialize logger and global exception hook now that config is available
+    logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)
+    sys.stdout = logger
+    sys.stderr = logger
+    setup_global_exception_hook()
 
-    # Resolve parameters precedence: CLI > config > defaults
-    n_features_to_select = args.n_features_to_select if args.n_features_to_select is not None else rfe_cfg.get("n_features_to_select")
-    step = args.step if args.step is not None else rfe_cfg.get("step", 1)
-    estimator_name = args.estimator if args.estimator is not None else rfe_cfg.get("estimator", "random_forest")
-    random_state = int(args.random_state) if args.random_state is not None else int(rfe_cfg.get("random_state", 42))
+    dataset_arg = cli.get("dataset_path") or CONFIG.get("rfe", {}).get("execution", {}).get("dataset_path")
+    if dataset_arg is None:
+        raise ValueError("dataset path must be provided via --dataset_path or config.rfe.execution.dataset_path")
 
-    resolved_n_folds = int(args.n_folds) if args.n_folds is not None else int(cross_cfg.get("n_folds", 10))
-    if resolved_n_folds < 2:
-        raise ValueError(f"cross_validation.n_folds must be >= 2, got {resolved_n_folds}")
+    n_features = cli.get("n_features_to_select") if cli.get("n_features_to_select") is not None else None
+    step_arg = cli.get("step") if cli.get("step") is not None else None
+    estimator_arg = cli.get("estimator") if cli.get("estimator") is not None else None
+    rs_arg = cli.get("random_state") if cli.get("random_state") is not None else None
 
-    resolved_n_jobs = args.n_jobs if args.n_jobs is not None else multi_cfg.get("n_jobs", -1)
-    if not isinstance(resolved_n_jobs, int):
-        raise ValueError("multiprocessing.n_jobs must be an integer (use -1 for all cores)")
-    if resolved_n_jobs != -1 and resolved_n_jobs < 1:
-        raise ValueError("multiprocessing.n_jobs must be -1 or >= 1")
-
-    resolved_cpu_procs = int(args.cpu_processes) if args.cpu_processes is not None else int(multi_cfg.get("cpu_processes", 1))
-    if resolved_cpu_procs < 1:
-        raise ValueError("multiprocessing.cpu_processes must be >= 1")
-
-    resolved_cache_enabled = bool(args.cache_enabled) if args.cache_enabled is not None else bool(cache_cfg.get("enabled", True))
-    resolved_pickle_protocol = int(args.pickle_protocol) if args.pickle_protocol is not None else int(cache_cfg.get("pickle_protocol", 4))
-    if not (0 <= resolved_pickle_protocol <= 5):
-        raise ValueError("caching.pickle_protocol must be an integer between 0 and 5")
-
-    N_JOBS = resolved_n_jobs
-    CROSS_N_FOLDS = resolved_n_folds
-    CPU_PROCESSES = resolved_cpu_procs
-    CACHING_ENABLED = resolved_cache_enabled
-    PICKLE_PROTOCOL = resolved_pickle_protocol
-
-    print(f"RFE params: n_features_to_select={n_features_to_select} (cli/config/default), step={step}, estimator={estimator_name}, random_state={random_state}")
-
-    main(n_features_to_select=n_features_to_select, step=step, estimator_name=estimator_name, random_state=random_state, config_path=args.config)
+    main(n_features_to_select=n_features, step=step_arg, estimator_name=estimator_arg, random_state=rs_arg, csv_path=dataset_arg)
