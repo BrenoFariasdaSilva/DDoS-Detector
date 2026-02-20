@@ -101,6 +101,7 @@ from sklearn.linear_model import LogisticRegression  # For logistic regression m
 from sklearn.manifold import TSNE  # For t-SNE dimensionality reduction
 from sklearn.metrics import (  # For performance metrics
     accuracy_score,
+    classification_report,
     confusion_matrix,
     f1_score,
     precision_score,
@@ -1266,6 +1267,171 @@ def merge_original_and_augmented(original_df, augmented_df, config=None):
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
+
+
+def extract_class_metrics(y_true, y_pred):
+    """
+    Extract per-class and global classification metrics without recomputing predictions.
+
+    :param y_true: True labels (array-like)
+    :param y_pred: Predicted labels (array-like)
+    :return: dict with structure specified by requirements
+    """
+    
+    try:
+        report = classification_report(y_true, y_pred, output_dict=True, zero_division=0)
+
+        per_class = {}
+        for k, v in report.items():
+
+            if k in ("accuracy", "macro avg", "weighted avg", "micro avg"):
+                continue
+
+            per_class[k] = {
+                "precision": float(v.get("precision", 0.0)),
+                "recall": float(v.get("recall", 0.0)),
+                "f1": float(v.get("f1-score", v.get("f1", 0.0)))
+            }
+
+        global_metrics = {
+            "accuracy": float(accuracy_score(y_true, y_pred)),
+            "macro_f1": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
+            "weighted_f1": float(f1_score(y_true, y_pred, average="weighted", zero_division=0)),
+            "macro_precision": float(precision_score(y_true, y_pred, average="macro", zero_division=0)),
+            "macro_recall": float(recall_score(y_true, y_pred, average="macro", zero_division=0)),
+        }
+
+        return {"per_class": per_class, "global": global_metrics}
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        return {"per_class": {}, "global": {}}
+
+
+def plot_per_class_metric(metric_dict: dict, metric_name: str, output_path: str, dpi: int, fmt: str) -> None:
+    """
+    Plot a per-class bar chart.
+
+    :param metric_dict: mapping class_label -> {precision, recall, f1}
+    :param metric_name: one of 'precision','recall','f1'
+    :param output_path: full path to save file
+    :param dpi: dpi integer > 0
+    :param fmt: file format string
+    """
+
+    try:
+        labels = sorted(metric_dict.keys(), key=lambda x: str(x))
+        values = [float(metric_dict[l].get(metric_name, 0.0)) for l in labels]
+
+        fig, ax = plt.subplots(figsize=(max(6, len(labels) * 0.4), 6))
+        bars = ax.bar(labels, values, color="tab:blue", alpha=0.8)
+        ax.set_ylim(0.0, 1.0)
+        ax.set_ylabel(metric_name.capitalize())
+        ax.set_xlabel("Class")
+        ax.set_title(f"Stacking - {metric_name.capitalize()} per Class")
+        ax.grid(axis="y", alpha=0.25)
+
+        for b, v in zip(bars, values):
+            ax.text(b.get_x() + b.get_width() / 2.0, v + 0.01, f"{v:.2f}", ha="center", va="bottom", fontsize=8)
+
+        plt.tight_layout()
+        fig.savefig(output_path, dpi=dpi, format=fmt, bbox_inches="tight")
+        plt.close(fig)
+    except Exception as e:
+        try:
+            plt.close()
+        except Exception:
+            pass
+        raise
+
+
+def plot_global_metrics(global_metrics: dict, output_path: str, dpi: int, fmt: str) -> None:
+    """
+    Plot a deterministic ordered global metrics bar chart.
+    Order: Accuracy, Macro F1, Weighted F1, Macro Precision, Macro Recall
+    
+    :param global_metrics: dict with keys like 'accuracy', 'macro_f1', etc.
+    :param output_path: full path to save file
+    :param dpi: dpi integer > 0
+    :param fmt: file format string
+    :return: None (saves plot to file)
+    """
+    
+    try:
+        order = ["accuracy", "macro_f1", "weighted_f1", "macro_precision", "macro_recall"]
+        labels = ["Accuracy", "Macro F1", "Weighted F1", "Macro Precision", "Macro Recall"]
+        values = [float(global_metrics.get(k, 0.0)) for k in order]
+
+        fig, ax = plt.subplots(figsize=(8, 6))
+        bars = ax.bar(labels, values, color="tab:green", alpha=0.85)
+        ax.set_ylim(0.0, 1.0)
+        ax.set_ylabel("Score")
+        ax.set_title("Stacking - Global Metrics")
+        ax.grid(axis="y", alpha=0.25)
+
+        for b, v in zip(bars, values):
+            ax.text(b.get_x() + b.get_width() / 2.0, v + 0.01, f"{v:.2f}", ha="center", va="bottom", fontsize=9)
+
+        plt.tight_layout()
+        fig.savefig(output_path, dpi=dpi, format=fmt, bbox_inches="tight")
+        plt.close(fig)
+    except Exception as e:
+        try:
+            plt.close()
+        except Exception:
+            pass
+        raise
+
+
+def generate_and_save_metric_plots(y_true, y_pred, stacking_config: dict, resolved_results_dir: str) -> None:
+    """
+    Orchestrate extraction and saving of all required plots into
+    <Feature_Analysis>/<stacking.results_dir>/Plots/
+
+    :param y_true: true labels
+    :param y_pred: predicted labels (must be the same predictions used to compute metrics)
+    :param stacking_config: config dict for stacking (may contain 'plots')
+    :param resolved_results_dir: absolute or project-relative path to stacking results directory
+    """
+    
+    try:
+        plots_cfg = stacking_config.get("plots", {}) if stacking_config is not None else {}
+        enabled = plots_cfg.get("enabled", True)
+        if not enabled:
+            return
+
+        dpi = plots_cfg.get("dpi", 300)
+        fmt = plots_cfg.get("format", "png")
+
+        if not isinstance(dpi, int) or dpi <= 0:
+            raise ValueError("plots.dpi must be an integer > 0")
+        if fmt not in ("png", "jpg", "pdf", "svg"):
+            raise ValueError("plots.format must be one of: png, jpg, pdf, svg")
+
+        plots_dir = os.path.join(os.path.abspath(resolved_results_dir), config.get("paths", {}).get("plots_subdir", "Plots"))
+        print(f"[STACKING][PLOTS] Saving plots to: {plots_dir}")
+        os.makedirs(plots_dir, exist_ok=True)
+
+        metrics = extract_class_metrics(y_true, y_pred)
+
+        per = metrics.get("per_class", {})
+
+        per_class_f1_path = os.path.join(plots_dir, f"per_class_f1.{fmt}")
+        per_class_prec_path = os.path.join(plots_dir, f"per_class_precision.{fmt}")
+        per_class_rec_path = os.path.join(plots_dir, f"per_class_recall.{fmt}")
+
+        plot_per_class_metric(per, "f1", per_class_f1_path, dpi, fmt)
+        plot_per_class_metric(per, "precision", per_class_prec_path, dpi, fmt)
+        plot_per_class_metric(per, "recall", per_class_rec_path, dpi, fmt)
+
+        global_path = os.path.join(plots_dir, f"global_metrics.{fmt}")
+        plot_global_metrics(metrics.get("global", {}), global_path, dpi, fmt)
+
+        verbose_output(f"[STACKING][PLOTS] Saved: {per_class_f1_path}, {per_class_prec_path}, {per_class_rec_path}, {global_path}")
+    except Exception as e:
+        verbose_output(f"{BackgroundColors.YELLOW}Plot generation failed: {e}{Style.RESET_ALL}")
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        return
 
 
 def calculate_metric_improvement(original_value, augmented_value):
@@ -3312,7 +3478,7 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
             f"{BackgroundColors.GREEN}Evaluation complete. Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed_time))}s{Style.RESET_ALL}"
         )  # Output the final result summary
 
-        return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
+        return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)), y_pred)  # Return the metrics tuple and predictions
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -5572,7 +5738,7 @@ def evaluate_on_dataset(
 
             stacking_metrics = evaluate_stacking_classifier(
                 stacking_model, X_train_df, y_train, X_test_df, y_test
-            )  # Evaluate stacking model with DataFrames
+            )  # Evaluate stacking model with DataFrames (returns metrics + predictions)
 
             try:
                 dataset_name = os.path.basename(os.path.dirname(file))
@@ -5580,7 +5746,17 @@ def evaluate_on_dataset(
             except Exception:
                 pass
 
-            s_acc, s_prec, s_rec, s_f1, s_fpr, s_fnr, s_elapsed = stacking_metrics
+            s_acc, s_prec, s_rec, s_f1, s_fpr, s_fnr, s_elapsed, s_y_pred = stacking_metrics
+
+            try:
+                file_path_obj = Path(file)
+                feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"
+                stacking_results_subdir = config.get("stacking", {}).get("results_dir", "Stacking")
+                resolved_results_dir = os.path.join(stacking_results_subdir, feature_analysis_dir.name)
+                generate_and_save_metric_plots(y_test, s_y_pred, config.get("stacking", {}), resolved_results_dir)
+            except Exception:
+                pass
+            
             stacking_result_entry = {
                 "model": stacking_model.__class__.__name__,
                 "dataset": os.path.relpath(file),
