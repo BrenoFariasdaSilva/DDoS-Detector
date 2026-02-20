@@ -288,6 +288,12 @@ stacking:  # Stacking experiment settings
     - "Data_Separability"
     - "Feature_Analysis"
 
+  plots:
+    plots_subdir: "Plots/"
+    enabled: true
+    dpi: 300
+    format: "png"
+
   results_csv_columns:                 # Column ordering for results CSV export
     - "model"                  # Model identifier (e.g., "RandomForest", "SVM")
     - "dataset"                # Dataset name extracted from file path
