@@ -46,6 +46,69 @@ execution:  # Execution control and per-script overrides
     - "Data_Separability"
     - "Feature_Analysis"
 
+# ------------------------------------------------------------------------------
+# Hyperparameters Optimization configuration (mandatory fields for script)
+# ------------------------------------------------------------------------------
+hyperparameters_optimization:
+  execution:
+    verbose: false
+    n_jobs: -2
+    skip_train_if_model_exists: false
+
+  export:
+    results_dir: "Feature_Analysis/Hyperparameter_Optimization"
+    results_filename: "Hyperparameter_Optimization_Results.csv"
+    model_export_base_dir: "Feature_Analysis/Hyperparameter_Optimization/Models"
+    cache_prefix: "Cache_"
+
+  dataset_processing:
+    match_filenames_to_process: [""]
+    ignore_files: ["Hyperparameter_Optimization_Results.csv"]
+    ignore_dirs:
+      - "Classifiers_Hyperparameters"
+      - "Dataset_Description"
+      - "Data_Separability"
+      - "Feature_Analysis"
+
+  models:
+    enabled_models:
+      - "Random Forest"
+      - "SVM"
+      - "XGBoost"
+      - "Logistic Regression"
+      - "KNN"
+      - "Nearest Centroid"
+      - "Gradient Boosting"
+      - "LightGBM"
+      - "MLP (Neural Net)"
+
+  datasets:
+    CICDDoS2019-Dataset:
+      - "./Datasets/CICDDoS2019/01-12/"
+      - "./Datasets/CICDDoS2019/03-11/"
+
+  results_schema:
+    columns:
+      - "base_csv"
+      - "model"
+      - "best_params"
+      - "best_cv_f1_score"
+      - "n_features"
+      - "feature_selection_method"
+      - "dataset"
+      - "elapsed_time_s"
+      - "accuracy"
+      - "precision"
+      - "recall"
+      - "fpr"
+      - "fnr"
+      - "tpr"
+      - "tnr"
+      - "matthews_corrcoef"
+      - "roc_auc_score"
+      - "cohen_kappa"
+      - "Hardware"
+
 # ==============================================================================
 # DATASET — Used by multiple scripts
 # ==============================================================================
