@@ -446,6 +446,8 @@ rfe:
     pickle_protocol: 4
 
   export:
+    results_dir: "Feature_Analysis/RFE"
+    results_filename: "RFE_Results.csv"
     results_csv_columns:
       - timestamp
       - tool
