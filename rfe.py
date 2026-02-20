@@ -159,6 +159,8 @@ def get_default_config() -> Dict[str, Any]:
             "multiprocessing": {"n_jobs": -1, "cpu_processes": 1},
             "caching": {"enabled": True, "pickle_protocol": 4},
             "export": {
+                "results_dir": "Feature_Analysis/RFE",
+                "results_filename": "RFE_Results.csv",
                 "results_csv_columns": [
                     "timestamp",
                     "tool",
@@ -239,6 +241,8 @@ def parse_cli_args() -> Dict[str, Any]:
     parser.add_argument("--pickle_protocol", type=int, default=None)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--skip_train_if_model_exists", action="store_true")
+    parser.add_argument("--results_dir", type=str, default=None, help="Override results directory for RFE exports (overrides config.rfe.export.results_dir)")
+    parser.add_argument("--results_filename", type=str, default=None, help="Override results filename for RFE exports (overrides config.rfe.export.results_filename)")
     args = parser.parse_args()
     return vars(args)
 
@@ -354,6 +358,11 @@ def get_config(cli_args: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any
         cache["enabled"] = bool(cli.get("caching_enabled"))
     if cli.get("pickle_protocol") is not None:
         cache["pickle_protocol"] = int(cli.get("pickle_protocol"))
+
+    if cli.get("results_dir") is not None:
+        merged.setdefault("export", {})["results_dir"] = cli.get("results_dir")
+    if cli.get("results_filename") is not None:
+        merged.setdefault("export", {})["results_filename"] = cli.get("results_filename")
 
     merged["execution"] = exec_cfg
     merged["model"] = model_cfg
@@ -966,7 +975,17 @@ def export_final_model(X_numeric, feature_columns, top_features, y_array, csv_pa
         final_model = RandomForestClassifier(n_estimators=100, random_state=int(model_rs) if model_rs is not None else 42, n_jobs=int(n_jobs_val) if n_jobs_val is not None else -1)  # Instantiate final RF
         final_model.fit(X_final, y_array)  # Fit final model on entire dataset using selected features
 
-        models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE/Models/"  # Models output directory under RFE/Models subdir
+        cfg_source = CONFIG if isinstance(CONFIG, dict) and CONFIG else get_default_config()
+        rfe_cfg_local = cfg_source.get("rfe") if isinstance(cfg_source.get("rfe"), dict) else cfg_source
+        export_cfg_local = (rfe_cfg_local or {}).get("export", {})
+        results_dir_raw_local = export_cfg_local.get("results_dir") or os.path.join("Feature_Analysis", "RFE")
+        if os.path.isabs(results_dir_raw_local):
+            resolved_dir_local = os.path.abspath(os.path.expanduser(results_dir_raw_local))
+        else:
+            dataset_dir_local = os.path.dirname(csv_path) or "."
+            resolved_dir_local = os.path.abspath(os.path.expanduser(os.path.join(dataset_dir_local, results_dir_raw_local)))
+        models_dir = os.path.join(resolved_dir_local, "Models")
+        
         os.makedirs(models_dir, exist_ok=True)  # Ensure directory exists
         timestamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")  # Timestamp for filenames (YYYY_MM_DD-HH_MM_SS)
         base_name = safe_filename(Path(csv_path).stem)  # Safe base name from dataset path
@@ -1212,9 +1231,32 @@ def save_rfe_results(csv_path, run_results):
 
         cols = get_results_csv_columns(CONFIG if CONFIG else None)
         df_new = pd.DataFrame(rows, columns=cols)
-        output_dir = os.path.join(os.path.dirname(csv_path), "Feature_Analysis", "RFE")
-        os.makedirs(output_dir, exist_ok=True)
-        run_csv_path = os.path.join(output_dir, "RFE_Run_Results.csv")
+
+        cfg_source = CONFIG if isinstance(CONFIG, dict) and CONFIG else get_default_config()
+        
+        rfe_cfg = cfg_source.get("rfe") if isinstance(cfg_source.get("rfe"), dict) else cfg_source
+        export_cfg = (rfe_cfg or {}).get("export", {})
+        results_dir_raw = export_cfg.get("results_dir")
+        results_filename = export_cfg.get("results_filename")
+        if not isinstance(results_dir_raw, str) or not results_dir_raw:
+            raise ValueError("rfe.export.results_dir must be a non-empty string in configuration")
+        if not isinstance(results_filename, str) or not results_filename:
+            raise ValueError("rfe.export.results_filename must be a non-empty string in configuration")
+        if not results_filename.lower().endswith(".csv"):
+            raise ValueError("rfe.export.results_filename must end with .csv")
+
+        if os.path.isabs(results_dir_raw):
+            resolved_dir = os.path.abspath(os.path.expanduser(results_dir_raw))
+        else:
+            dataset_dir = os.path.dirname(csv_path) or "."
+            resolved_dir = os.path.abspath(os.path.expanduser(os.path.join(dataset_dir, results_dir_raw)))
+
+        os.makedirs(resolved_dir, exist_ok=True)
+        if not os.access(resolved_dir, os.W_OK):
+            raise PermissionError(f"Directory not writable: {resolved_dir}")
+
+        run_csv_path = os.path.join(resolved_dir, results_filename)
+        print(f"[EXPORT] Results CSV path: {os.path.abspath(run_csv_path)}")
 
         if os.path.exists(run_csv_path):
             try:
@@ -1299,8 +1341,17 @@ def load_exported_artifacts(csv_path):
     """
     
     try:
-        models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/RFE/Models/"  # Location where RFE artifacts are stored
-        
+        cfg_source = CONFIG if isinstance(CONFIG, dict) and CONFIG else get_default_config()
+        rfe_cfg_local = cfg_source.get("rfe") if isinstance(cfg_source.get("rfe"), dict) else cfg_source
+        export_cfg_local = (rfe_cfg_local or {}).get("export", {})
+        results_dir_raw_local = export_cfg_local.get("results_dir") or os.path.join("Feature_Analysis", "RFE")
+        if os.path.isabs(results_dir_raw_local):
+            resolved_dir_local = os.path.abspath(os.path.expanduser(results_dir_raw_local))
+        else:
+            dataset_dir_local = os.path.dirname(csv_path) or "."
+            resolved_dir_local = os.path.abspath(os.path.expanduser(os.path.join(dataset_dir_local, results_dir_raw_local)))
+        models_dir = os.path.join(resolved_dir_local, "Models")
+
         if not os.path.isdir(models_dir):
             return None  # No models directory
 
