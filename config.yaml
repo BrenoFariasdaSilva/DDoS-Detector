@@ -264,6 +264,7 @@ export:
 # ==============================================================================
 
 stacking:  # Stacking experiment settings
+  results_dir: "Stacking"             # Directory to save stacking results (relative to Feature_Analysis)
   results_filename: "Stacking_Classifiers_Results.csv"   # Main results CSV filename for binary mode
   multiclass_results_filename: "Stacking_Classifiers_MultiClass_Results.csv"  # Results CSV filename for multi-class mode
   augmentation_comparison_filename: "Data_Augmentation_Comparison_Results.csv"  # Data augmentation experiments results CSV
@@ -275,7 +276,7 @@ stacking:  # Stacking experiment settings
   top_n_features_heatmap: 15            # Number of top features to show in generated heatmaps and CSV exports (int)
 
   cache_prefix: "Cache_"              # Prefix for cached preprocessing artifacts
-  model_export_base: "Feature_Analysis/Stacking/Models/"  # Base directory for model exports
+  model_export_base: "Stacking/Models/"  # Base directory for model exports
   match_filenames_to_process: [""]    # List of specific filenames to match (empty = process all)
   ignore_files:                         # Result filenames to ignore during processing
     - "Stacking_Classifiers_Results.csv"
