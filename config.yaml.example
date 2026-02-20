@@ -190,6 +190,7 @@ export:
     - elapsed_run_time
     - hardware
     - best_features
+    - union_features_across_runs
     - rfe_ranking
 
 
