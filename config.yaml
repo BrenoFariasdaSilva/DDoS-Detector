@@ -164,6 +164,8 @@ progress:
   state_dir_name: "ga_progress"       # Subfolder under Feature_Analysis to store progress files
 
 export:
+  results_dir: "Feature_Analysis/Genetic_Algorithm"
+  results_filename: "Genetic_Algorithm_Results.csv"
   results_csv_columns:                # Columns for the results CSV
     - timestamp
     - tool
