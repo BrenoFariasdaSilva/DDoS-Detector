@@ -348,11 +348,60 @@ explainability:
 # PCA — Used by pca.py
 # ==============================================================================
 pca:
-  n_components: 8                     # Number of principal components to use (int)
-  n_components_list: [8, 16, 32, 64]  # List of component counts to evaluate (list[int])
-  random_state: 42                    # Random seed for reproducibility (int)
-  scale_data: true                    # Whether to standardize numeric features before PCA (bool)
-  remove_zero_variance: true          # Drop zero-variance numeric features during preprocessing (bool)
+  execution:
+    verbose: false
+    skip_train_if_model_exists: false
+    dataset_path: null
+
+  model:
+    estimator: "RandomForestClassifier"
+    random_state: 42
+
+  dimensionality:
+    n_components: 8
+    n_components_list: [8, 16, 32, 64]
+
+  preprocessing:
+    scale_data: true
+    remove_zero_variance: true
+
+  cross_validation:
+    n_folds: 10
+
+  multiprocessing:
+    n_jobs: -1
+    cpu_processes: 1
+
+  caching:
+    enabled: true
+    pickle_protocol: 4
+
+  export:
+    results_csv_columns:
+      - timestamp
+      - tool
+      - model
+      - dataset
+      - hyperparameters
+      - cv_method
+      - train_test_split
+      - scaling
+      - n_components
+      - explained_variance
+      - cv_accuracy
+      - cv_precision
+      - cv_recall
+      - cv_f1_score
+      - test_accuracy
+      - test_precision
+      - test_recall
+      - test_f1_score
+      - test_fpr
+      - test_fnr
+      - feature_extraction_time_s
+      - training_time_s
+      - testing_time_s
+      - hardware
 
 # ==============================================================================
 # DATASET DESCRIPTOR — Used by dataset_descriptor.py
