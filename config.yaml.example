@@ -421,10 +421,56 @@ dataset_descriptor:
 # RFE — Used by rfe.py
 # ==============================================================================
 rfe:
-  n_features_to_select: 10            # Number of features to select (int, null = auto)
-  step: 1                             # Number of features removed at each iteration (int)
-  estimator: "random_forest"          # Base estimator for RFE (string, allowed: "random_forest")
-  random_state: 42                    # Random seed for reproducibility (int)
+  execution:
+    verbose: false
+    skip_train_if_model_exists: false
+    dataset_path: null
+
+  model:
+    estimator: "random_forest"
+    random_state: 42
+
+  selection:
+    n_features_to_select: 10
+    step: 1
+
+  cross_validation:
+    n_folds: 10
+
+  multiprocessing:
+    n_jobs: -1
+    cpu_processes: 1
+
+  caching:
+    enabled: true
+    pickle_protocol: 4
+
+  export:
+    results_csv_columns:
+      - timestamp
+      - tool
+      - model
+      - dataset
+      - hyperparameters
+      - cv_method
+      - train_test_split
+      - scaling
+      - cv_accuracy
+      - cv_precision
+      - cv_recall
+      - cv_f1_score
+      - test_accuracy
+      - test_precision
+      - test_recall
+      - test_f1_score
+      - test_fpr
+      - test_fnr
+      - feature_extraction_time_s
+      - training_time_s
+      - testing_time_s
+      - hardware
+      - top_features
+      - rfe_ranking
 
 
 # ==============================================================================
