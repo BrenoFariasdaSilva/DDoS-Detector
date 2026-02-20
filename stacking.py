@@ -82,12 +82,15 @@ import platform  # For getting the operating system name
 import psutil  # For checking system RAM
 import re  # For regular expressions
 import seaborn as sns  # For generating feature usage heatmaps
+import shap  # For SHAP explainability analysis
 import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import time  # For measuring execution time
+import yaml  # Import YAML library
 from colorama import Style  # For terminal text styling
 from joblib import dump, load  # For exporting and loading trained models and scalers
+from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from sklearn.decomposition import PCA  # For Principal Component Analysis
@@ -97,6 +100,7 @@ from sklearn.ensemble import (  # For ensemble models
     RandomForestClassifier,
     StackingClassifier,
 )
+from sklearn.inspection import permutation_importance  # Import permutation importance
 from sklearn.linear_model import LogisticRegression  # For logistic regression model
 from sklearn.manifold import TSNE  # For t-SNE dimensionality reduction
 from sklearn.metrics import (  # For performance metrics
@@ -142,7 +146,65 @@ logger = None  # Will be initialized in initialize_logger()
 # Functions Definitions:
 
 
-setup_global_exception_hook()  # Set up global exception hook to send exceptions via Telegram
+def get_stacking_output_dir(dataset_file_path: str, config: dict) -> str:
+    """
+    Get the output directory for stacking results based on the dataset file path and configuration.
+    
+    :param dataset_file_path: The path to the dataset file being processed
+    :param config: The configuration dictionary containing the stacking results directory setting
+    :return: The resolved path to the stacking results directory for the given dataset
+    """
+
+    if not isinstance(dataset_file_path, (str, Path)):
+        raise ValueError("dataset_file_path must be a path string or Path")
+    if not isinstance(config, dict):
+        raise ValueError("config must be a dict")
+
+    dataset_file = Path(dataset_file_path).resolve()
+    dataset_root = dataset_file.parent
+
+    stacking_cfg = config.get("stacking", {})
+    results_dir = stacking_cfg.get("results_dir")
+    if not isinstance(results_dir, str) or results_dir.strip() == "":
+        raise ValueError("Missing or invalid config['stacking']['results_dir']")
+    if os.path.isabs(results_dir):
+        raise ValueError("config['stacking']['results_dir'] must be relative (not absolute)")
+
+    stacking_dir = dataset_root / results_dir
+    stacking_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        common = os.path.commonpath([str(dataset_root.resolve()), str(stacking_dir.resolve())])
+    except Exception:
+        raise RuntimeError("Invalid paths provided for stacking directory validation")
+    if common != str(dataset_root.resolve()):
+        raise RuntimeError("Resolved stacking directory is not inside the dataset root")
+
+    return str(stacking_dir.resolve())
+
+
+def validate_output_path(base_dir: str, target_path: str) -> None:
+    """
+    Validate that the target_path is safely within the base_dir to prevent directory traversal issues.
+
+    :param base_dir: The base directory that should contain the target path
+    :param target_path: The target path to validate
+    :return: None
+    """
+    
+    if base_dir is None:
+        raise RuntimeError("base_dir is None")
+    
+    base_dir = os.path.abspath(base_dir)
+    target_path = os.path.abspath(target_path)
+    
+    try:
+        common = os.path.commonpath([base_dir, target_path])
+    except Exception:
+        raise RuntimeError("Invalid paths provided for validation")
+    
+    if common != base_dir:
+        raise RuntimeError("Unsafe path detected outside stacking output directory")
 
 
 def parse_cli_args():
@@ -337,7 +399,6 @@ def load_config_file(config_path=None):
             return {}  # Return empty dict
         
         try:  # Try to load YAML file
-            import yaml  # Import YAML library
             with open(config_path, "r", encoding="utf-8") as f:  # Open config file
                 config = yaml.safe_load(f)  # Load YAML safely
             return config or {}  # Return loaded config or empty dict
@@ -1410,6 +1471,8 @@ def generate_and_save_metric_plots(y_true, y_pred, stacking_config: dict, resolv
 
         plots_dir = os.path.join(os.path.abspath(resolved_results_dir), config.get("paths", {}).get("plots_subdir", "Plots"))
         print(f"[STACKING][PLOTS] Saving plots to: {plots_dir}")
+
+        validate_output_path(os.path.abspath(resolved_results_dir), os.path.abspath(plots_dir))
         os.makedirs(plots_dir, exist_ok=True)
 
         metrics = extract_class_metrics(y_true, y_pred)
@@ -1821,7 +1884,9 @@ def generate_augmentation_tsne_visualization(original_file, original_df, augment
             )  # Print warning message
             return  # Exit function early
 
-        tsne_output_dir = build_tsne_output_directory(original_file, augmented_file)  # Create output directory
+        stacking_output_dir = get_stacking_output_dir(original_file, CONFIG)
+        tsne_output_dir = Path(stacking_output_dir) / "Plots" / "tsne_plots" / Path(original_file).stem
+        tsne_output_dir.mkdir(parents=True, exist_ok=True)
 
         combined_df = combine_and_label_augmentation_data(original_df, augmented_df)  # Prepare labeled data
 
@@ -1863,6 +1928,7 @@ def apply_zebra_style(df):
     :param df: pandas DataFrame to style
     :return: pandas.io.formats.style.Styler styled object ready for export
     """
+
     try:
         def _zebra(row):  # Define row-wise zebra function
             return ["background-color: #ffffff" if i % 2 == 0 else "background-color: #f2f2f2" for i in range(len(row))]  # Return CSS list per column
@@ -1881,7 +1947,6 @@ def export_dataframe_image(styled_df, output_path):
     :param output_path: Path to PNG file to write
     :return: None
     """
-    import os  # Local import to keep top-level imports minimal
 
     try:
         out_path = Path(output_path)  # Create Path object for output
@@ -1915,7 +1980,7 @@ def generate_table_image_from_dataframe(df, csv_path):
         raise  # Propagate exceptions to caller
 
 
-def generate_csv_and_image(df, csv_path, is_visualizable=True, **to_csv_kwargs):
+def generate_csv_and_image(df, csv_path, is_visualizable=True, config=None, **to_csv_kwargs):
     """
     Save DataFrame to CSV and optionally generate a zebra-striped PNG image beside it.
 
@@ -1925,7 +1990,12 @@ def generate_csv_and_image(df, csv_path, is_visualizable=True, **to_csv_kwargs):
     :param to_csv_kwargs: Additional keyword args forwarded to pandas.DataFrame.to_csv
     :return: Path to saved CSV file
     """
+    
     try:
+        out_path = Path(csv_path)
+        base = get_stacking_output_dir(csv_path, config or CONFIG)
+        validate_output_path(base, str(out_path))
+
         df.to_csv(csv_path, **to_csv_kwargs)  # Save DataFrame to CSV with original kwargs
         if is_visualizable:  # Generate image only if flagged
             generate_table_image_from_dataframe(df, csv_path)  # Generate PNG from in-memory DataFrame
@@ -2001,7 +2071,7 @@ def aggregate_feature_usage(results_df, top_n=None):
         raise  # Propagate exceptions to caller (no silent failures)
 
 
-def export_top_features_csv(feature_counts_df, csv_path):
+def export_top_features_csv(feature_counts_df, csv_path, dataset_file=None):
     """
     Export aggregated top-N feature counts to CSV.
 
@@ -2016,13 +2086,17 @@ def export_top_features_csv(feature_counts_df, csv_path):
 
         out_path = Path(csv_path)  # Normalize to Path object
         out_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure parent directory exists
+        if dataset_file is None:
+            raise RuntimeError("dataset_file must be provided to safely resolve stacking results directory")
+        base = get_stacking_output_dir(dataset_file, CONFIG)
+        validate_output_path(base, str(out_path))
         feature_counts_df.to_csv(str(out_path), index=True)  # Write DataFrame to CSV including index (feature names)
         return str(out_path)  # Return string path to caller
     except Exception:
         raise  # Propagate exceptions
 
 
-def generate_feature_usage_heatmap(feature_counts_df, output_path):
+def generate_feature_usage_heatmap(feature_counts_df, output_path, dataset_file=None):
     """
     Generate and save a heatmap PNG from feature counts DataFrame.
 
@@ -2038,6 +2112,10 @@ def generate_feature_usage_heatmap(feature_counts_df, output_path):
             ax.set_axis_off()  # Hide axes for empty message
             out_png = str(Path(output_path))  # Compute output path
             Path(out_png).parent.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
+            if dataset_file is None:
+                raise RuntimeError("dataset_file must be provided to safely resolve stacking results directory")
+            base = get_stacking_output_dir(dataset_file, CONFIG)
+            validate_output_path(base, out_png)
             plt.savefig(out_png, bbox_inches="tight")  # Save PNG to disk
             plt.close(fig)  # Close the figure to free memory
             return out_png  # Return path to generated PNG
@@ -3287,17 +3365,17 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_nam
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
-        
-        model_export_base = config.get("stacking", {}).get("model_export_base", "Feature_Analysis/Stacking/Models/")  # Get model export base from config
-        
+
         def safe_filename(name):
             return re.sub(r'[\\/*?:"<>|]', "_", str(name))
 
-        if dataset_csv_path:
-            file_path_obj = Path(dataset_csv_path)
-            export_dir = file_path_obj.parent / "Classifiers" / "Models"
-        else:
-            export_dir = Path(model_export_base) / safe_filename(dataset_name)
+        if not dataset_csv_path:
+            raise ValueError("dataset_csv_path is required to safely export models")
+
+        file_path_obj = Path(dataset_csv_path)
+        stacking_output_dir = get_stacking_output_dir(str(file_path_obj), config)
+
+        export_dir = Path(stacking_output_dir) / "Models" / safe_filename(dataset_name)
         os.makedirs(export_dir, exist_ok=True)
         param_str = "_".join(f"{k}-{v}" for k, v in sorted(best_params.items())) if best_params else ""
         param_str = safe_filename(param_str)[:64]
@@ -3307,8 +3385,10 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_nam
         model_path = os.path.join(str(export_dir), f"{base_name}_model.joblib")
         scaler_path = os.path.join(str(export_dir), f"{base_name}_scaler.joblib")
         try:
+            validate_output_path(stacking_output_dir, model_path)
             dump(model, model_path)
             if scaler is not None:
+                validate_output_path(stacking_output_dir, scaler_path)
                 dump(scaler, scaler_path)
             meta = {
                 "model_name": model_name,
@@ -3317,6 +3397,7 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_nam
                 "params": best_params,
             }
             meta_path = os.path.join(str(export_dir), f"{base_name}_meta.json")
+            validate_output_path(stacking_output_dir, meta_path)
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, indent=2)
             verbose_output(f"Exported model to {model_path} and scaler to {scaler_path}")
@@ -3506,8 +3587,6 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
             config = CONFIG  # Use global CONFIG
 
         try:  # Attempt to generate SHAP explanations
-            import shap  # Import SHAP library
-
             verbose_output(
                 f"{BackgroundColors.GREEN}Generating SHAP explanations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
                 config=config
@@ -3613,8 +3692,6 @@ def generate_lime_explanations(model, X_test, y_test, feature_names, output_dir,
             config = CONFIG  # Use global CONFIG
 
         try:  # Attempt to generate LIME explanations
-            from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
-
             verbose_output(
                 f"{BackgroundColors.GREEN}Generating LIME explanations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
                 config=config
@@ -3706,8 +3783,6 @@ def generate_permutation_importance(model, X_test, y_test, feature_names, output
             config = CONFIG  # Use global CONFIG
 
         try:  # Attempt to generate permutation importance
-            from sklearn.inspection import permutation_importance  # Import permutation importance
-
             verbose_output(
                 f"{BackgroundColors.GREEN}Computing permutation importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
                 config=config
@@ -4009,7 +4084,8 @@ def run_explainability_pipeline(model, model_name, X_test, y_test, feature_names
 
         dataset_name = Path(dataset_file).stem  # Get dataset name from file path
         output_subdir = explainability_config.get("output_subdir", "explainability")  # Get output subdirectory name
-        base_output_dir = Path(dataset_file).parent / output_subdir / execution_mode / dataset_name  # Build base output directory
+        stacking_output_dir = get_stacking_output_dir(dataset_file, config)
+        base_output_dir = Path(stacking_output_dir) / output_subdir / execution_mode / dataset_name
         output_dir = base_output_dir / feature_set.replace(" ", "_") / model_name.replace(" ", "_")  # Build full output directory
         output_dir = str(output_dir)  # Convert Path to string
 
@@ -4250,8 +4326,8 @@ def save_stacking_results(csv_path, results_list, config=None):
                 dataset_base = file_path_obj.stem  # Compute dataset base name for output filenames
                 top_csv = stacking_dir / f"{dataset_base}_top_features.csv"  # Build CSV path for top features
                 top_png = stacking_dir / f"{dataset_base}_top_features.png"  # Build PNG path for heatmap
-                export_top_features_csv(feature_counts_df, str(top_csv))  # Export aggregated counts to CSV
-                generate_feature_usage_heatmap(feature_counts_df, str(top_png))  # Generate heatmap PNG
+                export_top_features_csv(feature_counts_df, str(top_csv), dataset_file=str(file_path_obj))  # Export aggregated counts to CSV
+                generate_feature_usage_heatmap(feature_counts_df, str(top_png), dataset_file=str(file_path_obj))  # Generate heatmap PNG
             except Exception as e:
                 print(f"{BackgroundColors.RED}Failed to export top-features CSV or heatmap: {e}{Style.RESET_ALL}")  # Print failure details
                 send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram but do not interrupt main flow
@@ -4286,6 +4362,9 @@ def get_cache_file_path(csv_path, config=None):
         cache_prefix = config.get("stacking", {}).get("cache_prefix", "CACHE_")  # Get cache prefix from config
         dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Get base dataset name
         output_dir = f"{os.path.dirname(csv_path)}/Classifiers"  # Directory relative to the dataset
+
+        stacking_output_dir = get_stacking_output_dir(csv_path, config)
+        validate_output_path(stacking_output_dir, str(Path(output_dir)))
         os.makedirs(output_dir, exist_ok=True)  # Ensure the directory exists
         cache_filename = f"{cache_prefix}{dataset_name}-Stacking_Classifiers_Results.csv"  # Cache filename
         cache_path = os.path.join(output_dir, cache_filename)  # Full cache file path
@@ -5071,7 +5150,7 @@ def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y
         raise
 
 
-def export_automl_search_history(study, output_dir, study_name):
+def export_automl_search_history(study, output_dir, study_name, dataset_file=None):
     """
     Exports the Optuna study trial history to a CSV file.
 
@@ -5082,6 +5161,18 @@ def export_automl_search_history(study, output_dir, study_name):
     """
     
     try:
+        if dataset_file is not None:
+            stacking_output_dir = get_stacking_output_dir(dataset_file, CONFIG)
+        else:
+            fa_parent = None
+            for p in Path(output_dir).parents:
+                if p.name == "Feature_Analysis":
+                    fa_parent = str(p)
+                    break
+            if fa_parent is None:
+                raise RuntimeError("Cannot derive Feature_Analysis root from output_dir for safe write")
+            stacking_output_dir = str((Path(fa_parent).parent / CONFIG.get("stacking", {}).get("results_dir")).resolve())
+        validate_output_path(stacking_output_dir, str(Path(output_dir)))
         os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
         trials_data = []  # Initialize list for trial data
@@ -5113,7 +5204,7 @@ def export_automl_search_history(study, output_dir, study_name):
         raise
 
 
-def export_automl_best_config(best_model_name, best_params, test_metrics, stacking_config, output_dir, feature_names):
+def export_automl_best_config(best_model_name, best_params, test_metrics, stacking_config, output_dir, feature_names, dataset_file=None):
     """
     Exports the best AutoML configuration and metrics to a JSON file.
 
@@ -5127,6 +5218,18 @@ def export_automl_best_config(best_model_name, best_params, test_metrics, stacki
     """
     
     try:
+        if dataset_file is not None:
+            stacking_output_dir = get_stacking_output_dir(dataset_file, CONFIG)
+        else:
+            fa_parent = None
+            for p in Path(output_dir).parents:
+                if p.name == "Feature_Analysis":
+                    fa_parent = str(p)
+                    break
+            if fa_parent is None:
+                raise RuntimeError("Cannot derive Feature_Analysis root from output_dir for safe write")
+            stacking_output_dir = str((Path(fa_parent).parent / CONFIG.get("stacking", {}).get("results_dir")).resolve())
+        validate_output_path(stacking_output_dir, str(Path(output_dir)))
         os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
         export_config = {  # Build configuration export dictionary
@@ -5152,6 +5255,19 @@ def export_automl_best_config(best_model_name, best_params, test_metrics, stacki
 
         output_path = os.path.join(output_dir, CONFIG.get("automl", {}).get("results_filename", "AutoML_Results.csv").replace(".csv", "_best_config.json"))  # Build output path
 
+        if dataset_file is not None:
+            stacking_output_dir = get_stacking_output_dir(dataset_file, CONFIG)
+        else:
+            fa_parent = None
+            for p in Path(output_path).parents:
+                if p.name == "Feature_Analysis":
+                    fa_parent = str(p)
+                    break
+            if fa_parent is None:
+                raise RuntimeError("Cannot derive Feature_Analysis root from output_path for safe write")
+            stacking_output_dir = str((Path(fa_parent).parent / CONFIG.get("stacking", {}).get("results_dir")).resolve())
+        validate_output_path(stacking_output_dir, output_path)
+
         with open(output_path, "w", encoding="utf-8") as f:  # Open file for writing
             json.dump(export_config, f, indent=2, default=str)  # Write JSON with indentation
 
@@ -5166,7 +5282,7 @@ def export_automl_best_config(best_model_name, best_params, test_metrics, stacki
         raise
 
 
-def export_automl_best_model(model, scaler, output_dir, model_name, feature_names):
+def export_automl_best_model(model, scaler, output_dir, model_name, feature_names, dataset_file=None):
     """
     Exports the best AutoML model and scaler to disk using joblib.
 
@@ -5185,9 +5301,22 @@ def export_automl_best_model(model, scaler, output_dir, model_name, feature_name
         model_path = os.path.join(output_dir, f"AutoML_best_{safe_name}_model.joblib")  # Build model file path
         scaler_path = os.path.join(output_dir, f"AutoML_best_{safe_name}_scaler.joblib")  # Build scaler file path
 
+        if dataset_file is not None:
+            stacking_output_dir = get_stacking_output_dir(dataset_file, CONFIG)
+        else:
+            fa_parent = None
+            for p in Path(output_dir).parents:
+                if p.name == "Feature_Analysis":
+                    fa_parent = str(p)
+                    break
+            if fa_parent is None:
+                raise RuntimeError("Cannot derive Feature_Analysis root from output_dir for safe write")
+            stacking_output_dir = str((Path(fa_parent).parent / CONFIG.get("stacking", {}).get("results_dir")).resolve())
+        validate_output_path(stacking_output_dir, model_path)
         dump(model, model_path)  # Export model to disk
 
         if scaler is not None:  # If scaler is provided
+            validate_output_path(stacking_output_dir, scaler_path)
             dump(scaler, scaler_path)  # Export scaler to disk
 
         meta_path = os.path.join(output_dir, f"AutoML_best_{safe_name}_meta.json")  # Build metadata file path
@@ -5197,6 +5326,7 @@ def export_automl_best_model(model, scaler, output_dir, model_name, feature_name
             "n_features": len(feature_names),  # Number of features
         }  # Metadata content
 
+        validate_output_path(stacking_output_dir, meta_path)
         with open(meta_path, "w", encoding="utf-8") as f:  # Open metadata file
             json.dump(meta, f, indent=2)  # Write metadata JSON
 
@@ -5425,24 +5555,24 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
         file_path_obj = Path(file)  # Create Path object for file
         automl_output_dir = str(file_path_obj.parent / "Feature_Analysis" / "AutoML")  # Build AutoML output directory
 
-        export_automl_search_history(model_study, automl_output_dir, "model_search")  # Export model search history
+        export_automl_search_history(model_study, automl_output_dir, "model_search", dataset_file=file)  # Export model search history
 
         if stacking_study is not None:  # If stacking study exists
-            export_automl_search_history(stacking_study, automl_output_dir, "stacking_search")  # Export stacking search history
+            export_automl_search_history(stacking_study, automl_output_dir, "stacking_search", dataset_file=file)  # Export stacking search history
 
         export_automl_best_config(
-            best_model_name, best_params, individual_metrics, stacking_config, automl_output_dir, feature_names
+            best_model_name, best_params, individual_metrics, stacking_config, automl_output_dir, feature_names, dataset_file=file
         )  # Export best configuration
 
         export_automl_best_model(
-            best_individual_model, scaler, automl_output_dir, best_model_name, feature_names
+            best_individual_model, scaler, automl_output_dir, best_model_name, feature_names, dataset_file=file
         )  # Export best individual model
 
         if stacking_config is not None and stacking_metrics is not None:  # If stacking was successful
             best_stacking_model_final = build_automl_stacking_model(stacking_config, config=config)  # Rebuild stacking model for export
             best_stacking_model_final.fit(X_train_scaled, y_train_arr)  # Fit stacking model on full training data
             export_automl_best_model(
-                best_stacking_model_final, scaler, automl_output_dir, "AutoML_Stacking", feature_names
+                best_stacking_model_final, scaler, automl_output_dir, "AutoML_Stacking", feature_names, dataset_file=file
             )  # Export best stacking model
 
         results_list = build_automl_results_list(
@@ -5751,9 +5881,9 @@ def evaluate_on_dataset(
             try:
                 file_path_obj = Path(file)
                 feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"
-                stacking_results_subdir = config.get("stacking", {}).get("results_dir", "Stacking")
-                resolved_results_dir = os.path.join(stacking_results_subdir, feature_analysis_dir.name)
-                generate_and_save_metric_plots(y_test, s_y_pred, config.get("stacking", {}), resolved_results_dir)
+
+                stacking_output_dir = get_stacking_output_dir(str(file_path_obj), config)
+                generate_and_save_metric_plots(y_test, s_y_pred, config.get("stacking", {}), stacking_output_dir)
             except Exception:
                 pass
             
