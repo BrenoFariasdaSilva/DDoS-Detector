@@ -29,7 +29,7 @@ execution:  # Execution control and per-script overrides
   verbose: false                      # Enable verbose output messages
   play_sound: true                    # Play sound notification when complete
   skip_train_if_model_exists: false   # Skip training if model artifacts exist
-  runs: 5                             # Number of GA runs per population size
+  runs: 10                             # Number of GA runs per population size
   resume_progress: true               # Resume from saved state files
   progress_save_interval: 10          # Save progress every N generations
   csv_file: null                      # Optional single CSV file to process (null = process all)
