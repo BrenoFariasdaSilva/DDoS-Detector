@@ -99,6 +99,14 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants will be sourced from configuration (CLI > config.yaml > defaults)
 
+SOUND_COMMANDS = {
+    "Darwin": "afplay",
+    "Linux": "aplay",
+    "Windows": "start",
+}
+
+SOUND_FILE = "./.assets/Sounds/NotificationSound.wav"
+
 
 def get_default_config() -> dict:
     """
@@ -2357,20 +2365,30 @@ def play_sound():
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
+        cfg = {}
+        try:
+            cfg = get_config() or {}
+        except Exception:
+            cfg = {}
+
+        sound_cfg = cfg.get("sound", {}) if isinstance(cfg, dict) else {}
+        sound_file = sound_cfg.get("file", SOUND_FILE)
+        sound_cmds = sound_cfg.get("commands", SOUND_COMMANDS)
+
         current_os = platform.system()  # Get the current operating system
         if current_os == "Windows":  # If the current operating system is Windows
-            return  # Do nothing
+            return  # Do nothing on Windows by default
 
-        if verify_filepath_exists(SOUND_FILE):  # If the sound file exists
-            if current_os in SOUND_COMMANDS:  # If the platform.system() is in the SOUND_COMMANDS dictionary
-                os.system(f"{SOUND_COMMANDS[current_os]} {SOUND_FILE}")  # Play the sound
-            else:  # If the platform.system() is not in the SOUND_COMMANDS dictionary
+        if verify_filepath_exists(sound_file):  # If the sound file exists
+            if current_os in sound_cmds:  # Use commands from config or defaults
+                os.system(f"{sound_cmds[current_os]} {sound_file}")  # Play the sound
+            else:  # Unknown OS mapping
                 print(
-                    f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not in the {BackgroundColors.CYAN}SOUND_COMMANDS dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}"
+                    f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not configured in sound.commands. Please add it!{Style.RESET_ALL}"
                 )
         else:  # If the sound file does not exist
             print(
-                f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{SOUND_FILE}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}"
+                f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{sound_file}{BackgroundColors.RED} not found. Make sure the file exists or set 'sound.file' in config.yaml.{Style.RESET_ALL}"
             )
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -2460,9 +2478,11 @@ def main():
             f"Dataset Descriptor finished. Execution time: {calculate_execution_time(start_time, finish_time)}",
         )  # Send Telegram message about program completion
 
-        (
-            atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
-        )  # Register the play_sound function to be called when the program finishes
+        try:
+            if config.get("execution", {}).get("play_sound", True):
+                atexit.register(play_sound)
+        except Exception:
+            pass
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
