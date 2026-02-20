@@ -189,6 +189,8 @@ def parse_cli_args():
         parser.add_argument("--monitor-interval", type=int, help="Monitor interval in seconds")  # Monitor interval
 
         parser.add_argument("--config", type=str, help="Path to configuration file (YAML or .env)")  # Config file path
+        parser.add_argument("--results_dir", type=str, help="Override results directory for GA exports (overrides genetic_algorithm.export.results_dir)")
+        parser.add_argument("--results_filename", type=str, help="Override results filename for GA exports (overrides genetic_algorithm.export.results_filename)")
 
         return parser.parse_args()  # Parse and return arguments
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -231,6 +233,40 @@ def get_default_config():
             "max_pop": 20,  # Maximum population size
             "cxpb": 0.5,  # Crossover probability
             "mutpb": 0.01,  # Mutation probability
+            "export": {
+                "results_dir": "Feature_Analysis/Genetic_Algorithm",
+                "results_filename": "Genetic_Algorithm_Results.csv",
+                "results_csv_columns": [
+                    "timestamp",
+                    "tool",
+                    "run_index",
+                    "model",
+                    "dataset",
+                    "hyperparameters",
+                    "cv_method",
+                    "train_test_split",
+                    "scaling",
+                    "cv_accuracy",
+                    "cv_precision",
+                    "cv_recall",
+                    "cv_f1_score",
+                    "num_features_selected",
+                    "test_accuracy",
+                    "test_precision",
+                    "test_recall",
+                    "test_f1_score",
+                    "test_fpr",
+                    "test_fnr",
+                    "feature_extraction_time_s",
+                    "training_time_s",
+                    "testing_time_s",
+                    "elapsed_run_time",
+                    "hardware",
+                    "best_features",
+                    "union_features_across_runs",
+                    "rfe_ranking",
+                ],
+            },
         },
         "early_stop": {
             "acc_threshold": 0.75,  # Minimum acceptable accuracy for an individual
@@ -265,38 +301,7 @@ def get_default_config():
         "progress": {
             "state_dir_name": "ga_progress",  # Subfolder under Feature_Analysis to store progress files
         },
-        "export": {
-            "results_csv_columns": [  # Columns for the results CSV
-                "timestamp",
-                "tool",
-                "run_index",
-                "model",
-                "dataset",
-                "hyperparameters",
-                "cv_method",
-                "train_test_split",
-                "scaling",
-                "cv_accuracy",
-                "cv_precision",
-                "cv_recall",
-                "cv_f1_score",
-                "num_features_selected",
-                "test_accuracy",
-                "test_precision",
-                "test_recall",
-                "test_f1_score",
-                "test_fpr",
-                "test_fnr",
-                "feature_extraction_time_s",
-                "training_time_s",
-                "testing_time_s",
-                "elapsed_run_time",
-                "hardware",
-                "best_features",
-                "union_features_across_runs",
-                "rfe_ranking",
-            ],
-        },
+        
         "sound": {
             "commands": {  # The commands to play a sound for each operating system
                 "Darwin": "afplay",
@@ -456,6 +461,11 @@ def merge_configs(defaults, file_config, cli_args):
                 config["telegram"]["progress_pct"] = int(cli_args.telegram_progress_pct)
             except Exception:
                 pass
+
+        if hasattr(cli_args, "results_dir") and cli_args.results_dir is not None:
+            config.setdefault("genetic_algorithm", {}).setdefault("export", {})["results_dir"] = cli_args.results_dir
+        if hasattr(cli_args, "results_filename") and cli_args.results_filename is not None:
+            config.setdefault("genetic_algorithm", {}).setdefault("export", {})["results_filename"] = cli_args.results_filename
 
         return config  # Return merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -618,7 +628,13 @@ def load_exported_artifacts(csv_path):
             f"{BackgroundColors.GREEN}Attempting to load exported model artifacts for dataset: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}"
         )  # Output the verbose message
         
-        models_dir = os.path.join(os.path.dirname(csv_path), "Feature_Analysis", "Genetic_Algorithm", "Models")  # Construct path to models directory
+        ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})
+        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")
+        if os.path.isabs(ga_results_dir_raw):
+            ga_results_dir_resolved = os.path.abspath(os.path.expanduser(ga_results_dir_raw))
+        else:
+            ga_results_dir_resolved = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir_raw)))
+        models_dir = os.path.join(ga_results_dir_resolved, "Models")  # Construct path to models directory
         if not os.path.isdir(models_dir):  # Verify if models directory exists
             return None  # Return None if directory doesn't exist
         base_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", os.path.splitext(os.path.basename(csv_path))[0])  # Sanitize dataset basename for filename
@@ -2296,9 +2312,13 @@ def run_genetic_algorithm_loop(
 
         folds = CONFIG.get("cross_validation", {}).get("n_folds", 10)  # Use configured constant for CV folds
 
-        output_dir = (
-            f"{os.path.dirname(csv_path)}/Feature_Analysis" if csv_path else os.path.join(".", "Feature_Analysis")
-        )  # Output directory for Feature_Analysis outputs
+        ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})
+        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")
+        if os.path.isabs(ga_results_dir_raw):
+            output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))
+        else:
+            base_dir = os.path.dirname(csv_path) if csv_path else "."
+            output_dir = os.path.abspath(os.path.expanduser(os.path.join(base_dir, ga_results_dir_raw)))
         state_id = compute_state_id(
             csv_path or "", pop_size or 0, n_generations, cxpb, mutpb, run or 0, folds, test_frac=None
         )  # Deterministic state id for resume/caching
@@ -2720,7 +2740,12 @@ def plot_ga_convergence(
     """
     
     try:
-        output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis"  # Directory to save outputs
+        ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})
+        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")
+        if os.path.isabs(ga_results_dir_raw):
+            output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))
+        else:
+            output_dir = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir_raw)))
         os.makedirs(output_dir, exist_ok=True)  # Ensure directory exists
 
         base_dataset_name = (
@@ -2787,7 +2812,12 @@ def generate_convergence_plots(
     """
     
     try:
-        output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis"  # Base directory for outputs
+        ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})
+        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")
+        if os.path.isabs(ga_results_dir_raw):
+            output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))
+        else:
+            output_dir = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir_raw)))
         os.makedirs(output_dir, exist_ok=True)  # Ensure base directory exists
 
         base_dataset_name = (
@@ -3109,9 +3139,13 @@ def run_single_ga_iteration(
             else None
         )  # Update progress bar if provided
 
-        output_dir = (
-            f"{os.path.dirname(csv_path)}/Feature_Analysis" if csv_path else os.path.join(".", "Feature_Analysis")
-        )  # Output directory for Feature_Analysis outputs
+        ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})
+        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")
+        if os.path.isabs(ga_results_dir_raw):
+            output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))
+        else:
+            base_dir = os.path.dirname(csv_path) if csv_path else "."
+            output_dir = os.path.abspath(os.path.expanduser(os.path.join(base_dir, ga_results_dir_raw)))
         cached, state_id = load_cached_run_if_any(
             output_dir, csv_path, pop_size, n_generations, cxpb, mutpb, run, folds, y_train, y_test
         )  # Try to load cached run result and state id
@@ -3374,7 +3408,12 @@ def generate_run_comparison_table(results_dict, csv_path, dataset_name, min_pop,
         )  # Log generation start
 
         try:  # Attempt to generate comparison table
-            output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis"  # Base output directory
+            ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})
+            ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")
+            if os.path.isabs(ga_results_dir_raw):
+                output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))
+            else:
+                output_dir = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir_raw)))
             comparison_dir = os.path.join(output_dir, "ga_run_comparisons")  # Subdirectory for comparison tables
             os.makedirs(comparison_dir, exist_ok=True)  # Ensure directory exists
 
@@ -3475,7 +3514,12 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         )  # Log generation start
 
         try:  # Attempt to generate all comparison plots
-            output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis"  # Base output directory
+            ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})
+            ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")
+            if os.path.isabs(ga_results_dir_raw):
+                output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))
+            else:
+                output_dir = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir_raw)))
             comparison_dir = os.path.join(output_dir, "ga_run_comparisons", "multi_run_plots")  # Subdirectory for comparison plots
             os.makedirs(comparison_dir, exist_ok=True)  # Ensure directory exists
 
@@ -3911,10 +3955,16 @@ def extract_rfe_ranking(csv_path):
         )  # Output the verbose message
 
         rfe_ranking = {}  # Dictionary to store feature names and their RFE rankings
-        dir_path = os.path.dirname(csv_path)  # Directory that contains Feature_Analysis
-        json_path = f"{dir_path}/Feature_Analysis/RFE_Summary.json"  # Path to new JSON summary
-        csv_path_runs = f"{dir_path}/Feature_Analysis/RFE_Runs_Summary.csv"  # Path to runs summary CSV
-        legacy_txt = f"{dir_path}/Feature_Analysis/RFE_results_RandomForestClassifier.txt"  # Legacy TXT path (fallback)
+        dir_path = os.path.dirname(csv_path)  # Directory that contains dataset
+        rfe_export_cfg = CONFIG.get("rfe", {}).get("export", {})
+        rfe_results_dir_raw = rfe_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "RFE")
+        if os.path.isabs(rfe_results_dir_raw):
+            resolved_rfe_dir = os.path.abspath(os.path.expanduser(rfe_results_dir_raw))
+        else:
+            resolved_rfe_dir = os.path.abspath(os.path.expanduser(os.path.join(dir_path or ".", rfe_results_dir_raw)))
+        json_path = os.path.join(resolved_rfe_dir, "RFE_Summary.json")  # Path to new JSON summary
+        csv_path_runs = os.path.join(resolved_rfe_dir, "RFE_Runs_Summary.csv")  # Path to runs summary CSV
+        legacy_txt = os.path.join(resolved_rfe_dir, "RFE_results_RandomForestClassifier.txt")  # Legacy TXT path (fallback)
 
         if verify_filepath_exists(json_path):  # If JSON summary exists
             try:  # Attempt to parse JSON
@@ -4329,7 +4379,13 @@ def write_consolidated_csv(rows, output_dir):
 
                 df_new = normalize_elapsed_column_df(df_new)  # Normalize legacy elapsed_time to elapsed_time_s in new rows
 
-                csv_out = os.path.join(output_dir, "Genetic_Algorithm_Results.csv")  # Build path for consolidated CSV
+                results_cols = CONFIG.get("genetic_algorithm", {}).get("export", {}).get("results_csv_columns")
+                results_filename = CONFIG.get("genetic_algorithm", {}).get("export", {}).get("results_filename")
+                if not isinstance(results_filename, str) or not results_filename:
+                    raise ValueError("genetic_algorithm.export.results_filename must be set and non-empty in configuration")
+                if not results_filename.lower().endswith('.csv'):
+                    raise ValueError("genetic_algorithm.export.results_filename must end with .csv")
+                csv_out = os.path.join(output_dir, results_filename)  # Build path for consolidated CSV
 
                 if os.path.exists(csv_out):  # If the consolidated CSV already exists, we need to merge with existing data
                     df_existing = pd.read_csv(csv_out, dtype=str)  # Read existing CSV as strings to avoid type issues
@@ -4340,10 +4396,10 @@ def write_consolidated_csv(rows, output_dir):
                         mtime = os.path.getmtime(csv_out)  # Get file modification time
                         back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")  # Format timestamp based on file modification time
                         df_existing["timestamp"] = back_ts  # Add the timestamp column with the default value
-                    for c in CONFIG["export"]["results_csv_columns"]:  # Ensure all expected columns are present in the existing DataFrame, adding any missing ones with None values
+                    for c in results_cols or []:  # Ensure all expected columns are present in the existing DataFrame, adding any missing ones with None values
                         if c not in df_existing.columns:  # If an expected column is missing
                             df_existing[c] = None  # Add the missing column with None values
-                    df_combined = pd.concat([df_existing[CONFIG["export"]["results_csv_columns"]], df_new], ignore_index=True, sort=False)  # Combine existing and new DataFrames, ensuring column order
+                    df_combined = pd.concat([df_existing[results_cols or []], df_new], ignore_index=True, sort=False)  # Combine existing and new DataFrames, ensuring column order
                     try:  # Try to sort by timestamp if the column exists and is properly formatted
                         df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")  # Parse timestamp into datetime, coercing errors to NaT
                         df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)  # Sort by the parsed datetime column in descending order (newest first)
@@ -4356,9 +4412,9 @@ def write_consolidated_csv(rows, output_dir):
 
                 df_out = populate_hardware_column(df_out, column_name="hardware")  # Populate hardware column using system specs
 
-                df_out = ensure_expected_columns(df_out, CONFIG["export"]["results_csv_columns"])  # Add any missing expected columns with None values
+                df_out = ensure_expected_columns(df_out, results_cols or [])  # Add any missing expected columns with None values
 
-                df_out = df_out[CONFIG["export"]["results_csv_columns"]]  # Reorder columns into the canonical order
+                df_out = df_out[results_cols or list(df_out.columns)]  # Reorder columns into the canonical order
 
                 for col in df_out.columns:  # Iterate over all columns
                     col_l = col.lower()  # Lowercase column name for case-insensitive verification
@@ -4496,7 +4552,13 @@ def prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generat
             mutpb=mutpb,
         )
 
-        models_dir_local = f"{os.path.dirname(csv_path)}/Feature_Analysis/Genetic_Algorithm/Models/"  # Prepare model artifact directory and filenames
+        ga_export = CONFIG.get("genetic_algorithm", {}).get("export", {})
+        ga_results_dir = ga_export.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")
+        if os.path.isabs(ga_results_dir):
+            ga_results_resolved = os.path.abspath(os.path.expanduser(ga_results_dir))
+        else:
+            ga_results_resolved = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir)))
+        models_dir_local = os.path.join(ga_results_resolved, "Models")
         os.makedirs(models_dir_local, exist_ok=True)  # Create models directory if it doesn't exist
         ts = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")  # Generate timestamp string for filenames
         base_name_local = re.sub(r"[^A-Za-z0-9_.-]+", "_", os.path.splitext(os.path.basename(csv_path))[0])  # Sanitize dataset name for use in filename
@@ -4800,7 +4862,12 @@ def save_results(
         
         eval_metrics, testing_time_s = evaluate_final_on_test(model_local, X_test_selected, y_test)
         
-        output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/"  # Directory to save outputs
+        ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})
+        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")
+        if os.path.isabs(ga_results_dir_raw):
+            output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))
+        else:
+            output_dir = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir_raw)))
         os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
 
         try:
@@ -4893,7 +4960,12 @@ def analyze_top_features(df, y, top_features, csv_path="."):
             str
         )  # Add the target variable to the DataFrame
 
-        output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis"  # Directory to save outputs
+        ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})
+        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")
+        if os.path.isabs(ga_results_dir_raw):
+            output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))
+        else:
+            output_dir = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir_raw)))
         os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
 
         base_dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Base name of the dataset
