@@ -98,44 +98,21 @@ class BackgroundColors:  # Colors for the terminal
     CLEAR_TERMINAL = "\033[H\033[J"  # Clear the terminal
 
 
-# Execution Constants:
-VERBOSE = False  # Set to True to output verbose messages
-SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, try loading exported models instead of retraining
-CSV_FILE = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Path to the CSV dataset file (set in main)
-PCA_RESULTS_CSV_COLUMNS = [  # Columns for the PCA results CSV
-    "timestamp",
-    "tool",
-    "model",
-    "dataset",
-    "hyperparameters",
-    "cv_method",
-    "train_test_split",
-    "scaling",
-    "n_components",
-    "explained_variance",
-    "cv_accuracy",
-    "cv_precision",
-    "cv_recall",
-    "cv_f1_score",
-    "test_accuracy",
-    "test_precision",
-    "test_recall",
-    "test_f1_score",
-    "test_fpr",
-    "test_fnr",
-    "feature_extraction_time_s",
-    "training_time_s",
-    "testing_time_s",
-    "hardware",
-]
+# Execution placeholders (no hard-coded runtime constants; populated at runtime)
+VERBOSE = None
+SKIP_TRAIN_IF_MODEL_EXISTS = None
+CSV_FILE = None
+N_JOBS = None
+CROSS_N_FOLDS = None
+CPU_PROCESSES = None
+CACHING_ENABLED = None
+PICKLE_PROTOCOL = None
+CONFIG_FILE = None
 
-# Telegram Bot Setup:
-TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
+# Telegram Bot Setup placeholder (initialized in runtime)
+TELEGRAM_BOT = None
 
-# Logger Setup:
-logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
-sys.stdout = logger  # Redirect stdout to the logger
-sys.stderr = logger  # Redirect stderr to the logger
+# Note: Logger and exception hooks are initialized at runtime inside main()
 
 # Sound Constants:
 SOUND_COMMANDS = {
@@ -145,22 +122,289 @@ SOUND_COMMANDS = {
 }  # The commands to play a sound for each operating system
 SOUND_FILE = "./.assets/Sounds/NotificationSound.wav"  # The path to the sound file
 
-# RUN_FUNCTIONS:
-RUN_FUNCTIONS = {
-    "Play Sound": True,  # Set to True to play a sound when the program finishes
-}
-
-N_JOBS = None
-CROSS_N_FOLDS = None
-CPU_PROCESSES = None
-CACHING_ENABLED = None
-PICKLE_PROTOCOL = None
-CONFIG_FILE = None
+# RUN_FUNCTIONS removed; sound/playback is controlled via configuration at runtime
 
 # Functions Definitions:
 
 
-setup_global_exception_hook()  # Set up global exception hook to send exceptions via Telegram
+# Do not call global exception hooks at import time; initialize in `main()` once config is loaded
+
+def get_default_config() -> dict:
+    """
+    Return the default configuration dictionary for PCA analysis.
+
+    This function centralizes all defaults so that configuration precedence
+    (CLI > config.yaml > defaults) can be implemented reliably.
+    """
+
+    return {
+        "pca": {
+            "execution": {
+                "verbose": False,
+                "skip_train_if_model_exists": False,
+                "dataset_path": None,
+            },
+            "model": {
+                "estimator": "RandomForestClassifier",
+                "random_state": 42,
+            },
+            "dimensionality": {
+                "n_components": 8,
+                "n_components_list": [8, 16, 32, 64],
+            },
+            "preprocessing": {"scale_data": True, "remove_zero_variance": True},
+            "cross_validation": {"n_folds": 10},
+            "multiprocessing": {"n_jobs": -1, "cpu_processes": 1},
+            "caching": {"enabled": True, "pickle_protocol": 4},
+            "export": {
+                "results_csv_columns": [
+                    "timestamp",
+                    "tool",
+                    "model",
+                    "dataset",
+                    "hyperparameters",
+                    "cv_method",
+                    "train_test_split",
+                    "scaling",
+                    "n_components",
+                    "explained_variance",
+                    "cv_accuracy",
+                    "cv_precision",
+                    "cv_recall",
+                    "cv_f1_score",
+                    "test_accuracy",
+                    "test_precision",
+                    "test_recall",
+                    "test_f1_score",
+                    "test_fpr",
+                    "test_fnr",
+                    "feature_extraction_time_s",
+                    "training_time_s",
+                    "testing_time_s",
+                    "hardware",
+                ]
+            },
+        }
+    }
+
+
+def load_config_file(path: str) -> dict:
+    """
+    Load YAML configuration from `path` and return as dict.
+
+    Raises FileNotFoundError or yaml.YAMLError on parse errors so callers
+    can handle validation explicitly.
+    """
+
+    if not path:
+        return {}
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+    with p.open("r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    if not isinstance(data, dict):
+        raise ValueError("Configuration file must contain a YAML mapping at top level")
+    return data
+
+
+def parse_cli_args() -> dict:
+    """
+    Parse CLI arguments and return a plain dict of values. This is executed
+    only when requested (e.g., inside `get_config()` or `main()`), never at
+    import time.
+    """
+
+    parser = argparse.ArgumentParser(description="PCA Feature Extraction & Evaluation Tool")
+    parser.add_argument("--config", type=str, default=None, help="Path to config.yaml (overrides auto-detection)")
+    parser.add_argument("--dataset_path", type=str, default=None, help="Path to the CSV dataset file")
+    parser.add_argument("--n_components", type=int, default=None, help="Single number of PCA components to test (overrides n_components_list)")
+    parser.add_argument("--n_components_list", type=str, default=None, help="Comma-separated list of PCA component counts to test")
+    parser.add_argument("--random_state", type=int, default=None, help="Random seed for reproducibility (overrides config)")
+    parser.add_argument("--scale_data", dest="scale_data", action="store_true", default=None, help="Enable scaling (overrides config)")
+    parser.add_argument("--no-scale_data", dest="scale_data", action="store_false", help="Disable scaling (overrides config)")
+    parser.add_argument("--remove_zero_variance", dest="remove_zero_variance", action="store_true", default=None, help="Remove zero-variance features (overrides config)")
+    parser.add_argument("--no-remove_zero_variance", dest="remove_zero_variance", action="store_false", help="Do not remove zero-variance features (overrides config)")
+    parser.add_argument("--max_workers", type=int, default=None, help="Number of parallel workers (overrides config)")
+    parser.add_argument("--n_folds", type=int, default=None, help="Number of CV folds (overrides config.cross_validation.n_folds)")
+    parser.add_argument("--n_jobs", type=int, default=None, help="Number of parallel jobs for estimators/CV (-1 uses all cores)")
+    parser.add_argument("--cpu_processes", type=int, default=None, help="Number of CPU processes for multiprocessing (overrides config.multiprocessing.cpu_processes)")
+    parser.add_argument("--caching_enabled", type=lambda s: str(s).lower() in ("1", "true", "yes", "y"), default=None, help="Enable/disable caching (true/false). Overrides config.caching.enabled")
+    parser.add_argument("--pickle_protocol", type=int, default=None, help="Pickle protocol (0-5) to use when caching")
+    parser.add_argument("--verbose", action="store_true", default=None, help="Enable verbose output (overrides config)")
+    parser.add_argument("--skip_train_if_model_exists", action="store_true", default=None, help="Skip training if exported model exists (overrides config)")
+
+    args = parser.parse_args()
+    return vars(args)
+
+
+def deep_merge_dicts(base: dict, override: dict) -> dict:
+    """
+    Recursively merge two dictionaries with `override` taking precedence.
+    Returns a new merged dictionary.
+    """
+
+    if not isinstance(base, dict):
+        return override
+    result = dict(base)
+    for k, v in (override or {}).items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = deep_merge_dicts(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+
+def validate_config_structure(config: dict) -> None:
+    """
+    Validate the merged configuration structure and raise ValueError on issues.
+
+    This enforces the required pca.export.results_csv_columns presence and
+    performs light type/range checks.
+    """
+
+    if not isinstance(config, dict):
+        raise ValueError("Configuration must be a mapping/dict")
+    pca_cfg = config.get("pca")
+    if not isinstance(pca_cfg, dict):
+        raise ValueError("Missing 'pca' configuration section")
+    export_cfg = pca_cfg.get("export")
+    if not isinstance(export_cfg, dict):
+        raise ValueError("Missing 'pca.export' configuration section")
+    cols = export_cfg.get("results_csv_columns")
+    if not isinstance(cols, list) or not cols:
+        raise ValueError("'pca.export.results_csv_columns' must be a non-empty list defining the CSV header")
+    # Basic numeric validations
+    n_folds = pca_cfg.get("cross_validation", {}).get("n_folds")
+    if not isinstance(n_folds, int) or n_folds < 2:
+        raise ValueError("'pca.cross_validation.n_folds' must be an integer >= 2")
+    n_components = pca_cfg.get("dimensionality", {}).get("n_components")
+    if not isinstance(n_components, int) or n_components <= 0:
+        raise ValueError("'pca.dimensionality.n_components' must be an integer > 0")
+
+
+def get_config() -> tuple:
+    """
+    Produce the final configuration using precedence: CLI > config.yaml > defaults.
+
+    Returns (config_dict, sources_dict) where sources_dict maps top-level keys
+    to the origin ('cli'|'config'|'default').
+    """
+
+    cli = parse_cli_args()
+
+    # Determine config file path (CLI overrides auto-detection)
+    cfg_path = cli.get("config")
+    if not cfg_path:
+        candidate = Path(__file__).parent / "config.yaml"
+        candidate_example = Path(__file__).parent / "config.yaml.example"
+        if candidate.exists():
+            cfg_path = str(candidate)
+        elif candidate_example.exists():
+            cfg_path = str(candidate_example)
+        else:
+            cfg_path = None
+
+    file_cfg = {}
+    if cfg_path:
+        try:
+            file_cfg = load_config_file(cfg_path)
+        except Exception as e:
+            raise
+
+    defaults = get_default_config()
+
+    # Merge defaults <- file
+    merged = deep_merge_dicts(defaults, file_cfg)
+
+    # Translate CLI flat args into nested override structure for PCA
+    pca_overrides = {}
+    pca_overrides.setdefault("pca", {})
+    # execution
+    exec_ov = {}
+    if cli.get("verbose") is not None:
+        exec_ov.setdefault("execution", {})["verbose"] = bool(cli.get("verbose"))
+    if cli.get("skip_train_if_model_exists") is not None:
+        exec_ov.setdefault("execution", {})["skip_train_if_model_exists"] = bool(cli.get("skip_train_if_model_exists"))
+    if cli.get("dataset_path") is not None:
+        exec_ov.setdefault("execution", {})["dataset_path"] = cli.get("dataset_path")
+    if exec_ov:
+        pca_overrides["pca"].update(exec_ov)
+
+    # model
+    model_ov = {}
+    if cli.get("random_state") is not None:
+        model_ov.setdefault("model", {})["random_state"] = int(cli.get("random_state"))
+    if model_ov:
+        pca_overrides["pca"].update(model_ov)
+
+    # dimensionality
+    dim_ov = {}
+    if cli.get("n_components") is not None:
+        dim_ov.setdefault("dimensionality", {})["n_components"] = int(cli.get("n_components"))
+        dim_ov.setdefault("dimensionality", {})["n_components_list"] = [int(cli.get("n_components"))]
+    elif cli.get("n_components_list") is not None:
+        try:
+            parts = [int(x) for x in cli.get("n_components_list").split(",") if x.strip()]
+        except Exception:
+            raise ValueError("--n_components_list must be a comma-separated list of integers")
+        dim_ov.setdefault("dimensionality", {})["n_components_list"] = parts
+    if dim_ov:
+        pca_overrides["pca"].update(dim_ov)
+
+    # preprocessing
+    prep_ov = {}
+    if cli.get("scale_data") is not None:
+        prep_ov.setdefault("preprocessing", {})["scale_data"] = bool(cli.get("scale_data"))
+    if cli.get("remove_zero_variance") is not None:
+        prep_ov.setdefault("preprocessing", {})["remove_zero_variance"] = bool(cli.get("remove_zero_variance"))
+    if prep_ov:
+        pca_overrides["pca"].update(prep_ov)
+
+    # cross_validation
+    cv_ov = {}
+    if cli.get("n_folds") is not None:
+        cv_ov.setdefault("cross_validation", {})["n_folds"] = int(cli.get("n_folds"))
+    if cv_ov:
+        pca_overrides["pca"].update(cv_ov)
+
+    # multiprocessing
+    multi_ov = {}
+    if cli.get("n_jobs") is not None:
+        multi_ov.setdefault("multiprocessing", {})["n_jobs"] = int(cli.get("n_jobs"))
+    if cli.get("cpu_processes") is not None:
+        multi_ov.setdefault("multiprocessing", {})["cpu_processes"] = int(cli.get("cpu_processes"))
+    if multi_ov:
+        pca_overrides["pca"].update(multi_ov)
+
+    # caching
+    cache_ov = {}
+    if cli.get("caching_enabled") is not None:
+        cache_ov.setdefault("caching", {})["enabled"] = bool(cli.get("caching_enabled"))
+    if cli.get("pickle_protocol") is not None:
+        cache_ov.setdefault("caching", {})["pickle_protocol"] = int(cli.get("pickle_protocol"))
+    if cache_ov:
+        pca_overrides["pca"].update(cache_ov)
+
+    # Merge merged <- pca_overrides (CLI)
+    final = deep_merge_dicts(merged, pca_overrides)
+
+    # Validate structure
+    validate_config_structure(final.get("pca", {}))
+
+    # Build a simple sources map (top-level pca subkeys)
+    sources = {"pca": {}}
+    for top in ("execution", "model", "dimensionality", "preprocessing", "cross_validation", "multiprocessing", "caching", "export"):
+        src = "default"
+        # if present in file_cfg -> config
+        if isinstance(file_cfg, dict) and file_cfg.get("pca", {}).get(top) is not None:
+            src = "config"
+        # if overridden by CLI
+        if pca_overrides.get("pca", {}).get(top) is not None:
+            src = "cli"
+        sources["pca"][top] = src
+
+    return final, sources
 
 
 def verbose_output(true_string="", false_string=""):
@@ -181,66 +425,6 @@ def verbose_output(true_string="", false_string=""):
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
-
-
-def get_config(config_path=None):
-    """
-    Load PCA-related configuration from config.yaml or config.yaml.example.
-
-    Precedence: CLI args (handled in main) > config file > hard-coded defaults.
-
-    :param config_path: Optional path to a YAML config file
-    :return: dict with keys under 'pca' and 'execution' merged with defaults
-    """
-    
-    try:
-        defaults = {
-            "pca": {
-                "n_components_list": [8, 16, 32, 64],
-                "random_state": 42,
-                "scale_data": True,
-                "remove_zero_variance": True,
-            },
-            "execution": {"verbose": False},
-            "cross_validation": {"n_folds": 10},
-            "multiprocessing": {"n_jobs": -1, "cpu_processes": 1},
-            "caching": {"enabled": True, "pickle_protocol": 4},
-        }
-
-        cfg_file = None
-        if config_path:
-            cfg_file = Path(config_path)
-        else:
-            candidate = Path(__file__).parent / "config.yaml"
-            candidate_example = Path(__file__).parent / "config.yaml.example"
-            if candidate.exists():
-                cfg_file = candidate
-            elif candidate_example.exists():
-                cfg_file = candidate_example
-
-        if cfg_file is None or not cfg_file.exists():
-            verbose_output(f"Config file not found, using defaults: {defaults['pca']}")
-            return defaults
-
-        with open(cfg_file, "r", encoding="utf-8") as f:
-            loaded = yaml.safe_load(f) or {}
-
-        cfg = dict(defaults)
-        for topk in ("pca", "execution", "cross_validation", "multiprocessing", "caching"):
-            if topk in loaded and isinstance(loaded[topk], dict):
-                cfg[topk].update(loaded[topk])
-
-        return cfg
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
-
-
-try:
-    cfg = get_config(CONFIG_FILE)
-except Exception:
-    cfg = {}
 
 
 def verify_dot_env_file():
@@ -847,7 +1031,7 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
         raise  # Propagate exceptions to caller
 
         
-def save_pca_results(csv_path, all_results):
+def save_pca_results(csv_path, all_results, cfg=None):
     """
     Saves PCA results to a single CSV file containing evaluation metadata
     and per-configuration metrics. This replaces separate JSON and CSV
@@ -909,6 +1093,12 @@ def save_pca_results(csv_path, all_results):
 
         comparison_df = pd.DataFrame(rows)  # Create DataFrame from rows
         csv_output = f"{output_dir}/PCA_Results.csv"  # Output CSV path
+        # Resolve CSV header from configuration
+        header = None
+        if cfg and isinstance(cfg, dict):
+            header = cfg.get("pca", {}).get("export", {}).get("results_csv_columns")
+        if not header:
+            raise ValueError("PCA results CSV header is missing from configuration: pca.export.results_csv_columns")
 
         if os.path.exists(csv_output):
             try:
@@ -918,11 +1108,11 @@ def save_pca_results(csv_path, all_results):
                     back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")
                     df_existing["timestamp"] = back_ts
 
-                for c in PCA_RESULTS_CSV_COLUMNS:
+                for c in header:
                     if c not in df_existing.columns:
                         df_existing[c] = None
 
-                df_combined = pd.concat([df_existing[PCA_RESULTS_CSV_COLUMNS], comparison_df], ignore_index=True, sort=False)
+                df_combined = pd.concat([df_existing[header], comparison_df], ignore_index=True, sort=False)
 
                 try:
                     df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")
@@ -940,7 +1130,7 @@ def save_pca_results(csv_path, all_results):
         df_out = populate_hardware_column(df_out, column_name="hardware")  # Add hardware specs column (lowercase)
 
         try:
-            df_out = df_out.reindex(columns=PCA_RESULTS_CSV_COLUMNS)
+            df_out = df_out.reindex(columns=header)
         except Exception:
             pass
 
@@ -1154,7 +1344,7 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
             )
             return  # Return
 
-        save_pca_results(csv_path, all_results)  # Save all results to files
+        save_pca_results(csv_path, all_results, cfg)  # Save all results to files (header from config)
 
         best_result = max(all_results, key=lambda x: x["cv_f1_score"])  # Find the best configuration based on CV F1-Score
 
@@ -1301,123 +1491,48 @@ def main():
     """
     
     try:
-        global VERBOSE, SKIP_TRAIN_IF_MODEL_EXISTS, CSV_FILE
-        parser = argparse.ArgumentParser(description="PCA Feature Extraction & Evaluation Tool")
-        parser.add_argument("--config", type=str, default=None, help="Path to config.yaml (overrides auto-detection)")
-        parser.add_argument("--csv_file", type=str, default=CSV_FILE, help="Path to the CSV dataset file")
-        parser.add_argument("--skip_train_if_model_exists", action="store_true", help="Skip training if exported model exists")
-        parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-        default_components_str = "8,16,32,64"
-        parser.add_argument("--n_components_list", type=str, default=default_components_str, help="Comma-separated list of PCA component counts to test")
-        parser.add_argument("--n_components", type=int, default=None, help="Single number of PCA components to test (overrides n_components_list)")
-        parser.add_argument("--random_state", type=int, default=None, help="Random seed for reproducibility (overrides config)")
-        parser.add_argument("--scale_data", dest="scale_data", action="store_true", default=None, help="Enable scaling (overrides config)")
-        parser.add_argument("--no-scale_data", dest="scale_data", action="store_false", help="Disable scaling (overrides config)")
-        parser.add_argument("--remove_zero_variance", dest="remove_zero_variance", action="store_true", default=None, help="Remove zero-variance features (overrides config)")
-        parser.add_argument("--no-remove_zero_variance", dest="remove_zero_variance", action="store_false", help="Do not remove zero-variance features (overrides config)")
-        parser.add_argument("--max_workers", type=int, default=None, help="Number of parallel workers (default: from config or auto)")
-        parser.add_argument("--n_folds", type=int, default=None, help="Number of CV folds (overrides config.cross_validation.n_folds)")
-        parser.add_argument("--n_jobs", type=int, default=None, help="Number of parallel jobs for estimators/CV (-1 uses all cores)")
-        parser.add_argument("--cpu_processes", type=int, default=None, help="Number of CPU processes for multiprocessing (overrides config.multiprocessing.cpu_processes)")
-        parser.add_argument(
-            "--cache_enabled",
-            type=lambda s: str(s).lower() in ("1", "true", "yes", "y"),
-            default=None,
-            help="Enable/disable caching (true/false). Overrides config.caching.enabled",
-        )
-        parser.add_argument("--pickle_protocol", type=int, default=None, help="Pickle protocol (0-5) to use when caching")
-        args = parser.parse_args()
+        merged_cfg, sources = get_config()
 
-        cfg = get_config(args.config)
-        CONFIG_FILE = args.config  # prefer explicit config path when loading programmatically
+        global cfg
+        cfg = merged_cfg
 
-        cross_cfg = cfg.get("cross_validation", {}) if isinstance(cfg, dict) else {}
-        multi_cfg = cfg.get("multiprocessing", {}) if isinstance(cfg, dict) else {}
-        cache_cfg = cfg.get("caching", {}) if isinstance(cfg, dict) else {}
+        logs_dir = cfg.get("paths", {}).get("logs_dir", "./Logs") if isinstance(cfg, dict) else "./Logs"
+        os.makedirs(logs_dir, exist_ok=True)
+        logger = Logger(f"{logs_dir}/{Path(__file__).stem}.log", clean=cfg.get("logging", {}).get("clean", True) if isinstance(cfg, dict) else True)
+        sys.stdout = logger
+        sys.stderr = logger
 
-        resolved_n_folds = int(args.n_folds) if args.n_folds is not None else int(cross_cfg.get("n_folds", 10))
-        if resolved_n_folds < 2:
-            raise ValueError(f"cross_validation.n_folds must be >= 2, got {resolved_n_folds}")
+        setup_global_exception_hook()
 
-        resolved_n_jobs = args.n_jobs if args.n_jobs is not None else multi_cfg.get("n_jobs", -1)
-        if not isinstance(resolved_n_jobs, int):
-            raise ValueError("multiprocessing.n_jobs must be an integer (use -1 for all cores)")
-        if resolved_n_jobs != -1 and resolved_n_jobs < 1:
-            raise ValueError("multiprocessing.n_jobs must be -1 or >= 1")
+        global N_JOBS, CROSS_N_FOLDS, CPU_PROCESSES, CACHING_ENABLED, PICKLE_PROTOCOL, VERBOSE, SKIP_TRAIN_IF_MODEL_EXISTS, CSV_FILE
+        CROSS_N_FOLDS = cfg.get("pca", {}).get("cross_validation", {}).get("n_folds")
+        N_JOBS = cfg.get("pca", {}).get("multiprocessing", {}).get("n_jobs")
+        CPU_PROCESSES = cfg.get("pca", {}).get("multiprocessing", {}).get("cpu_processes")
+        CACHING_ENABLED = cfg.get("pca", {}).get("caching", {}).get("enabled")
+        PICKLE_PROTOCOL = cfg.get("pca", {}).get("caching", {}).get("pickle_protocol")
+        VERBOSE = cfg.get("pca", {}).get("execution", {}).get("verbose", False)
+        SKIP_TRAIN_IF_MODEL_EXISTS = cfg.get("pca", {}).get("execution", {}).get("skip_train_if_model_exists", False)
+        CSV_FILE = cfg.get("pca", {}).get("execution", {}).get("dataset_path")
 
-        resolved_cpu_procs = int(args.cpu_processes) if args.cpu_processes is not None else int(multi_cfg.get("cpu_processes", 1))
-        if resolved_cpu_procs < 1:
-            raise ValueError("multiprocessing.cpu_processes must be >= 1")
+        if CSV_FILE is None:
+            raise ValueError("Dataset path must be provided (CLI --dataset_path or config.pca.execution.dataset_path)")
+        if not Path(CSV_FILE).exists():
+            raise ValueError(f"Dataset file not found: {CSV_FILE}")
 
-        resolved_cache_enabled = bool(args.cache_enabled) if args.cache_enabled is not None else bool(cache_cfg.get("enabled", True))
-        resolved_pickle_protocol = int(args.pickle_protocol) if args.pickle_protocol is not None else int(cache_cfg.get("pickle_protocol", 4))
-        if not (0 <= resolved_pickle_protocol <= 5):
-            raise ValueError("caching.pickle_protocol must be an integer between 0 and 5")
+        n_components_list = cfg.get("pca", {}).get("dimensionality", {}).get("n_components_list")
+        if not isinstance(n_components_list, list) or not all(isinstance(x, int) and x > 0 for x in n_components_list):
+            raise ValueError("pca.dimensionality.n_components_list must be a list of positive integers")
 
-        global N_JOBS, CROSS_N_FOLDS, CPU_PROCESSES, CACHING_ENABLED, PICKLE_PROTOCOL
-        N_JOBS = resolved_n_jobs
-        CROSS_N_FOLDS = resolved_n_folds
-        CPU_PROCESSES = resolved_cpu_procs
-        CACHING_ENABLED = resolved_cache_enabled
-        PICKLE_PROTOCOL = resolved_pickle_protocol
-
-        VERBOSE = args.verbose or cfg.get("execution", {}).get("verbose", False)
-        SKIP_TRAIN_IF_MODEL_EXISTS = args.skip_train_if_model_exists
-        CSV_FILE = args.csv_file
-
-        if args.n_components is not None:
-            n_components_list = [int(args.n_components)]
-            print(f"Using n_components from CLI (--n_components): {n_components_list}")
-            source_ncomp = "cli"
-        elif args.n_components_list != default_components_str:
-            n_components_list = [int(x) for x in args.n_components_list.split(",") if x.strip().isdigit()]
-            print(f"Using n_components_list from CLI (--n_components_list): {n_components_list}")
-            source_ncomp = "cli"
-        else:
-            cfg_n = cfg.get("pca", {}).get("n_components_list")
-            if cfg_n:
-                n_components_list = cfg_n
-                print(f"Using n_components_list from config.yaml: {n_components_list}")
-                source_ncomp = "config"
-            else:
-                n_components_list = cfg.get("pca", {}).get("n_components_list", [8, 16, 32, 64])
-                print(f"Using default n_components_list: {n_components_list}")
-                source_ncomp = "default"
-
-        if args.random_state is not None:
-            random_state = int(args.random_state)
-            print(f"Using random_state from CLI: {random_state}")
-            source_rs = "cli"
-        else:
-            random_state = cfg.get("pca", {}).get("random_state", 42)
-            source_rs = "config" if "random_state" in cfg.get("pca", {}) else "default"
-            print(f"Using random_state from {source_rs}: {random_state}")
-
-        if args.scale_data is not None:
-            scale_data = bool(args.scale_data)
-            print(f"Using scale_data from CLI: {scale_data}")
-            source_scale = "cli"
-        else:
-            scale_data = cfg.get("pca", {}).get("scale_data", True)
-            print(f"Using scale_data from config/default: {scale_data}")
-            source_scale = "config/default"
-
-        if args.remove_zero_variance is not None:
-            remove_zero_variance = bool(args.remove_zero_variance)
-            print(f"Using remove_zero_variance from CLI: {remove_zero_variance}")
-            source_rzv = "cli"
-        else:
-            remove_zero_variance = cfg.get("pca", {}).get("remove_zero_variance", True)
-            print(f"Using remove_zero_variance from config/default: {remove_zero_variance}")
-            source_rzv = "config/default"
-
-        max_workers = args.max_workers if args.max_workers is not None else None
+        random_state = cfg.get("pca", {}).get("model", {}).get("random_state")
+        scale_data = cfg.get("pca", {}).get("preprocessing", {}).get("scale_data", True)
+        remove_zero_variance = cfg.get("pca", {}).get("preprocessing", {}).get("remove_zero_variance", True)
+        max_workers = None
 
         print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}PCA Feature Extraction{BackgroundColors.GREEN} program!{Style.RESET_ALL}")
-        start_time = datetime.datetime.now()  # Get the start time of the program
-        
-        setup_telegram_bot()  # Setup Telegram bot if configured
-        
+        start_time = datetime.datetime.now()
+
+        setup_telegram_bot()
+
         send_telegram_message(TELEGRAM_BOT, [f"Starting PCA Feature Extraction on {CSV_FILE} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])
 
         run_pca_analysis(
@@ -1427,21 +1542,22 @@ def main():
             random_state=random_state,
             scale_data=scale_data,
             remove_zero_variance=remove_zero_variance,
-        )  # Run the PCA analysis
+        )
 
-        finish_time = datetime.datetime.now()  # Get the finish time of the program
+        finish_time = datetime.datetime.now()
         print(
             f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
-        )  # Output the start and finish times
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
-        )  # Output the end of the program message
-        
+        )
+        print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}")
+
         send_telegram_message(TELEGRAM_BOT, [f"PCA Feature Extraction completed on {CSV_FILE} at {finish_time.strftime('%Y-%m-%d %H:%M:%S')}.\nExecution time: {calculate_execution_time(start_time, finish_time)}"])
 
-        (
-            atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
-        )  # Register the play_sound function to be called at exit if enabled
+        try:
+            top_play_sound = cfg.get("execution", {}).get("play_sound", False)
+            if top_play_sound:
+                atexit.register(play_sound)
+        except Exception:
+            pass
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
