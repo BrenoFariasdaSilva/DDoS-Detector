@@ -45,8 +45,10 @@ Assumptions & Notes:
     - Outputs are written next to each processed dataset directory
 """
 
+
 import argparse  # For command-line arguments
 import atexit  # For playing a sound when the program finishes
+import copy  # For deep copying configuration dictionaries
 import dataframe_image as dfi  # For exporting DataFrame images (zebra-striped PNG)
 import datetime  # For getting the current date and time
 import json  # For handling JSON strings
@@ -63,6 +65,7 @@ import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import time  # For measuring execution time
 import warnings  # For suppressing warnings
+import yaml  # For loading YAML configuration files
 from collections import OrderedDict  # For deterministic results column ordering when saving
 from colorama import Style  # For coloring the terminal
 from itertools import product  # For generating parameter combinations
@@ -177,10 +180,8 @@ DATASETS = {  # Dictionary containing dataset paths and feature files
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
 
-# Logger Setup:
-logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
-sys.stdout = logger  # Redirect stdout to the logger
-sys.stderr = logger  # Redirect stderr to the logger
+# Logger placeholder (no side-effects at import-time):
+logger = None
 
 # Sound Constants:
 SOUND_COMMANDS = {
@@ -188,6 +189,7 @@ SOUND_COMMANDS = {
     "Linux": "aplay",
     "Windows": "start",
 }  # The commands to play a sound for each operating system
+
 SOUND_FILE = "./.assets/Sounds/NotificationSound.wav"  # The path to the sound file
 
 # RUN_FUNCTIONS:
@@ -198,7 +200,218 @@ RUN_FUNCTIONS = {
 # Functions Definitions:
 
 
-setup_global_exception_hook()  # Set up global exception hook to send exceptions via Telegram
+def get_default_config() -> Dict[str, Any]:
+    """
+    Return defaults for hyperparameters_optimization as a dict.
+
+    :param: None
+    :return: Dict containing default configuration values for hyperparameters optimization
+    """
+    
+    return {
+        "hyperparameters_optimization": {
+            "execution": {
+                "verbose": False,
+                "n_jobs": -2,
+                "skip_train_if_model_exists": False,
+            },
+            "export": {
+                "results_dir": "Feature_Analysis/Hyperparameter_Optimization",
+                "results_filename": "Hyperparameter_Optimization_Results.csv",
+                "model_export_base_dir": "Feature_Analysis/Hyperparameter_Optimization/Models",
+                "cache_prefix": "Cache_",
+            },
+            "dataset_processing": {
+                "match_filenames_to_process": [""],
+                "ignore_files": ["Hyperparameter_Optimization_Results.csv"],
+                "ignore_dirs": [
+                    "Classifiers_Hyperparameters",
+                    "Dataset_Description",
+                    "Data_Separability",
+                    "Feature_Analysis",
+                ],
+            },
+            "models": {
+                "enabled_models": [
+                    "Random Forest",
+                    "SVM",
+                    "XGBoost",
+                    "Logistic Regression",
+                    "KNN",
+                    "Nearest Centroid",
+                    "Gradient Boosting",
+                    "LightGBM",
+                    "MLP (Neural Net)",
+                ]
+            },
+            "datasets": {
+                "CICDDoS2019-Dataset": [
+                    "./Datasets/CICDDoS2019/01-12/",
+                    "./Datasets/CICDDoS2019/03-11/",
+                ]
+            },
+            "results_schema": {
+                "columns": [
+                    "base_csv",
+                    "model",
+                    "best_params",
+                    "best_cv_f1_score",
+                    "n_features",
+                    "feature_selection_method",
+                    "dataset",
+                    "elapsed_time_s",
+                    "accuracy",
+                    "precision",
+                    "recall",
+                    "fpr",
+                    "fnr",
+                    "tpr",
+                    "tnr",
+                    "matthews_corrcoef",
+                    "roc_auc_score",
+                    "cohen_kappa",
+                    "Hardware",
+                ]
+            },
+        }
+    }
+
+
+def load_config_file(path: str = "config.yaml") -> Dict[str, Any]:
+    """
+    Load YAML config from `path` if present; return empty dict otherwise.
+    
+    :param path: Path to the YAML configuration file (default: "config.yaml")
+    :return: Dict containing the loaded configuration, or empty dict if file not found
+    """
+    
+    cfg = {}
+    cfg_path = Path(path)
+    if cfg_path.exists():
+        with cfg_path.open("r", encoding="utf-8") as fh:
+            cfg = yaml.safe_load(fh) or {}
+    return cfg
+
+
+def deep_merge(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Recursively merge two dictionaries, with values from `b` taking precedence over `a`.
+
+    :param a: The base dictionary to merge into (will not be modified)
+    :param b: The dictionary with overriding values (will not be modified)
+    :return: A new dictionary resulting from deeply merging `a` and `b`
+    """
+    
+    result = copy.deepcopy(a)
+    for k, v in (b or {}).items():
+        if isinstance(v, dict) and isinstance(result.get(k), dict):
+            result[k] = deep_merge(result.get(k, {}), v)
+        else:
+            result[k] = copy.deepcopy(v)
+    return result
+
+
+def validate_hyperopt_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Validate required fields for hyperparameters_optimization and return cfg.
+
+    :param cfg: The configuration dictionary to validate
+    :return: The validated configuration dictionary (same as input if valid)
+    """
+    
+    try:
+        hp = cfg["hyperparameters_optimization"]
+    except Exception:
+        raise ValueError("Missing 'hyperparameters_optimization' section in configuration")
+
+    try:
+        export = hp["export"]
+    except Exception:
+        raise ValueError("Missing 'hyperparameters_optimization.export' section in configuration")
+
+    results_dir = export.get("results_dir")
+    results_filename = export.get("results_filename")
+
+    if results_dir is None or (isinstance(results_dir, str) and not results_dir.strip()):
+        raise ValueError("'results_dir' under hyperparameters_optimization.export must be defined and non-empty")
+
+    if results_filename is None or (isinstance(results_filename, str) and not results_filename.strip()):
+        raise ValueError("'results_filename' under hyperparameters_optimization.export must be defined and non-empty")
+
+    if not isinstance(results_filename, str) or not results_filename.lower().endswith(".csv"):
+        raise ValueError("'results_filename' must be a CSV filename ending with '.csv'")
+
+    return cfg
+
+
+def build_results_path(cfg: Dict[str, Any]) -> str:
+    """
+    Build the absolute path for the results CSV file based on the configuration.
+    
+    :param cfg: The configuration dictionary containing export settings
+    :return: The absolute path to the results CSV file
+    """
+    
+    export = cfg["hyperparameters_optimization"]["export"]
+    results_dir = export["results_dir"]
+    results_filename = export["results_filename"]
+    os.makedirs(results_dir, exist_ok=True)
+    results_path = os.path.abspath(os.path.join(results_dir, results_filename))
+    return results_path
+
+
+def apply_cli_overrides_to_cfg(cfg: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
+    """
+    Apply CLI overrides (when provided) into the merged config.
+
+    :param cfg: The configuration dictionary to update with CLI overrides
+    :param args: The parsed command-line arguments containing potential overrides
+    :return: The updated configuration dictionary with CLI overrides applied
+    """
+    
+    hp = cfg.setdefault("hyperparameters_optimization", {})
+    execution = hp.setdefault("execution", {})
+    export = hp.setdefault("export", {})
+
+    if getattr(args, "verbose", None) is not None:
+        execution["verbose"] = bool(args.verbose)
+
+    if getattr(args, "n_jobs", None) is not None:
+        execution["n_jobs"] = int(args.n_jobs)
+
+    if getattr(args, "skip_train_if_model_exists", None) is not None:
+        execution["skip_train_if_model_exists"] = bool(args.skip_train_if_model_exists)
+
+    if getattr(args, "results_dir", None):
+        export["results_dir"] = str(args.results_dir)
+
+    if getattr(args, "results_filename", None):
+        export["results_filename"] = str(args.results_filename)
+
+    if getattr(args, "model_export_base_dir", None):
+        export["model_export_base_dir"] = str(args.model_export_base_dir)
+
+    if getattr(args, "cache_prefix", None):
+        export["cache_prefix"] = str(args.cache_prefix)
+
+    return cfg
+
+
+def init_logger_and_exception_hook():
+    """
+    Instantiate logger and set up global exception hook (side-effects).
+
+    :param: None
+    :return: None
+    """
+    
+    global logger
+    logs_dir = Path("./Logs")
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)
+    sys.stdout = logger
+    sys.stderr = logger
+    setup_global_exception_hook()
 
 
 def verbose_output(true_string="", false_string=""):
@@ -737,7 +950,7 @@ def get_feature_subset(X_scaled, features, feature_names):
         raise
 
 
-def _is_valid_combination(model_name_local, params_local):
+def is_valid_combination(model_name_local, params_local):
     """
     Check if the given hyperparameter combination is valid for the specified model.
     
@@ -1471,7 +1684,7 @@ def update_optimization_progress_bar(
 
             desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} - {idx_str} {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}:{combo_str}"  # Base description for progress
 
-            def _short(value, limit=30):  # Helper to create short string representations
+            def short(value, limit=30):  # Helper to create short string representations
                 return str(value) if len(str(value)) <= limit else str(value)[: limit - 3] + "..."  # Truncate helper
 
             if isinstance(param_grid, dict):  # If param_grid is dict, prepare compact display
@@ -1481,18 +1694,18 @@ def update_optimization_progress_bar(
                         break  # Limit display to first 4 params
                     try:
                         vals = list(v) if hasattr(v, "__iter__") and not isinstance(v, (str, bytes, dict)) else [v]
-                        shown = ",".join([_short(x, 12) for x in vals[:4]])  # Show up to 4 values
+                        shown = ",".join([short(x, 12) for x in vals[:4]])  # Show up to 4 values
                         if len(vals) > 4:
                             shown += f",+{len(vals)-4}"  # Indicate extras
-                        parts.append(f"{BackgroundColors.GREEN}{_short(k,18)}{BackgroundColors.GREEN}:[{BackgroundColors.CYAN}{shown}{BackgroundColors.GREEN}]")
+                        parts.append(f"{BackgroundColors.GREEN}{short(k,18)}{BackgroundColors.GREEN}:[{BackgroundColors.CYAN}{shown}{BackgroundColors.GREEN}]")
                     except Exception:
-                        parts.append(f"{BackgroundColors.GREEN}{_short(k,18)}{BackgroundColors.GREEN}:[{BackgroundColors.CYAN}{_short(v,12)}{BackgroundColors.GREEN}]")
+                        parts.append(f"{BackgroundColors.GREEN}{short(k,18)}{BackgroundColors.GREEN}:[{BackgroundColors.CYAN}{short(v,12)}{BackgroundColors.GREEN}]")
                 remaining = max(0, len(param_grid) - 4)  # Number of remaining params not displayed
                 param_display = ", ".join(parts)  # Join parts for display
                 if remaining > 0:
                     param_display += f", {BackgroundColors.CYAN}+{remaining} more{BackgroundColors.GREEN}"  # Append remaining count
             else:
-                param_display = _short(param_grid, 60)  # Otherwise, short representation
+                param_display = short(param_grid, 60)  # Otherwise, short representation
 
             desc = f"{desc} {BackgroundColors.GREEN}({param_display}){Style.RESET_ALL}"  # Append parameter display
 
@@ -1763,7 +1976,7 @@ def process_cached_combinations(
 
                 global_counter += 1  # Increment global counter
             
-            elif _is_valid_combination(model_name, params_dict):  # If not cached and valid
+            elif is_valid_combination(model_name, params_dict):  # If not cached and valid
                 combinations_to_test.append(combo)  # Schedule for testing
         
         return combinations_to_test, best_score, best_params, best_elapsed, all_results, global_counter, cached_count
@@ -2336,11 +2549,11 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     :return: pandas Styler with alternating row background colors
     """
     try:
-        def _row_style(row):  # Define row-wise styling helper
+        def row_style(row):  # Define row-wise styling helper
             bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # white/light-gray alternation
             return [f"background-color: {bg};" for _ in row.index]  # Return style per cell preserving order
 
-        styled = df.style.apply(_row_style, axis=1)  # Apply zebra styling row-wise to preserve column order
+        styled = df.style.apply(row_style, axis=1)  # Apply zebra styling row-wise to preserve column order
         styled = styled.set_table_attributes('style="border-collapse:collapse; width:100%;"')  # Tight table rendering
         styled = styled.set_properties(**{"border": "1px solid #ddd", "padding": "6px"})  # Add cell padding and border
         return styled  # Return the pandas Styler object
@@ -2412,46 +2625,12 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
         raise  # Propagate exceptions to caller
 
 
-def play_sound():
+def run_optimization():
     """
-    Plays a sound when the program finishes and skips if the operating system is Windows.
-
-    :param: None
-    :return: None
+    Run the optimization loop. Separated from CLI/config parsing so `main()`
+    handles configuration and `run_optimization()` performs the processing.
     """
-    
     try:
-        current_os = platform.system()  # Get the current operating system
-        if current_os == "Windows":  # If the current operating system is Windows
-            return  # Do nothing
-
-        if verify_filepath_exists(SOUND_FILE):  # If the sound file exists
-            if current_os in SOUND_COMMANDS:  # If the platform.system() is in the SOUND_COMMANDS dictionary
-                os.system(f"{SOUND_COMMANDS[current_os]} {SOUND_FILE}")  # Play the sound
-            else:  # If the platform.system() is not in the SOUND_COMMANDS dictionary
-                print(
-                    f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not in the {BackgroundColors.CYAN}SOUND_COMMANDS dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}"
-                )  # Print error message
-        else:  # If the sound file does not exist
-            print(
-                f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{SOUND_FILE}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}"
-            )  # Print error message
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
-
-
-def main():
-    """
-    Main function.
-
-    :param: None
-    :return: None
-    """
-    
-    try:
-        parse_args(VERBOSE)  # Parse command-line arguments
 
         print(
             f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Classifiers Hyperparameters Optimization{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
@@ -2523,40 +2702,102 @@ def main():
         raise
 
 
-if __name__ == "__main__":
+def play_sound():
     """
-    This is the standard boilerplate that calls the main() function.
+    Plays a sound when the program finishes and skips if the operating system is Windows.
 
+    :param: None
     :return: None
     """
+    
+    try:
+        current_os = platform.system()  # Get the current operating system
+        if current_os == "Windows":  # If the current operating system is Windows
+            return  # Do nothing
 
-    parser = argparse.ArgumentParser(
-        description="Run Hyperparameter optimization and optionally load existing exported models."
-    )
-    parser.add_argument(
-        "--skip-train-if-model-exists",
-        dest="skip_train",
-        action="store_true",
-        help="If set, do not retrain; skip processing when exported models exist for the dataset.",
-    )
-    parser.add_argument(
-        "--verbose",
-        dest="verbose",
-        action="store_true",
-        help="Enable verbose output during the run.",
-    )
-    parser.add_argument(
-        "--csv",
-        dest="csv",
-        type=str,
-        default=None,
-        help="Optional: path to a single dataset CSV to analyze. If omitted, iterates DATASETS.",
-    )
+        if verify_filepath_exists(SOUND_FILE):  # If the sound file exists
+            if current_os in SOUND_COMMANDS:  # If the platform.system() is in the SOUND_COMMANDS dictionary
+                os.system(f"{SOUND_COMMANDS[current_os]} {SOUND_FILE}")  # Play the sound
+            else:  # If the platform.system() is not in the SOUND_COMMANDS dictionary
+                print(
+                    f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not in the {BackgroundColors.CYAN}SOUND_COMMANDS dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}"
+                )  # Print error message
+        else:  # If the sound file does not exist
+            print(
+                f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{SOUND_FILE}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}"
+            )  # Print error message
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def main():
+    """
+    Main function.
+
+    :param: None
+    :return: None
+    """
+    
+    parser = argparse.ArgumentParser(description="Hyperparameters optimization runner")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output (overrides config)")
+    parser.add_argument("--n_jobs", type=int, help="Number of parallel jobs (overrides config)")
+    parser.add_argument("--skip_train_if_model_exists", action="store_true", help="Skip training if model exists (overrides config)")
+    parser.add_argument("--results_dir", type=str, help="Results directory (overrides config)")
+    parser.add_argument("--results_filename", type=str, help="Results CSV filename (overrides config)")
+    parser.add_argument("--model_export_base_dir", type=str, help="Model export base directory (overrides config)")
+    parser.add_argument("--cache_prefix", type=str, help="Cache file prefix (overrides config)")
     args = parser.parse_args()
 
-    SKIP_TRAIN_IF_MODEL_EXISTS = bool(args.skip_train)
-    VERBOSE = bool(args.verbose)
-    if args.csv:
-        DATASETS = {"SingleCSV": [os.path.dirname(args.csv)]}
+    # Load/merge configuration with precedence defaults < config.yaml < CLI
+    defaults = get_default_config()
+    file_cfg = load_config_file("config.yaml")
+    merged = deep_merge(defaults, file_cfg.get("hyperparameters_optimization") and {"hyperparameters_optimization": file_cfg.get("hyperparameters_optimization")} or defaults)
+    # Apply CLI overrides
+    merged = apply_cli_overrides_to_cfg(merged, args)
+    # Validate required fields
+    merged = validate_hyperopt_config(merged)
 
-    main()  # Call the main function
+    # Build results path and ensure directory exists
+    results_path = build_results_path(merged)
+
+    # Initialize logger and exception hook now that runtime config exists
+    init_logger_and_exception_hook()
+
+    # Expose selected values as module-level variables so existing code paths continue to work
+    global VERBOSE, MODEL_EXPORT_BASE, N_JOBS, SKIP_TRAIN_IF_MODEL_EXISTS
+    global RESULTS_FILENAME, CACHE_PREFIX, MATCH_FILENAMES_TO_PROCESS
+    global IGNORE_FILES, IGNORE_DIRS, HYPERPARAMETERS_RESULTS_CSV_COLUMNS
+    global ENABLED_MODELS, DATASETS
+
+    hp = merged["hyperparameters_optimization"]
+    exec_cfg = hp["execution"]
+    export = hp["export"]
+    dp = hp.get("dataset_processing", {})
+    models_cfg = hp.get("models", {})
+
+    VERBOSE = bool(exec_cfg.get("verbose", False))
+    N_JOBS = int(exec_cfg.get("n_jobs", -2))
+    SKIP_TRAIN_IF_MODEL_EXISTS = bool(exec_cfg.get("skip_train_if_model_exists", False))
+
+    RESULTS_FILENAME = export["results_filename"]
+    MODEL_EXPORT_BASE = export.get("model_export_base_dir")
+    CACHE_PREFIX = export.get("cache_prefix")
+
+    MATCH_FILENAMES_TO_PROCESS = dp.get("match_filenames_to_process", [""])
+    IGNORE_FILES = dp.get("ignore_files", [RESULTS_FILENAME])
+    IGNORE_DIRS = dp.get("ignore_dirs", [])
+
+    HYPERPARAMETERS_RESULTS_CSV_COLUMNS = hp.get("results_schema", {}).get("columns", [])
+    ENABLED_MODELS = models_cfg.get("enabled_models", [])
+    DATASETS = hp.get("datasets", {})
+
+    # Log results CSV path
+    print(f"[EXPORT] Results CSV path: {results_path}")
+    # Start the optimization run
+    run_optimization()
+
+
+if __name__ == "__main__":
+    main()
