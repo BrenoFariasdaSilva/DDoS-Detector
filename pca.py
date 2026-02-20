@@ -157,6 +157,8 @@ def get_default_config() -> dict:
             "multiprocessing": {"n_jobs": -1, "cpu_processes": 1},
             "caching": {"enabled": True, "pickle_protocol": 4},
             "export": {
+                "results_dir": "Feature_Analysis/PCA",
+                "results_filename": "PCA_Results.csv",
                 "results_csv_columns": [
                     "timestamp",
                     "tool",
@@ -233,6 +235,8 @@ def parse_cli_args() -> dict:
     parser.add_argument("--pickle_protocol", type=int, default=None, help="Pickle protocol (0-5) to use when caching")
     parser.add_argument("--verbose", action="store_true", default=None, help="Enable verbose output (overrides config)")
     parser.add_argument("--skip_train_if_model_exists", action="store_true", default=None, help="Skip training if exported model exists (overrides config)")
+    parser.add_argument("--results_dir", type=str, default=None, help="Override results directory for PCA exports (overrides config.pca.export.results_dir)")
+    parser.add_argument("--results_filename", type=str, default=None, help="Override results filename for PCA exports (overrides config.pca.export.results_filename)")
 
     args = parser.parse_args()
     return vars(args)
@@ -337,6 +341,14 @@ def get_config() -> tuple:
         model_ov.setdefault("model", {})["random_state"] = int(cli.get("random_state"))
     if model_ov:
         pca_overrides["pca"].update(model_ov)
+
+    export_ov = {}
+    if cli.get("results_dir") is not None:
+        export_ov.setdefault("export", {})["results_dir"] = cli.get("results_dir")
+    if cli.get("results_filename") is not None:
+        export_ov.setdefault("export", {})["results_filename"] = cli.get("results_filename")
+    if export_ov:
+        pca_overrides["pca"].update(export_ov)
 
     # dimensionality
     dim_ov = {}
@@ -1044,8 +1056,28 @@ def save_pca_results(csv_path, all_results, cfg=None):
     """
     
     try:
-        output_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/PCA/"  # Output directory under PCA subdir
-        os.makedirs(output_dir, exist_ok=True)  # Create output directory if it doesn't exist
+        export_cfg = (cfg or {}).get("pca", {}).get("export", {})
+        results_dir_raw = export_cfg.get("results_dir")
+        results_filename = export_cfg.get("results_filename")
+        if not isinstance(results_dir_raw, str) or not results_dir_raw:
+            raise ValueError("'pca.export.results_dir' must be a non-empty string in configuration")
+        if not isinstance(results_filename, str) or not results_filename:
+            raise ValueError("'pca.export.results_filename' must be a non-empty string in configuration")
+        if not results_filename.lower().endswith(".csv"):
+            raise ValueError("'pca.export.results_filename' must end with .csv")
+
+        if os.path.isabs(results_dir_raw):
+            resolved_dir = os.path.abspath(os.path.expanduser(results_dir_raw))
+        else:
+            dataset_dir = os.path.dirname(csv_path) or "."
+            resolved_dir = os.path.abspath(os.path.expanduser(os.path.join(dataset_dir, results_dir_raw)))
+
+        os.makedirs(resolved_dir, exist_ok=True)
+        if not os.access(resolved_dir, os.W_OK):
+            raise PermissionError(f"Directory not writable: {resolved_dir}")
+
+        csv_output = os.path.join(resolved_dir, results_filename)
+        print(f"[EXPORT] Results CSV path: {os.path.abspath(csv_output)}")
 
         eval_model = "Random Forest"  # Evaluation model
         train_test_split = "80/20 split"  # Train/test split
@@ -1092,8 +1124,7 @@ def save_pca_results(csv_path, all_results, cfg=None):
             rows.append(row)
 
         comparison_df = pd.DataFrame(rows)  # Create DataFrame from rows
-        csv_output = f"{output_dir}/PCA_Results.csv"  # Output CSV path
-        # Resolve CSV header from configuration
+
         header = None
         if cfg and isinstance(cfg, dict):
             header = cfg.get("pca", {}).get("export", {}).get("results_csv_columns")
@@ -1140,7 +1171,7 @@ def save_pca_results(csv_path, all_results, cfg=None):
         except Exception as e:  # Handle exceptions during file saving
             print(f"{BackgroundColors.RED}Failed to save PCA CSV: {e}{Style.RESET_ALL}")
 
-        models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/PCA/Models/"
+        models_dir = os.path.join(resolved_dir, "Models")
         os.makedirs(models_dir, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
         base_name = Path(csv_path).stem
@@ -1194,7 +1225,19 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
     
     try:
         global SKIP_TRAIN_IF_MODEL_EXISTS
-        models_dir = f"{os.path.dirname(csv_path)}/Feature_Analysis/PCA/Models/"
+
+        export_cfg_local = (globals().get('cfg') or {}).get("pca", {}).get("export", {}) if 'cfg' in globals() else None
+        results_dir_raw_local = None
+        if export_cfg_local:
+            results_dir_raw_local = export_cfg_local.get("results_dir")
+        if not results_dir_raw_local:
+            results_dir_raw_local = os.path.join("Feature_Analysis", "PCA")
+        if os.path.isabs(results_dir_raw_local):
+            resolved_models_base = os.path.abspath(os.path.expanduser(results_dir_raw_local))
+        else:
+            dataset_dir_local = os.path.dirname(csv_path) or "."
+            resolved_models_base = os.path.abspath(os.path.expanduser(os.path.join(dataset_dir_local, results_dir_raw_local)))
+        models_dir = os.path.join(resolved_models_base, "Models")
         base_name = Path(csv_path).stem
         timestamp = None
         if SKIP_TRAIN_IF_MODEL_EXISTS:
