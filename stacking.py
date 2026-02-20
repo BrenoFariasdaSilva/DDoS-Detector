@@ -168,6 +168,7 @@ def parse_cli_args():
         parser.add_argument("--multi-class", action="store_true", help="Enable multi-class classification mode (combine all attacks)")
         parser.add_argument("--binary", dest="multi_class", action="store_false", help="Enable binary classification mode (default)")
         parser.add_argument("--both", action="store_true", help="Run both binary and multi-class pipelines sequentially")
+        parser.add_argument("--stacking-results-dir", type=str, default=None, help="Directory to save stacking results (relative to Feature_Analysis)")
         parser.add_argument("--top-n-features", dest="top_n_features", type=int, default=None, help="Number of top features to show in heatmap (overrides config)")
         
         return parser.parse_args()  # Return parsed arguments
@@ -210,6 +211,7 @@ def get_default_config():
             },
         },
         "stacking": {
+            "results_dir": "Stacking",
             "results_filename": "Stacking_Classifiers_Results.csv",
             "multiclass_results_filename": "Stacking_Classifiers_MultiClass_Results.csv",
             "augmentation_comparison_filename": "Data_Augmentation_Comparison_Results.csv",
@@ -410,6 +412,9 @@ def merge_configs(defaults, file_config, cli_args):
             if not isinstance(cli_args.top_n_features, int) or cli_args.top_n_features <= 0:  # Validate positive integer
                 raise ValueError("--top-n-features must be an integer greater than 0")  # Raise for invalid value
             config.setdefault("stacking", {})["top_n_features_heatmap"] = cli_args.top_n_features  # Apply override to config
+
+        if hasattr(cli_args, "stacking_results_dir") and cli_args.stacking_results_dir:
+            config.setdefault("stacking", {})["results_dir"] = cli_args.stacking_results_dir
         
         return config  # Return final merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -4013,7 +4018,9 @@ def save_stacking_results(csv_path, results_list, config=None):
         file_path_obj = Path(csv_path)
         feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"
         os.makedirs(feature_analysis_dir, exist_ok=True)
-        stacking_dir = feature_analysis_dir / "Stacking"
+        
+        stacking_results_dir = config.get("stacking", {}).get("results_dir", "Stacking")
+        stacking_dir = feature_analysis_dir / stacking_results_dir
         os.makedirs(stacking_dir, exist_ok=True)
         output_path = stacking_dir / results_filename
 
