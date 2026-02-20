@@ -485,6 +485,8 @@ wgangp:
   seed: 42                            # Random seed for reproducibility
   force_cpu: false                    # Force CPU usage even if CUDA available
   from_scratch: false                 # Force training from scratch, ignore checkpoints
+  results_dir: "Feature_Analysis/PCA"
+  results_filename: "PCA_Results.csv"
   results_csv_columns:                # Columns for per-directory data augmentation results CSV
     - original_file
     - generated_file
