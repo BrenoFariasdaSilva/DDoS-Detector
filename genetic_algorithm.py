@@ -5107,7 +5107,7 @@ def run_population_sweep(
         for run in range(runs):  # For each run
             for pop_size in range(min_pop, max_pop + 1):  # For each population size
                 send_telegram_message(TELEGRAM_BOT, [
-                    f"Run {run + 1}/{runs} - population size {pop_size}/{max_pop}"
+                    f"Starting Run {run + 1}/{runs} - population size {pop_size}/{max_pop}"
                 ])  # Send start message for this run and population size
                 start_pop_time = time.perf_counter()  # Start timing this population size iteration
                 result = run_single_ga_iteration(
