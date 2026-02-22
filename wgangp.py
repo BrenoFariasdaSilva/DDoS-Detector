@@ -2116,7 +2116,7 @@ def compose_generation_start_message(n: int, args, generated_file_name: str, ori
         if ratio_info != "":  # If ratio information is available
             return f"Starting generation: Producing {n} samples ({ratio_info}) to {generated_file_name}"  # Final formatted message
         
-        return f"Starting generation: Oroducing {n} samples to {generated_file_name}"  # Fallback message
+        return f"Starting generation: Producing {n} samples to {generated_file_name}"  # Fallback message
     
     except Exception as e:
         print(str(e))  # Print exception message
