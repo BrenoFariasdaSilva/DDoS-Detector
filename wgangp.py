@@ -2051,6 +2051,59 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
         raise  # Propagate exceptions to caller (do not swallow)
 
 
+def compose_generation_start_message(n: int, args, generated_file_name: str, original_num: Optional[int] = None):
+    """
+    Compose the generation start message including the ratio relative to the original dataset.
+
+    :param n: Number of samples that will be generated
+    :param args: Parsed CLI arguments (may contain n_samples and csv_path)
+    :param generated_file_name: Output file name where samples will be saved
+    :param original_num: Optional original dataset size (if already known)
+    :return: Formatted Telegram message string
+    """
+
+    try:
+        orig = original_num  # Start with provided original dataset size
+        
+        if orig is None:  # If original size was not explicitly provided
+            csv_path = getattr(args, "csv_path", None)  # Try to get CSV path from args
+            
+            if csv_path:  # If CSV path exists
+                try:
+                    df = pd.read_csv(csv_path)  # Load dataset
+                    orig = len(df)  # Determine original number of samples
+                except Exception:
+                    orig = None  # If reading fails, keep as None
+        
+        ratio_info = ""  # Initialize ratio info
+        
+        if orig is not None and orig > 0:  # If original dataset size is known and valid
+            ratio = float(n) / float(orig)  # Compute generation ratio
+            percentage = ratio * 100.0  # Convert ratio to percentage
+            ratio_info = f"{percentage:.2f}% ({n}/{orig})"  # Format ratio info
+        
+        elif args.n_samples is not None:  # If n_samples was explicitly provided
+            try:
+                requested = float(args.n_samples)  # Convert to float
+                
+                if requested <= 1.0:  # If decimal (percentage mode)
+                    ratio_info = f"{requested * 100:.2f}%"  # Percentage requested
+                else:  # If integer (absolute mode)
+                    ratio_info = f"{int(requested)} samples"  # Absolute requested
+            except Exception:
+                ratio_info = ""  # Fallback if conversion fails
+        
+        if ratio_info != "":  # If ratio information is available
+            return f"Starting generation: producing {n} samples ({ratio_info}) to {generated_file_name}"  # Final formatted message
+        
+        return f"Starting generation: producing {n} samples to {generated_file_name}"  # Fallback message
+    
+    except Exception as e:
+        print(str(e))  # Print exception message
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception to Telegram
+        raise
+
+
 def generate(args, config: Optional[Dict] = None):
     """
     Generate synthetic samples from a saved generator checkpoint.
@@ -2180,7 +2233,8 @@ def generate(args, config: Optional[Dict] = None):
 
         batch_size = args.gen_batch_size  # Set generation batch size
         try:
-            send_telegram_message(TELEGRAM_BOT, f"Starting generation: producing {n} samples to {Path(args.out_file).name}")  # Notify start of generation
+            start_msg = compose_generation_start_message(n, args, Path(args.out_file).name, original_num=None, class_distribution=class_distribution, args_ck=args_ck)
+            send_telegram_message(TELEGRAM_BOT, start_msg)  # Notify start of generation
         except Exception as e:  # Failed to notify start of generation
             print(str(e))  # Print send error to terminal for visibility
             try:  # Attempt to send full error via Telegram using exception sender
