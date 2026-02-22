@@ -2297,7 +2297,7 @@ def generate(args, config: Optional[Dict] = None):
             print(f"{BackgroundColors.YELLOW}Warning: failed to measure sample generation time: {_sg}{Style.RESET_ALL}")  # Warn but continue
             args._last_sample_generation_time = ""  # Ensure attribute exists even on failure
 
-        send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Finished WGAN-GP generation, saved {n} samples to {Path(args.out_file).name}")  # Telegram finish with prefix
+        send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Finished WGAN-GP generation: Saved {n} samples to {Path(args.out_file).name}")  # Telegram finish with prefix
         
         try:  # Wrap result writing in try/except to avoid breaking generation on failures
             results_cols_cfg = config.get("wgangp", {}).get("results_csv_columns", [])  # Read configured results columns list
