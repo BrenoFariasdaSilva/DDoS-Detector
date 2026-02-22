@@ -1372,6 +1372,26 @@ def find_config_value(cfg, key):
         return None  # On unexpected errors return None
 
 
+def compose_training_start_message(args, file_progress_prefix) -> str:
+    """
+    Compose the training start Telegram message including CSV file statistics.
+
+    :param args: Parsed CLI arguments; must contain `csv_path` and `epochs` attributes.
+    :param file_progress_prefix: Progress prefix string to include at message start.
+    :return: Single formatted f-string message including file name, sample count, file size in GB and epochs.
+    """
+    try:
+        file_name = Path(args.csv_path).name  # Extract file name from provided CSV path
+        num_samples = len(pd.read_csv(args.csv_path))  # Read CSV and count rows for total samples
+        file_size_bytes = Path(args.csv_path).stat().st_size  # Get file size in bytes from filesystem
+        file_size_gb = float(file_size_bytes) / (1024.0 ** 3)  # Convert bytes to gigabytes (GB)
+        return f"{file_progress_prefix} Startining on {file_name} ({num_samples} samples, {file_size_gb:.2f} GB) for {args.epochs} epochs"  # Single formatted f-string as requested
+    except Exception as e:
+        print(str(e))  # Print exception for visibility
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception information via Telegram
+        raise  # Re-raise exception to allow outer handler to manage it
+
+
 def train(args, config: Optional[Dict] = None):
     """
     Train the WGAN-GP model using the provided arguments and configuration.
@@ -1429,7 +1449,7 @@ def train(args, config: Optional[Dict] = None):
         print(f"{BackgroundColors.GREEN}Suggested num_workers: {BackgroundColors.CYAN}{suggested_workers}{Style.RESET_ALL}")  # Print suggested workers value
         print(f"{BackgroundColors.GREEN}AMP enabled: {BackgroundColors.CYAN}{args.use_amp}{Style.RESET_ALL}")  # Print AMP usage
         print(f"{BackgroundColors.GREEN}cuDNN benchmark: {BackgroundColors.CYAN}{torch.backends.cudnn.benchmark}{Style.RESET_ALL}")  # Print cuDNN benchmark status
-        send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Starting WGAN-GP training on {Path(args.csv_path).name} for {args.epochs} epochs")  # Telegram start with colored prefix
+        send_telegram_message(TELEGRAM_BOT, compose_training_start_message(args, file_progress_prefix))  # Telegram start with colored prefix and file statistics
 
         print(f"{BackgroundColors.GREEN}Device: {BackgroundColors.CYAN}{device.type.upper()}{Style.RESET_ALL}")
         if args.use_amp and device.type == "cuda":
