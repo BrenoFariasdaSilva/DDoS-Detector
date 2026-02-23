@@ -2333,7 +2333,7 @@ def generate(args, config: Optional[Dict] = None):
                 try:
                     original_num = None  # Default original count
                     if getattr(args, "csv_path", None):  # If csv_path provided, try reading length
-                        original_num = len(pd.read_csv(args.csv_path))  # Count original CSV rows
+                        original_num = len(pd.read_csv(args.csv_path, low_memory=False))  # Count original CSV rows
                 except Exception:
                     original_num = None  # Leave as None if reading fails
 
@@ -2355,7 +2355,14 @@ def generate(args, config: Optional[Dict] = None):
                 training_time_val = timing_values.get("training_time_s", "")  # Pull training time in case caller expects that key
                 testing_time_val = ""  # No testing time available by default
 
-                # Extract last known critic/generator losses from checkpoint metrics if present
+                row_runtime_defaults = {
+                    "critic_iterations": getattr(args, "critic_steps", ""),
+                    "learning_rate_generator": getattr(args, "lr", ""),
+                    "learning_rate_critic": getattr(args, "lr", ""),
+                    "testing_time_s": testing_time_val,
+                    "hardware": None,
+                }
+
                 critic_loss_val = ""  # Default critic loss
                 generator_loss_val = ""  # Default generator loss
                 try:
@@ -2381,6 +2388,27 @@ def generate(args, config: Optional[Dict] = None):
                 row_runtime["generator_loss"] = generator_loss_val  # Last generator loss from checkpoint metrics
                 for k, v in timing_values.items():  # For each timing key known
                     row_runtime[k] = v  # Store timing value under the timing key
+
+                try:
+                    for kk, vv in row_runtime_defaults.items():
+                        if kk not in row_runtime or row_runtime.get(kk) in (None, ""):
+                            row_runtime[kk] = vv
+                except Exception:
+                    pass
+
+                try:
+                    if (row_runtime.get("hardware") is None) or row_runtime.get("hardware") == "":
+                        hw_specs = get_hardware_specifications(device_used=device) if 'get_hardware_specifications' in globals() else None
+                        if isinstance(hw_specs, dict):
+                            hw_part = hw_specs.get("gpu", "None") if hw_specs.get("gpu", None) is not None else "None"
+                            hardware_str = (
+                                f"{hw_specs.get('cpu_model','Unknown')} | Cores: {hw_specs.get('cores','N/A')}"
+                                f" | RAM: {hw_specs.get('ram_gb','N/A')} GB | OS: {hw_specs.get('os','Unknown')}"
+                                f" | GPU: {hw_part} | CUDA: {hw_specs.get('cuda','No')} | Device Used: {hw_specs.get('device_used','Unknown')}"
+                            )
+                            row_runtime["hardware"] = hardware_str
+                except Exception:
+                    pass
 
                 try:  # Wrap open/write in try/except to avoid crashing on I/O issues
                     f_handle, writer = open_results_csv(results_csv_path, results_cols_cfg)  # Get persistent handle and writer
