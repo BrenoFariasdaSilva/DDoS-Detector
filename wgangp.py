@@ -896,6 +896,7 @@ def parse_args():
         
         p.add_argument("--checkpoint", type=str, default=None, help="Generator checkpoint path")  # Add checkpoint argument
         p.add_argument("--n_samples", type=float, default=None, help="Number/percentage of samples to generate")  # Add n_samples argument
+        p.add_argument("--force_new_samples", action="store_true", help="Force generation of new samples even if output file exists")  # Add force_new_samples argument
         p.add_argument("--gen_label", type=int, default=None, help="Specific class ID to generate")  # Add gen_label argument
         p.add_argument("--out_file", type=str, default=None, help="Output CSV filename")  # Add out_file argument
         p.add_argument("--gen_batch_size", type=int, default=None, help="Generation batch size")  # Add gen_batch_size argument
@@ -996,6 +997,8 @@ def args_to_config_overrides(args):
             overrides.setdefault("generation", {})["checkpoint"] = args.checkpoint  # Set checkpoint
         if args.n_samples is not None:  # If n_samples specified
             overrides.setdefault("generation", {})["n_samples"] = args.n_samples  # Set n_samples
+        if getattr(args, "force_new_samples", False):  # If force_new_samples flag set
+            overrides.setdefault("generation", {})["force_new_samples"] = True  # Set force_new_samples
         if args.gen_label is not None:  # If gen_label specified
             overrides.setdefault("generation", {})["label"] = args.gen_label  # Set label
         if args.out_file is not None:  # If out_file specified
@@ -3005,6 +3008,7 @@ def main():
                 self.feature_dim = cfg.get("generation", {}).get("feature_dim")
                 if self.feature_dim is not None:  # If feature_dim is not None
                     self.feature_dim = int(self.feature_dim)  # Cast to int
+                self.force_new_samples = cfg.get("generation", {}).get("force_new_samples", False)
                 self.num_workers = int(cfg.get("dataloader", {}).get("num_workers", 8))  # Cast to int
                 self._last_training_time = 0.0  # Placeholder for last training elapsed time (set after train)
 
