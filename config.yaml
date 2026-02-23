@@ -614,6 +614,7 @@ generation:
   checkpoint: null                    # Path to generator checkpoint
   n_samples: 1.0                      # Number/percentage of samples to generate (1.0 = 100%)
   label: null                         # Specific class ID to generate (null = all classes)
+  force_new_samples: false            # When true, always regenerate samples even if output exists
   out_file: "generated.csv"           # Output CSV filename
   gen_batch_size: 256                 # Generation batch size
   feature_dim: null                   # Feature dimensionality (null = auto-detect)
