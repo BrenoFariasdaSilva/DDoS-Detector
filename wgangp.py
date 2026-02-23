@@ -2130,6 +2130,179 @@ def compose_generation_start_message(n: int, args, generated_file_name: str, ori
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception to Telegram
         raise
 
+def compute_expected_samples_for_percentage(percent: float, args, config: Optional[Dict] = None) -> Optional[int]:
+    """
+    Compute the expected number of generated samples when n_samples is given as a percentage.
+
+    This reproduces the same small-class logic used during generation to ensure
+    consistency between verification and generation steps.
+
+    :param percent: Percentage value in decimal form (e.g., 1.0 for 100%)
+    :param args: Runtime arguments (may include checkpoint, csv_path, label_col, feature_cols)
+    :param config: Optional configuration dictionary
+    :return: Expected total number of samples or None if undeterminable
+    """
+
+    try:
+        if config is None:  # Use global config if not provided
+            config = CONFIG or get_default_config()  # Load default configuration if necessary
+
+        class_dist = None  # Initialize class distribution container
+
+        if getattr(args, "checkpoint", None):  # If checkpoint path exists in args
+            try:
+                ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)  # Load checkpoint
+                class_dist = ck.get("class_distribution", None)  # Extract class distribution
+            except Exception:
+                class_dist = None  # Fallback if checkpoint loading fails
+
+        if class_dist is None and getattr(args, "csv_path", None):  # If no checkpoint distribution available
+            try:
+                ds = CSVFlowDataset(
+                    args.csv_path,  # CSV dataset path
+                    label_col=getattr(
+                        args,
+                        "label_col",
+                        config.get("wgangp", {}).get("label_col", "Label"),
+                    ),  # Resolve label column
+                    feature_cols=getattr(args, "feature_cols", None),  # Optional feature columns
+                )
+                unique, counts = np.unique(ds.labels, return_counts=True)  # Compute label counts
+                class_dist = dict(zip([int(u) for u in unique.tolist()], counts.tolist()))  # Build distribution dict
+            except Exception:
+                class_dist = None  # Fallback if dataset loading fails
+
+        if class_dist is None:  # If still undetermined
+            return None  # Cannot compute expected value safely
+
+        threshold = int(config.get("generation", {}).get("small_class_threshold", 100))  # Small class threshold
+        small_min = int(config.get("generation", {}).get("small_class_min_samples", 10))  # Minimum small class samples
+
+        n_per_class = {}  # Container for computed samples per class
+
+        for label, original_count in class_dist.items():  # Iterate over classes
+            calculated = int(original_count * percent)  # Percentage-based computation
+            final_count = max(
+                small_min if original_count < threshold else 1,
+                calculated,
+            )  # Apply small-class logic
+            n_per_class[int(label)] = final_count  # Store per-class result
+
+        return sum(n_per_class.values())  # Return total expected samples
+
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
+    """
+    Verify whether the data-augmentation output file exists and matches the
+    configured number of samples. Returns True when generation should proceed
+    (file missing, mismatched, or forced), or False when generation can be
+    skipped because an existing file already matches the requested size.
+
+    Behavior:
+      - If output file does not exist: return True (proceed)
+      - If output file exists and equals expected sample count: return False
+        unless `force_new_samples` is True (in that case delete and return True)
+      - If output file exists but count mismatches: delete file and return True
+
+    :param args: Runtime args (must include `out_file`, `n_samples`, `checkpoint`, `csv_path`)
+    :param config: Optional configuration dictionary
+    :return: bool, True => proceed with generation, False => skip generation
+    """
+
+    try:
+        if config is None:  # Use global if not provided
+            config = CONFIG or get_default_config()  # Load default config when needed
+
+        out_path = Path(getattr(args, "out_file", ""))  # Resolve output path
+        file_prefix = getattr(args, "file_progress_prefix", "")  # Telegram prefix
+
+        if not out_path.exists():  # If file does not exist
+            return True  # Proceed with generation
+
+        try:
+            requested = float(
+                getattr(args, "n_samples", None)
+                if getattr(args, "n_samples", None) is not None
+                else config.get("generation", {}).get("n_samples", 1.0)
+            )  # Resolve requested n_samples
+        except Exception:
+            requested = config.get("generation", {}).get("n_samples", 1.0)  # Fallback
+
+        expected_n: Optional[int] = None  # Initialize expected sample count
+
+        if requested <= 1.0:  # Percentage mode
+            expected_n = compute_expected_samples_for_percentage(requested, args, config)  # Compute expected
+        else:
+            try:
+                expected_n = int(requested)  # Absolute mode
+            except Exception:
+                expected_n = None  # Fallback if conversion fails
+
+        if expected_n is None:  # If expected size cannot be determined
+            send_telegram_message(
+                TELEGRAM_BOT,
+                f"{file_prefix} Unable to verify existing augmented file {out_path.name}: expected count undeterminable — regenerating.",
+            )
+            try:
+                out_path.unlink()  # Attempt to remove problematic file
+            except Exception:
+                pass
+            return True  # Proceed safely
+
+        try:
+            existing_count = len(pd.read_csv(out_path, low_memory=False))  # Count rows safely
+        except Exception:
+            existing_count = None  # Fallback if unreadable
+
+        if existing_count is None:  # If file unreadable
+            send_telegram_message(
+                TELEGRAM_BOT,
+                f"{file_prefix} Existing augmented file {out_path.name} unreadable — regenerating.",
+            )
+            try:
+                out_path.unlink()  # Attempt deletion
+            except Exception:
+                pass
+            return True  # Proceed
+
+        if existing_count == expected_n and not getattr(args, "force_new_samples", False):  # Matching and no force
+            send_telegram_message(
+                TELEGRAM_BOT,
+                f"{file_prefix} Skipping Generation: {out_path.name} already exists with {existing_count} samples (expected {expected_n}).",
+            )
+            return False  # Skip generation
+
+        if getattr(args, "force_new_samples", False):  # Forced regeneration
+            send_telegram_message(
+                TELEGRAM_BOT,
+                f"{file_prefix} Force Regeneration Requested: Removing existing {out_path.name} ({existing_count} samples) and regenerating to {expected_n}.",
+            )
+        else:
+            send_telegram_message(
+                TELEGRAM_BOT,
+                f"{file_prefix} Existing {out_path.name} has {existing_count} samples but expected {expected_n}; removing and regenerating.",
+            )
+
+        try:
+            out_path.unlink()  # Delete existing file
+        except Exception:
+            pass
+
+        return True  # Proceed with generation
+
+    except Exception as e:
+        print(str(e))
+        try:
+            send_exception_via_telegram(type(e), e, e.__traceback__)
+        except Exception:
+            pass
+        return True
+
 
 def generate(args, config: Optional[Dict] = None):
     """
@@ -3042,7 +3215,10 @@ def main():
                 train(args, config)  # Train the model
             elif mode == "gen":  # Generation mode
                 assert args.checkpoint is not None, "Generation requires --checkpoint"  # Ensure checkpoint is provided
-                generate(args, config)  # Generate synthetic samples
+                if verify_data_augmentation_file(args, config):  # Verify if generation is necessary according to existing output and configuration
+                    generate(args, config)  # Generate synthetic samples
+                else:
+                    print(f"{BackgroundColors.GREEN}Skipping generation: output file already satisfies configured n_samples.{Style.RESET_ALL}")
             elif mode == "both":  # Combined mode
                 print(f"{BackgroundColors.GREEN}[1/2] Training model...{Style.RESET_ALL}")
                 training_start_time = time.time()  # Record training start time using time.time()
@@ -3065,7 +3241,11 @@ def main():
                 args.checkpoint = str(checkpoint_path)  # Set checkpoint path for generation
                 print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")
                 print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")
-                generate(args, config)  # Generate synthetic samples
+                
+                if verify_data_augmentation_file(args, config):  # Verify if generation is necessary according to existing output and configuration
+                    generate(args, config)  # Generate synthetic samples
+                else:
+                    print(f"{BackgroundColors.GREEN}Skipping generation: output file already satisfies configured n_samples.{Style.RESET_ALL}")
         
         else:
             print(
@@ -3133,7 +3313,10 @@ def main():
                                     args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
                                 elif mode == "gen":  # Generation mode
                                     assert args.checkpoint is not None, "Generation requires --checkpoint"
-                                    generate(args, config)  # Generate synthetic samples only
+                                    if verify_data_augmentation_file(args, config):  # Verify whether generation should proceed for this file according to existing output and configuration
+                                        generate(args, config)  # Generate synthetic samples only
+                                    else:
+                                        print(f"{BackgroundColors.GREEN}Skipping generation: output file already satisfies configured n_samples.{Style.RESET_ALL}")
                                 elif mode == "both":  # Combined mode
                                     print(f"{BackgroundColors.GREEN}[1/2] Training model on {BackgroundColors.CYAN}{csv_path_obj.name}{BackgroundColors.GREEN}...{Style.RESET_ALL}")
                                     training_start_time = time.time()  # Record training start time using time.time()
@@ -3154,7 +3337,11 @@ def main():
                                     args.checkpoint = str(checkpoint_path)  # Set checkpoint path for generation
                                     print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")
                                     print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")
-                                    generate(args, config)  # Generate synthetic samples
+                                    
+                                    if verify_data_augmentation_file(args, config):  # Verify whether generation should proceed for this file according to existing output and configuration
+                                        generate(args, config)  # Generate synthetic samples
+                                    else:
+                                        print(f"{BackgroundColors.GREEN}Skipping generation: output file already satisfies configured n_samples.{Style.RESET_ALL}")
                             finally:  # Always mark file as processed even if generation/training raised (prevents re-entry)
                                 try:  # Guard adding to registry
                                     PROCESSED_FILES.add(resolved_path)  # Remember that this file was processed in this run
