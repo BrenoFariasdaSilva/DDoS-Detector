@@ -1732,13 +1732,17 @@ def train(args, config: Optional[Dict] = None):
                     opt_G.step()  # Update generator parameters
 
                 pbar.set_description(
-                    f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL} | "
-                    f"{BackgroundColors.YELLOW}step {step}{Style.RESET_ALL} | "
-                    f"{BackgroundColors.RED}loss_D: {loss_D.item():.4f}{Style.RESET_ALL} | "
-                    f"{BackgroundColors.GREEN}loss_G: {g_loss.item():.4f}{Style.RESET_ALL} | "
-                    f"gp: {gp.item():.4f} | "
-                    f"D(real): {d_real_score.item():.4f} | "
-                    f"D(fake): {d_fake_score.item():.4f}"
+                    (
+                        f"{getattr(args, 'file_progress_prefix', '')} "
+                        f"{BackgroundColors.CYAN}{(Path(getattr(args, 'csv_path', '')).name if getattr(args, 'csv_path', None) else '')}{Style.RESET_ALL} | "
+                    )
+                    + f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL} | "
+                    + f"{BackgroundColors.YELLOW}step {step}{Style.RESET_ALL} | "
+                    + f"{BackgroundColors.RED}loss_D: {loss_D.item():.4f}{Style.RESET_ALL} | "
+                    + f"{BackgroundColors.GREEN}loss_G: {g_loss.item():.4f}{Style.RESET_ALL} | "
+                    + f"gp: {gp.item():.4f} | "
+                    + f"D(real): {d_real_score.item():.4f} | "
+                    + f"D(fake): {d_fake_score.item():.4f}"
                 )
                 
                 if step % args.log_interval == 0:  # Log training progress periodically
