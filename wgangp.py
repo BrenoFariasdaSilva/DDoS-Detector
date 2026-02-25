@@ -136,6 +136,68 @@ RESOURCE_MONITOR_THREAD = None  # Background thread running the watcher
 setup_global_exception_hook()  # Set global exception hook to shared Telegram handler
 
 
+def safe_log(level: str, message: str):
+    """
+    Safe logging helper that works with the minimal `Logger` (write/flush)
+    or with richer logger objects exposing level methods.
+
+    :param level: Logging level name (e.g. "debug", "warning", "critical")
+    :param message: Message to log
+    :return: None
+    """
+
+    try:
+        if logger and hasattr(logger, level): getattr(logger, level)(message)  # Use level method if present
+        elif logger and hasattr(logger, "write"): logger.write(f"[{level.upper()}] {message}")  # Fallback to write()
+        else: print(f"[{level.upper()}] {message}")  # Last resort: print
+    except Exception:
+        try:
+            print(str(message))  # Best-effort fallback to print
+        except Exception:
+            pass  # Suppress any further errors
+
+
+def safe_debug(message: str):
+    """
+    Debug-level safe logger wrapper.
+
+    :param message: Message to log at debug level
+    :return: None
+    """
+
+    try:
+        safe_log("debug", message)  # Delegate to safe_log
+    except Exception:
+        pass  # Ignore logging failures
+
+
+def safe_warning(message: str):
+    """
+    Warning-level safe logger wrapper.
+
+    :param message: Message to log at warning level
+    :return: None
+    """
+
+    try:
+        safe_log("warning", message)  # Delegate to safe_log
+    except Exception:
+        pass  # Ignore logging failures
+
+
+def safe_critical(message: str):
+    """
+    Critical-level safe logger wrapper.
+
+    :param message: Message to log at critical level
+    :return: None
+    """
+
+    try:
+        safe_log("critical", message)  # Delegate to safe_log
+    except Exception:
+        pass  # Ignore logging failures
+
 def resource_monitor_loop(stop_event: threading.Event, config: Optional[Dict] = None):
     """
     Background loop that periodically inspects system resource usage (RAM/CPU)
@@ -163,12 +225,12 @@ def resource_monitor_loop(stop_event: threading.Event, config: Optional[Dict] = 
             cpu = psutil.cpu_percent(interval=None)  # Current CPU usage percent (non-blocking)
 
             if logger:
-                logger.debug(f"Resource monitor: mem={mem:.1f}%, cpu={cpu:.1f}%")  # Debug log
+                safe_debug(f"Resource monitor: mem={mem:.1f}%, cpu={cpu:.1f}%")  # Debug log
 
             if mem >= max_ram or cpu >= max_cpu:
                 consecutive += 1  # Count this breach
                 if logger:
-                    logger.warning(f"Resource monitor: threshold breach (mem={mem:.1f}%, cpu={cpu:.1f}%)")  # Warn
+                    safe_warning(f"Resource monitor: threshold breach (mem={mem:.1f}%, cpu={cpu:.1f}%)")  # Warn
                 try:
                     send_telegram_message(TELEGRAM_BOT, f"Resource watcher: high resource usage detected: mem={mem:.1f}%, cpu={cpu:.1f}%")  # Notify
                 except Exception:
@@ -178,7 +240,7 @@ def resource_monitor_loop(stop_event: threading.Event, config: Optional[Dict] = 
 
             if consecutive >= sustained_checks:
                 if logger:
-                    logger.critical(f"Resource monitor: sustained high resource usage for ~{sustained_checks * check_interval}s; requesting termination")  # Critical log
+                    safe_critical(f"Resource monitor: sustained high resource usage for ~{sustained_checks * check_interval}s; requesting termination")  # Critical log
                 try:
                     send_telegram_message(TELEGRAM_BOT, f"Resource watcher: sustained high resource usage; requesting process termination to avoid abrupt OOM kill")  # Notify
                 except Exception:
@@ -463,12 +525,16 @@ def initialize_logger(config: Dict):
         logger = Logger(log_file, clean=clean)  # Create a Logger instance
         sys.stdout = logger  # Redirect stdout to the logger
         sys.stderr = logger  # Redirect stderr to the logger
+        
+        globals()["safe_debug"] = safe_debug  # Make available globally
+        globals()["safe_warning"] = safe_warning  # Make available globally
+        globals()["safe_critical"] = safe_critical  # Make available globally
 
         global RESOURCE_MONITOR_STOP_EVENT, RESOURCE_MONITOR_THREAD  # Access globals for monitor
         if RESOURCE_MONITOR_THREAD is None or not (RESOURCE_MONITOR_THREAD and RESOURCE_MONITOR_THREAD.is_alive()):  # If monitor not running
             RESOURCE_MONITOR_STOP_EVENT, RESOURCE_MONITOR_THREAD = start_resource_monitor(config)  # Start monitor with current config
         else:  # Monitor already running
-            logger.debug("Resource monitor already active; skipping start")  # Debug message
+            safe_debug("Resource monitor already active; skipping start")  # Debug message
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
