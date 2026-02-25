@@ -68,6 +68,8 @@ import subprocess  # For running small system commands to query hardware
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import time  # For elapsed time tracking
+import threading  # For background resource watcher thread
+import signal  # For sending signals to this process when critical
 import torch  # PyTorch core
 import torch.nn as nn  # Neural network modules
 import traceback  # For printing tracebacks on exceptions
@@ -125,10 +127,108 @@ TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegr
 # Logger Setup:
 logger = None  # Will be initialized in initialize_logger()
 
+RESOURCE_MONITOR_STOP_EVENT = None  # Event to signal watcher to stop
+RESOURCE_MONITOR_THREAD = None  # Background thread running the watcher
+
 
 # Functions Definitions:
 
 setup_global_exception_hook()  # Set global exception hook to shared Telegram handler
+
+
+def resource_monitor_loop(stop_event: threading.Event, config: Optional[Dict] = None):
+    """
+    Background loop that periodically inspects system resource usage (RAM/CPU)
+    and logs / reports when thresholds are approached or exceeded.
+
+    :param stop_event: Event used to signal the loop to stop
+    :param config: Optional configuration dictionary containing watchdog settings
+    :return: None
+    """
+
+    try:
+        if psutil is None: return  # If psutil missing, nothing to monitor
+
+        cfg = config or CONFIG or get_default_config()  # Prefer explicit config, fallback to global/default
+        wd = cfg.get("watchdog", {}) if isinstance(cfg, dict) else {}  # Get watchdog config dict
+        max_ram = wd.get("max_ram_percent", 90)  # Percent RAM usage considered critical
+        max_cpu = wd.get("max_cpu_percent", 95)  # Percent CPU usage considered critical
+        check_interval = wd.get("check_interval_s", 5)  # Seconds between checks
+        sustained_checks = max(1, int((wd.get("critical_duration_s", 30) // max(1, check_interval))))  # Number of checks to consider sustained
+
+        consecutive = 0  # Counter for consecutive threshold breaches
+
+        while not stop_event.is_set():
+            mem = psutil.virtual_memory().percent  # Current RAM usage percent
+            cpu = psutil.cpu_percent(interval=None)  # Current CPU usage percent (non-blocking)
+
+            if logger:
+                logger.debug(f"Resource monitor: mem={mem:.1f}%, cpu={cpu:.1f}%")  # Debug log
+
+            if mem >= max_ram or cpu >= max_cpu:
+                consecutive += 1  # Count this breach
+                if logger:
+                    logger.warning(f"Resource monitor: threshold breach (mem={mem:.1f}%, cpu={cpu:.1f}%)")  # Warn
+                try:
+                    send_telegram_message(TELEGRAM_BOT, f"Resource watcher: high resource usage detected: mem={mem:.1f}%, cpu={cpu:.1f}%")  # Notify
+                except Exception:
+                    pass  # Ignore Telegram failures to avoid cascading errors
+            else:
+                consecutive = 0  # Reset counter when metrics return to normal
+
+            if consecutive >= sustained_checks:
+                if logger:
+                    logger.critical(f"Resource monitor: sustained high resource usage for ~{sustained_checks * check_interval}s; requesting termination")  # Critical log
+                try:
+                    send_telegram_message(TELEGRAM_BOT, f"Resource watcher: sustained high resource usage; requesting process termination to avoid abrupt OOM kill")  # Notify
+                except Exception:
+                    pass  # Ignore failures in notification
+
+                try:
+                    os.kill(os.getpid(), signal.SIGTERM)  # Send SIGTERM to self for graceful shutdown
+                except Exception:
+                    try:
+                        os._exit(1)  # Force exit if signal fails
+                    except Exception:
+                        pass  # Best effort: if even exit fails, continue
+
+            stop_event.wait(timeout=check_interval)  # Wait with interruptability
+
+    except Exception as e:
+        try:
+            print(str(e))  # Print to stdout as fallback
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify about monitor failure
+        except Exception:
+            pass  # Ignore notification failures from within monitor
+
+
+def start_resource_monitor(config: Optional[Dict] = None):
+    """
+    Start the background resource monitor thread and return (stop_event, thread).
+
+    :param config: Optional configuration dict to pass through to the loop
+    :return: (stop_event, thread)
+    """
+
+    stop_event = threading.Event()  # Event used to stop the thread
+    thread = threading.Thread(target=resource_monitor_loop, args=(stop_event, config), daemon=True)  # Daemon thread so it won't block process exit
+    thread.start()  # Start background monitoring thread
+    return stop_event, thread  # Return handles to caller
+
+
+def stop_resource_monitor():
+    """
+    Signal the resource monitor to stop and join the thread if running.
+
+    :return: None
+    """
+
+    global RESOURCE_MONITOR_STOP_EVENT, RESOURCE_MONITOR_THREAD  # Access global handles
+    try:
+        if RESOURCE_MONITOR_STOP_EVENT is not None: RESOURCE_MONITOR_STOP_EVENT.set()  # Signal the monitor to stop
+        if RESOURCE_MONITOR_THREAD is not None and RESOURCE_MONITOR_THREAD.is_alive(): RESOURCE_MONITOR_THREAD.join(timeout=5)  # Join briefly to allow cleanup
+    except Exception:
+        pass  # Ignore errors during shutdown
 
 
 def get_default_config():
@@ -363,6 +463,12 @@ def initialize_logger(config: Dict):
         logger = Logger(log_file, clean=clean)  # Create a Logger instance
         sys.stdout = logger  # Redirect stdout to the logger
         sys.stderr = logger  # Redirect stderr to the logger
+
+        global RESOURCE_MONITOR_STOP_EVENT, RESOURCE_MONITOR_THREAD  # Access globals for monitor
+        if RESOURCE_MONITOR_THREAD is None or not (RESOURCE_MONITOR_THREAD and RESOURCE_MONITOR_THREAD.is_alive()):  # If monitor not running
+            RESOURCE_MONITOR_STOP_EVENT, RESOURCE_MONITOR_THREAD = start_resource_monitor(config)  # Start monitor with current config
+        else:  # Monitor already running
+            logger.debug("Resource monitor already active; skipping start")  # Debug message
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -3095,6 +3201,11 @@ def close_all_results_csv_handles():
     :return: None
     """
     
+    try:
+        stop_resource_monitor()  # Signal and join resource monitor thread if running
+    except Exception:
+        pass  # Ignore any errors stopping the monitor during exit
+
     for key, (f, _) in list(RESULTS_CSV_HANDLES.items()):  # Iterate over cached handles
         try:
             if f and not f.closed:  # If file object exists and is open
