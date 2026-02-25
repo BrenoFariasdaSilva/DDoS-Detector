@@ -1385,7 +1385,10 @@ def compose_training_start_message(args, file_progress_prefix) -> str:
     """
     try:
         file_name = Path(args.csv_path).name  # Extract file name from provided CSV path
-        num_samples = len(pd.read_csv(args.csv_path))  # Read CSV and count rows for total samples
+        try:  # Attempt to read CSV and count rows for total samples, but catch exceptions to avoid crashing on problematic files
+            num_samples = len(pd.read_csv(args.csv_path, low_memory=False))  # Read CSV and count rows for total samples
+        except Exception:  # On failure (e.g., file too large, malformed CSV, etc.), fallback to unknown sample count
+            num_samples = "?"  # Use "?" to indicate unknown sample count when reading fails
         file_size_bytes = Path(args.csv_path).stat().st_size  # Get file size in bytes from filesystem
         file_size_gb = float(file_size_bytes) / (1024.0 ** 3)  # Convert bytes to gigabytes (GB)
         return f"{file_progress_prefix} Startining on {file_name} ({num_samples} samples, {file_size_gb:.2f} GB) for {args.epochs} epochs"  # Single formatted f-string as requested
@@ -2097,7 +2100,10 @@ def compose_generation_start_message(n: int, args, generated_file_name: str, ori
             
             if csv_path:  # If CSV path exists
                 try:
-                    df = pd.read_csv(csv_path)  # Load dataset
+                    try:  # Guard CSV reading to avoid crashing if file is large or malformed
+                        df = pd.read_csv(csv_path, low_memory=False)  # Load dataset safely
+                    except Exception:  # If reading with low_memory fails, try again without it (may use more memory but can handle some files)
+                        df = None  # Initialize df to None before second attempt
                     orig = len(df)  # Determine original number of samples
                 except Exception:
                     orig = None  # If reading fails, keep as None
@@ -3345,8 +3351,13 @@ def main():
                             finally:  # Always mark file as processed even if generation/training raised (prevents re-entry)
                                 try:  # Guard adding to registry
                                     PROCESSED_FILES.add(resolved_path)  # Remember that this file was processed in this run
-                                except Exception:
-                                    pass  # Ignore any errors when recording processed file
+                                except Exception:  # Ignore failures when updating registry
+                                    pass  # Continue despite registry update failure
+                                try:  # Attempt to flush the logger to persist recent outputs
+                                    if logger is not None:  # Only flush if logger initialized
+                                        logger.flush()  # Flush log file buffer to disk
+                                except Exception:  # Ignore any logger flush errors to avoid masking primary failures
+                                    pass  # No-op on flush failure
                         except Exception as e:  #   
                             print(
                                 f"{BackgroundColors.RED}Error processing {BackgroundColors.CYAN}{file}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
@@ -3375,8 +3386,8 @@ def main():
         raise
 
 
-if __name__ == "__main__":
-    """
+if __name__ == "__main__":  # Standard Python entrypoint check
+    """  # Module executed as script: call main() with robust error handling
     This is the standard boilerplate that calls the main() function.
 
     :return: None
@@ -3384,10 +3395,32 @@ if __name__ == "__main__":
 
     try:  # Protect main execution to ensure errors are reported and notified
         main()  # Call the main function
-    except Exception as e:  # Catch any unhandled exception from main
-        print(str(e))  # Print the exception message to terminal for logs
-        try:  # Attempt to send full exception via Telegram
-            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback and message
-        except Exception:  # If sending the notification fails, print traceback to stderr
-            traceback.print_exc()  # Print full traceback to stderr as final fallback
-        raise  # Re-raise to avoid silent failure and preserve original crash behavior
+    except KeyboardInterrupt:  # User-initiated interrupt
+        try:  # Attempt friendly shutdown notification on interrupt
+            print("Execution interrupted by user (KeyboardInterrupt)")  # Inform terminal about user interrupt
+            send_telegram_message(TELEGRAM_BOT, ["WGAN-GP execution interrupted by user (KeyboardInterrupt)"])  # Notify via Telegram
+        except Exception:  # Ignore notification failures during interrupt handling
+            pass  # Continue to cleanup even if notification fails
+        try:  # Attempt to flush and close logger for clean logs on interrupt
+            if logger is not None:  # Only interact with logger if it exists
+                logger.flush()  # Flush pending log writes to disk
+                logger.close()  # Close log file handle cleanly
+        except Exception:  # Ignore logger errors during cleanup
+            pass  # Proceed with raising the interrupt
+        raise  # Re-raise KeyboardInterrupt to allow upstream handling
+    except BaseException as e:  # Catch everything (including SystemExit) and report
+        try:  # Try to log and notify about the fatal error
+            print(f"Fatal error: {e}")  # Print the exception message to terminal for logs
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback and message via Telegram
+        except Exception:  # If notification fails, attempt to print traceback to stderr
+            try:  # Try printing a full traceback as fallback
+                traceback.print_exc()  # Print traceback to stderr
+            except Exception:  # If even traceback printing fails, ignore silently
+                pass  # No further fallback available
+        try:  # Attempt to flush and close logger to preserve logs on fatal errors
+            if logger is not None:  # Only flush/close if logger initialized
+                logger.flush()  # Flush pending log writes
+                logger.close()  # Close the log file handle
+        except Exception:  # Ignore any logger cleanup failures
+            pass  # Continue to re-raise after best-effort cleanup
+        raise  # Re-raise exception to preserve exit semantics
