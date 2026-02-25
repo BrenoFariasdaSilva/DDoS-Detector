@@ -225,14 +225,14 @@ def resource_monitor_loop(stop_event: threading.Event, config: Optional[Dict] = 
             cpu = psutil.cpu_percent(interval=None)  # Current CPU usage percent (non-blocking)
 
             if logger:
-                safe_debug(f"Resource monitor: mem={mem:.1f}%, cpu={cpu:.1f}%")  # Debug log
+                safe_debug(f"Resources Monitor: Memory={mem:.1f}%, CPU={cpu:.1f}%")  # Debug log
 
             if mem >= max_ram or cpu >= max_cpu:
                 consecutive += 1  # Count this breach
                 if logger:
-                    safe_warning(f"Resource monitor: threshold breach (mem={mem:.1f}%, cpu={cpu:.1f}%)")  # Warn
+                    safe_warning(f"Resources Monitor: Threshold Breach (Memory={mem:.1f}%, CPU={cpu:.1f}%)")  # Warn
                 try:
-                    send_telegram_message(TELEGRAM_BOT, f"Resource watcher: high resource usage detected: mem={mem:.1f}%, cpu={cpu:.1f}%")  # Notify
+                    send_telegram_message(TELEGRAM_BOT, f"Resource Watcher: High Resource Usage Detected: Memory={mem:.1f}%, CPU={cpu:.1f}%")  # Notify
                 except Exception:
                     pass  # Ignore Telegram failures to avoid cascading errors
             else:
@@ -240,9 +240,9 @@ def resource_monitor_loop(stop_event: threading.Event, config: Optional[Dict] = 
 
             if consecutive >= sustained_checks:
                 if logger:
-                    safe_critical(f"Resource monitor: sustained high resource usage for ~{sustained_checks * check_interval}s; requesting termination")  # Critical log
+                    safe_critical(f"Resources Monitor: Sustained High Resource Usage For ~{sustained_checks * check_interval}s; Requesting Termination")  # Critical log
                 try:
-                    send_telegram_message(TELEGRAM_BOT, f"Resource watcher: sustained high resource usage; requesting process termination to avoid abrupt OOM kill")  # Notify
+                    send_telegram_message(TELEGRAM_BOT, f"Resource Watcher: Sustained High Resource Usage; Requesting Process Termination to Avoid Abrupt OOM Kill")  # Notify
                 except Exception:
                     pass  # Ignore failures in notification
 
