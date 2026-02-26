@@ -1308,6 +1308,21 @@ def get_files_to_process(directory_path, file_extension=".csv", config: Optional
         raise
 
 
+def safe_float(value: Any, default: float = 0.0) -> float:
+    """
+    Safely convert a value to float, returning default if conversion fails.
+
+    :param value: Value to convert to float
+    :param default: Value to return if conversion fails
+    :return: float representation or default
+    """
+    
+    try:
+        return float(value)  # Attempt conversion to float
+    except (TypeError, ValueError):
+        return float(default)  # Return fallback default on conversion failure
+
+
 def gradient_penalty(critic, real_samples, fake_samples, labels, device, config: Optional[Dict] = None):
     """
     Compute the WGAN-GP gradient penalty.
@@ -1325,7 +1340,7 @@ def gradient_penalty(critic, real_samples, fake_samples, labels, device, config:
         if config is None:  # If no config provided
             config = CONFIG or get_default_config()  # Use global or default config
         
-        epsilon = float(config.get("gradient_penalty", {}).get("epsilon", 1e-12))  # Get epsilon from config and cast to float
+        epsilon = safe_float(config.get("gradient_penalty", {}).get("epsilon", 1e-12), 1e-12)  # Get epsilon safely from config
         
         batch_size = real_samples.size(0)  # Get batch size from real samples
         alpha = torch.rand(batch_size, 1, device=device)  # Sample random interpolation factors
@@ -1380,9 +1395,9 @@ def plot_training_metrics(metrics_history, out_dir, filename=None, config: Optio
         dpi = int(config.get("plotting", {}).get("dpi", 300))  # Get DPI and cast to int
         subplot_rows = int(config.get("plotting", {}).get("subplot_rows", 2))  # Get subplot rows and cast to int
         subplot_cols = int(config.get("plotting", {}).get("subplot_cols", 3))  # Get subplot columns and cast to int
-        linewidth = float(config.get("plotting", {}).get("linewidth", 1.5))  # Get line width and cast to float
-        alpha = float(config.get("plotting", {}).get("alpha", 0.7))  # Get alpha and cast to float
-        grid_alpha = float(config.get("plotting", {}).get("grid_alpha", 0.3))  # Get grid alpha and cast to float
+        linewidth = safe_float(config.get("plotting", {}).get("linewidth", 1.5), 1.5)  # Get line width safely from config
+        alpha = safe_float(config.get("plotting", {}).get("alpha", 0.7), 0.7)  # Get alpha safely from config
+        grid_alpha = safe_float(config.get("plotting", {}).get("grid_alpha", 0.3), 0.3)  # Get grid alpha safely from config
     
         fig, axes = plt.subplots(subplot_rows, subplot_cols, figsize=figsize)  # Create subplot grid
         fig.suptitle("WGAN-GP Training Metrics", fontsize=16, fontweight="bold")  # Add main title
@@ -1556,6 +1571,7 @@ def compose_training_start_message(args, file_progress_prefix) -> str:
     :param file_progress_prefix: Progress prefix string to include at message start.
     :return: Single formatted f-string message including file name, sample count, file size in GB and epochs.
     """
+
     try:
         file_name = Path(args.csv_path).name  # Extract file name from provided CSV path
         try:  # Attempt to read CSV and count rows for total samples, but catch exceptions to avoid crashing on problematic files
@@ -1563,7 +1579,7 @@ def compose_training_start_message(args, file_progress_prefix) -> str:
         except Exception:  # On failure (e.g., file too large, malformed CSV, etc.), fallback to unknown sample count
             num_samples = "?"  # Use "?" to indicate unknown sample count when reading fails
         file_size_bytes = Path(args.csv_path).stat().st_size  # Get file size in bytes from filesystem
-        file_size_gb = float(file_size_bytes) / (1024.0 ** 3)  # Convert bytes to gigabytes (GB)
+        file_size_gb = safe_float(file_size_bytes, 0.0) / (1024.0 ** 3)  # Convert bytes to gigabytes (GB) safely
         return f"{file_progress_prefix} Startining on {file_name} ({num_samples} samples, {file_size_gb:.2f} GB) for {args.epochs} epochs"  # Single formatted f-string as requested
     except Exception as e:
         print(str(e))  # Print exception for visibility
@@ -1584,13 +1600,13 @@ def adjust_num_workers_for_file(csv_path: str, suggested_workers: int, config: O
     try:  # Guard helper with try/except to follow project style
         if config is None: config = CONFIG or get_default_config()  # Use provided config or fallback to global/default
         file_size_bytes = Path(csv_path).stat().st_size  # Get file size in bytes from filesystem
-        file_size_gb = float(file_size_bytes) / (1024.0 ** 3)  # Convert bytes to gigabytes (GB)
+        file_size_gb = safe_float(file_size_bytes, 0.0) / (1024.0 ** 3)  # Convert bytes to gigabytes (GB) safely
         
         if psutil is None:  # If psutil is unavailable
             print("[WARNING] psutil not available; keeping suggested num_workers")  # Warn and keep suggested
             return int(suggested_workers)  # Return suggested_workers when RAM detection is impossible
         
-        total_ram_gb = float(psutil.virtual_memory().total) / (1024.0 ** 3)  # Get total system RAM in GB
+        total_ram_gb = safe_float(psutil.virtual_memory().total, 0.0) / (1024.0 ** 3)  # Get total system RAM in GB safely
         
         print(f"[DEBUG] Detected file size: {file_size_gb:.2f} GB")  # Log detected file size
         print(f"[DEBUG] Detected system RAM: {total_ram_gb:.2f} GB")  # Log detected total RAM
@@ -1634,11 +1650,11 @@ def train(args, config: Optional[Dict] = None):
         if config is None:  # If no config provided
             config = CONFIG or get_default_config()  # Use global or default config
     
-        args.lr = float(args.lr)  # Ensure learning rate is float
-        args.beta1 = float(args.beta1)  # Ensure beta1 is float
-        args.beta2 = float(args.beta2)  # Ensure beta2 is float
-        args.lambda_gp = float(args.lambda_gp)  # Ensure lambda_gp is float
-        args.n_samples = float(args.n_samples)  # Ensure n_samples is float
+        args.lr = safe_float(getattr(args, "lr", None), config.get("training", {}).get("lr", 1e-4))  # Ensure learning rate is float safely
+        args.beta1 = safe_float(getattr(args, "beta1", None), config.get("training", {}).get("beta1", 0.5))  # Ensure beta1 is float safely
+        args.beta2 = safe_float(getattr(args, "beta2", None), config.get("training", {}).get("beta2", 0.9))  # Ensure beta2 is float safely
+        args.lambda_gp = safe_float(getattr(args, "lambda_gp", None), config.get("training", {}).get("lambda_gp", 10.0))  # Ensure lambda_gp is float safely
+        args.n_samples = safe_float(getattr(args, "n_samples", None), config.get("generation", {}).get("n_samples", 1.0))  # Ensure n_samples is float safely
         args.seed = int(args.seed)  # Ensure seed is int
         args.epochs = int(args.epochs)  # Ensure epochs is int
         args.batch_size = int(args.batch_size)  # Ensure batch_size is int
@@ -1694,7 +1710,7 @@ def train(args, config: Optional[Dict] = None):
         num_workers = adjust_num_workers_for_file(args.csv_path, num_workers, config)  # Adjust num_workers based on file size and system RAM
         if device.type == "cuda" and num_workers == 0:  # If CUDA available but adjusted workers is 0
             try:  # Attempt to fetch total RAM to decide whether to raise workers for CUDA
-                total_ram_gb = float(psutil.virtual_memory().total) / (1024.0 ** 3) if psutil is not None else None  # Detect total RAM if psutil available
+                total_ram_gb = (safe_float(psutil.virtual_memory().total, 0.0) / (1024.0 ** 3)) if psutil is not None else None  # Detect total RAM if psutil available safely
             except Exception:  # If detection fails
                 total_ram_gb = None  # Unknown RAM when detection fails
             if total_ram_gb is None or total_ram_gb >= 8.0:  # If RAM unknown or sufficient
@@ -1736,8 +1752,8 @@ def train(args, config: Optional[Dict] = None):
         feature_dim = dataset.feature_dim  # Get feature dimensionality from dataset
         n_classes = dataset.n_classes  # Get number of label classes from dataset
 
-        g_leaky_relu_alpha = float(config.get("generator", {}).get("leaky_relu_alpha", 0.2))  # Get generator LeakyReLU alpha and cast to float
-        d_leaky_relu_alpha = float(config.get("discriminator", {}).get("leaky_relu_alpha", 0.2))  # Get discriminator LeakyReLU alpha and cast to float
+        g_leaky_relu_alpha = safe_float(config.get("generator", {}).get("leaky_relu_alpha", 0.2), 0.2)  # Get generator LeakyReLU alpha safely from config
+        d_leaky_relu_alpha = safe_float(config.get("discriminator", {}).get("leaky_relu_alpha", 0.2), 0.2)  # Get discriminator LeakyReLU alpha safely from config
         
         G = Generator(
             latent_dim=args.latent_dim,  # Noise vector dimensionality for generator input
@@ -1818,7 +1834,7 @@ def train(args, config: Optional[Dict] = None):
                         try:  # Try to load checkpoint
                             print(f"{BackgroundColors.GREEN}Loading generator checkpoint: {g_checkpoint_path.name}{Style.RESET_ALL}")
                             g_checkpoint = torch.load(g_checkpoint_path, map_location=device, weights_only=False)  # Load generator checkpoint with sklearn objects
-                            if hasattr(cast(Any, G), "module"):  # If model wrapped by DataParallel
+                            if isinstance(cast(Any, G), torch.nn.DataParallel):  # If model wrapped by DataParallel
                                 cast(Any, G).module.load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights into module
                             else:  # Not DataParallel
                                 cast(Any, G).load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights
@@ -1853,7 +1869,7 @@ def train(args, config: Optional[Dict] = None):
                             if d_checkpoint_path.exists():  # If discriminator checkpoint exists
                                 print(f"{BackgroundColors.GREEN}Loading discriminator checkpoint: {d_checkpoint_path.name}{Style.RESET_ALL}")
                                 d_checkpoint = torch.load(d_checkpoint_path, map_location=device, weights_only=False)  # Load discriminator checkpoint
-                                if hasattr(cast(Any, D), "module"):  # If discriminator wrapped by DataParallel
+                                if isinstance(cast(Any, D), torch.nn.DataParallel):  # If discriminator wrapped by DataParallel
                                     cast(Any, D).module.load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights into module
                                 else:  # Not DataParallel
                                     cast(Any, D).load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights
@@ -1997,7 +2013,7 @@ def train(args, config: Optional[Dict] = None):
             try:  # Safely compute and print epoch elapsed time without interrupting training
                 epoch_elapsed = time.time() - epoch_start_time  # Calculate epoch elapsed seconds
                 print(f"{BackgroundColors.GREEN}Epoch {epoch+1} elapsed: {BackgroundColors.CYAN}{epoch_elapsed:.2f}s{Style.RESET_ALL}")  # Print epoch elapsed time
-                args._last_epoch_time = float(epoch_elapsed)  # Store last epoch elapsed on args for external use
+                args._last_epoch_time = safe_float(epoch_elapsed, 0.0)  # Store last epoch elapsed on args for external use safely
             except Exception as _te:  # If timing calculation fails
                 print(f"{BackgroundColors.YELLOW}Warning: failed to measure epoch time: {_te}{Style.RESET_ALL}")  # Warn but continue
 
@@ -2015,11 +2031,11 @@ def train(args, config: Optional[Dict] = None):
                     row_runtime["original_num_samples"] = getattr(dataset, "original_num_samples", "")  # Original sample count after preprocessing
                     row_runtime["critic_iterations"] = getattr(args, "critic_steps", "")  # Critic iterations per generator update
                     try:  # Attempt to read current optimizer learning rates
-                        row_runtime["learning_rate_generator"] = float(opt_G.param_groups[0].get("lr", ""))  # Generator LR
+                        row_runtime["learning_rate_generator"] = safe_float(opt_G.param_groups[0].get("lr", None), getattr(args, "lr", 0.0))  # Generator LR safely
                     except Exception:
                         row_runtime["learning_rate_generator"] = getattr(args, "lr", "")  # Fallback to args.lr
                     try:  # Attempt to read current optimizer learning rates
-                        row_runtime["learning_rate_critic"] = float(opt_D.param_groups[0].get("lr", ""))  # Critic LR
+                        row_runtime["learning_rate_critic"] = safe_float(opt_D.param_groups[0].get("lr", None), getattr(args, "lr", 0.0))  # Critic LR safely
                     except Exception:
                         row_runtime["learning_rate_critic"] = getattr(args, "lr", "")  # Fallback to args.lr
                     ordered = []  # Prepare ordered list following config order
@@ -2086,8 +2102,8 @@ def train(args, config: Optional[Dict] = None):
                 class_distribution = dict(zip(unique_labels.tolist(), label_counts.tolist()))  # Create label:count mapping
                 
                 g_checkpoint = {
-                    "epoch": epoch + 1,  # Save current epoch number
-                    "state_dict": (cast(Any, G).module.state_dict() if hasattr(cast(Any, G), "module") else cast(Any, G).state_dict()),  # Save generator state dict (unwrap DataParallel.module if present)
+                "epoch": epoch + 1,  # Save current epoch number
+                    "state_dict": (cast(Any, G).module.state_dict() if isinstance(cast(Any, G), torch.nn.DataParallel) else cast(Any, G).state_dict()),  # Save generator state dict (unwrap DataParallel.module if present)
                     "opt_G_state": cast(Any, opt_G).state_dict(),  # Save generator optimizer state
                     "scaler": dataset.scaler,  # Save scaler for inverse transform
                     "label_encoder": dataset.label_encoder,  # Save label encoder for mapping
@@ -2106,15 +2122,15 @@ def train(args, config: Optional[Dict] = None):
                     
                     d_checkpoint = {
                     "epoch": epoch + 1,  # Save current epoch number
-                    "state_dict": (cast(Any, D).module.state_dict() if hasattr(cast(Any, D), "module") else cast(Any, D).state_dict()),  # Save discriminator state dict (unwrap DataParallel.module if present)
+                    "state_dict": (cast(Any, D).module.state_dict() if isinstance(cast(Any, D), torch.nn.DataParallel) else cast(Any, D).state_dict()),  # Save discriminator state dict (unwrap DataParallel.module if present)
                     "opt_D_state": cast(Any, opt_D).state_dict(),  # Save discriminator optimizer state
                     "args": vars(args),  # Save training arguments
                 }
                     torch.save(d_checkpoint, str(d_path))  # Save discriminator checkpoint to disk
                     latest_path = checkpoint_dir / f"{checkpoint_prefix}_generator_latest.pt"  # Path for latest generator
-                    torch.save(cast(Any, G).state_dict(), str(latest_path))  # Save latest generator weights
+                    torch.save((cast(Any, G).module.state_dict() if isinstance(cast(Any, G), torch.nn.DataParallel) else cast(Any, G).state_dict()), str(latest_path))  # Save latest generator weights safely handling DataParallel
                     model_save_elapsed = time.time() - model_save_start_time  # Compute model save elapsed seconds
-                    args._last_model_save_time = float(model_save_elapsed)  # Store last model save elapsed on args
+                    args._last_model_save_time = safe_float(model_save_elapsed, 0.0)  # Store last model save elapsed on args safely
                     print(f"{BackgroundColors.GREEN}Model save elapsed: {BackgroundColors.CYAN}{model_save_elapsed:.2f}s{Style.RESET_ALL}")  # Print model save elapsed
                 except Exception as _ms:  # If saving failed, warn but continue
                     print(f"{BackgroundColors.YELLOW}Warning: model save failed: {_ms}{Style.RESET_ALL}")  # Warn about save failure
@@ -2142,9 +2158,9 @@ def train(args, config: Optional[Dict] = None):
         
         try:  # Safely compute total training and file elapsed times
             training_elapsed = time.time() - training_start_time  # Calculate total training elapsed seconds
-            args._last_training_time = float(training_elapsed)  # Store total training elapsed on args for downstream use
+            args._last_training_time = safe_float(training_elapsed, 0.0)  # Store total training elapsed on args for downstream use safely
             file_elapsed = time.time() - file_start_time  # Calculate file processing elapsed seconds
-            args._last_file_time = float(file_elapsed)  # Store file elapsed on args for downstream use
+            args._last_file_time = safe_float(file_elapsed, 0.0)  # Store file elapsed on args for downstream use safely
             print(f"{BackgroundColors.GREEN}Training finished! Total training elapsed: {BackgroundColors.CYAN}{training_elapsed:.2f}s{Style.RESET_ALL}")  # Print total training elapsed message
             print(f"{BackgroundColors.GREEN}File processing elapsed: {BackgroundColors.CYAN}{file_elapsed:.2f}s{Style.RESET_ALL}")  # Print per-file elapsed message
         except Exception as _tt:  # If timing calculation fails, warn but do not interrupt
@@ -2154,7 +2170,7 @@ def train(args, config: Optional[Dict] = None):
 
         try:  # Wrap writes to avoid crashing on I/O errors
             if results_csv_writer and results_cols_cfg:  # Only write if writer and schema are available
-                final_runtime = {}  # Build runtime-only values for final per-file row
+                final_runtime: Dict[str, Any] = {}  # Build runtime-only values for final per-file row with explicit typing
                 final_runtime["original_file"] = Path(args.csv_path).name if getattr(args, "csv_path", None) else ""  # Original filename
                 final_runtime["original_num_samples"] = getattr(dataset, "original_num_samples", "")  # Original sample count after preprocessing
                 gen_file = getattr(args, "out_file", None) or ""  # Prefer explicit out_file if set
@@ -2173,20 +2189,21 @@ def train(args, config: Optional[Dict] = None):
                 final_runtime["file_time_s"] = getattr(args, "_last_file_time", "")  # Per-file processing elapsed
                 final_runtime["testing_time_s"] = 0.0  # Default testing/generation time is zero unless generation runs
                 final_runtime["critic_iterations"] = getattr(args, "critic_steps", "")  # Critic iterations per generator update
-                try:  # Attempt to read optimizer learning rates
-                    final_runtime["learning_rate_generator"] = float(opt_G.param_groups[0].get("lr", ""))  # Generator LR
+                try:  # Attempt to read optimizer learning rates safely
+                    final_runtime["learning_rate_generator"] = safe_float(opt_G.param_groups[0].get("lr", None), getattr(args, "lr", 0.0))  # Generator LR safely
                 except Exception:
                     final_runtime["learning_rate_generator"] = getattr(args, "lr", "")  # Fallback to args.lr
-                try:  # Attempt to read optimizer learning rates
-                    final_runtime["learning_rate_critic"] = float(opt_D.param_groups[0].get("lr", ""))  # Critic LR
+                try:  # Attempt to read optimizer learning rates safely
+                    final_runtime["learning_rate_critic"] = safe_float(opt_D.param_groups[0].get("lr", None), getattr(args, "lr", 0.0))  # Critic LR safely
                 except Exception:
                     final_runtime["learning_rate_critic"] = getattr(args, "lr", "")  # Fallback to args.lr
                 final_runtime["critic_loss"] = metrics_history.get("loss_D", [])[-1] if metrics_history.get("loss_D") else ""  # Final critic loss
                 final_runtime["generator_loss"] = metrics_history.get("loss_G", [])[-1] if metrics_history.get("loss_G") else ""  # Final generator loss
-                # Compute generated_ratio when possible
+                # Compute generated_ratio when possible using safe conversions
                 try:
-                    if final_runtime.get("original_num_samples") not in (None, "", 0) and final_runtime.get("total_generated_samples") not in (None, "", 0):
-                        final_runtime["generated_ratio"] = float(final_runtime.get("total_generated_samples")) / float(final_runtime.get("original_num_samples"))  # Ratio
+                    total_generated = safe_float(final_runtime.get("total_generated_samples"), 0.0)  # Total generated safely
+                    original_samples = safe_float(final_runtime.get("original_num_samples"), 0.0)  # Original samples safely
+                    final_runtime["generated_ratio"] = (total_generated / original_samples) if original_samples > 0.0 else 0.0  # Guard division
                 except Exception:
                     final_runtime["generated_ratio"] = ""  # Leave blank on failure
                 ordered_final = []  # Prepare ordered list according to configured schema
@@ -2290,6 +2307,7 @@ def export_dataframe_image(styled_df: pd.io.formats.style.Styler, output_path: U
     :param output_path: Path to output PNG file
     :raises: Any exception raised by dataframe_image.export will be propagated
     """
+
     try:
         out_p = Path(output_path)  # Ensure Path object for output
         # Ensure parent directory exists before writing
@@ -2310,6 +2328,7 @@ def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str
     :param output_path: Target PNG path (will be overwritten if exists)
     :raises: PermissionError if directory not writable, or any dataframe_image error
     """
+
     try:
         out_p = Path(output_path)  # Convert to Path for manipulation
         parent = out_p.parent  # Parent directory
@@ -2336,6 +2355,7 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
     :param is_visualizable: Flag indicating whether to generate PNG image
     :raises: Propagates IO and dataframe_image exceptions
     """
+
     try:
         csv_p = Path(csv_path)  # Convert csv_path to Path
         parent = csv_p.parent  # Parent directory for CSV
@@ -2352,7 +2372,14 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
         raise  # Propagate exceptions to caller (do not swallow)
 
 
-def compose_generation_start_message(n: int, args, generated_file_name: str, original_num: Optional[int] = None):
+def compose_generation_start_message(
+    n: int,
+    args,
+    generated_file_name: str,
+    original_num: Optional[int] = None,
+    class_distribution: Optional[Dict] = None,
+    args_ck: Optional[Dict] = None,
+) -> str:
     """
     Compose the generation start message including the ratio relative to the original dataset.
 
@@ -2381,15 +2408,14 @@ def compose_generation_start_message(n: int, args, generated_file_name: str, ori
         
         ratio_info = ""  # Initialize ratio info
         
-        if orig is not None and orig > 0:  # If original dataset size is known and valid
-            ratio = float(n) / float(orig)  # Compute generation ratio
+        if orig is not None and safe_float(orig, 0.0) > 0.0:  # If original dataset size is known and valid
+            ratio = safe_float(n, 0.0) / safe_float(orig, 1.0)  # Compute generation ratio safely
             percentage = ratio * 100.0  # Convert ratio to percentage
-            ratio_info = f"{percentage:.2f}% ({n}/{orig})"  # Format ratio info
+            ratio_info = f"{percentage:.2f}% ({int(safe_float(n,0.0))}/{int(safe_float(orig,0.0))})"  # Format ratio info
         
-        elif args.n_samples is not None:  # If n_samples was explicitly provided
+        elif getattr(args, "n_samples", None) is not None:  # If n_samples was explicitly provided
             try:
-                requested = float(args.n_samples)  # Convert to float
-                
+                requested = safe_float(getattr(args, "n_samples", None), 0.0)  # Convert to float safely
                 if requested <= 1.0:  # If decimal (percentage mode)
                     ratio_info = f"{requested * 100:.2f}%"  # Percentage requested
                 else:  # If integer (absolute mode)
@@ -2502,11 +2528,12 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
             return True  # Proceed with generation
 
         try:
-            requested = float(
+            requested = safe_float(
                 getattr(args, "n_samples", None)
                 if getattr(args, "n_samples", None) is not None
-                else config.get("generation", {}).get("n_samples", 1.0)
-            )  # Resolve requested n_samples
+                else config.get("generation", {}).get("n_samples", 1.0),
+                config.get("generation", {}).get("n_samples", 1.0),
+            )  # Resolve requested n_samples safely
         except Exception:
             requested = config.get("generation", {}).get("n_samples", 1.0)  # Fallback
 
@@ -2650,7 +2677,7 @@ def generate(args, config: Optional[Dict] = None):
                 )  # Raise error if not available
         n_classes = len(label_encoder.classes_)  # Get number of classes from label encoder
 
-        g_leaky_relu_alpha = float(config.get("generator", {}).get("leaky_relu_alpha", 0.2))  # Get generator LeakyReLU alpha and cast to float
+        g_leaky_relu_alpha = safe_float(config.get("generator", {}).get("leaky_relu_alpha", 0.2), 0.2)  # Get generator LeakyReLU alpha safely from config
         
         G = Generator(
             latent_dim=args.latent_dim,  # Noise vector dimensionality for generator input
@@ -2663,7 +2690,7 @@ def generate(args, config: Optional[Dict] = None):
         ).to(
             device
         )  # Initialize generator model
-        if hasattr(G, "module"):  # If generator wrapped by DataParallel
+        if isinstance(G, torch.nn.DataParallel):  # If generator wrapped by DataParallel
             G.module.load_state_dict(ckpt["state_dict"] if "state_dict" in ckpt else ckpt)  # Load into underlying module
         else:  # Not DataParallel
             G.load_state_dict(ckpt["state_dict"] if "state_dict" in ckpt else ckpt)  # Load generator weights from checkpoint
@@ -2754,7 +2781,32 @@ def generate(args, config: Optional[Dict] = None):
             print(f"{BackgroundColors.YELLOW}Warning: failed to measure sample generation time: {_sg}{Style.RESET_ALL}")  # Warn but continue
             args._last_sample_generation_time = ""  # Ensure attribute exists even on failure
 
-        send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Finished WGAN-GP generation: Saved {n} samples ({(f'{n/original_num:.2%}, ' if 'original_num' in locals() and original_num else '')}{(Path(args.out_file).stat().st_size >= 1024**3 and f'{Path(args.out_file).stat().st_size/1024**3:.2f} GB' or f'{Path(args.out_file).stat().st_size/1024**2:.2f} MB')}) to {Path(args.out_file).name}")  # Telegram finish with prefix
+        try:  # Build a safe, human-readable finish message and notify via Telegram
+            gen_path = Path(args.out_file)  # Path object for generated file
+            try:  # Try to get original_num if available safely
+                original_num = original_num if 'original_num' in locals() else None  # Use local original_num when present
+            except Exception:
+                original_num = None  # Fallback to None on any error
+            try:  # Try to compute ratio string safely
+                ratio_str = (
+                    f"{(safe_float(n,0.0)/safe_float(original_num,1.0))*100:.2f}% ({int(safe_float(n,0.0))}/{int(safe_float(original_num,0.0))})"
+                    if original_num and safe_float(original_num, 0.0) > 0.0
+                    else ""
+                )  # Ratio string if original_num available and >0
+            except Exception:
+                ratio_str = ""  # Fallback empty ratio on error
+            try:  # Try to compute generated file size string safely
+                size_bytes = gen_path.stat().st_size if gen_path.exists() else 0  # File size in bytes when exists
+                if size_bytes >= 1024 ** 3:  # Size in GB
+                    size_str = f"{size_bytes / (1024 ** 3):.2f} GB"  # Human-readable GB
+                else:  # Size in MB
+                    size_str = f"{size_bytes / (1024 ** 2):.2f} MB"  # Human-readable MB
+            except Exception:
+                size_str = "Unknown size"  # Fallback when unable to determine size
+            msg = f"{file_progress_prefix} Finished WGAN-GP generation: Saved {int(safe_float(n,0.0))} samples{(f' ({ratio_str}, {size_str})' if ratio_str or size_str else '')} to {gen_path.name}"  # Compose final message
+            send_telegram_message(TELEGRAM_BOT, msg)  # Send message via Telegram
+        except Exception:
+            pass  # Ignore notification failures to avoid breaking flow
         
         try:  # Wrap result writing in try/except to avoid breaking generation on failures
             results_cols_cfg = config.get("wgangp", {}).get("results_csv_columns", [])  # Read configured results columns list
@@ -3138,6 +3190,17 @@ def populate_hardware_column(df, column_name="hardware", device_used=None):
         raise  # Re-raise to preserve original failure semantics
 
 
+def row_style_for_zebra(row):
+    """
+    Top-level helper to produce zebra row styles for pandas Styler.
+
+    :param row: pandas Series representing a row
+    :return: List[str] of CSS style strings for each cell
+    """
+    bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # white for even rows, light gray for odd rows
+    return [f"background-color: {bg};" for _ in row.index]  # Return style for every column in the row
+
+
 def play_sound(config: Optional[Dict] = None):
     """
     Plays a sound when the program finishes and skips if the operating system is Windows.
@@ -3177,7 +3240,7 @@ def play_sound(config: Optional[Dict] = None):
         raise
 
 
-def run_wgangp(config: Optional[Union [Dict, str]] = None, **kwargs):
+def run_wgangp(config: Optional[Union[Dict, str]] = None, **kwargs) -> None:  # Entry point wrapper accepting optional config dict or path
     """
     Programmatic entry point for WGAN-GP execution from external orchestrators.
 
