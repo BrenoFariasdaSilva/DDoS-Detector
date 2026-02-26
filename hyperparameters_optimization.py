@@ -2555,7 +2555,7 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
 
         styled = df.style.apply(row_style, axis=1)  # Apply zebra styling row-wise to preserve column order
         styled = styled.set_table_attributes('style="border-collapse:collapse; width:100%;"')  # Tight table rendering
-        styled = styled.set_properties(**{"border": "1px solid #ddd", "padding": "6px"})  # Add cell padding and border
+        styled = styled.set_properties(subset=None, border="1px solid #ddd", padding="6px")  # Add cell padding and border with explicit subset to select all cells
         return styled  # Return the pandas Styler object
     except Exception as e:
         print(str(e))  # Print exception for visibility
