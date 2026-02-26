@@ -1245,56 +1245,42 @@ def load_augmented_files_for_multiclass(original_files_list, config=None):
 
     try:
         if config is None:  # If no config provided
-            config = CONFIG  # Use global CONFIG
-        
-        verbose_output(
+            config = CONFIG  # Use global CONFIG as fallback
+
+        verbose_output(  # Emit verbose startup message for multi-class augmentation loading
             f"{BackgroundColors.GREEN}Loading augmented files for multi-class mode: {BackgroundColors.CYAN}{len(original_files_list)} files{Style.RESET_ALL}",
-            config=config
-        )  # Output the verbose message
-        
-        augmented_files = []  # Initialize list to store augmented file paths
-        found_count = 0  # Initialize counter for found augmented files
-        
-        for original_file in original_files_list:  # Iterate over each original file
-            augmented_file = find_data_augmentation_file(original_file, config=config)  # Find corresponding augmented file
-            if augmented_file is not None:  # If augmented file was found
-                augmented_files.append(augmented_file)  # Add to augmented files list
+            config=config,
+        )
+
+        augmented_files = []  # Prepare list to preserve alignment with originals (None = missing)
+        found_count = 0  # Counter for how many augmented files were found
+
+        for original_file in original_files_list:  # Iterate originals to locate augmented counterparts
+            augmented_file = find_data_augmentation_file(original_file, config=config)  # Locate augmented file path or None
+            if augmented_file is not None:  # If an augmented file exists for this original
+                augmented_files.append(augmented_file)  # Append the found augmented file path
                 found_count += 1  # Increment found counter
-            else:  # If augmented file was not found
-                verbose_output(
+            else:  # If no augmented file exists for this original
+                verbose_output(  # Emit a per-file informative warning to verbose output
                     f"{BackgroundColors.YELLOW}No augmented file found for: {BackgroundColors.CYAN}{original_file}{Style.RESET_ALL}",
-                    config=config
-                )  # Output warning message
-                augmented_files.append(None)  # Add None placeholder to maintain alignment
-        
-        if found_count == 0:  # If no augmented files were found at all
-            print(
+                    config=config,
+                )
+                augmented_files.append(None)  # Preserve index alignment with None placeholder
+
+        if found_count == 0:  # If none were found across all originals
+            print(  # Print a consolidated warning about missing augmented files
                 f"{BackgroundColors.YELLOW}No augmented files found for any original files in multi-class mode.{Style.RESET_ALL}"
-            )  # Print warning message
+            )
         else:  # If at least one augmented file was found
-            print(
+            print(  # Print a consolidated summary of found augmented files
                 f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{found_count}/{len(original_files_list)}{BackgroundColors.GREEN} augmented files for multi-class mode.{Style.RESET_ALL}"
-            )  # Print success summary
-        
-        return augmented_files  # Return list of augmented file paths with None entries for missing files
-    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
-        print(str(e))  # Print error to terminal for server logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-        raise  # Re-raise to preserve original failure semantics
-        return []  # Return empty list
-    
-    if found_count < len(original_files_list):  # If some but not all augmented files were found
-        print(
-            f"{BackgroundColors.YELLOW}Found augmented files for {BackgroundColors.CYAN}{found_count}/{len(original_files_list)}{BackgroundColors.YELLOW} original files.{Style.RESET_ALL}"
-        )  # Print partial match warning
-    else:  # If all augmented files were found
-        print(
-            f"{BackgroundColors.GREEN}Found augmented files for all {BackgroundColors.CYAN}{found_count}{BackgroundColors.GREEN} original files.{Style.RESET_ALL}"
-        )  # Print success message
-    
-    valid_augmented_files = [f for f in augmented_files if f is not None]  # Filter out None entries
-    
-    return valid_augmented_files  # Return list of valid augmented file paths
+            )
+
+        return augmented_files  # Return the list preserving None placeholders for missing entries
+    except Exception as e:  # On any exception, ensure logging and notification then re-raise
+        print(str(e))  # Print the exception string to terminal logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send the exception via Telegram with traceback
+        raise  # Re-raise the original exception to preserve semantics
 
 
 def merge_original_and_augmented(original_df, augmented_df, config=None):
@@ -1340,21 +1326,24 @@ def extract_class_metrics(y_true, y_pred):
     """
     
     try:
-        report = classification_report(y_true, y_pred, output_dict=True, zero_division=0)
+        report = classification_report(y_true, y_pred, output_dict=True, zero_division=0)  # Generate report dict
 
-        per_class = {}
-        for k, v in report.items():
+        if not isinstance(report, dict):  # Ensure report has mapping semantics
+            raise TypeError("classification_report did not return a dict as expected")  # Defensive type check
 
-            if k in ("accuracy", "macro avg", "weighted avg", "micro avg"):
-                continue
+        per_class = {}  # Prepare per-class metrics mapping
+        for k, v in report.items():  # Iterate over report items (class labels and metrics)
 
-            per_class[k] = {
+            if k in ("accuracy", "macro avg", "weighted avg", "micro avg"):  # Skip aggregate keys
+                continue  # Move to next item
+
+            per_class[k] = {  # Populate per-class metric dict converting values to float
                 "precision": float(v.get("precision", 0.0)),
                 "recall": float(v.get("recall", 0.0)),
-                "f1": float(v.get("f1-score", v.get("f1", 0.0)))
+                "f1": float(v.get("f1-score", v.get("f1", 0.0))),
             }
 
-        global_metrics = {
+        global_metrics = {  # Compute deterministic global metrics
             "accuracy": float(accuracy_score(y_true, y_pred)),
             "macro_f1": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
             "weighted_f1": float(f1_score(y_true, y_pred, average="weighted", zero_division=0)),
@@ -1362,10 +1351,11 @@ def extract_class_metrics(y_true, y_pred):
             "macro_recall": float(recall_score(y_true, y_pred, average="macro", zero_division=0)),
         }
 
-        return {"per_class": per_class, "global": global_metrics}
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
+        return {"per_class": per_class, "global": global_metrics}  # Return structured metrics
+    except Exception as e:  # On exception, log and notify then re-raise
+        print(str(e))  # Print exception to terminal
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception details via Telegram
+        raise  # Re-raise the exception to preserve original control flow
         return {"per_class": {}, "global": {}}
 
 
