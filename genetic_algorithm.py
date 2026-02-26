@@ -95,7 +95,7 @@ from sklearn.model_selection import StratifiedKFold, train_test_split  # For spl
 from sklearn.preprocessing import StandardScaler  # For feature scaling
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For Telegram notifications
 from tqdm import tqdm  # For progress bars
-from typing import Any, Callable, Union  # For type hints
+from typing import Any, Callable, Union, cast  # For type hints
 
 psutil = (
     __import__("psutil") if __import__("importlib").util.find_spec("psutil") else None
@@ -5303,27 +5303,35 @@ def calculate_execution_time(start_time, finish_time=None):
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
         raise  # Re-raise to preserve original failure semantics
 
+def row_style_for_zebra(row):
+    """
+    Top-level helper to produce zebra row styles for pandas Styler.
+
+    :param row: pandas Series representing a row
+    :return: List[str] of CSS style strings for each cell
+    """
+
+    bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # White for even rows, light gray for odd rows
+    return [f"background-color: {bg};" for _ in row.index]  # Return style for every column in the row
+
 
 def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """
     Apply zebra-striping style to a DataFrame using pandas Styler.
 
-    :param df: DataFrame to style
-    :return: pandas Styler with alternating row background colors
+    :param df: Input DataFrame to style
+    :return: pandas Styler with zebra row background colors applied
     """
+    
     try:
-        def _row_style(row):  # Define row-wise styling helper
-            bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # white/light-gray alternation
-            return [f"background-color: {bg};" for _ in row.index]  # Return style per cell preserving order
-
-        styled = df.style.apply(_row_style, axis=1)  # Apply zebra styling row-wise to preserve column order
-        styled = styled.set_table_attributes('style="border-collapse:collapse; width:100%;"')  # Tight table rendering
-        styled = styled.set_properties(**{"border": "1px solid #ddd", "padding": "6px"})  # Add cell padding and border
-        return styled  # Return the pandas Styler object
+        styled = df.style.apply(row_style_for_zebra, axis=1)  # Apply zebra function row-wise using top-level helper
+        styled = styled.set_table_attributes('style="border-collapse:collapse; width:100%;"')  # Tight table style
+        styled = cast(pd.io.formats.style.Styler, cast(Any, styled).set_properties(**{"border": "1px solid #ddd", "padding": "6px"}))  # Cell padding/border (cast to Any to satisfy typing)
+        return styled  # Return the styled object
     except Exception as e:
-        print(str(e))  # Print exception for visibility
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram about the failure
-        raise  # Propagate exception (no silent failures)
+        print(str(e))  # Print error for visibility
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram
+        raise  # Propagate error to caller
 
 
 def export_dataframe_image(styled_df: pd.io.formats.style.Styler, output_path: Union[str, Path]):
