@@ -62,6 +62,7 @@ import subprocess  # For executing system commands
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import time  # For measuring elapsed time
+import traceback  # For formatting and printing exception tracebacks
 import yaml  # For loading configuration from YAML files
 from colorama import Style  # For coloring the terminal
 from joblib import dump, load  # For exporting and loading trained models and scalers
@@ -2066,25 +2067,55 @@ if __name__ == "__main__":
 
     :return: None
     """
-    
-    cli = parse_cli_args()
-    CLI_ARGS.update(cli)
-    cfg, sources = get_config(cli)
-    CONFIG.update(cfg)
 
-    # initialize logger and global exception hook now that config is available
-    logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)
-    sys.stdout = logger
-    sys.stderr = logger
-    setup_global_exception_hook()
+    try:  # Protect top-level execution to ensure errors are reported and notified
+        cli = parse_cli_args()  # Parse CLI arguments into a dict
+        CLI_ARGS.update(cli)  # Update global CLI_ARGS with parsed values
+        cfg, sources = get_config(cli)  # Merge configuration from defaults/file/CLI
+        CONFIG.update(cfg)  # Populate global CONFIG with merged config
 
-    dataset_arg = cli.get("dataset_path") or CONFIG.get("rfe", {}).get("execution", {}).get("dataset_path")
-    if dataset_arg is None:
-        raise ValueError("dataset path must be provided via --dataset_path or config.rfe.execution.dataset_path")
+        logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Initialize file logger for this script
+        sys.stdout = logger  # Redirect stdout to logger to capture prints
+        sys.stderr = logger  # Redirect stderr to logger to capture errors
+        setup_global_exception_hook()  # Install global exception hook that forwards to Telegram
 
-    n_features = cli.get("n_features_to_select") if cli.get("n_features_to_select") is not None else None
-    step_arg = cli.get("step") if cli.get("step") is not None else None
-    estimator_arg = cli.get("estimator") if cli.get("estimator") is not None else None
-    rs_arg = cli.get("random_state") if cli.get("random_state") is not None else None
+        dataset_arg = cli.get("dataset_path") or CONFIG.get("rfe", {}).get("execution", {}).get("dataset_path")  # Resolve dataset path from CLI or config
+        if dataset_arg is None:  # Validate required dataset argument presence
+            raise ValueError("dataset path must be provided via --dataset_path or config.rfe.execution.dataset_path")  # Raise if missing
 
-    main(n_features_to_select=n_features, step=step_arg, estimator_name=estimator_arg, random_state=rs_arg, csv_path=dataset_arg)
+        n_features = cli.get("n_features_to_select") if cli.get("n_features_to_select") is not None else None  # Extract optional n_features
+        step_arg = cli.get("step") if cli.get("step") is not None else None  # Extract optional step value
+        estimator_arg = cli.get("estimator") if cli.get("estimator") is not None else None  # Extract optional estimator override
+        rs_arg = cli.get("random_state") if cli.get("random_state") is not None else None  # Extract optional random state
+
+        try:  # Run main and handle user interrupts separately
+            main(n_features_to_select=n_features, step=step_arg, estimator_name=estimator_arg, random_state=rs_arg, csv_path=dataset_arg)  # Invoke main business logic
+        except KeyboardInterrupt:  # Handle user-initiated interrupts with friendly notification
+            try:  # Attempt graceful interrupt notification and cleanup
+                print("Execution interrupted by user (KeyboardInterrupt)")  # Inform terminal about user interrupt
+                send_telegram_message(TELEGRAM_BOT, ["RFE execution interrupted by user (KeyboardInterrupt)"])  # Notify via Telegram about interrupt
+            except Exception:  # Ignore failures sending interrupt notification to avoid masking the interrupt
+                pass  # No-op on notification failure
+            try:  # Best-effort logger flush/close during interrupt handling
+                if logger is not None:  # Only flush/close if logger exists
+                    logger.flush()  # Flush pending log writes
+                    logger.close()  # Close the logger file handle
+            except Exception:  # Ignore logger cleanup errors during interrupt handling
+                pass  # Continue to re-raise the interrupt
+            raise  # Re-raise KeyboardInterrupt to preserve original behavior and exit code
+    except BaseException as e:  # Catch everything (including SystemExit) and report via Telegram
+        try:  # Try to log and notify about the fatal error
+            print(f"Fatal error: {e}")  # Print the exception message to terminal for visibility
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback and message via Telegram
+        except Exception:  # If notification fails, attempt to print traceback to stderr as fallback
+            try:  # Attempt fallback traceback printing for diagnostics
+                traceback.print_exc()  # Print full traceback to stderr as a fallback notification
+            except Exception:  # Ignore failures of the fallback printing to avoid cascading errors
+                pass  # No further fallback available
+        try:  # Attempt best-effort logger cleanup after fatal error
+            if logger is not None:  # Only flush/close if logger exists
+                logger.flush()  # Flush pending log writes
+                logger.close()  # Close the logger file handle
+        except Exception:  # Ignore logger cleanup errors to avoid masking the primary failure
+            pass  # No-op on cleanup failure
+        raise  # Re-raise the original exception to preserve non-zero exit code and behavior
