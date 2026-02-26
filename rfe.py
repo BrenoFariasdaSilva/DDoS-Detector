@@ -357,7 +357,15 @@ def get_config(cli_args: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any
     if cli.get("caching_enabled") is not None:
         cache["enabled"] = bool(cli.get("caching_enabled"))
     if cli.get("pickle_protocol") is not None:
-        cache["pickle_protocol"] = int(cli.get("pickle_protocol"))
+        raw_pickle_protocol = cli.get("pickle_protocol")  # Retrieve raw CLI value for 'pickle_protocol' (Any | None)
+        if raw_pickle_protocol is None:  # Ensure the retrieved CLI value is not None before conversion
+            raise ValueError("pickle_protocol CLI argument is required")  # Raise to preserve strict semantics when missing
+        if isinstance(raw_pickle_protocol, int):  # If the raw value is already an int
+            cache["pickle_protocol"] = raw_pickle_protocol  # Assign the int value directly into cache
+        elif isinstance(raw_pickle_protocol, str) and raw_pickle_protocol.strip() != "":  # If it's a non-empty string
+            cache["pickle_protocol"] = int(raw_pickle_protocol)  # Safely convert numeric string to int and assign into cache
+        else:  # Any other type is invalid for conversion
+            raise ValueError("Invalid pickle_protocol CLI value; expected int or numeric string")  # Raise to avoid unsafe int() call
 
     if cli.get("results_dir") is not None:
         merged.setdefault("export", {})["results_dir"] = cli.get("results_dir")
