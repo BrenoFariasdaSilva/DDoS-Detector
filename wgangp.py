@@ -2021,13 +2021,23 @@ def train(args, config: Optional[Dict] = None):
                 if results_csv_writer and results_cols_cfg:  # Only write if we have a valid writer and columns
                     row_runtime = {}  # Collect runtime-derived metrics into a dedicated mapping
                     row_runtime["original_file"] = Path(args.csv_path).name if getattr(args, "csv_path", None) else ""  # Original file name
-                    row_runtime["epoch"] = epoch + 1  # Current epoch number
+                    row_runtime["epoch"] = epoch + 1  # Current epoch number (1-based)
+                    row_runtime["epochs"] = getattr(args, "epochs", "")  # Total epochs configured
                     row_runtime["epoch_time_s"] = getattr(args, "_last_epoch_time", "")  # Epoch elapsed seconds
                     row_runtime["training_time_s"] = getattr(args, "_last_training_time", "")  # Total training elapsed seconds
                     row_runtime["file_time_s"] = getattr(args, "_last_file_time", "")  # File processing elapsed seconds
-                    # Fill recognized metric placeholders safely into runtime mapping
-                    row_runtime["loss_D"] = metrics_history.get("loss_D", [])[-1] if metrics_history.get("loss_D") else ""  # Last discriminator loss
-                    row_runtime["loss_G"] = metrics_history.get("loss_G", [])[-1] if metrics_history.get("loss_G") else ""  # Last generator loss
+                    # Hyperparameters: capture configured / effective values for reproducibility
+                    row_runtime["batch_size"] = getattr(args, "batch_size", "")  # Effective batch size used
+                    row_runtime["lambda_gp"] = getattr(args, "lambda_gp", "")  # Gradient penalty coefficient
+                    row_runtime["latent_dim"] = getattr(args, "latent_dim", "")  # Latent noise dimensionality
+                    # Fill recognized metric placeholders safely into runtime mapping (canonical CSV names)
+                    row_runtime["critic_loss"] = metrics_history.get("loss_D", [])[-1] if metrics_history.get("loss_D") else ""  # Last discriminator/critic loss
+                    row_runtime["generator_loss"] = metrics_history.get("loss_G", [])[-1] if metrics_history.get("loss_G") else ""  # Last generator loss
+                    # Include additional training diagnostics
+                    row_runtime["gp"] = metrics_history.get("gp", [])[-1] if metrics_history.get("gp") else ""  # Last gradient penalty value
+                    row_runtime["D_real"] = metrics_history.get("D_real", [])[-1] if metrics_history.get("D_real") else ""  # Avg critic score for real samples
+                    row_runtime["D_fake"] = metrics_history.get("D_fake", [])[-1] if metrics_history.get("D_fake") else ""  # Avg critic score for fake samples
+                    row_runtime["wasserstein"] = metrics_history.get("wasserstein", [])[-1] if metrics_history.get("wasserstein") else ""  # Estimated wasserstein distance
                     row_runtime["original_num_samples"] = getattr(dataset, "original_num_samples", "")  # Original sample count after preprocessing
                     row_runtime["critic_iterations"] = getattr(args, "critic_steps", "")  # Critic iterations per generator update
                     try:  # Attempt to read current optimizer learning rates
@@ -2051,8 +2061,7 @@ def train(args, config: Optional[Dict] = None):
                             if cfg_val is not None:  # If config provided a value
                                 ordered.append(cfg_val)  # Use configured hyperparameter value
                             else:  # Neither runtime nor config provided the column value
-                                print(f"{BackgroundColors.YELLOW}Warning: results CSV column '{c}' not found in runtime metrics or config; writing None{Style.RESET_ALL}")  # Warn about missing column
-                                ordered.append(None)  # Use None to indicate missing value explicitly
+                                ordered.append(None)  # Use None to indicate missing value explicitly (no warning)
                     # Inject hardware string into ordered row when hardware tracking is enabled in config
                     if config.get("hardware_tracking", False):  # If hardware tracking requested
                         try:  # Guard hardware detection to avoid breaking training
@@ -2188,6 +2197,13 @@ def train(args, config: Optional[Dict] = None):
                 final_runtime["training_time_s"] = getattr(args, "_last_training_time", "")  # Total training elapsed
                 final_runtime["file_time_s"] = getattr(args, "_last_file_time", "")  # Per-file processing elapsed
                 final_runtime["testing_time_s"] = 0.0  # Default testing/generation time is zero unless generation runs
+                final_runtime["epoch"] = ""  # Final summary must not include a per-epoch value
+                final_runtime["epoch_time_s"] = ""  # Final summary must not include last epoch duration
+                # Hyperparameters: ensure required columns are present for final summary
+                final_runtime["epochs"] = getattr(args, "epochs", "")  # Total epochs configured
+                final_runtime["batch_size"] = getattr(args, "batch_size", "")  # Effective batch size used
+                final_runtime["lambda_gp"] = getattr(args, "lambda_gp", "")  # Gradient penalty coefficient
+                final_runtime["latent_dim"] = getattr(args, "latent_dim", "")  # Latent noise dimensionality
                 final_runtime["critic_iterations"] = getattr(args, "critic_steps", "")  # Critic iterations per generator update
                 try:  # Attempt to read optimizer learning rates safely
                     final_runtime["learning_rate_generator"] = safe_float(opt_G.param_groups[0].get("lr", None), getattr(args, "lr", 0.0))  # Generator LR safely
@@ -2199,11 +2215,15 @@ def train(args, config: Optional[Dict] = None):
                     final_runtime["learning_rate_critic"] = getattr(args, "lr", "")  # Fallback to args.lr
                 final_runtime["critic_loss"] = metrics_history.get("loss_D", [])[-1] if metrics_history.get("loss_D") else ""  # Final critic loss
                 final_runtime["generator_loss"] = metrics_history.get("loss_G", [])[-1] if metrics_history.get("loss_G") else ""  # Final generator loss
+                final_runtime["gp"] = metrics_history.get("gp", [])[-1] if metrics_history.get("gp") else ""  # Final gradient penalty
+                final_runtime["D_real"] = metrics_history.get("D_real", [])[-1] if metrics_history.get("D_real") else ""  # Final avg real score
+                final_runtime["D_fake"] = metrics_history.get("D_fake", [])[-1] if metrics_history.get("D_fake") else ""  # Final avg fake score
+                final_runtime["wasserstein"] = metrics_history.get("wasserstein", [])[-1] if metrics_history.get("wasserstein") else ""  # Final wasserstein estimate
                 # Compute generated_ratio when possible using safe conversions
                 try:
                     total_generated = safe_float(final_runtime.get("total_generated_samples"), 0.0)  # Total generated safely
                     original_samples = safe_float(final_runtime.get("original_num_samples"), 0.0)  # Original samples safely
-                    final_runtime["generated_ratio"] = (total_generated / original_samples) if original_samples > 0.0 else 0.0  # Guard division
+                    final_runtime["generated_ratio"] = (total_generated / original_samples) if original_samples > 0.0 else 0.0  # Guard division and avoid ZeroDivisionError
                 except Exception:
                     final_runtime["generated_ratio"] = ""  # Leave blank on failure
                 ordered_final = []  # Prepare ordered list according to configured schema
@@ -2218,8 +2238,7 @@ def train(args, config: Optional[Dict] = None):
                             cfg_val = None  # On error treat as missing
                         if cfg_val is not None:  # If found in config
                             ordered_final.append(cfg_val)  # Use configured hyperparameter value
-                        else:  # Not found anywhere; warn and use None
-                            print(f"{BackgroundColors.YELLOW}Warning: results CSV column '{c}' not found in runtime metrics or config; writing None{Style.RESET_ALL}")  # Warn about missing column
+                        else:  # Not found anywhere; use None silently
                             ordered_final.append(None)  # Explicit None for missing value
                 # Inject hardware string into final ordered row when hardware tracking is enabled in config
                 if config.get("hardware_tracking", False):  # If hardware tracking requested
