@@ -1570,6 +1570,56 @@ def compose_training_start_message(args, file_progress_prefix) -> str:
         raise  # Re-raise exception to allow outer handler to manage it
 
 
+def adjust_num_workers_for_file(csv_path: str, suggested_workers: int, config: Optional[Dict] = None) -> int:
+    """
+    Adjust DataLoader `num_workers` based on CSV file size and total system RAM.
+
+    :param csv_path: Path to the CSV file to inspect
+    :param suggested_workers: Initial suggested num_workers value from config
+    :param config: Optional configuration dictionary
+    :return: Adjusted num_workers integer
+    """
+    
+    try:  # Guard helper with try/except to follow project style
+        if config is None: config = CONFIG or get_default_config()  # Use provided config or fallback to global/default
+        file_size_bytes = Path(csv_path).stat().st_size  # Get file size in bytes from filesystem
+        file_size_gb = float(file_size_bytes) / (1024.0 ** 3)  # Convert bytes to gigabytes (GB)
+        
+        if psutil is None:  # If psutil is unavailable
+            print("[WARNING] psutil not available; keeping suggested num_workers")  # Warn and keep suggested
+            return int(suggested_workers)  # Return suggested_workers when RAM detection is impossible
+        
+        total_ram_gb = float(psutil.virtual_memory().total) / (1024.0 ** 3)  # Get total system RAM in GB
+        
+        print(f"[DEBUG] Detected file size: {file_size_gb:.2f} GB")  # Log detected file size
+        print(f"[DEBUG] Detected system RAM: {total_ram_gb:.2f} GB")  # Log detected total RAM
+        print(f"[DEBUG] Original suggested num_workers: {suggested_workers}")  # Log original suggestion
+        
+        final = int(suggested_workers)  # Start with suggested value as integer
+        if file_size_gb < 1.0:  # Small files: keep suggestion
+            final = int(suggested_workers)  # No change for tiny files
+        elif file_size_gb <= 4.0:  # Moderate files: reduce parallelism by half
+            final = max(1, int(suggested_workers) // 2)  # Reduce but keep at least 1
+        else:  # Large files: strongly reduce parallelism
+            final = 1  # Prefer 1 worker for large CSVs by default
+       
+        if total_ram_gb < 8.0:  # Very low RAM: disable workers to avoid memory pressure
+            final = 0  # Force zero workers when RAM is under 8GB
+            print(f"[WARNING] Available RAM {total_ram_gb:.2f} GB < 8GB -> forcing num_workers=0")  # Log forced zero
+        elif total_ram_gb < 16.0:  # Moderate RAM: cap workers conservatively
+            final = min(final, 2)  # Cap to at most 2 workers
+            print(f"[WARNING] Available RAM {total_ram_gb:.2f} GB < 16GB -> capping num_workers to <=2")  # Log capping
+        
+        final = max(0, int(final))  # Ensure non-negative integer
+        print(f"[DEBUG] Final adjusted num_workers: {final}")  # Log final decision
+        
+        return final  # Return computed value
+    except Exception as e:  # On error, report and re-raise following project conventions
+        print(str(e))  # Print exception for visibility
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception via Telegram
+        raise  # Re-raise to allow outer handler to manage it
+
+
 def train(args, config: Optional[Dict] = None):
     """
     Train the WGAN-GP model using the provided arguments and configuration.
@@ -1639,9 +1689,17 @@ def train(args, config: Optional[Dict] = None):
             args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols
         )  # Load dataset from CSV
         
-        num_workers = int(config.get("dataloader", {}).get("num_workers", 8))  # Get num_workers from config and cast to int
-        if device.type == "cuda" and num_workers == 0:  # If CUDA available but user set 0 workers
-            num_workers = max(1, (os.cpu_count() or 1))  # Ensure at least one worker for CUDA to improve throughput
+        num_workers = int(config.get("dataloader", {}).get("num_workers", 8))  # Get base num_workers from config and cast to int
+        num_workers = adjust_num_workers_for_file(args.csv_path, num_workers, config)  # Adjust num_workers based on file size and system RAM
+        if device.type == "cuda" and num_workers == 0:  # If CUDA available but adjusted workers is 0
+            try:  # Attempt to fetch total RAM to decide whether to raise workers for CUDA
+                total_ram_gb = float(psutil.virtual_memory().total) / (1024.0 ** 3) if psutil is not None else None  # Detect total RAM if psutil available
+            except Exception:  # If detection fails
+                total_ram_gb = None  # Unknown RAM when detection fails
+            if total_ram_gb is None or total_ram_gb >= 8.0:  # If RAM unknown or sufficient
+                num_workers = max(1, (os.cpu_count() or 1))  # Ensure at least one worker for CUDA when RAM allows
+            else:  # Low RAM and CUDA present: keep zero workers to avoid memory pressure
+                print(f"[WARNING] Low RAM ({total_ram_gb:.2f} GB) and CUDA present; keeping num_workers=0 to avoid memory pressure")  # Log decision
         pin_memory = True if device.type == "cuda" else False  # Always enable pin_memory on CUDA for faster host->device transfers
         persistent_workers = config.get("dataloader", {}).get("persistent_workers", True) if num_workers > 0 else False  # Get persistent_workers from config
         prefetch_factor = int(config.get("dataloader", {}).get("prefetch_factor", 2)) if num_workers > 0 else None  # Get prefetch_factor from config and cast to int
