@@ -1938,8 +1938,9 @@ def train(args, config: Optional[Dict] = None):
                 ncols=None,  # Auto-detect terminal width
                 bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"  # Custom format
             )
+            total_steps = len(dataloader)  # Number of batches per epoch (explicit total for logging)
             
-            for real_x_np, labels_np in pbar:  # Loop over batches in dataloader with progress bar
+            for batch_idx, (real_x_np, labels_np) in enumerate(pbar):  # Enumerate batches to obtain current batch index
                 real_x = real_x_np.to(device, non_blocking=True)  # Move real features to device with non_blocking when pinned
                 labels = labels_np.to(device, dtype=torch.long, non_blocking=True)  # Move labels to device with non_blocking when pinned
 
@@ -1984,18 +1985,18 @@ def train(args, config: Optional[Dict] = None):
                     g_loss.backward()  # Backpropagate generator loss
                     opt_G.step()  # Update generator parameters
 
-                pbar.set_description(
+                pbar.set_description(  # Update tqdm description with epoch and step/total information
                     (
-                        f"{getattr(args, 'file_progress_prefix', '')} "
-                        f"{BackgroundColors.CYAN}{(Path(getattr(args, 'csv_path', '')).name if getattr(args, 'csv_path', None) else '')}{Style.RESET_ALL} | "
+                        f"{getattr(args, 'file_progress_prefix', '')} "  # File progress prefix (may include colored index)
+                        f"{BackgroundColors.CYAN}{(Path(getattr(args, 'csv_path', '')).name if getattr(args, 'csv_path', None) else '')}{Style.RESET_ALL} | "  # Current filename
                     )
-                    + f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL} | "
-                    + f"{BackgroundColors.YELLOW}step {step}{Style.RESET_ALL} | "
-                    + f"{BackgroundColors.RED}loss_D: {loss_D.item():.4f}{Style.RESET_ALL} | "
-                    + f"{BackgroundColors.GREEN}loss_G: {g_loss.item():.4f}{Style.RESET_ALL} | "
-                    + f"gp: {gp.item():.4f} | "
-                    + f"D(real): {d_real_score.item():.4f} | "
-                    + f"D(fake): {d_fake_score.item():.4f}"
+                    + f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL} | "  # Current epoch and total epochs
+                    + f"{BackgroundColors.YELLOW}step {batch_idx+1}/{total_steps}{Style.RESET_ALL} | "  # Current batch index and total batches per epoch
+                    + f"{BackgroundColors.RED}loss_D: {loss_D.item():.4f}{Style.RESET_ALL} | "  # Discriminator loss formatted
+                    + f"{BackgroundColors.GREEN}loss_G: {g_loss.item():.4f}{Style.RESET_ALL} | "  # Generator loss formatted
+                    + f"gp: {gp.item():.4f} | "  # Gradient penalty value
+                    + f"D(real): {d_real_score.item():.4f} | "  # Average critic score on real samples
+                    + f"D(fake): {d_fake_score.item():.4f}"  # Average critic score on fake samples
                 )
                 
                 if step % args.log_interval == 0:  # Log training progress periodically
