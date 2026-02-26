@@ -685,6 +685,7 @@ class CSVFlowDataset(Dataset):
                 raise ValueError(f"Label column '{label_col}' not found in CSV. Available columns: {list(df.columns)}")  # Raise error
 
         df = preprocess_dataframe(df, label_col, remove_zero_variance=True)  # Clean and filter DataFrame
+        self.original_num_samples = len(df)  # Store number of samples after preprocessing (NaN/inf removed)
 
         if len(df) == 0:  # If all rows were dropped
             raise ValueError(f"No valid data remaining after preprocessing {csv_path}")  # Raise error
@@ -2011,6 +2012,16 @@ def train(args, config: Optional[Dict] = None):
                     # Fill recognized metric placeholders safely into runtime mapping
                     row_runtime["loss_D"] = metrics_history.get("loss_D", [])[-1] if metrics_history.get("loss_D") else ""  # Last discriminator loss
                     row_runtime["loss_G"] = metrics_history.get("loss_G", [])[-1] if metrics_history.get("loss_G") else ""  # Last generator loss
+                    row_runtime["original_num_samples"] = getattr(dataset, "original_num_samples", "")  # Original sample count after preprocessing
+                    row_runtime["critic_iterations"] = getattr(args, "critic_steps", "")  # Critic iterations per generator update
+                    try:  # Attempt to read current optimizer learning rates
+                        row_runtime["learning_rate_generator"] = float(opt_G.param_groups[0].get("lr", ""))  # Generator LR
+                    except Exception:
+                        row_runtime["learning_rate_generator"] = getattr(args, "lr", "")  # Fallback to args.lr
+                    try:  # Attempt to read current optimizer learning rates
+                        row_runtime["learning_rate_critic"] = float(opt_D.param_groups[0].get("lr", ""))  # Critic LR
+                    except Exception:
+                        row_runtime["learning_rate_critic"] = getattr(args, "lr", "")  # Fallback to args.lr
                     ordered = []  # Prepare ordered list following config order
                     for c in results_cols_cfg:  # For each configured column name
                         if c in row_runtime:  # If runtime metric provides this column
@@ -2145,9 +2156,39 @@ def train(args, config: Optional[Dict] = None):
             if results_csv_writer and results_cols_cfg:  # Only write if writer and schema are available
                 final_runtime = {}  # Build runtime-only values for final per-file row
                 final_runtime["original_file"] = Path(args.csv_path).name if getattr(args, "csv_path", None) else ""  # Original filename
+                final_runtime["original_num_samples"] = getattr(dataset, "original_num_samples", "")  # Original sample count after preprocessing
+                gen_file = getattr(args, "out_file", None) or ""  # Prefer explicit out_file if set
+                if not gen_file and getattr(args, "csv_path", None):  # Derive augmented filename when not explicitly set
+                    try:  # Attempt to construct derived augmented file path
+                        csv_obj = Path(args.csv_path)  # Path object for csv
+                        suffix = config.get("execution", {}).get("results_suffix", "_data_augmented")  # Suffix from config
+                        derived = csv_obj.parent / config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / f"{csv_obj.stem}{suffix}.csv"  # Construct path
+                        gen_file = str(derived)  # Use derived path string
+                    except Exception:
+                        gen_file = ""  # Leave blank on failure
+                final_runtime["generated_file"] = gen_file  # Store generated file path (may be empty)
                 final_runtime["total_generated_samples"] = ""  # Placeholder, generation may fill this later
+                final_runtime["generated_ratio"] = ""  # Placeholder ratio
                 final_runtime["training_time_s"] = getattr(args, "_last_training_time", "")  # Total training elapsed
                 final_runtime["file_time_s"] = getattr(args, "_last_file_time", "")  # Per-file processing elapsed
+                final_runtime["testing_time_s"] = 0.0  # Default testing/generation time is zero unless generation runs
+                final_runtime["critic_iterations"] = getattr(args, "critic_steps", "")  # Critic iterations per generator update
+                try:  # Attempt to read optimizer learning rates
+                    final_runtime["learning_rate_generator"] = float(opt_G.param_groups[0].get("lr", ""))  # Generator LR
+                except Exception:
+                    final_runtime["learning_rate_generator"] = getattr(args, "lr", "")  # Fallback to args.lr
+                try:  # Attempt to read optimizer learning rates
+                    final_runtime["learning_rate_critic"] = float(opt_D.param_groups[0].get("lr", ""))  # Critic LR
+                except Exception:
+                    final_runtime["learning_rate_critic"] = getattr(args, "lr", "")  # Fallback to args.lr
+                final_runtime["critic_loss"] = metrics_history.get("loss_D", [])[-1] if metrics_history.get("loss_D") else ""  # Final critic loss
+                final_runtime["generator_loss"] = metrics_history.get("loss_G", [])[-1] if metrics_history.get("loss_G") else ""  # Final generator loss
+                # Compute generated_ratio when possible
+                try:
+                    if final_runtime.get("original_num_samples") not in (None, "", 0) and final_runtime.get("total_generated_samples") not in (None, "", 0):
+                        final_runtime["generated_ratio"] = float(final_runtime.get("total_generated_samples")) / float(final_runtime.get("original_num_samples"))  # Ratio
+                except Exception:
+                    final_runtime["generated_ratio"] = ""  # Leave blank on failure
                 ordered_final = []  # Prepare ordered list according to configured schema
                 for c in results_cols_cfg:  # For each configured column name
                     if c in final_runtime:  # If runtime mapping contains key
