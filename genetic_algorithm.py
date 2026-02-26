@@ -73,6 +73,7 @@ import seaborn as sns  # For enhanced plotting
 import shutil  # For verifying disk usage
 import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
+import traceback  # For formatting and printing exception tracebacks
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import threading  # For optional background resource monitor
 import time  # For measuring execution time
@@ -5570,4 +5571,61 @@ if __name__ == "__main__":
     :return: None
     """
 
-    main()  # Call the main function
+    try:  # Protect main execution to ensure errors are reported and notified
+        main()  # Call the main function
+    except KeyboardInterrupt:  # User-initiated interrupt
+        try:  # Attempt friendly shutdown notification on interrupt
+            print("Execution interrupted by user (KeyboardInterrupt)")  # Inform terminal about user interrupt
+            send_telegram_message(TELEGRAM_BOT, ["Genetic Algorithm execution interrupted by user (KeyboardInterrupt)"])  # Notify via Telegram
+        except Exception:  # Ignore notification failures during interrupt handling
+            pass  # Continue to cleanup even if notification fails
+        try:  # Attempt to flush/close logger for clean logs on interrupt
+            if "logger" in globals() and globals().get("logger") is not None:  # Check logger existence to avoid attribute errors
+                try:  # Try flushing and closing logger
+                    globals()["logger"].flush()  # Flush logger buffer
+                    globals()["logger"].close()  # Close logger handle
+                except Exception:  # Ignore flush/close errors
+                    pass  # Swallow to continue shutdown
+        except Exception:  # Ignore unexpected errors during logger cleanup
+            pass  # Swallow to continue shutdown
+        raise  # Re-raise KeyboardInterrupt to allow upstream handling
+    except BaseException as e:  # Catch everything (including SystemExit) and report
+        try:  # Try to log and notify about the fatal error
+            print(f"Fatal error: {e}")  # Print the exception message to terminal for logs
+            tb_str = traceback.format_exc()  # Preserve full traceback string for local printing and inspection
+            try:  # Send detailed exception via existing notifier (reuse implementation)
+                send_exception_via_telegram(type(e), e, e.__traceback__)  # Use existing notifier to send full traceback
+            except Exception:  # If telegram send fails, attempt to print the traceback as fallback
+                try:  # Try printing fallback traceback
+                    traceback.print_exc()  # Print full traceback to stderr as fallback
+                except Exception:  # If even printing fails, swallow
+                    pass  # Swallow to avoid masking original error
+        except Exception:  # If notification preparation fails, attempt to print traceback
+            try:  # Try printing traceback if preparation failed
+                traceback.print_exc()  # Print traceback to stderr
+            except Exception:  # If printing fails, swallow
+                pass  # Swallow to avoid further errors
+        try:  # Attempt to flush and close logger to preserve logs on fatal errors
+            if "logger" in globals() and globals().get("logger") is not None:  # Check logger exists
+                try:  # Try to flush/close logger
+                    globals()["logger"].flush()  # Flush logger buffer
+                    globals()["logger"].close()  # Close logger handle
+                except Exception:  # Ignore logger cleanup failures
+                    pass  # Continue after best-effort cleanup
+            else:  # Fallback if logger unavailable
+                try:  # Try to flush/close sys.stdout if possible
+                    if hasattr(sys.stdout, "flush"):  # Check stdout flush
+                        try:
+                            sys.stdout.flush()  # Attempt to flush stdout
+                        except Exception:  # Ignore flush errors
+                            pass  # Continue cleanup
+                    if hasattr(sys.stdout, "close"):  # Check stdout close
+                        try:
+                            sys.stdout.close()  # Attempt to close stdout
+                        except Exception:  # Ignore close errors
+                            pass  # Continue cleanup
+                except Exception:  # Ignore any errors while handling stdout
+                    pass  # Continue after best-effort cleanup
+        except Exception:  # Ignore any logger cleanup failures
+            pass  # Continue to re-raise after best-effort cleanup
+        raise  # Re-raise exception to preserve exit semantics
