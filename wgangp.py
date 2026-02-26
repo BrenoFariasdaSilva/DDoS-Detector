@@ -3783,8 +3783,8 @@ def main():
         raise
 
 
-if __name__ == "__main__":  # Standard Python entrypoint check
-    """  # Module executed as script: call main() with robust error handling
+if __name__ == "__main__":
+    """
     This is the standard boilerplate that calls the main() function.
 
     :return: None
