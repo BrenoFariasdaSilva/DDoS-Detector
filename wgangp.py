@@ -1637,6 +1637,44 @@ def adjust_num_workers_for_file(csv_path: str, suggested_workers: int, config: O
         raise  # Re-raise to allow outer handler to manage it
 
 
+def compute_epoch_milestones(total_epochs: int) -> List[int]:
+    """
+    Compute milestone epoch indices for progress-based CSV writes.
+
+    Always includes epoch 1 and epoch `total_epochs`.  Additionally includes
+    the 25%, 50% and 75% epochs computed with ceiling rounding and deduped.
+
+    :param total_epochs: Total number of training epochs
+    :return: Sorted list of unique integer epoch indices (1-based)
+    """
+
+    try:  # Preserve repository try/except pattern for robustness
+        total = int(total_epochs)  # Cast provided total to integer type
+        if total < 1:  # If no positive epochs requested
+            return []  # Return empty list when there are no valid epochs
+        
+        milestones = set()  # Create a set to deduplicate milestone indices efficiently
+        milestones.add(1)  # Ensure the first epoch is always present
+        milestones.add(total)  # Ensure the final epoch is always present
+        m25 = (total + 3) // 4  # Compute ceil(total * 1/4) using integer arithmetic
+        m50 = (total + 1) // 2  # Compute ceil(total * 1/2) using integer arithmetic
+        m75 = (3 * total + 3) // 4  # Compute ceil(total * 3/4) using integer arithmetic
+        
+        for m in (m25, m50, m75):  # Iterate candidate fractional milestones
+            if 1 <= m <= total:  # Only add candidates within valid epoch bounds
+                milestones.add(int(m))  # Add integer milestone to set to dedupe
+        
+        return sorted(milestones)  # Return a sorted list for predictable ordering
+    except Exception as e:  # Follow repo convention: report then re-raise
+        print(str(e))  # Print exception for visibility
+        
+        try:  # Attempt to notify via Telegram when available
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception via Telegram
+        except Exception:
+            pass  # Ignore notification errors to avoid cascading failures
+        raise  # Re-raise exception to be handled by outer logic
+
+
 def train(args, config: Optional[Dict] = None):
     """
     Train the WGAN-GP model using the provided arguments and configuration.
@@ -1657,6 +1695,7 @@ def train(args, config: Optional[Dict] = None):
         args.n_samples = safe_float(getattr(args, "n_samples", None), config.get("generation", {}).get("n_samples", 1.0))  # Ensure n_samples is float safely
         args.seed = int(args.seed)  # Ensure seed is int
         args.epochs = int(args.epochs)  # Ensure epochs is int
+        epoch_milestones = compute_epoch_milestones(int(args.epochs))  # Precompute milestone epochs after epochs finalized
         args.batch_size = int(args.batch_size)  # Ensure batch_size is int
         args.critic_steps = int(args.critic_steps)  # Ensure critic_steps is int
         args.save_every = int(args.save_every)  # Ensure save_every is int
@@ -2082,15 +2121,16 @@ def train(args, config: Optional[Dict] = None):
                                     pass  # Ignore hardware insertion errors
                         except Exception:
                             pass  # Ignore any hardware detection errors to keep training running
-                    results_csv_writer.writerow(ordered)  # Write ordered row following configured schema
-                    try:  # Flush to disk right away to persist progressively
-                        if results_csv_file is not None:  # Only call flush when file handle exists
-                            try:  # Guard flush call to avoid raising
-                                results_csv_file.flush()  # Flush OS buffer for safety
-                            except Exception:
-                                pass  # Ignore flush errors
-                    except Exception:
-                        pass  # Ignore outer errors as well
+                    if (epoch + 1) in epoch_milestones:  # Only write per-epoch row when this epoch is a milestone
+                        results_csv_writer.writerow(ordered)  # Write ordered row following configured schema for milestone epoch
+                        try:  # Flush to disk right away to persist progressively after milestone write
+                            if results_csv_file is not None:  # Only call flush when file handle exists
+                                try:  # Guard flush call to avoid raising
+                                    results_csv_file.flush()  # Flush OS buffer for safety
+                                except Exception:  # Ignore flush errors during milestone persistence
+                                    pass  # Continue when flush fails
+                        except Exception:  # Ignore outer flush-related errors as well
+                            pass  # Continue regardless of flush errors
             except Exception as _cw:  # If writing fails, warn and continue training
                 print(f"{BackgroundColors.YELLOW}Warning: failed to write epoch row to results CSV: {_cw}{Style.RESET_ALL}")  # Warn but do not abort
 
