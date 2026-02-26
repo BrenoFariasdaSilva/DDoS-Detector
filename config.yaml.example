@@ -289,6 +289,7 @@ stacking:  # Stacking experiment settings
     - "Feature_Analysis"
 
   plots:
+    plots_subdir: "Plots/"
     enabled: true
     dpi: 300
     format: "png"
@@ -422,7 +423,7 @@ pca:
   execution:
     verbose: false
     skip_train_if_model_exists: false
-    dataset_path: null
+    dataset_path: "/Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"
 
   model:
     estimator: "RandomForestClassifier"
@@ -495,7 +496,7 @@ rfe:
   execution:
     verbose: false
     skip_train_if_model_exists: false
-    dataset_path: null
+    dataset_path: "/Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"
 
   model:
     estimator: "random_forest"
