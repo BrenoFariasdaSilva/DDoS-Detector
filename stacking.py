@@ -87,6 +87,7 @@ import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import time  # For measuring execution time
+import traceback  # For formatting and printing exception tracebacks
 import yaml  # Import YAML library
 from colorama import Style  # For terminal text styling
 from joblib import dump, load  # For exporting and loading trained models and scalers
@@ -7502,10 +7503,44 @@ def main(config=None):
 
 
 if __name__ == "__main__":
-    cli_args = parse_cli_args()  # Parse command-line arguments
+    """
+    This is the standard boilerplate that calls the main() function.
+
+    :return: None
+    """
     
-    config = initialize_config(config_path=cli_args.config, cli_args=cli_args)  # Initialize config with file and CLI args
-    
-    initialize_logger(config=config)  # Initialize logger with config
-    
-    main(config=config)  # Run main with configuration
+    try:  # Protect top-level execution to ensure errors are reported and notified
+        cli_args = parse_cli_args()  # Parse command-line arguments into namespace
+        config = initialize_config(config_path=cli_args.config, cli_args=cli_args)  # Merge configuration from file and CLI
+        initialize_logger(config=config)  # Initialize logger and redirect stdout/stderr to logger
+        try:  # Run main and handle user interrupts separately
+            main(config=config)  # Invoke main business logic for stacking pipeline
+        except KeyboardInterrupt:  # Handle user-initiated interrupts with friendly notification
+            try:  # Attempt graceful interrupt notification and cleanup
+                print("Execution interrupted by user (KeyboardInterrupt)")  # Inform terminal about user interrupt
+                send_telegram_message(TELEGRAM_BOT, ["Stacking pipeline interrupted by user (KeyboardInterrupt)"])  # Notify via Telegram about interrupt
+            except Exception:  # Ignore failures sending interrupt notification to avoid masking the interrupt
+                pass  # No-op on notification failure
+            try:  # Best-effort logger flush/close during interrupt handling
+                if logger is not None:  # Only flush/close if logger exists
+                    logger.flush()  # Flush pending log writes
+                    logger.close()  # Close the logger file handle
+            except Exception:  # Ignore logger cleanup errors during interrupt handling
+                pass  # Continue to re-raise the interrupt
+            raise  # Re-raise KeyboardInterrupt to preserve original exit semantics
+    except BaseException as e:  # Catch everything (including SystemExit) and report
+        try:  # Try to log and notify about the fatal error
+            print(f"Fatal error: {e}")  # Print the exception message to terminal for visibility
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback and message via Telegram
+        except Exception:  # If notification fails, attempt to print traceback to stderr as fallback
+            try:  # Attempt fallback traceback printing for diagnostics
+                traceback.print_exc()  # Print full traceback to stderr as a fallback notification
+            except Exception:  # Ignore failures of the fallback printing to avoid cascading errors
+                pass  # No further fallback available
+        try:  # Attempt best-effort logger cleanup after fatal error
+            if logger is not None:  # Only flush/close if logger initialized
+                logger.flush()  # Flush pending log writes
+                logger.close()  # Close the logger file handle
+        except Exception:  # Ignore logger cleanup errors to avoid masking the primary failure
+            pass  # No-op on cleanup failure
+        raise  # Re-raise the original exception to preserve non-zero exit code and behavior
