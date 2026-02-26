@@ -2396,7 +2396,10 @@ def compose_generation_start_message(
                         df = pd.read_csv(csv_path, low_memory=False)  # Load dataset safely
                     except Exception:  # If reading with low_memory fails, try again without it (may use more memory but can handle some files)
                         df = None  # Initialize df to None before second attempt
-                    orig = len(df)  # Determine original number of samples
+                    if df is not None:  # If reading succeeded, determine original number of samples
+                        orig = len(df)  # Determine original number of samples
+                    else:  # If both attempts to read failed, keep orig as None
+                        orig = None
                 except Exception:
                     orig = None  # If reading fails, keep as None
         
