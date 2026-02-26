@@ -78,6 +78,7 @@ import shap  # For SHAP value explanations
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import time  # For measuring time taken by operations
+import traceback  # For formatting and printing exception tracebacks
 from colorama import Style  # For terminal text styling
 from lime.lime_tabular import LimeTabularExplainer  # For LIME explanations
 from Logger import Logger  # For logging output to both terminal and file
@@ -1759,4 +1760,34 @@ if __name__ == "__main__":
     :return: None
     """
 
-    main()  # Call the main function
+    try:  # Protect main execution to ensure errors are reported and notified
+        main()  # Call the main function
+    except KeyboardInterrupt:  # User-initiated interrupt
+        try:  # Attempt friendly shutdown notification on interrupt
+            print("Execution interrupted by user (KeyboardInterrupt)")  # Inform terminal about user interrupt
+            send_telegram_message(TELEGRAM_BOT, ["WGAN-GP execution interrupted by user (KeyboardInterrupt)"])  # Notify via Telegram using same notifier and message format as wgangp.py
+        except Exception:  # Ignore notification failures during interrupt handling
+            pass  # Continue to cleanup even if notification fails
+        try:  # Attempt to flush and close logger for clean logs on interrupt
+            if logger is not None:  # Only interact with logger if it exists
+                logger.flush()  # Flush pending log writes to disk
+                logger.close()  # Close log file handle cleanly
+        except Exception:  # Ignore logger errors during cleanup
+            pass  # Proceed with raising the interrupt
+        raise  # Re-raise KeyboardInterrupt to allow upstream handling
+    except BaseException as e:  # Catch everything (including SystemExit) and report
+        try:  # Try to log and notify about the fatal error
+            print(f"Fatal error: {e}")  # Print the exception message to terminal for logs
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback and message via Telegram using existing utility
+        except Exception:  # If notification fails, attempt to print traceback to stderr
+            try:  # Try printing a full traceback as fallback
+                traceback.print_exc()  # Print traceback to stderr as fallback
+            except Exception:  # If even traceback printing fails, ignore silently
+                pass  # No further fallback available
+        try:  # Attempt to flush and close logger to preserve logs on fatal errors
+            if logger is not None:  # Only flush/close if logger initialized
+                logger.flush()  # Flush pending log writes
+                logger.close()  # Close the log file handle
+        except Exception:  # Ignore any logger cleanup failures
+            pass  # Continue to re-raise after best-effort cleanup
+        raise  # Re-raise exception to preserve exit semantics and non-zero exit code
