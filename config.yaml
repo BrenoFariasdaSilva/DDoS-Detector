@@ -423,7 +423,7 @@ pca:
   execution:
     verbose: false
     skip_train_if_model_exists: false
-    dataset_path: "/Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"
+    dataset_path: "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"
 
   model:
     estimator: "RandomForestClassifier"
@@ -496,7 +496,7 @@ rfe:
   execution:
     verbose: false
     skip_train_if_model_exists: false
-    dataset_path: "/Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"
+    dataset_path: "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"
 
   model:
     estimator: "random_forest"
