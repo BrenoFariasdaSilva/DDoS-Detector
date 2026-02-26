@@ -441,16 +441,16 @@ def collect_matching_files(
         resolved_ignore_files = ignore_files if ignore_files is not None else list(cfg.get("paths", {}).get("ignore_files", []) or [])
         resolved_ignore_dirs = ignore_dirs if ignore_dirs is not None else list(cfg.get("paths", {}).get("ignore_dirs", ["Cache", "Data_Separability", "Dataset_Description", "Feature_Analysis"]) or ["Cache", "Data_Separability", "Dataset_Description", "Feature_Analysis"])
 
-        ignore_files = set(os.path.normcase(f) for f in (resolved_ignore_files or []))
-        ignore_dirs = set(os.path.normcase(d) for d in (resolved_ignore_dirs or []))
+        normalized_ignore_files: set[str] = {os.path.normcase(f) for f in (resolved_ignore_files or [])}  # Create normalized set of ignored filenames for fast membership checks
+        normalized_ignore_dirs: set[str] = {os.path.normcase(d) for d in (resolved_ignore_dirs or [])}  # Create normalized set of ignored directory names for fast membership checks
 
         matching_files = []  # List to store matching file paths
 
         for root, dirs, files in os.walk(input_dir):  # Walk through the directory
-            try:  # Try to filter out ignored directories
+                try:  # Try to filter out ignored directories
                 dirs[:] = [
-                    d for d in dirs if os.path.normcase(d) not in ignore_dirs
-                ]  # Modify dirs in-place to skip ignored directories
+                    d for d in dirs if os.path.normcase(d) not in normalized_ignore_dirs
+                ]  # Modify dirs in-place to skip ignored directories using normalized set
             except Exception:  # If an error occurs while filtering directories
                 pass  # Ignore the error and continue
 
@@ -462,7 +462,7 @@ def collect_matching_files(
                 fullpath = os.path.join(root, file)  # Get the full file path
                 fullpath_norm = os.path.normcase(fullpath)  # Normalize the full file path for case-insensitive comparison
 
-                if basename_norm in ignore_files or fullpath_norm in ignore_files:  # If the file is in the ignore list
+                if basename_norm in normalized_ignore_files or fullpath_norm in normalized_ignore_files:  # If the file is in the ignore set
                     verbose_output(f"Skipping ignored file: {fullpath}")  # Output verbose message for ignored file
                     continue  # Continue to the next file
 
