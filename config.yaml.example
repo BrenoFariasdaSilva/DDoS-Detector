@@ -570,14 +570,21 @@ wgangp:
     - batch_size
     - critic_iterations
     - lambda_gp
+    - latent_dim
     - learning_rate_generator
     - learning_rate_critic
-    - latent_dim
+    - epoch
+    - epoch_time_s
     - critic_loss
     - generator_loss
-    - hardware
+    - gp
+    - D_real
+    - D_fake
+    - wasserstein
     - training_time_s
+    - file_time_s
     - testing_time_s
+    - hardware
   hardware_tracking: true
 
 training:
