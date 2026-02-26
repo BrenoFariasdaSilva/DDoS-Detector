@@ -2781,7 +2781,7 @@ def generate(args, config: Optional[Dict] = None):
         try:  # Build a safe, human-readable finish message and notify via Telegram
             gen_path = Path(args.out_file)  # Path object for generated file
             try:  # Try to get original_num if available safely
-                original_num = original_num if 'original_num' in locals() else None  # Use local original_num when present
+                original_num = locals().get('original_num', None)  # Try to get original_num from local variables (set in compose_generation_start_message)
             except Exception:
                 original_num = None  # Fallback to None on any error
             try:  # Try to compute ratio string safely
