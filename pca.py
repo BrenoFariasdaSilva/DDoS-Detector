@@ -268,20 +268,27 @@ def validate_config_structure(config: dict) -> None:
 
     if not isinstance(config, dict):
         raise ValueError("Configuration must be a mapping/dict")
-    pca_cfg = config.get("pca")
+    if "pca" in config and isinstance(config.get("pca"), dict):
+        pca_cfg = config.get("pca")  # Use the 'pca' section if it exists and is a dict
+    else:
+        pca_cfg = config  # Allow top-level keys if 'pca' section is missing, but still require 'export' subsection
+
     if not isinstance(pca_cfg, dict):
-        raise ValueError("Missing 'pca' configuration section")
+        raise ValueError("Missing or invalid 'pca' configuration section")
+
     export_cfg = pca_cfg.get("export")
     if not isinstance(export_cfg, dict):
         raise ValueError("Missing 'pca.export' configuration section")
+
     cols = export_cfg.get("results_csv_columns")
     if not isinstance(cols, list) or not cols:
         raise ValueError("'pca.export.results_csv_columns' must be a non-empty list defining the CSV header")
-    # Basic numeric validations
-    n_folds = pca_cfg.get("cross_validation", {}).get("n_folds")
+
+    n_folds = (pca_cfg.get("cross_validation") or {}).get("n_folds")
     if not isinstance(n_folds, int) or n_folds < 2:
         raise ValueError("'pca.cross_validation.n_folds' must be an integer >= 2")
-    n_components = pca_cfg.get("dimensionality", {}).get("n_components")
+
+    n_components = (pca_cfg.get("dimensionality") or {}).get("n_components")
     if not isinstance(n_components, int) or n_components <= 0:
         raise ValueError("'pca.dimensionality.n_components' must be an integer > 0")
 
@@ -1114,7 +1121,7 @@ def save_pca_results(csv_path, all_results, cfg=None):
     """
     
     try:
-        export_cfg = (cfg or {}).get("pca", {}).get("export", {})
+        export_cfg = (cfg or {}).get("export", {})
         results_dir_raw = export_cfg.get("results_dir")
         results_filename = export_cfg.get("results_filename")
         if not isinstance(results_dir_raw, str) or not results_dir_raw:
@@ -1196,7 +1203,7 @@ def save_pca_results(csv_path, all_results, cfg=None):
 
         header = None
         if cfg and isinstance(cfg, dict):
-            header = cfg.get("pca", {}).get("export", {}).get("results_csv_columns")
+            header = (cfg or {}).get("export", {}).get("results_csv_columns")
         if not header:
             raise ValueError("PCA results CSV header is missing from configuration: pca.export.results_csv_columns")
 
@@ -1343,7 +1350,7 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
     try:
         global SKIP_TRAIN_IF_MODEL_EXISTS
 
-        export_cfg_local = (globals().get('cfg') or {}).get("pca", {}).get("export", {}) if 'cfg' in globals() else None
+        export_cfg_local = (globals().get('cfg') or {}).get("export", {}) if 'cfg' in globals() else None
         results_dir_raw_local = None
         if export_cfg_local:
             results_dir_raw_local = export_cfg_local.get("results_dir")
@@ -1653,39 +1660,40 @@ def main():
     try:
         merged_cfg, sources = get_config()
 
-        global cfg
-        cfg = merged_cfg
+        global cfg, app_cfg
+        app_cfg = merged_cfg
+        cfg = (merged_cfg or {}).get("pca", {}) if isinstance(merged_cfg, dict) else {}
 
-        logs_dir = cfg.get("paths", {}).get("logs_dir", "./Logs") if isinstance(cfg, dict) else "./Logs"
+        logs_dir = app_cfg.get("paths", {}).get("logs_dir", "./Logs") if isinstance(app_cfg, dict) else "./Logs"
         os.makedirs(logs_dir, exist_ok=True)
-        logger = Logger(f"{logs_dir}/{Path(__file__).stem}.log", clean=cfg.get("logging", {}).get("clean", True) if isinstance(cfg, dict) else True)
+        logger = Logger(f"{logs_dir}/{Path(__file__).stem}.log", clean=app_cfg.get("logging", {}).get("clean", True) if isinstance(app_cfg, dict) else True)
         sys.stdout = logger
         sys.stderr = logger
 
         setup_global_exception_hook()
 
         global N_JOBS, CROSS_N_FOLDS, CPU_PROCESSES, CACHING_ENABLED, PICKLE_PROTOCOL, VERBOSE, SKIP_TRAIN_IF_MODEL_EXISTS, CSV_FILE
-        CROSS_N_FOLDS = cfg.get("pca", {}).get("cross_validation", {}).get("n_folds")
-        N_JOBS = cfg.get("pca", {}).get("multiprocessing", {}).get("n_jobs")
-        CPU_PROCESSES = cfg.get("pca", {}).get("multiprocessing", {}).get("cpu_processes")
-        CACHING_ENABLED = cfg.get("pca", {}).get("caching", {}).get("enabled")
-        PICKLE_PROTOCOL = cfg.get("pca", {}).get("caching", {}).get("pickle_protocol")
-        VERBOSE = cfg.get("pca", {}).get("execution", {}).get("verbose", False)
-        SKIP_TRAIN_IF_MODEL_EXISTS = cfg.get("pca", {}).get("execution", {}).get("skip_train_if_model_exists", False)
-        CSV_FILE = cfg.get("pca", {}).get("execution", {}).get("dataset_path")
+        CROSS_N_FOLDS = (cfg or {}).get("cross_validation", {}).get("n_folds")
+        N_JOBS = (cfg or {}).get("multiprocessing", {}).get("n_jobs")
+        CPU_PROCESSES = (cfg or {}).get("multiprocessing", {}).get("cpu_processes")
+        CACHING_ENABLED = (cfg or {}).get("caching", {}).get("enabled")
+        PICKLE_PROTOCOL = (cfg or {}).get("caching", {}).get("pickle_protocol")
+        VERBOSE = (cfg or {}).get("execution", {}).get("verbose", False)
+        SKIP_TRAIN_IF_MODEL_EXISTS = (cfg or {}).get("execution", {}).get("skip_train_if_model_exists", False)
+        CSV_FILE = (cfg or {}).get("execution", {}).get("dataset_path")
 
         if CSV_FILE is None:
             raise ValueError("Dataset path must be provided (CLI --dataset_path or config.pca.execution.dataset_path)")
         if not Path(CSV_FILE).exists():
             raise ValueError(f"Dataset file not found: {CSV_FILE}")
 
-        n_components_list = cfg.get("pca", {}).get("dimensionality", {}).get("n_components_list")
+        n_components_list = (cfg or {}).get("dimensionality", {}).get("n_components_list")
         if not isinstance(n_components_list, list) or not all(isinstance(x, int) and x > 0 for x in n_components_list):
             raise ValueError("pca.dimensionality.n_components_list must be a list of positive integers")
 
-        random_state = cfg.get("pca", {}).get("model", {}).get("random_state")
-        scale_data = cfg.get("pca", {}).get("preprocessing", {}).get("scale_data", True)
-        remove_zero_variance = cfg.get("pca", {}).get("preprocessing", {}).get("remove_zero_variance", True)
+        random_state = (cfg or {}).get("model", {}).get("random_state")
+        scale_data = (cfg or {}).get("preprocessing", {}).get("scale_data", True)
+        remove_zero_variance = (cfg or {}).get("preprocessing", {}).get("remove_zero_variance", True)
         max_workers = None
 
         print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}PCA Feature Extraction{BackgroundColors.GREEN} program!{Style.RESET_ALL}")
@@ -1713,7 +1721,7 @@ def main():
         send_telegram_message(TELEGRAM_BOT, [f"PCA Feature Extraction completed on {CSV_FILE} at {finish_time.strftime('%Y-%m-%d %H:%M:%S')}.\nExecution time: {calculate_execution_time(start_time, finish_time)}"])
 
         try:
-            top_play_sound = cfg.get("execution", {}).get("play_sound", False)
+            top_play_sound = app_cfg.get("execution", {}).get("play_sound", False)
             if top_play_sound:
                 atexit.register(play_sound)
         except Exception:
