@@ -24,16 +24,15 @@ Usage:
     - Adjust `n_components_list` to test desired component counts
     - Run: `python3 pca.py` or via the repository Makefile
 
-Outputs:
-    - `Feature_Analysis/PCA_Results.csv` (one row per configuration)
-    - Saved PCA objects for reproducibility (optional)
-    - Console summary and best-configuration selection by CV F1-score
+            - `Feature_Analysis/PCA_Results.csv` (one row per configuration)
+            - Saved PCA objects for reproducibility (optional)
+            - Console summary and best-configuration selection by CV F1-score
 
 Notes & conventions:
     - The code expects the last column to be the target variable.
     - Only numeric input columns are used for PCA (non-numeric columns are ignored).
     - Defaults: 80/20 train-test split, 10-fold Stratified CV on training data,
-        RandomForest (100 trees) used for evaluation.
+    - Toggle `VERBOSE = True` for extra diagnostic output.
     - Toggle `VERBOSE = True` for extra diagnostic output.
 
 TODOs:
@@ -322,10 +321,10 @@ def get_config() -> tuple:
     merged = deep_merge_dicts(defaults, file_cfg)
 
     # Translate CLI flat args into nested override structure for PCA
-    pca_overrides = {}
-    pca_overrides.setdefault("pca", {})
+    pca_overrides = {}  # Prepare dict to collect CLI overrides for PCA section
+    pca_overrides.setdefault("pca", {})  # Ensure top-level 'pca' mapping exists in overrides
     # execution
-    exec_ov = {}
+    exec_ov = {}  # Collect execution-related override values
     if cli.get("verbose") is not None:
         exec_ov.setdefault("execution", {})["verbose"] = bool(cli.get("verbose"))
     if cli.get("skip_train_if_model_exists") is not None:
@@ -336,13 +335,19 @@ def get_config() -> tuple:
         pca_overrides["pca"].update(exec_ov)
 
     # model
-    model_ov = {}
-    if cli.get("random_state") is not None:
-        model_ov.setdefault("model", {})["random_state"] = int(cli.get("random_state"))
+    model_ov = {}  # Collect model-related override values
+    raw_random_state: Any = cli.get("random_state")  # Retrieve raw CLI value for random_state (may be None)
+    if raw_random_state is not None:  # Only process when CLI provided to preserve original behavior
+        if not isinstance(raw_random_state, (int, str)):  # Validate acceptable input types
+            raise TypeError("--random_state must be an int or string convertible to int")
+        try:
+            model_ov.setdefault("model", {})["random_state"] = int(raw_random_state)  # Safely convert to int
+        except Exception as e:
+            raise ValueError(f"Invalid --random_state value: {raw_random_state}") from e
     if model_ov:
         pca_overrides["pca"].update(model_ov)
 
-    export_ov = {}
+    export_ov = {}  # Collect export-related override values
     if cli.get("results_dir") is not None:
         export_ov.setdefault("export", {})["results_dir"] = cli.get("results_dir")
     if cli.get("results_filename") is not None:
@@ -351,13 +356,34 @@ def get_config() -> tuple:
         pca_overrides["pca"].update(export_ov)
 
     # dimensionality
-    dim_ov = {}
+    dim_ov = {}  # Collect dimensionality-related override values
     if cli.get("n_components") is not None:
-        dim_ov.setdefault("dimensionality", {})["n_components"] = int(cli.get("n_components"))
-        dim_ov.setdefault("dimensionality", {})["n_components_list"] = [int(cli.get("n_components"))]
+        raw_ncomp: Any = cli.get("n_components")  # Retrieve raw CLI value for n_components (may be str/int)
+        if raw_ncomp is None:  # Defensive check; preserve original conditional logic by not changing behavior
+            pass  # No-op when raw_ncomp unexpectedly None (keeps original semantics)
+        else:
+            if not isinstance(raw_ncomp, (int, str)):  # Ensure convertible types
+                raise TypeError("--n_components must be an int or string convertible to int")
+            try:
+                validated_ncomp: int = int(raw_ncomp)  # Convert to int after validation
+            except Exception as e:
+                raise ValueError(f"Invalid --n_components value: {raw_ncomp}") from e
+            dim_ov.setdefault("dimensionality", {})["n_components"] = validated_ncomp  # Store validated int
+            dim_ov.setdefault("dimensionality", {})["n_components_list"] = [validated_ncomp]  # Store single-item list
     elif cli.get("n_components_list") is not None:
         try:
-            parts = [int(x) for x in cli.get("n_components_list").split(",") if x.strip()]
+            raw_list: Any = cli.get("n_components_list")  # Retrieve raw CLI value for n_components_list
+            if not isinstance(raw_list, str):  # Ensure it is a comma-separated string as expected
+                raise TypeError("--n_components_list must be a comma-separated string of integers")
+            parts = []  # Prepare list to collect validated ints
+            for x in raw_list.split(","):  # Iterate substrings to validate and convert each
+                s = x.strip()  # Strip whitespace from the substring
+                if not s:  # Skip empty substrings
+                    continue  # Continue to next substring
+                try:
+                    parts.append(int(s))  # Convert validated substring to int and append
+                except Exception as e:
+                    raise ValueError(f"Invalid integer in --n_components_list: {s}") from e
         except Exception:
             raise ValueError("--n_components_list must be a comma-separated list of integers")
         dim_ov.setdefault("dimensionality", {})["n_components_list"] = parts
@@ -365,7 +391,7 @@ def get_config() -> tuple:
         pca_overrides["pca"].update(dim_ov)
 
     # preprocessing
-    prep_ov = {}
+    prep_ov = {}  # Collect preprocessing-related override values
     if cli.get("scale_data") is not None:
         prep_ov.setdefault("preprocessing", {})["scale_data"] = bool(cli.get("scale_data"))
     if cli.get("remove_zero_variance") is not None:
@@ -374,27 +400,51 @@ def get_config() -> tuple:
         pca_overrides["pca"].update(prep_ov)
 
     # cross_validation
-    cv_ov = {}
-    if cli.get("n_folds") is not None:
-        cv_ov.setdefault("cross_validation", {})["n_folds"] = int(cli.get("n_folds"))
+    cv_ov = {}  # Collect cross-validation-related override values
+    raw_n_folds: Any = cli.get("n_folds")  # Retrieve raw CLI value for n_folds
+    if raw_n_folds is not None:  # Only process when provided
+        if not isinstance(raw_n_folds, (int, str)):  # Validate expected input types
+            raise TypeError("--n_folds must be an int or string convertible to int")
+        try:
+            cv_ov.setdefault("cross_validation", {})["n_folds"] = int(raw_n_folds)  # Safely convert to int
+        except Exception as e:
+            raise ValueError(f"Invalid --n_folds value: {raw_n_folds}") from e
     if cv_ov:
         pca_overrides["pca"].update(cv_ov)
 
     # multiprocessing
-    multi_ov = {}
-    if cli.get("n_jobs") is not None:
-        multi_ov.setdefault("multiprocessing", {})["n_jobs"] = int(cli.get("n_jobs"))
-    if cli.get("cpu_processes") is not None:
-        multi_ov.setdefault("multiprocessing", {})["cpu_processes"] = int(cli.get("cpu_processes"))
+    multi_ov = {}  # Collect multiprocessing-related override values
+    raw_n_jobs: Any = cli.get("n_jobs")  # Retrieve raw CLI value for n_jobs
+    if raw_n_jobs is not None:  # Only process when provided
+        if not isinstance(raw_n_jobs, (int, str)):  # Validate acceptable types
+            raise TypeError("--n_jobs must be an int or string convertible to int")
+        try:
+            multi_ov.setdefault("multiprocessing", {})["n_jobs"] = int(raw_n_jobs)  # Convert to int safely
+        except Exception as e:
+            raise ValueError(f"Invalid --n_jobs value: {raw_n_jobs}") from e
+    raw_cpu_processes: Any = cli.get("cpu_processes")  # Retrieve raw CLI value for cpu_processes
+    if raw_cpu_processes is not None:  # Only process when provided
+        if not isinstance(raw_cpu_processes, (int, str)):  # Validate acceptable types
+            raise TypeError("--cpu_processes must be an int or string convertible to int")
+        try:
+            multi_ov.setdefault("multiprocessing", {})["cpu_processes"] = int(raw_cpu_processes)  # Convert to int safely
+        except Exception as e:
+            raise ValueError(f"Invalid --cpu_processes value: {raw_cpu_processes}") from e
     if multi_ov:
         pca_overrides["pca"].update(multi_ov)
 
     # caching
-    cache_ov = {}
+    cache_ov = {}  # Collect caching-related override values
     if cli.get("caching_enabled") is not None:
         cache_ov.setdefault("caching", {})["enabled"] = bool(cli.get("caching_enabled"))
-    if cli.get("pickle_protocol") is not None:
-        cache_ov.setdefault("caching", {})["pickle_protocol"] = int(cli.get("pickle_protocol"))
+    raw_pickle_protocol: Any = cli.get("pickle_protocol")  # Retrieve raw CLI value for pickle_protocol
+    if raw_pickle_protocol is not None:  # Only process when provided
+        if not isinstance(raw_pickle_protocol, (int, str)):  # Validate types
+            raise TypeError("--pickle_protocol must be an int or string convertible to int")
+        try:
+            cache_ov.setdefault("caching", {})["pickle_protocol"] = int(raw_pickle_protocol)  # Safely convert to int
+        except Exception as e:
+            raise ValueError(f"Invalid --pickle_protocol value: {raw_pickle_protocol}") from e
     if cache_ov:
         pca_overrides["pca"].update(cache_ov)
 
@@ -1095,41 +1145,52 @@ def save_pca_results(csv_path, all_results, cfg=None):
         
         evaluator_fallback = {"model": "RandomForestClassifier", "n_estimators": 100, "random_state": 42, "n_jobs": -1}
         cv_method = "StratifiedKFold(n_splits=10)"
-        for results in all_results:
-            eval_params = None
-            trained_clf = results.get("trained_classifier")
-            if trained_clf is not None:
+        for results in all_results:  # Iterate over each PCA configuration result dict
+            eval_params = None  # Initialize eval_params for this result
+            trained_clf = results.get("trained_classifier")  # Retrieve trained classifier object if present
+            if trained_clf is not None:  # Only attempt to extract params when classifier exists
                 try:
-                    eval_params = trained_clf.get_params()
+                    eval_params = trained_clf.get_params()  # Try to get estimator parameters
                 except Exception:
-                    eval_params = None
+                    eval_params = None  # Fallback to None if inspection fails
 
-            row = {
-                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d_%H_%M_%S"),
-                "tool": "PCA",
-                "model": eval_model,
-                "dataset": os.path.relpath(csv_path),
-                "hyperparameters": json.dumps(eval_params or evaluator_fallback, sort_keys=True, ensure_ascii=False, default=str),
-                "cv_method": cv_method,
-                "train_test_split": train_test_split,
-                "scaling": scaling,
-                "n_components": int(results.get("n_components")) if results.get("n_components") is not None else None,
-                "explained_variance": truncate_value(results.get("explained_variance")),
-                "cv_accuracy": truncate_value(results.get("cv_accuracy")),
-                "cv_precision": truncate_value(results.get("cv_precision")),
-                "cv_recall": truncate_value(results.get("cv_recall")),
-                "cv_f1_score": truncate_value(results.get("cv_f1_score")),
-                "test_accuracy": truncate_value(results.get("test_accuracy")),
-                "test_precision": truncate_value(results.get("test_precision")),
-                "test_recall": truncate_value(results.get("test_recall")),
-                "test_f1_score": truncate_value(results.get("test_f1_score")),
-                "test_fpr": truncate_value(results.get("test_fpr")),
-                "test_fnr": truncate_value(results.get("test_fnr")),
-                "training_time_s": results.get("training_time_s") if results.get("training_time_s") is not None else None,
-                "testing_time_s": results.get("testing_time_s") if results.get("testing_time_s") is not None else None,
-                "feature_extraction_time_s": results.get("feature_extraction_time_s") if results.get("feature_extraction_time_s") is not None else None,
+            raw_n_components: Any = results.get("n_components")  # Retrieve raw n_components from result (may be None)
+            if raw_n_components is None:  # If not present, keep None to match original behavior
+                validated_n_components = None  # Preserve original None semantics when missing
+            else:
+                if not isinstance(raw_n_components, (int, str)):  # Validate acceptable input types
+                    raise TypeError(f"results['n_components'] must be int or str convertible to int, got {type(raw_n_components)}")
+                try:
+                    validated_n_components = int(raw_n_components)  # Convert to int after validation
+                except Exception as e:
+                    raise ValueError(f"Invalid n_components value in results: {raw_n_components}") from e
+
+            row = {  # Build the normalized row mapping for CSV export
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d_%H_%M_%S"),  # Current timestamp for this row
+                "tool": "PCA",  # Tool name
+                "model": eval_model,  # Model descriptor
+                "dataset": os.path.relpath(csv_path),  # Relative dataset path
+                "hyperparameters": json.dumps(eval_params or evaluator_fallback, sort_keys=True, ensure_ascii=False, default=str),  # JSON-encoded params
+                "cv_method": cv_method,  # CV method string
+                "train_test_split": train_test_split,  # Train/test split descriptor
+                "scaling": scaling,  # Scaling descriptor
+                "n_components": validated_n_components,  # Validated integer or None
+                "explained_variance": truncate_value(results.get("explained_variance")),  # Explained variance formatted
+                "cv_accuracy": truncate_value(results.get("cv_accuracy")),  # CV accuracy formatted
+                "cv_precision": truncate_value(results.get("cv_precision")),  # CV precision formatted
+                "cv_recall": truncate_value(results.get("cv_recall")),  # CV recall formatted
+                "cv_f1_score": truncate_value(results.get("cv_f1_score")),  # CV f1 formatted
+                "test_accuracy": truncate_value(results.get("test_accuracy")),  # Test accuracy formatted
+                "test_precision": truncate_value(results.get("test_precision")),  # Test precision formatted
+                "test_recall": truncate_value(results.get("test_recall")),  # Test recall formatted
+                "test_f1_score": truncate_value(results.get("test_f1_score")),  # Test f1 formatted
+                "test_fpr": truncate_value(results.get("test_fpr")),  # Test FPR formatted
+                "test_fnr": truncate_value(results.get("test_fnr")),  # Test FNR formatted
+                "training_time_s": results.get("training_time_s") if results.get("training_time_s") is not None else None,  # Training time or None
+                "testing_time_s": results.get("testing_time_s") if results.get("testing_time_s") is not None else None,  # Testing time or None
+                "feature_extraction_time_s": results.get("feature_extraction_time_s") if results.get("feature_extraction_time_s") is not None else None,  # Feature extraction time or None
             }
-            rows.append(row)
+            rows.append(row)  # Append the normalized row to the rows collection
 
         comparison_df = pd.DataFrame(rows)  # Create DataFrame from rows
 
@@ -1189,9 +1250,25 @@ def save_pca_results(csv_path, all_results, cfg=None):
             if pca_obj:
                 pca_file = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}.pkl"
                 try:
-                    proto = PICKLE_PROTOCOL if PICKLE_PROTOCOL is not None else cfg.get("caching", {}).get("pickle_protocol", 4)
-                    with open(pca_file, "wb") as f:
-                        pickle.dump(pca_obj, f, protocol=int(proto))
+                    if PICKLE_PROTOCOL is not None:  # Use global PICKLE_PROTOCOL when explicitly set
+                        proto = PICKLE_PROTOCOL  # Use explicit global protocol value
+                    else:
+                        cache_cfg: Any = (cfg or {}).get("caching")  # Safely retrieve 'caching' mapping from cfg or empty
+                        if cache_cfg is None:  # If caching section missing
+                            proto = 4  # Default pickle protocol fallback
+                        else:
+                            raw_proto: Any = cache_cfg.get("pickle_protocol")  # Raw value from config (may be None)
+                            if raw_proto is None:  # If not specified in config
+                                proto = 4  # Default pickle protocol fallback
+                            else:
+                                if not isinstance(raw_proto, (int, str)):  # Validate acceptable types
+                                    raise TypeError("cfg['caching']['pickle_protocol'] must be int or string convertible to int")
+                                try:
+                                    proto = int(raw_proto)  # Convert validated value to int
+                                except Exception as e:
+                                    raise ValueError(f"Invalid pickle_protocol value in config: {raw_proto}") from e
+                    with open(pca_file, "wb") as f:  # Open file for binary write
+                        pickle.dump(pca_obj, f, protocol=int(proto))  # Dump PCA object using validated protocol
                     verbose_output(f"{BackgroundColors.GREEN}PCA object saved to {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")
                 except Exception as e:
                     print(f"{BackgroundColors.RED}Failed to save PCA object: {e}{Style.RESET_ALL}")
@@ -1200,16 +1277,48 @@ def save_pca_results(csv_path, all_results, cfg=None):
             if scaler is not None:
                 scaler_path = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}-scaler.joblib"
                 try:
-                    proto = PICKLE_PROTOCOL if PICKLE_PROTOCOL is not None else cfg.get("caching", {}).get("pickle_protocol", 4)
-                    dump(scaler, scaler_path, protocol=int(proto))
+                    if PICKLE_PROTOCOL is not None:  # Use global PICKLE_PROTOCOL when set
+                        proto = PICKLE_PROTOCOL  # Use explicit protocol value
+                    else:
+                        cache_cfg: Any = (cfg or {}).get("caching")  # Safely get caching mapping from cfg
+                        if cache_cfg is None:  # If caching config missing
+                            proto = 4  # Default fallback protocol
+                        else:
+                            raw_proto: Any = cache_cfg.get("pickle_protocol")  # Raw protocol value
+                            if raw_proto is None:  # If unspecified
+                                proto = 4  # Default fallback protocol
+                            else:
+                                if not isinstance(raw_proto, (int, str)):  # Validate type
+                                    raise TypeError("cfg['caching']['pickle_protocol'] must be int or string convertible to int")
+                                try:
+                                    proto = int(raw_proto)  # Convert to int
+                                except Exception as e:
+                                    raise ValueError(f"Invalid pickle_protocol value in config: {raw_proto}") from e
+                    dump(scaler, scaler_path, protocol=int(proto))  # Dump scaler using validated protocol
                     verbose_output(f"{BackgroundColors.GREEN}Scaler saved to {BackgroundColors.CYAN}{scaler_path}{Style.RESET_ALL}")
                 except Exception as e:
                     print(f"{BackgroundColors.RED}Failed to save scaler: {e}{Style.RESET_ALL}")
             if clf is not None:
                 model_path = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}-model.joblib"
                 try:
-                    proto = PICKLE_PROTOCOL if PICKLE_PROTOCOL is not None else cfg.get("caching", {}).get("pickle_protocol", 4)
-                    dump(clf, model_path, protocol=int(proto))
+                    if PICKLE_PROTOCOL is not None:  # Use explicit global protocol when present
+                        proto = PICKLE_PROTOCOL  # Use explicit protocol value
+                    else:
+                        cache_cfg: Any = (cfg or {}).get("caching")  # Safely retrieve caching mapping
+                        if cache_cfg is None:  # If not present
+                            proto = 4  # Default fallback protocol
+                        else:
+                            raw_proto: Any = cache_cfg.get("pickle_protocol")  # Raw config value
+                            if raw_proto is None:  # If unspecified
+                                proto = 4  # Default fallback protocol
+                            else:
+                                if not isinstance(raw_proto, (int, str)):  # Validate input type
+                                    raise TypeError("cfg['caching']['pickle_protocol'] must be int or string convertible to int")
+                                try:
+                                    proto = int(raw_proto)  # Convert to int safely
+                                except Exception as e:
+                                    raise ValueError(f"Invalid pickle_protocol value in config: {raw_proto}") from e
+                    dump(clf, model_path, protocol=int(proto))  # Dump classifier with validated protocol
                     verbose_output(f"{BackgroundColors.GREEN}Trained classifier saved to {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}")
                 except Exception as e:
                     print(f"{BackgroundColors.RED}Failed to save classifier: {e}{Style.RESET_ALL}")
