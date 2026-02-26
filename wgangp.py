@@ -2281,17 +2281,11 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     :param df: Input DataFrame to style
     :return: pandas Styler with zebra row background colors applied
     """
+    
     try:
-        # Define row styling function that returns a list of styles for each cell in the row
-        def _row_style(row):  # Define helper used by Styler.apply
-            # Compute background color based on row index parity
-            bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # white and light gray
-            # Return style for every column in the row preserving column order
-            return [f"background-color: {bg};" for _ in row.index]  # Preserve columns
-
-        styled = df.style.apply(_row_style, axis=1)  # Apply zebra function row-wise
+        styled = df.style.apply(row_style_for_zebra, axis=1)  # Apply zebra function row-wise using top-level helper
         styled = styled.set_table_attributes('style="border-collapse:collapse; width:100%;"')  # Tight table style
-        styled = styled.set_properties(**{"border": "1px solid #ddd", "padding": "6px"})  # Cell padding/border
+        styled = cast(pd.io.formats.style.Styler, cast(Any, styled).set_properties(**{"border": "1px solid #ddd", "padding": "6px"}))  # Cell padding/border (cast to Any to satisfy typing)
         return styled  # Return the styled object
     except Exception as e:
         print(str(e))  # Print error for visibility
