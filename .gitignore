@@ -213,6 +213,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# Credentials
+**/Credentials/
+
 # Spyder project settings
 .spyderproject
 .spyproject
