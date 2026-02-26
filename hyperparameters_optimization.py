@@ -64,6 +64,7 @@ import subprocess  # WMIC call
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import time  # For measuring execution time
+import traceback  # For formatting and printing exception tracebacks
 import warnings  # For suppressing warnings
 import yaml  # For loading YAML configuration files
 from collections import OrderedDict  # For deterministic results column ordering when saving
@@ -2800,4 +2801,41 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    """
+    This is the standard boilerplate that calls the main() function.
+
+    :return: None
+    """
+    
+    try:  # Protect top-level execution to ensure errors are reported and notified
+        init_logger_and_exception_hook()  # Initialize logger and global exception hook for Telegram notifications
+        main()  # Invoke main business logic for hyperparameter optimization
+    except KeyboardInterrupt:  # Handle user-initiated interrupt separately
+        try:  # Attempt friendly shutdown notification and cleanup
+            print("Execution interrupted by user (KeyboardInterrupt)")  # Inform terminal about user interrupt
+            send_telegram_message(TELEGRAM_BOT, ["Hyperparameter optimization interrupted by user (KeyboardInterrupt)"])  # Notify via Telegram about interrupt
+        except Exception:  # Ignore notification failures during interrupt handling
+            pass  # No-op on notification failure
+        try:  # Attempt to flush and close logger for clean logs on interrupt
+            if logger is not None:  # Only interact with logger if it exists
+                logger.flush()  # Flush pending log writes to disk
+                logger.close()  # Close log file handle cleanly
+        except Exception:  # Ignore logger errors during cleanup
+            pass  # Continue with raising the interrupt
+        raise  # Re-raise KeyboardInterrupt to allow upstream handling
+    except BaseException as e:  # Catch everything (including SystemExit) and report
+        try:  # Try to log and notify about the fatal error
+            print(f"Fatal error: {e}")  # Print the exception message to terminal for logs
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback and message via Telegram
+        except Exception:  # If notification fails, attempt to print traceback to stderr
+            try:  # Try printing a full traceback as fallback
+                traceback.print_exc()  # Print traceback to stderr as fallback notification
+            except Exception:  # If even traceback printing fails, ignore silently
+                pass  # No further fallback available
+        try:  # Attempt to flush and close logger to preserve logs on fatal errors
+            if logger is not None:  # Only flush/close if logger initialized
+                logger.flush()  # Flush pending log writes
+                logger.close()  # Close the log file handle
+        except Exception:  # Ignore any logger cleanup failures
+            pass  # Continue to re-raise after best-effort cleanup
+        raise  # Re-raise exception to preserve exit semantics
