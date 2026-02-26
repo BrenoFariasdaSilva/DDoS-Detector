@@ -3526,6 +3526,7 @@ def main():
                 self.force_new_samples = cfg.get("generation", {}).get("force_new_samples", False)
                 self.num_workers = int(cfg.get("dataloader", {}).get("num_workers", 8))  # Cast to int
                 self._last_training_time = 0.0  # Placeholder for last training elapsed time (set after train)
+                self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
 
         args = ConfigNamespace(config)  # Create args namespace
         # Validate results_csv_columns existence and type for CLI runs
