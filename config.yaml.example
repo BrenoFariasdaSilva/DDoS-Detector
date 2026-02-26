@@ -431,7 +431,7 @@ pca:
 
   dimensionality:
     n_components: 8
-    n_components_list: [8, 16, 32, 64]
+    n_components_list: [8, 16, 24, 32, 48, 64]
 
   preprocessing:
     scale_data: true
