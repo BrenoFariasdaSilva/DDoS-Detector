@@ -377,7 +377,7 @@ def create_directories(directory_name):
         raise  # Re-raise to preserve original failure semantics
 
 
-def get_dataset_files(directory=INPUT_DIRECTORY):
+def get_dataset_files(directory=None):
     """
     Get all dataset files in the specified directory and its subdirectories.
 
@@ -391,19 +391,15 @@ def get_dataset_files(directory=INPUT_DIRECTORY):
         )  # Output the verbose message
 
         dataset_files = []  # List to store paths of dataset files
-        for root, dirs, files in os.walk(directory):  # Walk through the directory and its subdirectories
-            if any(
-                ignore_word.lower() in root.lower() for ignore_word in IGNORE_DIRECTORY_NAMED_WITH
-            ):  # Verify if the current directory contains any of the ignore words
+        cfg = DEFAULTS.get("dataset_converter", {}) if DEFAULTS else {}  # Get default configuration for dataset converter if available
+        effective_dir = directory if directory else cfg.get("input_directory", "./Input")  # Resolve effective directory to search from CLI argument or DEFAULTS, defaulting to "./Input"
+        ignore_list = cfg.get("ignore_dirs", ["Results"])  # Resolve ignore directories list from DEFAULTS or fallback
+        for root, dirs, files in os.walk(effective_dir):  # Walk through the effective directory and its subdirectories
+            if any(ignore_word.lower() in root.lower() for ignore_word in ignore_list):  # Verify if the current directory contains any ignore words
                 continue  # If the current directory contains any of the ignore words, skip it
 
             for file in files:  # Iterate through files in the current directory
-                if os.path.splitext(file)[1].lower() in [
-                    ".arff",
-                    ".csv",
-                    ".txt",
-                    ".parquet",
-                ]:  # Verify if the file has a valid extension
+                if os.path.splitext(file)[1].lower() in [".arff", ".csv", ".txt", ".parquet"]:  # Verify if the file has a valid extension
                     dataset_files.append(os.path.join(root, file))  # Append the full path of the file to the list
 
         return dataset_files  # Return the list of dataset files
