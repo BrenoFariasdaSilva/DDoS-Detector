@@ -1123,6 +1123,110 @@ def convert_to_txt(df, output_path):
         raise  # Re-raise to preserve original failure semantics
 
 
+def resolve_datasets_cfg(cfg: dict) -> dict:
+    """
+    Resolve datasets mapping from configuration.
+
+    :param cfg: Configuration dictionary containing dataset mappings.
+    :return: Mapping of dataset names to path lists or empty dict.
+    """
+
+    try:  # Wrap resolution logic to ensure production-safe monitoring
+        datasets_cfg = cfg.get("datasets", {})  # Retrieve the datasets mapping from configuration
+        if not isinstance(datasets_cfg, dict):  # Verify datasets_cfg is a mapping of dataset names to path lists
+            return {}  # Return an empty mapping when datasets configuration is invalid
+        return datasets_cfg  # Return the resolved datasets mapping when valid
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def process_dataset_paths(ds_paths: list, context: dict, cfg: dict) -> None:
+    """
+    Process configured paths for a single dataset entry.
+
+    :param ds_paths: Iterable of paths configured for the dataset.
+    :param context: Processing context dictionary with runtime values.
+    :param cfg: Full configuration dictionary for fallback values.
+    :return: None
+    """
+
+    try:  # Wrap processing logic to ensure production-safe monitoring
+        if not isinstance(ds_paths, (list, tuple)):  # Verify dataset entry is an iterable of paths
+            return  # Return early when ds_paths is not a valid iterable
+
+        for ds_path in ds_paths:  # Iterate configured paths for this dataset entry
+            effective_input = ds_path  # Set effective input directory for this configured path
+            out_dir = context.get("output_directory")  # Retrieve output_directory from context which may be None
+            effective_output_base = str(out_dir) if out_dir else os.path.join(str(ds_path), cfg.get("output_directory", "Converted"))  # Determine per-dataset base output directory as a string
+            dataset_files = resolve_dataset_files(effective_input)  # Resolve dataset files for this configured path
+            if not dataset_files:  # If no files found for this configured path
+                print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{effective_input}{Style.RESET_ALL}")  # Print error message when no files found
+                continue  # Continue to next configured path when empty
+
+            formats_list = resolve_formats(context.get("formats"))  # Normalize and validate output formats for this path
+            len_dataset_files = len(dataset_files)  # Count files to process for progress reporting
+
+            pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len_dataset_files)  # Create a progress bar for the conversion process
+
+            for idx, input_path in enumerate(pbar, start=1):  # Iterate files for this configured path with index
+                process_dataset_file(idx, len_dataset_files, input_path, effective_input, effective_output_base, formats_list, pbar)  # Delegate per-file processing to helper
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effective_input: str, effective_output_base: str, formats_list: list, pbar) -> None:
+    """
+    Process a single dataset file: clean, load and convert to requested formats.
+
+    :param idx: Index of the file in the current processing batch.
+    :param len_dataset_files: Total number of files in the current batch.
+    :param input_path: Path to the input file being processed.
+    :param effective_input: Effective input directory used for relative calculations.
+    :param effective_output_base: Base output directory for converted files.
+    :param formats_list: List of output formats to generate for this file.
+    :param pbar: Progress bar instance used to display per-file progress.
+    :return: None
+    """
+
+    try:  # Wrap per-file logic to ensure production-safe monitoring
+        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path}")  # Notify progress via Telegram before processing
+
+        file = os.path.basename(str(input_path))  # Extract the file name from the full path
+        name, ext = os.path.splitext(file)  # Split file name into base name and extension
+        ext = ext.lower()  # Normalize extension to lowercase for matching
+
+        pbar.set_postfix_str(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}")  # Display current file in progress bar
+
+        if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Skip unsupported file types early
+            return  # Return early to the caller when unsupported extension
+
+        dest_dir = resolve_destination_directory(effective_input, input_path, effective_output_base)  # Determine destination directory preserving relative structure
+        create_directories(dest_dir)  # Ensure destination directory exists before writing
+
+        cleaned_path = os.path.join(str(dest_dir), f"{name}{ext}")  # Path for saving the cleaned file prior to conversion
+        clean_file(input_path, cleaned_path)  # Clean the file before conversion to normalize content
+
+        df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame for conversion
+        if "arff" in formats_list:  # If ARFF format is requested for output
+            convert_to_arff(df, os.path.join(str(dest_dir), f"{name}.arff"))  # Convert and save as ARFF format
+        if "csv" in formats_list:  # If CSV format is requested for output
+            convert_to_csv(df, os.path.join(str(dest_dir), f"{name}.csv"))  # Convert and save as CSV format
+        if "parquet" in formats_list:  # If Parquet format is requested for output
+            convert_to_parquet(df, os.path.join(str(dest_dir), f"{name}.parquet"))  # Convert and save as Parquet format
+        if "txt" in formats_list:  # If TXT format is requested for output
+            convert_to_txt(df, os.path.join(str(dest_dir), f"{name}.txt"))  # Convert and save as TXT format
+
+        print()  # Print a newline for better readability between files in terminal output
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs in case of per-file failure
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram when per-file failure occurs
+        raise  # Re-raise to preserve original failure semantics for upstream handling
+
+
 def process_configured_datasets(context: dict) -> None:
     """
     Process datasets defined in configuration mapping.
@@ -1132,61 +1236,17 @@ def process_configured_datasets(context: dict) -> None:
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        cfg = context.get("cfg", {})  # Retrieve configuration section from context
-        datasets_cfg = cfg.get("datasets", {})  # Retrieve the datasets mapping from configuration
-        if not isinstance(datasets_cfg, dict):  # Verify datasets_cfg is a mapping of dataset names to path lists
-            return  # Return immediately when configured datasets are not a mapping
+        cfg = context.get("cfg", {})  # Retrieve configuration section from context for processing
+        datasets_cfg = resolve_datasets_cfg(cfg)  # Resolve and validate datasets mapping from config
+        if not datasets_cfg:  # Verify datasets_cfg is a mapping of dataset names to path lists
+            return  # Return immediately when configured datasets are not present or invalid
 
-        for ds_name, ds_paths in datasets_cfg.items():  # Iterate each dataset entry in configuration
-            if not isinstance(ds_paths, (list, tuple)):  # Verify dataset entry is an iterable of paths
-                continue  # Skip invalid dataset entries
-
-            for ds_path in ds_paths:  # Iterate configured paths for this dataset entry
-                effective_input = ds_path  # Set effective input directory for this configured path
-                effective_output_base = context.get("output_directory") if context.get("output_directory") else os.path.join(str(ds_path), cfg.get("output_directory", "Converted"))  # Determine per-dataset base output directory
-                dataset_files = resolve_dataset_files(effective_input)  # Resolve dataset files for this configured path
-                if not dataset_files:  # If no files found for this configured path
-                    print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{effective_input}{Style.RESET_ALL}")  # Print error message and continue
-                    continue  # Continue to next configured path
-
-                formats_list = resolve_formats(context.get("formats"))  # Normalize and validate output formats for this path
-                len_dataset_files = len(dataset_files)  # Count files to process for progress reporting
-
-                pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len_dataset_files)  # Create a progress bar for the conversion process
-
-                for idx, input_path in enumerate(pbar, start=1):  # Iterate files for this configured path
-                    send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path}")  # Notify progress via Telegram
-
-                    file = os.path.basename(str(input_path))  # Extract the file name from the full path
-                    name, ext = os.path.splitext(file)  # Split file name into base name and extension
-                    ext = ext.lower()  # Normalize extension to lowercase
-
-                    pbar.set_postfix_str(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}")  # Display current file in progress bar
-
-                    if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Skip unsupported file types
-                        continue  # Move to the next file
-
-                    dest_dir = resolve_destination_directory(effective_input, input_path, effective_output_base)  # Determine destination directory preserving relative structure
-                    create_directories(dest_dir)  # Ensure destination directory exists
-
-                    cleaned_path = os.path.join(str(dest_dir), f"{name}{ext}")  # Path for saving the cleaned file
-                    clean_file(input_path, cleaned_path)  # Clean the file before conversion
-
-                    df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame
-                    if "arff" in formats_list:  # If ARFF format is requested
-                        convert_to_arff(df, os.path.join(str(dest_dir), f"{name}.arff"))  # Convert and save as ARFF
-                    if "csv" in formats_list:  # If CSV format is requested
-                        convert_to_csv(df, os.path.join(str(dest_dir), f"{name}.csv"))  # Convert and save as CSV
-                    if "parquet" in formats_list:  # If Parquet format is requested
-                        convert_to_parquet(df, os.path.join(str(dest_dir), f"{name}.parquet"))  # Convert and save as Parquet
-                    if "txt" in formats_list:  # If TXT format is requested
-                        convert_to_txt(df, os.path.join(str(dest_dir), f"{name}.txt"))  # Convert and save as TXT
-
-                    print()  # Print a newline for better readability between files
+        for ds_name, ds_paths in datasets_cfg.items():  # Iterate each dataset entry in configuration mapping
+            process_dataset_paths(ds_paths, context, cfg)  # Delegate per-dataset processing to helper function
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
-        print(str(e))  # Print error to terminal for server logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-        raise  # Re-raise to preserve original failure semantics
+        print(str(e))  # Print error to terminal for server logs in case of top-level failure
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram for top-level failures
+        raise  # Re-raise to preserve original failure semantics for callers
 
 
 def process_input_directory(context: dict) -> None:
