@@ -318,19 +318,27 @@ def extract_input_paths_from_datasets(dmap: dict) -> list:  # Define a nested he
         for key in sorted(dmap.keys()):  # Iterate deterministically over mapping keys
             val = dmap.get(key)  # Retrieve the mapping value for the current key
             if isinstance(val, str):  # If the mapping value is a string path
-                candidates.append(val)  # Add the string path to candidates
+                cleaned = val.strip() if isinstance(val, str) else val  # Strip surrounding whitespace from the path
+                if cleaned:  # Only add non-empty cleaned paths
+                    candidates.append(cleaned)  # Add the cleaned string path to candidates
             elif isinstance(val, (list, tuple)):  # If the mapping value is a list/tuple of paths
                 for p in val:  # Iterate each candidate path in the sequence
-                    candidates.append(p)  # Add candidate path to list
+                    cleaned = p.strip() if isinstance(p, str) else p  # Strip surrounding whitespace from each candidate
+                    if cleaned:  # Only add non-empty cleaned candidates
+                        candidates.append(cleaned)  # Add the cleaned candidate to list
             elif isinstance(val, dict):  # If the mapping value is a nested dict
                 single = val.get("path") or val.get("input")  # Extract a single path candidate from known keys
                 if isinstance(single, str):  # If the single candidate is a string
-                    candidates.append(single)  # Add the single candidate to the list
+                    cleaned = single.strip()  # Strip surrounding whitespace from the single candidate
+                    if cleaned:  # Only add non-empty cleaned single candidate
+                        candidates.append(cleaned)  # Add the single candidate to the list
                 multi = val.get("paths") or val.get("inputs")  # Extract multi-paths from known keys
-                
+
                 if isinstance(multi, (list, tuple)):  # If multi-paths is a sequence
                     for candidate in multi:  # Iterate provided multi-path entries
-                        candidates.append(candidate)  # Append each candidate to the list
+                        cleaned = candidate.strip() if isinstance(candidate, str) else candidate  # Strip whitespace from each multi candidate
+                        if cleaned:  # Only add non-empty cleaned entries
+                            candidates.append(cleaned)  # Append each cleaned candidate to the list
         
         return candidates  # Return collected candidate paths
     except Exception as e:  # Catch exceptions inside helper
@@ -350,14 +358,14 @@ def validate_and_prepare_input_paths(paths: list) -> list:  # Define a nested he
     try:  # Wrap helper logic to ensure production-safe monitoring
         valid = []  # Initialize list for validated existing paths
         for p in paths:  # Iterate provided candidate paths
-            if not p:  # Skip empty or None entries
+            p_str = str(p).strip() if p is not None else ""  # Strip surrounding whitespace and coerce to string
+            if not p_str:  # Skip empty or None entries after cleaning
                 continue  # Continue to next candidate when value is falsy
-            if verify_filepath_exists(p):  # Verify candidate exists on filesystem
-                valid.append(p)  # Add existing path to validated list
-            else:  # If candidate does not exist
-                create_directories(p)  # Attempt to create the missing path
-                if verify_filepath_exists(p):  # Re-verify after creation attempt
-                    valid.append(p)  # Add newly created path to validated list
+            if verify_filepath_exists(p_str):  # Verify candidate exists on filesystem
+                valid.append(p_str)  # Add existing cleaned path to validated list
+            else:  # If candidate does not exist, do NOT create input directories automatically
+                verbose_output(f"{BackgroundColors.YELLOW}Configured input path does not exist, skipping: {BackgroundColors.CYAN}{p_str}{Style.RESET_ALL}")  # Informative verbose message when configured input is missing
+                continue  # Skip non-existing configured input paths without creating them
         
         return valid  # Return the list of validated paths
     except Exception as e:  # Catch exceptions inside helper
