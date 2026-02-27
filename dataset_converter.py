@@ -1252,7 +1252,9 @@ def process_dataset_paths(ds_paths: list, context: dict, cfg: dict) -> None:
     """
 
     try:  # Wrap processing logic to ensure production-safe monitoring
-        if not isinstance(ds_paths, (list, tuple)):  # Verify dataset entry is an iterable of paths
+        if isinstance(ds_paths, str):  # Verify ds_paths is a single string path
+            ds_paths = [ds_paths]  # Wrap single string into a list for uniform processing
+        elif not isinstance(ds_paths, (list, tuple)):  # Verify dataset entry is an iterable of paths
             return  # Return early when ds_paths is not a valid iterable
 
         for ds_path in ds_paths:  # Iterate configured paths for this dataset entry
