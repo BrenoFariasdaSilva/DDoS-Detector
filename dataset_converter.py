@@ -1530,17 +1530,16 @@ def main():
         
         args = parse_cli_arguments()  # Parse CLI arguments
 
-        input_path, output_path = resolve_io_paths(args)  # Resolve and validate paths
-        if input_path is None or output_path is None:  # If either path is invalid
-            return  # Exit early if input/output paths are invalid
-        
-        send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter started for input: {input_path} and output: {output_path} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")  # Notify start via Telegram
+        input_paths, output_path = resolve_io_paths(args)  # Resolve and validate paths, returning list of inputs
+        if input_paths is None or output_path is None:  # If either resolution failed
+            return  # Exit early when inputs/outputs are invalid
+
+        send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter started for input: {', '.join(input_paths)} and output: {output_path} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")  # Notify start via Telegram for all inputs
 
         configure_verbose_mode(args)  # Enable verbose mode if requested
 
-        batch_convert(
-            input_path, output_path, formats=args.formats if args.formats else None
-        )  # Perform batch conversion of dataset files
+        for input_path in input_paths:  # Iterate through each resolved input path
+            batch_convert(input_path, output_path, formats=args.formats if args.formats else None)  # Perform batch conversion per input path
 
         finish_time = datetime.datetime.now()  # Get the finish time of the program
         print(
