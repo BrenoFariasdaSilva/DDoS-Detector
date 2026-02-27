@@ -185,22 +185,22 @@ def parse_cli_args(argv=None) -> dict:
     """
     
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--include_preprocessing_metrics", dest="include_preprocessing_metrics", action="store_true")
-    parser.add_argument("--no-include_preprocessing_metrics", dest="include_preprocessing_metrics", action="store_false")
-    parser.add_argument("--include_data_augmentation_info", dest="include_data_augmentation_info", action="store_true")
-    parser.add_argument("--no-include_data_augmentation_info", dest="include_data_augmentation_info", action="store_false")
-    parser.add_argument("--generate_table_image", dest="generate_table_image", action="store_true")
-    parser.add_argument("--no-generate_table_image", dest="generate_table_image", action="store_false")
-    parser.add_argument("--table_image_format", dest="table_image_format")
-    parser.add_argument("--csv_output_suffix", dest="csv_output_suffix")
-    parser.add_argument("--class_column_name", dest="class_column_name")
-    parser.add_argument("--dropna_before_analysis", dest="dropna_before_analysis", action="store_true")
-    parser.add_argument("--no-dropna_before_analysis", dest="dropna_before_analysis", action="store_false")
-    parser.add_argument("--compute_class_distribution", dest="compute_class_distribution", action="store_true")
-    parser.add_argument("--no-compute_class_distribution", dest="compute_class_distribution", action="store_false")
-    parser.add_argument("--compute_feature_statistics", dest="compute_feature_statistics", action="store_true")
-    parser.add_argument("--no-compute_feature_statistics", dest="compute_feature_statistics", action="store_false")
-    parser.add_argument("--round_decimals", dest="round_decimals", type=int)
+    parser.add_argument("--include_preprocessing_metrics", dest="include_preprocessing_metrics", action="store_true", default=None)
+    parser.add_argument("--no-include_preprocessing_metrics", dest="include_preprocessing_metrics", action="store_false", default=None)
+    parser.add_argument("--include_data_augmentation_info", dest="include_data_augmentation_info", action="store_true", default=None)
+    parser.add_argument("--no-include_data_augmentation_info", dest="include_data_augmentation_info", action="store_false", default=None)
+    parser.add_argument("--generate_table_image", dest="generate_table_image", action="store_true", default=None)
+    parser.add_argument("--no-generate_table_image", dest="generate_table_image", action="store_false", default=None)
+    parser.add_argument("--table_image_format", dest="table_image_format", default=None)
+    parser.add_argument("--csv_output_suffix", dest="csv_output_suffix", default=None)
+    parser.add_argument("--class_column_name", dest="class_column_name", default=None)
+    parser.add_argument("--dropna_before_analysis", dest="dropna_before_analysis", action="store_true", default=None)
+    parser.add_argument("--no-dropna_before_analysis", dest="dropna_before_analysis", action="store_false", default=None)
+    parser.add_argument("--compute_class_distribution", dest="compute_class_distribution", action="store_true", default=None)
+    parser.add_argument("--no-compute_class_distribution", dest="compute_class_distribution", action="store_false", default=None)
+    parser.add_argument("--compute_feature_statistics", dest="compute_feature_statistics", action="store_true", default=None)
+    parser.add_argument("--no-compute_feature_statistics", dest="compute_feature_statistics", action="store_false", default=None)
+    parser.add_argument("--round_decimals", dest="round_decimals", type=int, default=None)
     parser.add_argument("--config", dest="config", default="config.yaml")
     args, _ = parser.parse_known_args(argv)
     return {k: v for k, v in vars(args).items() if v is not None}
@@ -1853,7 +1853,12 @@ def print_preprocessing_summary_table(df):
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
         raise  # Re-raise to preserve original failure semantics
 
-
+def _stripe(row):  # Small helper to produce row-wise styles
+    return [
+        "background-color: #ffffff" if row.name % 2 == 0 else "background-color: #f2f2f2"
+        for _ in row
+    ]  # Return alternating colors per column in the row
+            
 def apply_zebra_style(df):
     """
     Apply zebra-striping pandas Styler to the provided DataFrame.
@@ -1863,11 +1868,7 @@ def apply_zebra_style(df):
     """
 
     try:  # Wrap function body for consistent error handling
-        def _stripe(row):  # Small helper to produce row-wise styles
-            return [
-                "background-color: #ffffff" if row.name % 2 == 0 else "background-color: #f2f2f2"
-                for _ in row
-            ]  # Return alternating colors per column in the row
+        
 
         styled = df.style.apply(_stripe, axis=1)  # Apply zebra striping across rows
         return styled  # Return the styled DataFrame
