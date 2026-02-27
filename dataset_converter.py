@@ -55,6 +55,7 @@ import shutil  # For checking disk usage
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import traceback  # For printing tracebacks on exceptions
+import yaml  # For loading configuration from YAML file
 from colorama import Style  # For coloring the terminal output
 from fastparquet import ParquetFile  # For handling Parquet file format
 from Logger import Logger  # For logging output to both terminal and file
