@@ -645,8 +645,14 @@ dataloader:
 # ===============================================================================
 dataset_converter:
   verbose: false                      # Enable verbose output for dataset converter
-  input_directory: "./Input"         # Default input directory for conversion
-  output_directory: "./Output"       # Default output directory for converted files
+  input_directory: ""         # Default input directory for conversion
+  output_directory: "Converted"     # Default output directory for converted datasets
+  datasets:                           # Dictionary containing dataset paths
+    CICDDoS2019-Dataset:
+      - "./Datasets/CICDDoS2019/01-12/"
+      - "./Datasets/CICDDoS2019/03-11/"
+    CIC-IDS2017-Dataset:
+      - "./Datasets/CICIDS2017/TrafficLabelling/"
   ignore_dirs:
     - "Results"                      # Directory names to ignore during discovery
   ignore_files: []                    # Filename substrings to ignore
