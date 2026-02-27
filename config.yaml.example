@@ -636,6 +636,27 @@ generation:
 
 dataloader:
   num_workers: 8                      # Number of workers for data loading
+  prefetch_factor: 2                  # Number of batches to prefetch
+
+# ===============================================================================
+# DATASET CONVERTER — Used by dataset_converter.py
+# ===============================================================================
+dataset_converter:
+  verbose: false                      # Enable verbose output for dataset converter
+  input_directory: "./Input"         # Default input directory for conversion
+  output_directory: "./Output"       # Default output directory for converted files
+  ignore_dirs:
+    - "Results"                      # Directory names to ignore during discovery
+  ignore_files: []                    # Filename substrings to ignore
+  play_sound: true                    # Play a sound when conversion completes
+  sound_commands:
+    Darwin: "afplay"
+    Linux: "aplay"
+    Windows: "start"
+  sound_file: "./.assets/Sounds/NotificationSound.wav"  # Sound file to play on completion
+  log_file: "./Logs/dataset_converter.log"  # Log file used by dataset_converter
+  log_clean: true                      # Clear log file on startup
+  num_workers: 8                      # Number of workers for data loading
   pin_memory: true                    # Use pinned memory for faster GPU transfer
   persistent_workers: true            # Keep workers alive between epochs
   prefetch_factor: 2                  # Number of batches to prefetch
