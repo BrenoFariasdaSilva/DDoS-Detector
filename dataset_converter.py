@@ -1524,9 +1524,9 @@ def main():
         )  # Output the Welcome message
         start_time = datetime.datetime.now()  # Get the start time of the program
         
-        setup_telegram_bot()  # Setup Telegram bot if configured
-        
         initialize_defaults()  # Initialize DEFAULTS from get_default_config() and config.yaml
+        
+        setup_telegram_bot()  # Setup Telegram bot if configured
         
         args = parse_cli_arguments()  # Parse CLI arguments
 
