@@ -653,6 +653,12 @@ dataset_converter:
       - "./Datasets/CICDDoS2019/03-11/"
     CIC-IDS2017-Dataset:
       - "./Datasets/CICIDS2017/TrafficLabelling/"
+    KDD-Dataset:
+      - "./Datasets/KDD-Dataset/"
+    LATAM-DDoS-IoT:
+      - "./Datasets/LATAM DDoS IoT/"
+    UNSW-NB15-Dataset:
+      - "./Datasets/UNSW-NB15-Dataset/"
   ignore_dirs:
     - "Results"                      # Directory names to ignore during discovery
   ignore_files: []                    # Filename substrings to ignore
