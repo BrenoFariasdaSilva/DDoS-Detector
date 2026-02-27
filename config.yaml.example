@@ -489,6 +489,12 @@ dataset_descriptor:
   compute_class_distribution: true          # Compute per-class counts and proportions
   compute_feature_statistics: true          # Compute feature-level summary statistics
   round_decimals: 4                         # Number of decimal places for floats
+  datasets:                           # Dictionary containing dataset paths
+    CICDDoS2019-Dataset:
+      - "./Datasets/CICDDoS2019/01-12/"
+      - "./Datasets/CICDDoS2019/03-11/"
+    CIC-IDS2017-Dataset:
+      - "./Datasets/CICIDS2017/TrafficLabelling/"
 
 # RFE — Used by rfe.py
 # ==============================================================================
