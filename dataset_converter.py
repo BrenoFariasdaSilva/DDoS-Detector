@@ -312,25 +312,24 @@ def resolve_io_paths(args):
             f"{BackgroundColors.GREEN}Resolving input/output paths...{Style.RESET_ALL}"
         )  # Output the verbose message
 
-        input_path = args.input if args.input else INPUT_DIRECTORY  # Resolve input path
-        output_path = args.output if args.output else OUTPUT_DIRECTORY  # Resolve output path
+        cfg = DEFAULTS.get("dataset_converter", {}) if DEFAULTS else {}
+        input_default = cfg.get("input_directory", "./Input")
+        output_default = cfg.get("output_directory", "./Output")
+        input_path = args.input if args.input else input_default
+        output_path = args.output if args.output else output_default
 
         if args.input:  # If a custom input path was provided
-            if not verify_filepath_exists(input_path):  # Check if it exists
-                print(
-                    f"{BackgroundColors.RED}Specified input path does not exist: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
-                )  # Output error message
+            if not verify_filepath_exists(input_path):  # Check if the provided input path exists
+                print(f"{BackgroundColors.RED}Specified input path does not exist: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}")  # Output error message
                 return None, None  # Invalid path, exit early
-        else:  # No custom input path
-            if not verify_filepath_exists(INPUT_DIRECTORY):  # Check default folder
-                create_directories(INPUT_DIRECTORY)  # Create default folder
-                print(
-                    f"{BackgroundColors.RED}Input folder does not exist: {INPUT_DIRECTORY}{Style.RESET_ALL}"
-                )  # Output error message
+        else:  # No custom input path provided
+            if not verify_filepath_exists(input_default):  # Check DEFAULTS-derived default input folder existence
+                create_directories(input_default)  # Create DEFAULTS-derived input folder when missing
+                print(f"{BackgroundColors.RED}Input folder does not exist: {input_default}{Style.RESET_ALL}")  # Output error message
                 return None, None  # Invalid input directory
 
-        if not verify_filepath_exists(output_path):  # If output directory does not exist
-            create_directories(output_path)  # Create output directory
+        if not verify_filepath_exists(output_path):  # If resolved output directory does not exist
+            create_directories(output_path)  # Create the resolved output directory
 
         return input_path, output_path  # Return validated paths
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
