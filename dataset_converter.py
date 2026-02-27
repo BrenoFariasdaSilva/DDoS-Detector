@@ -1412,6 +1412,84 @@ def process_configured_datasets(context: dict) -> None:
         raise  # Re-raise to preserve original failure semantics for callers
 
 
+def prepare_processing_context(context: dict) -> tuple:
+    """
+    Prepare common processing context values.
+
+    :param context: Processing context dictionary with runtime values.
+    :return: Tuple containing (cfg, input_directory, output_directory).
+    """
+
+    try:  # Wrap helper logic to ensure production-safe monitoring
+        cfg = context.get("cfg", {})  # Retrieve configuration section from context for processing
+        input_directory, output_directory = prepare_input_context(context, cfg)  # Prepare input and output directories for processing
+        return cfg, input_directory, output_directory  # Return prepared context values
+    except Exception as e:  # Catch exceptions inside helper
+        print(str(e))  # Print helper exception to terminal for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send helper exception via Telegram
+        raise  # Re-raise to preserve failure semantics
+
+
+def get_and_verify_dataset_files(input_directory: str, cfg: dict) -> tuple:
+    """
+    Gather dataset files and verify non-empty, printing message on empty.
+
+    :param input_directory: Path to the input directory to scan for datasets.
+    :param cfg: Configuration dictionary used for fallback values.
+    :return: Tuple containing (dataset_files_list, len_dataset_files).
+    """
+
+    try:  # Wrap helper logic to ensure production-safe monitoring
+        dataset_files, len_dataset_files = gather_dataset_files(input_directory, cfg)  # Gather dataset files and their count for processing
+        if not dataset_files:  # If no dataset files were found
+            print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}")  # Print error message when directory is empty
+            return [], 0  # Return empty results to signal caller to exit early
+        return dataset_files, len_dataset_files  # Return discovered dataset files and their count
+    except Exception as e:  # Catch exceptions inside helper
+        print(str(e))  # Print helper exception to terminal for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send helper exception via Telegram
+        raise  # Re-raise to preserve failure semantics
+
+
+def create_progress_bar(dataset_files: list, len_dataset_files: int):
+    """
+    Create a progress bar for the conversion process.
+
+    :param dataset_files: List of dataset files to display in the progress bar.
+    :param len_dataset_files: Total number of dataset files for progress reporting.
+    :return: A tqdm progress bar instance.
+    """
+
+    try:  # Wrap helper logic to ensure production-safe monitoring
+        pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len_dataset_files)  # Create a progress bar for the conversion process
+        return pbar  # Return the created progress bar instance
+    except Exception as e:  # Catch exceptions inside helper
+        print(str(e))  # Print helper exception to terminal for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send helper exception via Telegram
+        raise  # Re-raise to preserve failure semantics
+
+
+def iterate_and_process_with_pbar(pbar, input_directory: str, output_directory: str, formats_list: list, len_dataset_files: int) -> None:
+    """
+    Iterate progress bar and delegate per-file processing to the per-file helper.
+
+    :param pbar: Progress bar instance iterating dataset files.
+    :param input_directory: Source input directory used for relative calculations.
+    :param output_directory: Base output directory for converted files.
+    :param formats_list: List of output formats to generate for this run.
+    :param len_dataset_files: Total number of files in the current batch.
+    :return: None
+    """
+
+    try:  # Wrap helper logic to ensure production-safe monitoring
+        for idx, input_path in enumerate(pbar, start=1):  # Iterate through each dataset file with index
+            process_single_input_file(idx, {"input_path": input_path, "input_directory": input_directory, "output_directory": output_directory, "formats_list": formats_list, "len_dataset_files": len_dataset_files, "pbar": pbar})  # Delegate per-file work to helper
+    except Exception as e:  # Catch exceptions inside helper
+        print(str(e))  # Print helper exception to terminal for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send helper exception via Telegram
+        raise  # Re-raise to preserve failure semantics
+
+
 def process_input_directory(context: dict) -> None:
     """
     Process a single explicit input directory for conversion.
@@ -1421,19 +1499,17 @@ def process_input_directory(context: dict) -> None:
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        cfg = context.get("cfg", {})  # Retrieve configuration section from context
-        input_directory, output_directory = prepare_input_context(context, cfg)  # Prepare input and output directories for processing
-        dataset_files, len_dataset_files = gather_dataset_files(input_directory, cfg)  # Gather dataset files and their count for processing
-        if not dataset_files:  # If no dataset files were found
-            print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}")  # Print error message when directory is empty
-            return  # Exit early if there are no files to convert
+        cfg, input_directory, output_directory = prepare_processing_context(context)  # Prepare context and directories for processing
+
+        dataset_files, len_dataset_files = get_and_verify_dataset_files(input_directory, cfg)  # Gather dataset files and verify non-empty
+        if not dataset_files:  # If no dataset files were found after verification
+            return  # Exit early when helper signaled empty discovery
 
         formats_list = resolve_formats(context.get("formats"))  # Normalize and validate output formats for the run
 
-        pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len_dataset_files)  # Create a progress bar for the conversion process
+        pbar = create_progress_bar(dataset_files, len_dataset_files)  # Create a progress bar for the conversion process
 
-        for idx, input_path in enumerate(pbar, start=1):  # Iterate through each dataset file with index
-            process_single_input_file(idx, {"input_path": input_path, "input_directory": input_directory, "output_directory": output_directory, "formats_list": formats_list, "len_dataset_files": len_dataset_files, "pbar": pbar})  # Delegate per-file work to helper
+        iterate_and_process_with_pbar(pbar, input_directory, output_directory, formats_list, len_dataset_files)  # Iterate and process all files using helper
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs when top-level failure occurs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram for top-level failures
