@@ -129,13 +129,16 @@ def load_config_file(path: str = "config.yaml") -> dict:  # Load YAML config if 
     :return: Loaded configuration dictionary or empty dict.
     """
 
-    try:
+    try:  # Wrap file loading to report errors and fallback gracefully
         if os.path.exists(path):  # Verify path existence
             with open(path, "r", encoding="utf-8") as fh:  # Open file for reading
                 data = yaml.safe_load(fh) or {}  # Parse YAML safely
                 return data  # Return parsed config
-    except Exception:
-        return {}  # On error return empty dict
+    except Exception as e:  # On error, log and notify via Telegram then return empty dict
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        return {}  # Return empty dict on error
+
     return {}  # Default empty dict when file not found
 
 
