@@ -630,6 +630,9 @@ def main():
     verbose_output(f"{BackgroundColors.GREEN}Sections removed. Starting staged commits...{Style.RESET_ALL}")  # Output staged commits start message
     
     commit_count = process_all_sections(sections, prefix, suffix)  # Process all sections and commit them incrementally
+    
+    git_dir = FILE_PATH.resolve().parent  # Get the directory containing the file
+    subprocess.run(["git", "-C", str(git_dir), "push"], check=True)  # Push all commits to the remote repository
         
     print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}All sections and subsections committed successfully! Total commits: {BackgroundColors.CYAN}{commit_count}{Style.RESET_ALL}", end="\n\n")  # Output success message with commit count
 
