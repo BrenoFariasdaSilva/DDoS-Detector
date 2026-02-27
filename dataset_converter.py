@@ -77,12 +77,7 @@ class BackgroundColors:  # Colors for the terminal
 
 
 # Execution Constants:
-VERBOSE = False  # Set to True to output verbose messages
-INPUT_DIRECTORY = "./Input"  # Input directory path
-OUTPUT_DIRECTORY = "./Output"  # Output directory path
-IGNORE_DIRECTORY_NAMED_WITH = [
-    "Results"
-]  # List of directory names to ignore if they have any of this words in their nameLOGGER = Logger(log_to_file=True, log_file_path="./Logs/dataset_converter.log")
+DEFAULTS = None  # Will hold the default configuration loaded from YAML or hardcoded defaults
 
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
