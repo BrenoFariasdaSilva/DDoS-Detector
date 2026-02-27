@@ -315,26 +315,18 @@ def resolve_io_paths(args):
             f"{BackgroundColors.GREEN}Resolving input/output paths...{Style.RESET_ALL}"
         )  # Output the verbose message
 
-        cfg = DEFAULTS.get("dataset_converter", {}) if DEFAULTS else {}
-        input_default = cfg.get("input_directory", "./Input")
-        output_default = cfg.get("output_directory", "./Output")
-        input_path = args.input if args.input else input_default
-        output_path = args.output if args.output else output_default
+        cfg = DEFAULTS.get("dataset_converter", {}) if DEFAULTS else {}  # Get dataset_converter config safely
+        datasets_cfg = cfg.get("datasets", {})  # Resolve datasets mapping from config
 
-        if args.input:  # If a custom input path was provided
-            if not verify_filepath_exists(input_path):  # Check if the provided input path exists
-                print(f"{BackgroundColors.RED}Specified input path does not exist: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}")  # Output error message
-                return None, None  # Invalid path, exit early
-        else:  # No custom input path provided
-            if not verify_filepath_exists(input_default):  # Check DEFAULTS-derived default input folder existence
-                create_directories(input_default)  # Create DEFAULTS-derived input folder when missing
-                print(f"{BackgroundColors.RED}Input folder does not exist: {input_default}{Style.RESET_ALL}")  # Output error message
-                return None, None  # Invalid input directory
+        input_candidates = [args.input] if args.input else extract_input_paths_from_datasets(datasets_cfg)  # Build initial candidate list from CLI or config
+        resolved_inputs = validate_and_prepare_input_paths(input_candidates)  # Validate and prepare candidate input paths
+        out_path = resolve_output_path(args.output if hasattr(args, "output") else None, cfg)  # Resolve output path using helper
 
-        if not verify_filepath_exists(output_path):  # If resolved output directory does not exist
-            create_directories(output_path)  # Create the resolved output directory
+        if not resolved_inputs:  # If no validated input paths were found
+            print(f"{BackgroundColors.RED}No input path available from CLI or configuration datasets{Style.RESET_ALL}")  # Report missing input paths
+            return None, None  # Return failure when no inputs are available
 
-        return input_path, output_path  # Return validated paths
+        return resolved_inputs, out_path  # Return validated input list and resolved output path
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
