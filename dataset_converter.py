@@ -511,6 +511,53 @@ def get_dataset_files(directory=None):
         raise  # Re-raise to preserve original failure semantics
 
 
+def scan_top_level_for_supported_files(input_directory: str) -> list:
+    """
+    Scan the directory itself for supported extensions.
+
+    :param input_directory: Directory path to scan.
+    :return: List of supported files found directly under the directory.
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        supported_exts = {".arff", ".csv", ".parquet", ".txt"}  # Supported file extensions set
+        direct_files = []  # Container for files found directly under the directory
+        if os.path.isdir(input_directory):  # Verify the path is a directory before listing
+            for entry in os.listdir(input_directory):  # Iterate entries directly under the directory
+                candidate = os.path.join(input_directory, entry)  # Build candidate full path
+                if os.path.isfile(candidate) and os.path.splitext(entry)[1].lower() in supported_exts:  # Verify file and extension
+                    direct_files.append(candidate)  # Add matching file to direct_files
+        return direct_files  # Return the directly found files (may be empty)
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def scan_immediate_subdirs_for_files(input_directory: str) -> list:
+    """
+    Scan each immediate subdirectory for dataset files and return first non-empty result.
+
+    :param input_directory: Directory path whose immediate children will be scanned.
+    :return: List of dataset files found in the first child directory containing supported files.
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        if not os.path.isdir(input_directory):  # Verify the input path is a directory before exploring children
+            return []  # Return empty list when input is not a directory
+        for entry in os.listdir(input_directory):  # Iterate child entries to explore subdirectories
+            child = os.path.join(input_directory, entry)  # Build child path
+            if os.path.isdir(child):  # Only consider child directories
+                child_files = get_dataset_files(child)  # Attempt recursive discovery in the child directory
+                if child_files:  # If any files were discovered in the child
+                    return child_files  # Return the first non-empty child discovery
+        return []  # Return empty list when no child directories contain dataset files
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def resolve_dataset_files(input_directory):
     """
     Resolve dataset files from a directory or a single file path.
@@ -520,10 +567,22 @@ def resolve_dataset_files(input_directory):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        if os.path.isfile(input_directory):  # If the input directory is actually a file
-            return [input_directory]  # Process only that one file
+        if os.path.isfile(input_directory):  # If the input_directory is actually a file
+            return [input_directory]  # Return a single-item list containing the file path
 
-        return get_dataset_files(input_directory)  # Otherwise, scan directory recursively
+        files = get_dataset_files(input_directory)  # Attempt to recursively discover dataset files under the directory
+        if files:  # If recursive discovery returned any files
+            return files  # Return discovered files immediately
+
+        direct_files = scan_top_level_for_supported_files(input_directory)  # Scan the directory itself for supported extensions
+        if direct_files:  # If direct files were found in the top-level directory
+            return direct_files  # Return the directly found files
+
+        child_files = scan_immediate_subdirs_for_files(input_directory)  # Scan each immediate subdirectory separately to handle unusual mounts
+        if child_files:  # If any files were discovered in an immediate child directory
+            return child_files  # Return the first non-empty child discovery
+
+        return []  # Return empty list when no dataset files could be located
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
