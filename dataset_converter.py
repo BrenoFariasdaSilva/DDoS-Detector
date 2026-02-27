@@ -103,6 +103,24 @@ RUN_FUNCTIONS = {
 setup_global_exception_hook()  # Set global exception hook to shared Telegram handler
 
 
+def get_default_config() -> dict:  # Return default configuration for dataset_converter
+    """
+    Default dataset_converter configuration.
+
+    :return: Dictionary with default configuration values.
+    """
+
+    return {
+        "dataset_converter": {
+            "verbose": False,  # Whether to enable verbose messages
+            "input_directory": "./Input",  # Default input directory
+            "output_directory": "./Output",  # Default output directory
+            "ignore_dirs": ["Results"],  # Directories to ignore
+            "ignore_files": [],  # File substrings to ignore
+        }
+    }
+
+
 def verbose_output(true_string="", false_string=""):
     """
     Outputs a message if the VERBOSE constant is set to True.
