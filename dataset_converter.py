@@ -121,6 +121,24 @@ def get_default_config() -> dict:  # Return default configuration for dataset_co
     }
 
 
+def load_config_file(path: str = "config.yaml") -> dict:  # Load YAML config if exists
+    """
+    Load configuration from YAML file if present.
+
+    :param path: Path to YAML file.
+    :return: Loaded configuration dictionary or empty dict.
+    """
+
+    try:
+        if os.path.exists(path):  # Verify path existence
+            with open(path, "r", encoding="utf-8") as fh:  # Open file for reading
+                data = yaml.safe_load(fh) or {}  # Parse YAML safely
+                return data  # Return parsed config
+    except Exception:
+        return {}  # On error return empty dict
+    return {}  # Default empty dict when file not found
+
+
 def verbose_output(true_string="", false_string=""):
     """
     Outputs a message if the VERBOSE constant is set to True.
