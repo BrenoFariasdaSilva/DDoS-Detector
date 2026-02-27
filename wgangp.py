@@ -1622,17 +1622,23 @@ def adjust_num_workers_for_file(csv_path: str, suggested_workers: int, config: O
         print(f"[DEBUG] Detected free RAM: {free_ram_gb:.4f} GB")  # Log detected available RAM
         print(f"[DEBUG] Original suggested num_workers: {suggested_workers}")  # Log original suggestion
 
-        if free_ram_gb <= 0.0:  # If available RAM cannot be determined
-            print("[WARNING] Free RAM detected as 0 GB; forcing num_workers=0")  # Warn
-            final = 0  # Disable workers to avoid crash
-        else:
-            computed = (file_size_gb * 3.0) / free_ram_gb  # Core formula
-            final = int(max(0, computed))  # Ensure non-negative integer
+        computed = None
+        if file_size_gb <= 0.0:  # If file size cannot be determined or is zero
+            print("[WARNING] File size detected as 0 GB; keeping suggested num_workers")
+            final = max(0, int(suggested_workers))
+        else:  # Otherwise, compute num_workers based on file size and free RAM
+            computed = (free_ram_gb * 3.0) / file_size_gb  # Updated formula: free_ram numerator
+            try:  # Attempt to convert computed value to float for proper scaling
+                computed_val = float(computed)
+            except Exception:
+                computed_val = float(int(suggested_workers))
+            computed = computed_val
+            final = int(max(0, computed_val))  # Ensure non-negative integer
 
         cpu_count = os.cpu_count() or 1  # Detect CPU count safely
         final = min(final, cpu_count)  # Do not exceed logical CPUs
 
-        print(f"[DEBUG] Computed num_workers (formula result): {final}")  # Log computed value
+        print(f"[DEBUG] Computed num_workers (formula result): {final} (computed={computed if computed is not None else 'N/A'})")  # Log computed value
 
         try:  # Notify via Telegram (non-blocking)
             send_telegram_message(
