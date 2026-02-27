@@ -1589,48 +1589,63 @@ def compose_training_start_message(args, file_progress_prefix) -> str:
 
 def adjust_num_workers_for_file(csv_path: str, suggested_workers: int, config: Optional[Dict] = None) -> int:
     """
-    Adjust DataLoader `num_workers` based on CSV file size and total system RAM.
+    Adjust DataLoader `num_workers` based on CSV file size and total FREE system RAM.
+
+    New rule:
+        num_workers = (file_size_gb * 3) / free_ram_gb
 
     :param csv_path: Path to the CSV file to inspect
     :param suggested_workers: Initial suggested num_workers value from config
     :param config: Optional configuration dictionary
     :return: Adjusted num_workers integer
     """
-    
+
     try:  # Guard helper with try/except to follow project style
         if config is None: config = CONFIG or get_default_config()  # Use provided config or fallback to global/default
+
         file_size_bytes = Path(csv_path).stat().st_size  # Get file size in bytes from filesystem
         file_size_gb = safe_float(file_size_bytes, 0.0) / (1024.0 ** 3)  # Convert bytes to gigabytes (GB) safely
-        
+
         if psutil is None:  # If psutil is unavailable
             print("[WARNING] psutil not available; keeping suggested num_workers")  # Warn and keep suggested
-            return int(suggested_workers)  # Return suggested_workers when RAM detection is impossible
-        
-        total_ram_gb = safe_float(psutil.virtual_memory().total, 0.0) / (1024.0 ** 3)  # Get total system RAM in GB safely
-        
-        print(f"[DEBUG] Detected file size: {file_size_gb:.2f} GB")  # Log detected file size
-        print(f"[DEBUG] Detected system RAM: {total_ram_gb:.2f} GB")  # Log detected total RAM
+            final = max(0, int(suggested_workers))  # Fallback to suggested
+            try:
+                send_telegram_message(TELEGRAM_BOT, f"[INFO] num_workers for {Path(csv_path).name}: {final} (psutil unavailable)")  # Notify via Telegram
+            except Exception:
+                pass  # Do not break execution if Telegram fails
+            return final  # Return suggested_workers when RAM detection is impossible
+
+        vm = psutil.virtual_memory()  # Capture virtual memory snapshot
+        free_ram_gb = safe_float(vm.available, 0.0) / (1024.0 ** 3)  # Use AVAILABLE RAM (not total) in GB
+
+        print(f"[DEBUG] Detected file size: {file_size_gb:.4f} GB")  # Log detected file size
+        print(f"[DEBUG] Detected free RAM: {free_ram_gb:.4f} GB")  # Log detected available RAM
         print(f"[DEBUG] Original suggested num_workers: {suggested_workers}")  # Log original suggestion
-        
-        final = int(suggested_workers)  # Start with suggested value as integer
-        if file_size_gb < 1.0:  # Small files: keep suggestion
-            final = int(suggested_workers)  # No change for tiny files
-        elif file_size_gb <= 4.0:  # Moderate files: reduce parallelism by half
-            final = max(1, int(suggested_workers) // 2)  # Reduce but keep at least 1
-        else:  # Large files: strongly reduce parallelism
-            final = 1  # Prefer 1 worker for large CSVs by default
-       
-        if total_ram_gb < 8.0:  # Very low RAM: disable workers to avoid memory pressure
-            final = 0  # Force zero workers when RAM is under 8GB
-            print(f"[WARNING] Available RAM {total_ram_gb:.2f} GB < 8GB -> forcing num_workers=0")  # Log forced zero
-        elif total_ram_gb < 16.0:  # Moderate RAM: cap workers conservatively
-            final = min(final, 2)  # Cap to at most 2 workers
-            print(f"[WARNING] Available RAM {total_ram_gb:.2f} GB < 16GB -> capping num_workers to <=2")  # Log capping
-        
-        final = max(0, int(final))  # Ensure non-negative integer
-        print(f"[DEBUG] Final adjusted num_workers: {final}")  # Log final decision
-        
+
+        if free_ram_gb <= 0.0:  # If available RAM cannot be determined
+            print("[WARNING] Free RAM detected as 0 GB; forcing num_workers=0")  # Warn
+            final = 0  # Disable workers to avoid crash
+        else:
+            computed = (file_size_gb * 3.0) / free_ram_gb  # Core formula
+            final = int(max(0, computed))  # Ensure non-negative integer
+
+        cpu_count = os.cpu_count() or 1  # Detect CPU count safely
+        final = min(final, cpu_count)  # Do not exceed logical CPUs
+
+        print(f"[DEBUG] Computed num_workers (formula result): {final}")  # Log computed value
+
+        try:  # Notify via Telegram (non-blocking)
+            send_telegram_message(
+                TELEGRAM_BOT,
+                f"[INFO] num_workers adjusted for {Path(csv_path).name} | "
+                f"file={file_size_gb:.2f}GB | free_ram={free_ram_gb:.2f}GB | "
+                f"final_workers={final}",
+            )
+        except Exception:
+            pass  # Never allow Telegram failure to affect training
+
         return final  # Return computed value
+
     except Exception as e:  # On error, report and re-raise following project conventions
         print(str(e))  # Print exception for visibility
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception via Telegram
