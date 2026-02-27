@@ -134,7 +134,7 @@ def get_default_config() -> dict:
             "logs_dir": "./Logs",
         },
         "execution": {
-            "verbose": False,
+            "verbose": True,
             "cross_dataset_validate": True,
         },
         "datasets": {},
@@ -2432,7 +2432,7 @@ def main():
         setup_telegram_bot()
         send_telegram_message(TELEGRAM_BOT, [f"Starting Dataset Descriptor at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])
 
-        datasets = config.get("datasets", {}) or {}
+        datasets = config.get("dataset_descriptor", {}).get("datasets", {}) or config.get("datasets") or {}
         results_suffix = config.get("dataset_descriptor", {}).get("csv_output_suffix", "_description")
 
         for dataset_name, paths in datasets.items():
