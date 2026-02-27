@@ -139,6 +139,40 @@ def load_config_file(path: str = "config.yaml") -> dict:  # Load YAML config if 
     return {}  # Default empty dict when file not found
 
 
+def initialize_defaults() -> None:
+    """
+    Initialize DEFAULTS by loading defaults and merging with config.yaml.
+
+    :return: None
+    """
+
+    try:  # Wrap initialization logic to ensure production-safe monitoring
+        global DEFAULTS  # Declare that we will assign to the module-global DEFAULTS
+        
+        defaults = get_default_config()  # Load hard-coded default configuration
+        cfg = load_config_file()  # Load configuration from disk (config.yaml)
+        
+        if cfg and isinstance(cfg, dict) and "dataset_converter" in cfg:  # Verify presence of dataset_converter section
+            try:  # Attempt to merge nested dataset_converter values
+                defaults_dataset = defaults.get("dataset_converter", {})  # Extract defaults subsection
+                file_dataset = cfg.get("dataset_converter", {})  # Extract file subsection
+                defaults_dataset.update(file_dataset)  # Merge file subsection into defaults subsection
+                defaults["dataset_converter"] = defaults_dataset  # Assign merged subsection back into defaults
+            except Exception:  # If nested merge fails, fall back to shallow overlay
+                defaults.update(cfg)  # Overlay top-level keys with file config
+        DEFAULTS = defaults  # Set the module-global DEFAULTS to the merged configuration
+        # Initialize runtime flags from DEFAULTS
+        try:
+            global VERBOSE  # Declare that we will assign to the module-global VERBOSE
+            VERBOSE = bool(DEFAULTS.get("dataset_converter", {}).get("verbose", False))  # Set VERBOSE based on DEFAULTS, defaulting to False if not specified
+        except Exception:  # Catch any issues with accessing DEFAULTS and ensure VERBOSE is set to a boolean
+            VERBOSE = False  # Default to False if there was an issue accessing the verbose setting in DEFAULTS
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def verbose_output(true_string="", false_string=""):
     """
     Outputs a message if the VERBOSE constant is set to True.
