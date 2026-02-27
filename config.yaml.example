@@ -651,7 +651,6 @@ dataloader:
 # ===============================================================================
 dataset_converter:
   verbose: false                      # Enable verbose output for dataset converter
-  input_directory: ""         # Default input directory for conversion
   output_directory: "Converted"     # Default output directory for converted datasets
   datasets:                           # Dictionary containing dataset paths
     CICDDoS2019-Dataset:
