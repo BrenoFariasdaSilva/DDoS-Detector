@@ -216,7 +216,7 @@ def run_git_commit(method_name: str):
     :return: None
     """
 
-    commit_msg = f"{COMMIT_PREFIX} {method_name} method to {FILE_PATH.name}"  # Create the commit message
+    commit_msg = f"{COMMIT_PREFIX} {method_name} method to the class {CLASSNAME} in the ./{FILE_PATH.name}"  # Create the commit message
 
     verbose_output(f"{BackgroundColors.GREEN}Running Git add for: {BackgroundColors.CYAN}{FILE_PATH}{Style.RESET_ALL}")
 
