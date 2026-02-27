@@ -97,6 +97,9 @@ RUN_FUNCTIONS = {
 }
 
 
+# Functions Definitions:
+
+
 setup_global_exception_hook()  # Set global exception hook to shared Telegram handler
 
 
