@@ -1199,7 +1199,10 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
         name, ext = os.path.splitext(file)  # Split file name into base name and extension
         ext = ext.lower()  # Normalize extension to lowercase for matching
 
-        pbar.set_postfix_str(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}")  # Display current file in progress bar
+        formats_list = resolve_formats(formats_list) if formats_list is not None else []  # Normalize formats_list to a list when possible
+
+        if pbar is not None:  # Verify progress bar instance exists before calling set_postfix_str
+            pbar.set_postfix_str(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}")  # Display current file in progress bar
 
         if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Skip unsupported file types early
             return  # Return early to the caller when unsupported extension
@@ -1259,56 +1262,109 @@ def process_input_directory(context: dict) -> None:
 
     try:  # Wrap full function logic to ensure production-safe monitoring
         cfg = context.get("cfg", {})  # Retrieve configuration section from context
-        input_directory = context.get("input_directory")  # Retrieve provided input_directory from context
-        output_directory = context.get("output_directory")  # Retrieve provided output_directory from context
-
-        if not output_directory:  # If output directory is not provided, get it from defaults
-            output_directory = cfg.get("output_directory", "Converted")  # Default to 'Converted' when not specified
-
-        dataset_files = resolve_dataset_files(input_directory)  # Get all dataset files from the input directory
-        len_dataset_files = len(dataset_files)  # Get the number of dataset files found
-
+        input_directory, output_directory = prepare_input_context(context, cfg)  # Prepare input and output directories for processing
+        dataset_files, len_dataset_files = gather_dataset_files(input_directory, cfg)  # Gather dataset files and their count for processing
         if not dataset_files:  # If no dataset files were found
-            print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}")  # Print error message
+            print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}")  # Print error message when directory is empty
             return  # Exit early if there are no files to convert
 
-        formats_list = resolve_formats(context.get("formats"))  # Normalize and validate output formats
+        formats_list = resolve_formats(context.get("formats"))  # Normalize and validate output formats for the run
 
         pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len_dataset_files)  # Create a progress bar for the conversion process
 
         for idx, input_path in enumerate(pbar, start=1):  # Iterate through each dataset file with index
-            send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path}")  # Notify progress via Telegram
+            process_single_input_file(idx, {"input_path": input_path, "input_directory": input_directory, "output_directory": output_directory, "formats_list": formats_list, "len_dataset_files": len_dataset_files, "pbar": pbar})  # Delegate per-file work to helper
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs when top-level failure occurs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram for top-level failures
+        raise  # Re-raise to preserve original failure semantics
 
-            file = os.path.basename(str(input_path))  # Extract the file name from the full path
-            name, ext = os.path.splitext(file)  # Split file name into base name and extension
-            ext = ext.lower()  # Normalize extension to lowercase
 
+def prepare_input_context(context: dict, cfg: dict) -> tuple:
+    """
+    Prepare input and output directory values from context and configuration.
+
+    :param context: Processing context dictionary with runtime values.
+    :param cfg: Configuration dictionary used for fallback defaults.
+    :return: Tuple containing (input_directory, output_directory).
+    """
+
+    input_directory = context.get("input_directory")  # Retrieve provided input_directory from context
+    output_directory = context.get("output_directory")  # Retrieve provided output_directory from context
+    
+    if not output_directory:  # If output directory is not provided, get it from defaults
+        output_directory = cfg.get("output_directory", "Converted")  # Default to 'Converted' when not specified
+    
+    return input_directory, output_directory  # Return prepared input and output directories
+
+
+def gather_dataset_files(input_directory: str, cfg: dict) -> tuple:
+    """
+    Gather dataset files from the input directory and return them with count.
+
+    :param input_directory: Path to the input directory to scan for datasets.
+    :param cfg: Configuration dictionary used for fallback values.
+    :return: Tuple containing (dataset_files_list, len_dataset_files).
+    """
+
+    dataset_files = resolve_dataset_files(input_directory)  # Get all dataset files from the input directory
+    len_dataset_files = len(dataset_files)  # Get the number of dataset files found
+    
+    return dataset_files, len_dataset_files  # Return both the list and its length
+
+
+def process_single_input_file(idx: int, params: dict) -> None:
+    """
+    Process a single input file: clean, load and convert to requested formats.
+
+    :param idx: Index of the file in the current processing batch.
+    :param params: Dictionary with keys: input_path, input_directory, output_directory, formats_list, len_dataset_files, pbar.
+    :return: None
+    """
+
+    try:  # Wrap per-file logic to ensure production-safe monitoring
+        input_path = params.get("input_path")  # Extract input_path from params for this file
+        input_directory = params.get("input_directory")  # Extract input_directory from params for relative pathing
+        output_directory = params.get("output_directory")  # Extract output_directory from params for writing outputs
+        formats_list = params.get("formats_list")  # Extract formats_list from params to know desired outputs
+        len_dataset_files = params.get("len_dataset_files")  # Extract total count for progress messages
+        pbar = params.get("pbar")  # Extract progress bar instance for updates
+
+        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path}")  # Notify progress via Telegram for current file
+
+        file = os.path.basename(str(input_path))  # Extract the file name from the full path
+        name, ext = os.path.splitext(file)  # Split file name into base name and extension
+        ext = ext.lower()  # Normalize extension to lowercase for matching
+
+        formats_list = resolve_formats(formats_list) if formats_list is not None else []  # Normalize formats_list to a list when possible
+
+        if pbar is not None:  # Verify progress bar instance exists before calling set_postfix_str
             pbar.set_postfix_str(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}")  # Display current file in progress bar
 
-            if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Skip unsupported file types
-                continue  # Move to the next file
+        if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Skip unsupported file types early
+            return  # Return early to the caller when unsupported extension
 
-            dest_dir = resolve_destination_directory(input_directory, input_path, output_directory)  # Determine destination directory for converted files
-            create_directories(dest_dir)  # Ensure destination directory exists
+        dest_dir = resolve_destination_directory(input_directory, input_path, output_directory)  # Determine destination directory for converted files
+        create_directories(dest_dir)  # Ensure destination directory exists before writing
 
-            cleaned_path = os.path.join(str(dest_dir), f"{name}{ext}")  # Path for saving the cleaned file
-            clean_file(input_path, cleaned_path)  # Clean the file before conversion
+        cleaned_path = os.path.join(str(dest_dir), f"{name}{ext}")  # Path for saving the cleaned file prior to conversion
+        clean_file(input_path, cleaned_path)  # Clean the file before conversion to normalize content
 
-            df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame
-            if "arff" in formats_list:  # If ARFF format is requested
-                convert_to_arff(df, os.path.join(str(dest_dir), f"{name}.arff"))  # Convert and save as ARFF
-            if "csv" in formats_list:  # If CSV format is requested
-                convert_to_csv(df, os.path.join(str(dest_dir), f"{name}.csv"))  # Convert and save as CSV
-            if "parquet" in formats_list:  # If Parquet format is requested
-                convert_to_parquet(df, os.path.join(str(dest_dir), f"{name}.parquet"))  # Convert and save as Parquet
-            if "txt" in formats_list:  # If TXT format is requested
-                convert_to_txt(df, os.path.join(str(dest_dir), f"{name}.txt"))  # Convert and save as TXT
+        df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame for conversion
+        if "arff" in formats_list:  # If ARFF format is requested for output
+            convert_to_arff(df, os.path.join(str(dest_dir), f"{name}.arff"))  # Convert and save as ARFF format
+        if "csv" in formats_list:  # If CSV format is requested for output
+            convert_to_csv(df, os.path.join(str(dest_dir), f"{name}.csv"))  # Convert and save as CSV format
+        if "parquet" in formats_list:  # If Parquet format is requested for output
+            convert_to_parquet(df, os.path.join(str(dest_dir), f"{name}.parquet"))  # Convert and save as Parquet format
+        if "txt" in formats_list:  # If TXT format is requested for output
+            convert_to_txt(df, os.path.join(str(dest_dir), f"{name}.txt"))  # Convert and save as TXT format
 
-            print()  # Print a newline for better readability between files
-    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
-        print(str(e))  # Print error to terminal for server logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-        raise  # Re-raise to preserve original failure semantics
+        print()  # Print a newline for better readability between files in terminal output
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert for per-file failures
+        print(str(e))  # Print error to terminal for server logs in case of per-file failure
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram when per-file failure occurs
+        raise  # Re-raise to preserve original failure semantics for upstream handling
 
 
 def batch_convert(input_directory=None, output_directory=None, formats=None):
