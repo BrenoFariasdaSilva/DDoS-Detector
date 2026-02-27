@@ -1120,7 +1120,7 @@ def convert_to_txt(df, output_path):
         raise  # Re-raise to preserve original failure semantics
 
 
-def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIRECTORY, formats=None):
+def batch_convert(input_directory=None, output_directory=None, formats=None):
     """
     Batch converts dataset files from the input directory into multiple output formats
     (ARFF, CSV, TXT, Parquet). Ensures the output directory exists, cleans input files,
@@ -1137,6 +1137,11 @@ def batch_convert(input_directory=INPUT_DIRECTORY, output_directory=OUTPUT_DIREC
             f"{BackgroundColors.GREEN}Batch converting dataset files from {BackgroundColors.CYAN}{input_directory}{BackgroundColors.GREEN} to {BackgroundColors.CYAN}{output_directory}{Style.RESET_ALL}"
         )  # Output the verbose message
 
+        cfg = DEFAULTS.get("dataset_converter", {}) if DEFAULTS else {}  # Get default configuration for dataset converter if available
+        if not input_directory:  # If input directory is not provided as an argument, try to get it from defaults
+            input_directory = cfg.get("input_directory", "./Input")  # Default to "./Input" if not specified in defaults
+        if not output_directory:  # If output directory is not provided as an argument, try to get it from defaults
+            output_directory = cfg.get("output_directory", "./Output")  # Default to "./Output" if not specified in defaults
         dataset_files = resolve_dataset_files(input_directory)  # Get all dataset files from the input directory
         len_dataset_files = len(dataset_files)  # Get the number of dataset files found
 
