@@ -650,11 +650,3 @@ dataset_converter:
   ignore_dirs:
     - "Results"                      # Directory names to ignore during discovery
   ignore_files: []                    # Filename substrings to ignore
-  play_sound: true                    # Play a sound when conversion completes
-  sound_commands:
-    Darwin: "afplay"
-    Linux: "aplay"
-    Windows: "start"
-  sound_file: "./.assets/Sounds/NotificationSound.wav"  # Sound file to play on completion
-  log_file: "./Logs/dataset_converter.log"  # Log file used by dataset_converter
-  log_clean: true                      # Clear log file on startup
