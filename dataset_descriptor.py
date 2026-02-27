@@ -447,7 +447,7 @@ def collect_matching_files(
         matching_files = []  # List to store matching file paths
 
         for root, dirs, files in os.walk(input_dir):  # Walk through the directory
-                try:  # Try to filter out ignored directories
+            try:  # Try to filter out ignored directories
                 dirs[:] = [
                     d for d in dirs if os.path.normcase(d) not in normalized_ignore_dirs
                 ]  # Modify dirs in-place to skip ignored directories using normalized set
