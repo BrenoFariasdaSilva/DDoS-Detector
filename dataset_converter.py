@@ -302,6 +302,43 @@ def verify_filepath_exists(filepath):
         raise  # Re-raise to preserve original failure semantics
 
 
+def extract_input_paths_from_datasets(dmap: dict) -> list:  # Define a nested helper to extract candidate paths
+    """
+    Extract input path candidates from datasets mapping.
+
+    :param dmap: Datasets mapping from configuration.
+    :return: List of candidate input path strings.
+    """
+
+    try:  # Wrap helper logic to ensure production-safe monitoring
+        if not dmap or not isinstance(dmap, dict):  # Verify mapping is a dict
+            return []  # Return empty list when mapping is missing or invalid
+        candidates = []  # Initialize list of candidate paths
+        
+        for key in sorted(dmap.keys()):  # Iterate deterministically over mapping keys
+            val = dmap.get(key)  # Retrieve the mapping value for the current key
+            if isinstance(val, str):  # If the mapping value is a string path
+                candidates.append(val)  # Add the string path to candidates
+            elif isinstance(val, (list, tuple)):  # If the mapping value is a list/tuple of paths
+                for p in val:  # Iterate each candidate path in the sequence
+                    candidates.append(p)  # Add candidate path to list
+            elif isinstance(val, dict):  # If the mapping value is a nested dict
+                single = val.get("path") or val.get("input")  # Extract a single path candidate from known keys
+                if isinstance(single, str):  # If the single candidate is a string
+                    candidates.append(single)  # Add the single candidate to the list
+                multi = val.get("paths") or val.get("inputs")  # Extract multi-paths from known keys
+                
+                if isinstance(multi, (list, tuple)):  # If multi-paths is a sequence
+                    for candidate in multi:  # Iterate provided multi-path entries
+                        candidates.append(candidate)  # Append each candidate to the list
+        
+        return candidates  # Return collected candidate paths
+    except Exception as e:  # Catch exceptions inside helper
+        print(str(e))  # Print helper exception to terminal for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send helper exception via Telegram
+        raise  # Re-raise to preserve failure semantics
+
+
 def resolve_io_paths(args):
     """
     Resolve and validate input/output paths from CLI arguments.
