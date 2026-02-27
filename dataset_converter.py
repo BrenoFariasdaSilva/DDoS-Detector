@@ -366,6 +366,29 @@ def validate_and_prepare_input_paths(paths: list) -> list:  # Define a nested he
         raise  # Re-raise to preserve failure semantics
 
 
+def resolve_output_path(arg_output: str, cfg_section: dict) -> str:  # Define a nested helper to resolve output directory
+    """
+    Resolve the output directory path from CLI argument or configuration.
+
+    :param arg_output: Output path provided via CLI.
+    :param cfg_section: The dataset_converter configuration section.
+    :return: Resolved output path string.
+    """
+
+    try:  # Wrap helper logic to ensure production-safe monitoring
+        output_default = cfg_section.get("output_directory", "./Output") or "./Output"  # Determine configured default
+        out = arg_output if arg_output else output_default  # Choose CLI-provided output or fallback default
+        
+        if not verify_filepath_exists(out):  # Verify output path existence
+            create_directories(out)  # Create output directory when missing
+            
+        return out  # Return the resolved output path
+    except Exception as e:  # Catch exceptions inside helper
+        print(str(e))  # Print helper exception to terminal for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send helper exception via Telegram
+        raise  # Re-raise to preserve failure semantics
+
+
 def resolve_io_paths(args):
     """
     Resolve and validate input/output paths from CLI arguments.
