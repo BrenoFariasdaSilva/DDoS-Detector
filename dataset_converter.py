@@ -847,7 +847,7 @@ def clean_parquet_file(input_path, cleaned_path):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        df = pd.read_parquet(input_path, engine="fastparquet")  # Read parquet into DataFrame
+        df = pd.read_parquet(input_path, engine="fastparquet", low_memory=False)  # Read parquet into DataFrame
 
         required_bytes = estimate_bytes_parquet(df)  # Estimate bytes needed for cleaned Parquet
         ensure_enough_space(cleaned_path, required_bytes)  # Ensure enough space to write the cleaned file
@@ -1078,7 +1078,7 @@ def load_csv_file(input_path):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        df = pd.read_csv(input_path)  # Load the CSV file
+        df = pd.read_csv(input_path, low_memory=False)  # Load the CSV file
         df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
         return df  # Return the DataFrame
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -1113,7 +1113,7 @@ def load_txt_file(input_path):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        df = pd.read_csv(input_path, sep="\t")  # Load TXT file using tab separator
+        df = pd.read_csv(input_path, sep="\t", low_memory=False)  # Load TXT file using tab separator
         df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
         return df  # Return the DataFrame
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
