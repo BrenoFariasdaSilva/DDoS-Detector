@@ -1330,6 +1330,8 @@ def main():
         
         setup_telegram_bot()  # Setup Telegram bot if configured
         
+        initialize_defaults()  # Initialize DEFAULTS from get_default_config() and config.yaml
+        
         args = parse_cli_arguments()  # Parse CLI arguments
 
         input_path, output_path = resolve_io_paths(args)  # Resolve and validate paths
