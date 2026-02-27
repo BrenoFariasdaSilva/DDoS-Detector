@@ -393,19 +393,35 @@ def get_dataset_files(directory=None):
             f"{BackgroundColors.GREEN}Searching for dataset files in: {BackgroundColors.CYAN}{directory}{Style.RESET_ALL}"
         )  # Output the verbose message
 
-        dataset_files = []  # List to store paths of dataset files
-        cfg = DEFAULTS.get("dataset_converter", {}) if DEFAULTS else {}  # Get default configuration for dataset converter if available
-        effective_dir = directory if directory else cfg.get("input_directory", "./Input")  # Resolve effective directory to search from CLI argument or DEFAULTS, defaulting to "./Input"
-        ignore_list = cfg.get("ignore_dirs", ["Results"])  # Resolve ignore directories list from DEFAULTS or fallback
-        for root, dirs, files in os.walk(effective_dir):  # Walk through the effective directory and its subdirectories
-            if any(ignore_word.lower() in root.lower() for ignore_word in ignore_list):  # Verify if the current directory contains any ignore words
-                continue  # If the current directory contains any of the ignore words, skip it
-
-            for file in files:  # Iterate through files in the current directory
-                if os.path.splitext(file)[1].lower() in [".arff", ".csv", ".txt", ".parquet"]:  # Verify if the file has a valid extension
-                    dataset_files.append(os.path.join(root, file))  # Append the full path of the file to the list
-
-        return dataset_files  # Return the list of dataset files
+        dataset_files = []  # List to store discovered dataset file paths
+        cfg = DEFAULTS.get("dataset_converter", {}) if DEFAULTS else {}  # Get dataset_converter settings from DEFAULTS
+        ignore_list = cfg.get("ignore_dirs", ["Results"])  # Get ignore directories list from configuration
+        
+        if directory:  # If a specific directory argument provided
+            roots = [directory]  # Use the provided directory as single root to scan
+        else:  # If no directory argument provided
+            datasets_map = cfg.get("datasets", {})  # Retrieve datasets mapping from configuration
+            roots = []  # Initialize roots list for scanning
+            
+            for v in datasets_map.values():  # Iterate over dataset groups in mapping
+                if isinstance(v, (list, tuple)):  # If mapping value is a list of paths
+                    for candidate in v:  # Iterate candidate paths inside list
+                        roots.append(candidate)  # Add candidate path to roots list
+                elif isinstance(v, str):  # If mapping value is a single path string
+                    roots.append(v)  # Add single path to roots list
+        
+        for root in roots:  # Iterate roots to walk through filesystem
+            if not root:  # If root is empty string or None
+                continue  # Skip empty root entries safely
+            
+            for r, dirs, files in os.walk(root):  # Walk the directory tree starting at root
+                if any(ignore_word.lower() in r.lower() for ignore_word in ignore_list):  # If the current path contains ignored directory names
+                    continue  # Skip ignored directories
+                for file in files:  # Iterate files in the current directory
+                    if os.path.splitext(file)[1].lower() in [".arff", ".csv", ".txt", ".parquet"]:  # If file extension is supported
+                        dataset_files.append(os.path.join(r, file))  # Append full file path to results list
+        
+        return dataset_files  # Return collected dataset file paths
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
