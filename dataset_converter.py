@@ -368,6 +368,10 @@ def create_directories(directory_name):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
+        if not directory_name:  # Empty string or None
+            print(f"{BackgroundColors.YELLOW}Warning: create_directories called with empty path; skipping{Style.RESET_ALL}")
+            return  # Skip when no valid directory name provided
+
         verbose_output(
             f"{BackgroundColors.GREEN}Creating directory: {BackgroundColors.CYAN}{directory_name}{Style.RESET_ALL}"
         )  # Output the verbose message
