@@ -1123,11 +1123,137 @@ def convert_to_txt(df, output_path):
         raise  # Re-raise to preserve original failure semantics
 
 
+def process_configured_datasets(context: dict) -> None:
+    """
+    Process datasets defined in configuration mapping.
+
+    :param context: Dictionary with processing context values.
+    :return: None
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        cfg = context.get("cfg", {})  # Retrieve configuration section from context
+        datasets_cfg = cfg.get("datasets", {})  # Retrieve the datasets mapping from configuration
+        if not isinstance(datasets_cfg, dict):  # Verify datasets_cfg is a mapping of dataset names to path lists
+            return  # Return immediately when configured datasets are not a mapping
+
+        for ds_name, ds_paths in datasets_cfg.items():  # Iterate each dataset entry in configuration
+            if not isinstance(ds_paths, (list, tuple)):  # Verify dataset entry is an iterable of paths
+                continue  # Skip invalid dataset entries
+
+            for ds_path in ds_paths:  # Iterate configured paths for this dataset entry
+                effective_input = ds_path  # Set effective input directory for this configured path
+                effective_output_base = context.get("output_directory") if context.get("output_directory") else os.path.join(str(ds_path), cfg.get("output_directory", "Converted"))  # Determine per-dataset base output directory
+                dataset_files = resolve_dataset_files(effective_input)  # Resolve dataset files for this configured path
+                if not dataset_files:  # If no files found for this configured path
+                    print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{effective_input}{Style.RESET_ALL}")  # Print error message and continue
+                    continue  # Continue to next configured path
+
+                formats_list = resolve_formats(context.get("formats"))  # Normalize and validate output formats for this path
+                len_dataset_files = len(dataset_files)  # Count files to process for progress reporting
+
+                pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len_dataset_files)  # Create a progress bar for the conversion process
+
+                for idx, input_path in enumerate(pbar, start=1):  # Iterate files for this configured path
+                    send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path}")  # Notify progress via Telegram
+
+                    file = os.path.basename(str(input_path))  # Extract the file name from the full path
+                    name, ext = os.path.splitext(file)  # Split file name into base name and extension
+                    ext = ext.lower()  # Normalize extension to lowercase
+
+                    pbar.set_postfix_str(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}")  # Display current file in progress bar
+
+                    if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Skip unsupported file types
+                        continue  # Move to the next file
+
+                    dest_dir = resolve_destination_directory(effective_input, input_path, effective_output_base)  # Determine destination directory preserving relative structure
+                    create_directories(dest_dir)  # Ensure destination directory exists
+
+                    cleaned_path = os.path.join(str(dest_dir), f"{name}{ext}")  # Path for saving the cleaned file
+                    clean_file(input_path, cleaned_path)  # Clean the file before conversion
+
+                    df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame
+                    if "arff" in formats_list:  # If ARFF format is requested
+                        convert_to_arff(df, os.path.join(str(dest_dir), f"{name}.arff"))  # Convert and save as ARFF
+                    if "csv" in formats_list:  # If CSV format is requested
+                        convert_to_csv(df, os.path.join(str(dest_dir), f"{name}.csv"))  # Convert and save as CSV
+                    if "parquet" in formats_list:  # If Parquet format is requested
+                        convert_to_parquet(df, os.path.join(str(dest_dir), f"{name}.parquet"))  # Convert and save as Parquet
+                    if "txt" in formats_list:  # If TXT format is requested
+                        convert_to_txt(df, os.path.join(str(dest_dir), f"{name}.txt"))  # Convert and save as TXT
+
+                    print()  # Print a newline for better readability between files
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def process_input_directory(context: dict) -> None:
+    """
+    Process a single explicit input directory for conversion.
+
+    :param context: Dictionary with processing context values.
+    :return: None
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        cfg = context.get("cfg", {})  # Retrieve configuration section from context
+        input_directory = context.get("input_directory")  # Retrieve provided input_directory from context
+        output_directory = context.get("output_directory")  # Retrieve provided output_directory from context
+
+        if not output_directory:  # If output directory is not provided, get it from defaults
+            output_directory = cfg.get("output_directory", "Converted")  # Default to 'Converted' when not specified
+
+        dataset_files = resolve_dataset_files(input_directory)  # Get all dataset files from the input directory
+        len_dataset_files = len(dataset_files)  # Get the number of dataset files found
+
+        if not dataset_files:  # If no dataset files were found
+            print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}")  # Print error message
+            return  # Exit early if there are no files to convert
+
+        formats_list = resolve_formats(context.get("formats"))  # Normalize and validate output formats
+
+        pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len_dataset_files)  # Create a progress bar for the conversion process
+
+        for idx, input_path in enumerate(pbar, start=1):  # Iterate through each dataset file with index
+            send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path}")  # Notify progress via Telegram
+
+            file = os.path.basename(str(input_path))  # Extract the file name from the full path
+            name, ext = os.path.splitext(file)  # Split file name into base name and extension
+            ext = ext.lower()  # Normalize extension to lowercase
+
+            pbar.set_postfix_str(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}")  # Display current file in progress bar
+
+            if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Skip unsupported file types
+                continue  # Move to the next file
+
+            dest_dir = resolve_destination_directory(input_directory, input_path, output_directory)  # Determine destination directory for converted files
+            create_directories(dest_dir)  # Ensure destination directory exists
+
+            cleaned_path = os.path.join(str(dest_dir), f"{name}{ext}")  # Path for saving the cleaned file
+            clean_file(input_path, cleaned_path)  # Clean the file before conversion
+
+            df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame
+            if "arff" in formats_list:  # If ARFF format is requested
+                convert_to_arff(df, os.path.join(str(dest_dir), f"{name}.arff"))  # Convert and save as ARFF
+            if "csv" in formats_list:  # If CSV format is requested
+                convert_to_csv(df, os.path.join(str(dest_dir), f"{name}.csv"))  # Convert and save as CSV
+            if "parquet" in formats_list:  # If Parquet format is requested
+                convert_to_parquet(df, os.path.join(str(dest_dir), f"{name}.parquet"))  # Convert and save as Parquet
+            if "txt" in formats_list:  # If TXT format is requested
+                convert_to_txt(df, os.path.join(str(dest_dir), f"{name}.txt"))  # Convert and save as TXT
+
+            print()  # Print a newline for better readability between files
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def batch_convert(input_directory=None, output_directory=None, formats=None):
     """
     Batch converts dataset files from the input directory into multiple output formats
-    (ARFF, CSV, TXT, Parquet). Ensures the output directory exists, cleans input files,
-    loads them into a DataFrame, and writes all supported conversions.
 
     :param input_directory: Path to the input directory containing dataset files.
     :param output_directory: Path to the output directory where converted files will be saved.
@@ -1136,66 +1262,17 @@ def batch_convert(input_directory=None, output_directory=None, formats=None):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        verbose_output(
-            f"{BackgroundColors.GREEN}Batch converting dataset files from {BackgroundColors.CYAN}{input_directory}{BackgroundColors.GREEN} to {BackgroundColors.CYAN}{output_directory}{Style.RESET_ALL}"
-        )  # Output the verbose message
+        verbose_output(f"{BackgroundColors.GREEN}Batch converting dataset files from {BackgroundColors.CYAN}{input_directory}{BackgroundColors.GREEN} to {BackgroundColors.CYAN}{output_directory}{Style.RESET_ALL}")  # Output the verbose message
 
         cfg = DEFAULTS.get("dataset_converter", {}) if DEFAULTS else {}  # Get default configuration for dataset converter if available
-        if not input_directory:  # If input directory is not provided as an argument, try to get it from defaults
-            input_directory = cfg.get("input_directory", "./Input")  # Default to "./Input" if not specified in defaults
-        if not output_directory:  # If output directory is not provided as an argument, try to get it from defaults
-            output_directory = cfg.get("output_directory", "./Output")  # Default to "./Output" if not specified in defaults
-        dataset_files = resolve_dataset_files(input_directory)  # Get all dataset files from the input directory
-        len_dataset_files = len(dataset_files)  # Get the number of dataset files found
 
-        if not dataset_files:  # If no dataset files were found
-            print(
-                f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}"
-            )  # Print error message
-            return  # Exit early if there are no files to convert
+        if not input_directory:  # Verify if no input_directory argument was given
+            context = {"cfg": cfg, "output_directory": output_directory, "formats": formats}  # Build context dictionary for configured datasets processing
+            process_configured_datasets(context)  # Process datasets defined in configuration
+            return  # Completed processing configured datasets, exit early
 
-        formats_list = resolve_formats(formats)  # Normalize and validate output formats
-
-        pbar = tqdm(
-            dataset_files,
-            desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}",
-            unit="file",
-            colour="green",
-            total=len_dataset_files,
-        )  # Create a progress bar for the conversion process
-        for idx, input_path in enumerate(pbar, start=1):  # Iterate through each dataset file with index
-            send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path}")  # Notify progress via Telegram
-            
-            file = os.path.basename(input_path)  # Extract the file name from the full path
-            name, ext = os.path.splitext(file)  # Split file name into base name and extension
-            ext = ext.lower()  # Normalize extension to lowercase
-
-            pbar.set_postfix_str(
-                f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}"
-            )  # Display current file in progress bar
-
-            if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Skip unsupported file types
-                continue  # Move to the next file
-
-            dest_dir = resolve_destination_directory(
-                input_directory, input_path, output_directory
-            )  # Determine destination directory for converted files
-            create_directories(dest_dir)  # Ensure destination directory exists
-
-            cleaned_path = os.path.join(dest_dir, f"{name}{ext}")  # Path for saving the cleaned file
-            clean_file(input_path, cleaned_path)  # Clean the file before conversion
-
-            df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame
-            if "arff" in formats_list:  # If ARFF format is requested
-                convert_to_arff(df, os.path.join(dest_dir, f"{name}.arff"))  # Convert and save as ARFF
-            if "csv" in formats_list:  # If CSV format is requested
-                convert_to_csv(df, os.path.join(dest_dir, f"{name}.csv"))  # Convert and save as CSV
-            if "parquet" in formats_list:  # If Parquet format is requested
-                convert_to_parquet(df, os.path.join(dest_dir, f"{name}.parquet"))  # Convert and save as Parquet
-            if "txt" in formats_list:  # If TXT format is requested
-                convert_to_txt(df, os.path.join(dest_dir, f"{name}.txt"))  # Convert and save as TXT
-
-            print()  # Print a newline for better readability between files
+        context = {"cfg": cfg, "input_directory": input_directory, "output_directory": output_directory, "formats": formats}  # Build context dictionary for input-directory processing
+        process_input_directory(context)  # Process the explicit input directory
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
