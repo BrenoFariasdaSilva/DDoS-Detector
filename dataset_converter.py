@@ -339,6 +339,33 @@ def extract_input_paths_from_datasets(dmap: dict) -> list:  # Define a nested he
         raise  # Re-raise to preserve failure semantics
 
 
+def validate_and_prepare_input_paths(paths: list) -> list:  # Define a nested helper to validate and create inputs
+    """
+    Validate candidate input paths and ensure directories exist.
+
+    :param paths: Candidate input path list.
+    :return: List of validated input paths.
+    """
+
+    try:  # Wrap helper logic to ensure production-safe monitoring
+        valid = []  # Initialize list for validated existing paths
+        for p in paths:  # Iterate provided candidate paths
+            if not p:  # Skip empty or None entries
+                continue  # Continue to next candidate when value is falsy
+            if verify_filepath_exists(p):  # Verify candidate exists on filesystem
+                valid.append(p)  # Add existing path to validated list
+            else:  # If candidate does not exist
+                create_directories(p)  # Attempt to create the missing path
+                if verify_filepath_exists(p):  # Re-verify after creation attempt
+                    valid.append(p)  # Add newly created path to validated list
+        
+        return valid  # Return the list of validated paths
+    except Exception as e:  # Catch exceptions inside helper
+        print(str(e))  # Print helper exception to terminal for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send helper exception via Telegram
+        raise  # Re-raise to preserve failure semantics
+
+
 def resolve_io_paths(args):
     """
     Resolve and validate input/output paths from CLI arguments.
