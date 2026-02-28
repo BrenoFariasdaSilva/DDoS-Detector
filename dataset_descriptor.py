@@ -1892,24 +1892,31 @@ def export_dataframe_image(styled_df, output_path):
         timeout_ms = int((cfg or {}).get("dataset_descriptor", {}).get("table_image_timeout_ms", 30000))  # Determine timeout in ms with fallback
         src = "config" if (cfg or {}).get("dataset_descriptor", {}).get("table_image_timeout_ms") is not None else "default"  # Determine config source
         print(f"[CONFIG] table_image_timeout_ms = {timeout_ms} (source: {src})")  # Log the timeout value and its source
-        try:  # Attempt export with Playwright and specified timeout
-            dfi.export(styled_df, output_path, table_conversion="playwright", screenshot_timeout=timeout_ms)  # Export styled DataFrame to PNG with Playwright and configured timeout
+        try:  # Attempt export with Playwright and configured timeout when supported
+            export_kwargs: dict[str, Any] = {"table_conversion": "playwright"}  # Prepare kwargs for dfi.export with Playwright conversion
+            try:  # Inspect dfi.export signature to decide whether to include timeout
+                if "screenshot_timeout" in signature(dfi.export).parameters:  # Verify if screenshot_timeout parameter is supported
+                    export_kwargs["screenshot_timeout"] = timeout_ms  # Add configured timeout in milliseconds to export kwargs
+            except Exception:  # If signature inspection fails, continue without adding timeout
+                pass  # Proceed without explicit timeout when inspection fails
+
+            dfi.export(styled_df, output_path, **export_kwargs)  # Export styled DataFrame to PNG using dataframe_image with prepared kwargs
             print(f"[DEBUG] Exported image: {output_path}")  # Log successful export for diagnostics
-        except TypeError:  # Handle dataframe_image versions that do not accept screenshot_timeout parameter
-            dfi.export(styled_df, output_path, table_conversion="playwright")  # Fallback to export without explicit timeout parameter
-            print(f"[DEBUG] Exported image (fallback): {output_path}")  # Log fallback successful export for diagnostics
+        except TypeError:  # Handle dataframe_image versions that raise TypeError for unexpected kwargs
+            dfi.export(styled_df, output_path, table_conversion="playwright")  # Retry export without dynamic kwargs when TypeError occurs
+            print(f"[DEBUG] Exported image (fallback): {output_path}")  # Log fallback export success for diagnostics
     except Exception as e:  # If export fails, log warning and continue without crashing
         try:  # Try to import Playwright-specific TimeoutError for precise detection
-            from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError  # Optional import of Playwright TimeoutError
-        except Exception:
-            PlaywrightTimeoutError = None  # Set to None when import fails
+            from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError  # Optional import of Playwright TimeoutError for specific handling
+        except Exception:  # If import fails, ensure variable is defined for downstream checks
+            PlaywrightTimeoutError = None  # Set to None when Playwright TimeoutError cannot be imported
         if PlaywrightTimeoutError is not None and isinstance(e, PlaywrightTimeoutError):  # Verify if exception is Playwright TimeoutError
             print(f"[WARNING] Playwright screenshot timeout while exporting {output_path}: {e}")  # Warn when Playwright timeout occurs
-        else:
+        else:  # General failure when not a Playwright TimeoutError
             print(f"[WARNING] Failed to export image {output_path}: {e}")  # Warn for general export failures
         try:  # Send exception trace via Telegram for observability
-            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-        except Exception:
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram for remote debugging
+        except Exception:  # Ignore failures when sending Telegram notifications to avoid cascading errors
             pass  # Ignore failures when sending Telegram notifications
         return  # Return gracefully to avoid terminating the program
 
