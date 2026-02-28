@@ -1699,25 +1699,21 @@ def update_progress_description(pbar, input_path: Optional[str], input_directory
 
     if pbar is None:  # Verify that a progress bar instance was provided
         return  # Return immediately when no progress bar is available
-    try:  # Wrap relative path and size computation to avoid raising inside progress update
+    try:  # Wrap path and size retrieval to avoid raising inside progress update
         input_path_str = str(input_path) if input_path is not None else ""  # Normalize input_path to string to satisfy os.path expectations
-        input_dir_str = str(input_directory) if input_directory is not None else ""  # Normalize input_directory to string to satisfy os.path expectations
-        if input_dir_str and os.path.isdir(input_dir_str):  # Verify the input directory exists before using relpath
-            rel = os.path.relpath(input_path_str, input_dir_str)  # Compute relative path when possible
-        else:  # If no valid input directory available
-            rel = os.path.basename(input_path_str)  # Use basename when relpath is not applicable
+        rel = input_path_str  # Use the full input path string instead of computing a relative path
         try:  # Attempt to retrieve file size in bytes safely
             size_str = compute_file_size_str(input_path_str)  # Retrieve formatted file size string using helper
         except Exception:  # Fallback when size retrieval fails for any reason
             size_str = "0.00 GB"  # Use default size string on error
-    except Exception:  # Fallback when relpath computation fails for any reason
+    except Exception:  # Fallback when unexpected errors occur during path normalization
         input_path_str = str(input_path) if input_path is not None else ""  # Normalize input_path again in exception path
-        rel = os.path.basename(input_path_str)  # Use basename when relpath fails
+        rel = input_path_str  # Use the full input path string in exception path as well
         try:  # Attempt to retrieve file size in exception path
             size_str = compute_file_size_str(input_path_str)  # Retrieve formatted file size string using helper in exception path
         except Exception:  # Fallback when size retrieval fails in exception path
             size_str = "0.00 GB"  # Use default size string on error
-    pbar.set_description(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{rel}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{size_str}{BackgroundColors.GREEN}){Style.RESET_ALL}")  # Update the progress bar description with the relative path and file size
+    pbar.set_description(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{rel}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{size_str}{BackgroundColors.GREEN}){Style.RESET_ALL}")  # Update the progress bar description with the input path and file size
 
 
 def is_supported_extension(ext: str) -> bool:
