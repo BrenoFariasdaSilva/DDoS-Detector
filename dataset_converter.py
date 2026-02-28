@@ -1362,7 +1362,8 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
     """
 
     try:  # Wrap per-file logic to ensure production-safe monitoring
-        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path}")  # Notify progress via Telegram before processing
+        size_str = compute_file_size_str(str(input_path))  # Retrieve formatted file size string for current input_path
+        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path} ({size_str})")  # Notify progress via Telegram before processing with file size
 
         file = os.path.basename(str(input_path))  # Extract the file name from the full path
         name, ext = os.path.splitext(file)  # Split file name into base name and extension
@@ -1580,7 +1581,8 @@ def process_single_input_file(idx: int, params: dict) -> None:
         len_dataset_files = params.get("len_dataset_files")  # Extract total count for progress messages
         pbar = params.get("pbar")  # Extract progress bar instance for updates
 
-        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path}")  # Notify progress via Telegram for current file
+        size_str = compute_file_size_str(str(input_path))  # Retrieve formatted file size string for current input_path
+        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path} ({size_str})")  # Notify progress via Telegram for current file with file size
 
         file = os.path.basename(str(input_path))  # Extract the file name from the full path
         name, ext = os.path.splitext(file)  # Split file name into base name and extension
