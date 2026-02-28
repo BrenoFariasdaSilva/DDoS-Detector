@@ -461,7 +461,7 @@ def create_directories(directory_name):
         )  # Output the verbose message
 
         if not os.path.exists(directory_name):  # If the directory does not exist
-            os.makedirs(directory_name)  # Create the directory
+            os.makedirs(directory_name, exist_ok=True)  # Create the directory using exist_ok to avoid race conditions
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -1430,6 +1430,8 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
                 rel = os.path.basename(input_path)  # Use basename when relpath fails for pbar description
             pbar.set_description(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{rel}{Style.RESET_ALL}")  # Update the progress bar description with the relative path
 
+        dir_created = create_destination_if_missing(str(dest_dir), os.path.exists(str(dest_dir)))  # Verify and create destination directory lazily then update flag
+        dir_created = create_destination_if_missing(str(dest_dir), os.path.exists(str(dest_dir)))  # Verify and create destination directory lazily then update flag
         cleaned_path = os.path.join(str(dest_dir), f"{name}{ext}")  # Path for saving the cleaned file prior to conversion
         clean_file(input_path, cleaned_path)  # Clean the file before conversion to normalize content
 
