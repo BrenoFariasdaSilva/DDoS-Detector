@@ -174,7 +174,7 @@ plotting:  # Plotting defaults and sizes
   filename: "training_metrics.png"    # Plot filename
   subdir: "plots"                     # Subdirectory under data augmentation outputs for plots
   figsize: [18, 10]                   # Figure size [width, height]
-  dpi: 300                            # Image resolution
+  dpi: 1000                            # Image resolution
   subplot_rows: 2                     # Number of subplot rows
   subplot_cols: 3                     # Number of subplot columns
   linewidth: 1.5                      # Line width for plots
@@ -291,7 +291,7 @@ stacking:  # Stacking experiment settings
   plots:
     plots_subdir: "Plots/"
     enabled: true
-    dpi: 300
+    dpi: 1000
     format: "png"
 
   results_csv_columns:                 # Column ordering for results CSV export
@@ -398,7 +398,7 @@ tsne:
   random_state: 42                    # Random seed for t-SNE
   n_iter: 1000                        # Number of t-SNE iterations
   figsize: [12, 10]                   # Figure size for t-SNE plots
-  dpi: 300                            # DPI for t-SNE plots
+  dpi: 1000                            # DPI for t-SNE plots
   alpha: 0.6                          # Marker transparency
   marker_size: 50                     # Marker size for scatter plots
 
