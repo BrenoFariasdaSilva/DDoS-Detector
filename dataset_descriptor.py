@@ -74,6 +74,7 @@ from inspect import signature  # For inspecting function signatures
 from Logger import Logger  # For logging output to both terminal and file
 from mpl_toolkits.mplot3d import Axes3D  # For 3D plotting
 from pathlib import Path  # For handling file paths
+from PIL import Image  # For verifying image dimensions and upscaling if necessary
 from sklearn.manifold import TSNE  # For t-SNE dimensionality reduction
 from sklearn.preprocessing import StandardScaler  # For feature scaling
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages and exceptions to Telegram
@@ -1362,7 +1363,12 @@ def save_tsne_plot(X_emb, labels, output_path, title):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        plt.figure(figsize=(8, 6))  # Create matplotlib figure
+        target_width_px = 3840  # Desired width in pixels for the output image (e.g., 3840 for 4K UHD)
+        target_height_px = 2160  # Desired height in pixels for the output image (e.g., 2160 for 4K UHD)
+        dpi_given = 1000  # High DPI to ensure the output image has the desired pixel dimensions when saved
+
+        figsize = (target_width_px / float(dpi_given), target_height_px / float(dpi_given))  # Calculate figure size in inches to achieve target pixel dimensions at the given DPI
+        plt.figure(figsize=figsize)  # Create matplotlib figure (DPI preserved by savefig)
 
         if labels is not None:  # Plot colored by class
             labels_ser = pd.Series(labels)  # Ensure labels are a pandas Series
@@ -1893,6 +1899,7 @@ def _stripe(row):  # Small helper to produce row-wise styles
         "background-color: #ffffff" if row.name % 2 == 0 else "background-color: #f2f2f2"
         for _ in row
     ]  # Return alternating colors per column in the row
+    
             
 def apply_zebra_style(df):
     """
@@ -1913,6 +1920,39 @@ def apply_zebra_style(df):
         raise  # Re-raise exception to surface failure
 
 
+def upscale_image_if_needed(path, fallback=False):
+    """
+    This function checks the dimensions of the image at the given path and upscales it if either dimension is below 4k (3840x2160).
+    
+    :param path: Absolute path to the image file to check and potentially upscale
+    :param fallback: Boolean indicating if this upscale is being attempted after a fallback export (for logging purposes)
+    :return: None
+    """
+    
+    try:  # Guard image operations to avoid raising from image processing
+        with Image.open(path) as im:  # Open the output image for inspection and possible resizing
+            w, h = im.size  # Capture current image width and height
+            if w < 3840 or h < 2160:  # Verify if image is smaller than 4k thresholds
+                target_w = max(3840, w)  # Compute target width ensuring at least 3840
+                target_h = max(2160, h)  # Compute target height ensuring at least 2160
+                scale = max(target_w / float(w), target_h / float(h))  # Compute scale factor to meet both dimensions
+                new_size = (int(w * scale), int(h * scale))  # Compute new integer dimensions for resizing
+                im_resized = im.resize(new_size, Image.LANCZOS)  # Resize using high-quality LANCZOS filter
+                orig_dpi = im.info.get("dpi") if hasattr(im, "info") else None  # Retrieve original DPI metadata if available
+                
+                if orig_dpi:  # Verify if DPI metadata exists
+                    im_resized.save(path, dpi=orig_dpi)  # Save resized image preserving original DPI
+                else:
+                    im_resized.save(path)  # Save resized image without explicit DPI metadata
+                
+                if fallback:  # Verify whether this upscale was triggered from fallback export
+                    print(f"[DEBUG] Upscaled image to meet 4k (fallback): {path}")  # Log fallback upscale event
+                else:
+                    print(f"[DEBUG] Upscaled image to meet 4k: {path}")  # Log normal upscale event
+    except Exception:  # Ignore any image processing errors to avoid cascading failures
+        pass  # Continue silently on upscale failures to preserve original behavior
+
+
 def export_dataframe_image(styled_df, output_path):
     """
     Export a pandas.Styler to a PNG image using dataframe_image.
@@ -1927,19 +1967,22 @@ def export_dataframe_image(styled_df, output_path):
         timeout_ms = int((cfg or {}).get("dataset_descriptor", {}).get("table_image_timeout_ms", 30000))  # Determine timeout in ms with fallback
         src = "config" if (cfg or {}).get("dataset_descriptor", {}).get("table_image_timeout_ms") is not None else "default"  # Determine config source
         print(f"[CONFIG] table_image_timeout_ms = {timeout_ms} (source: {src})")  # Log the timeout value and its source
-        try:  # Attempt export with Playwright and configured timeout when supported
-            export_kwargs: dict[str, Any] = {"table_conversion": "playwright"}  # Prepare kwargs for dfi.export with Playwright conversion
-            try:  # Inspect dfi.export signature to decide whether to include timeout
-                if "screenshot_timeout" in signature(dfi.export).parameters:  # Verify if screenshot_timeout parameter is supported
-                    export_kwargs["screenshot_timeout"] = timeout_ms  # Add configured timeout in milliseconds to export kwargs
-            except Exception:  # If signature inspection fails, continue without adding timeout
-                pass  # Proceed without explicit timeout when inspection fails
 
-            dfi.export(styled_df, output_path, **export_kwargs)  # Export styled DataFrame to PNG using dataframe_image with prepared kwargs
+        export_kwargs: dict[str, Any] = {"table_conversion": "playwright"}  # Prepare kwargs for dfi.export with Playwright conversion
+        try:  # Attempt to inspect dfi.export signature to optionally provide screenshot timeout
+            if "screenshot_timeout" in signature(dfi.export).parameters:  # Verify if screenshot_timeout parameter is supported by dataframe_image
+                export_kwargs["screenshot_timeout"] = timeout_ms  # Attach configured screenshot timeout in milliseconds
+        except Exception:  # If signature inspection fails, proceed without adding timeout
+            pass  # Continue without explicit timeout when inspection fails
+
+        try:  # Attempt primary export using prepared kwargs (may raise TypeError on older dfi versions)
+            dfi.export(styled_df, output_path, **export_kwargs)  # Export styled DataFrame to PNG using dataframe_image
             print(f"[DEBUG] Exported image: {output_path}")  # Log successful export for diagnostics
+            upscale_image_if_needed(output_path, fallback=False)  # Attempt to upscale exported image if below 4k
         except TypeError:  # Handle dataframe_image versions that raise TypeError for unexpected kwargs
             dfi.export(styled_df, output_path, table_conversion="playwright")  # Retry export without dynamic kwargs when TypeError occurs
             print(f"[DEBUG] Exported image (fallback): {output_path}")  # Log fallback export success for diagnostics
+            upscale_image_if_needed(output_path, fallback=True)  # Attempt to upscale exported image after fallback export
     except Exception as e:  # If export fails, log warning and continue without crashing
         try:  # Try to import Playwright-specific TimeoutError for precise detection
             from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError  # Optional import of Playwright TimeoutError for specific handling
