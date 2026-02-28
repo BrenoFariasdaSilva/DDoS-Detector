@@ -883,7 +883,7 @@ def clean_parquet_file(input_path, cleaned_path):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        df = pd.read_parquet(input_path, engine="fastparquet", low_memory=False)  # Read parquet into DataFrame
+        df = pd.read_parquet(input_path, engine="fastparquet")  # Read parquet into DataFrame
 
         required_bytes = estimate_bytes_parquet(df)  # Estimate bytes needed for cleaned Parquet
         ensure_enough_space(cleaned_path, required_bytes)  # Ensure enough space to write the cleaned file
