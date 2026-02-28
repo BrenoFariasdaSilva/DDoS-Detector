@@ -1607,6 +1607,25 @@ def process_single_input_file(idx: int, params: dict) -> None:
         raise  # Re-raise to preserve original failure semantics for upstream handling
 
 
+def compute_file_size_str(path: str) -> str:
+    """
+    Return formatted file size in GB.
+
+    :param path: Path to the file to measure.
+    :return: Formatted size string like "1.23 GB".
+    """
+
+    try:  # Wrap size retrieval to avoid raising and ensure safe fallback
+        if path and os.path.exists(path):  # Verify the file exists before getting size
+            size_bytes = os.path.getsize(path)  # Get file size in bytes from filesystem
+            size_gb = size_bytes / (1024 ** 3)  # Convert bytes to gigabytes
+            return f"{size_gb:.2f} GB"  # Return formatted size string with two decimal places
+        else:  # When file path is empty or does not exist
+            return "0.00 GB"  # Default size string for missing file
+    except Exception:  # Fallback if os.path operations throw
+        return "0.00 GB"  # Use default size string on error
+
+
 def update_progress_description(pbar, input_path: Optional[str], input_directory: Optional[str]) -> None:
     """
     Update the progress bar description with the relative path of the current file.
@@ -1627,24 +1646,14 @@ def update_progress_description(pbar, input_path: Optional[str], input_directory
         else:  # If no valid input directory available
             rel = os.path.basename(input_path_str)  # Use basename when relpath is not applicable
         try:  # Attempt to retrieve file size in bytes safely
-            if input_path_str and os.path.exists(input_path_str):  # Verify the file exists before getting size
-                size_bytes = os.path.getsize(input_path_str)  # Get file size in bytes from filesystem
-                size_gb = size_bytes / (1024 ** 3)  # Convert bytes to gigabytes
-                size_str = f"{size_gb:.2f} GB"  # Format size string with two decimal places
-            else:  # When file path is empty or does not exist
-                size_str = "0.00 GB"  # Default size string for missing file
+            size_str = compute_file_size_str(input_path_str)  # Retrieve formatted file size string using helper
         except Exception:  # Fallback when size retrieval fails for any reason
             size_str = "0.00 GB"  # Use default size string on error
     except Exception:  # Fallback when relpath computation fails for any reason
         input_path_str = str(input_path) if input_path is not None else ""  # Normalize input_path again in exception path
         rel = os.path.basename(input_path_str)  # Use basename when relpath fails
         try:  # Attempt to retrieve file size in exception path
-            if input_path_str and os.path.exists(input_path_str):  # Verify the file exists before getting size
-                size_bytes = os.path.getsize(input_path_str)  # Get file size in bytes from filesystem
-                size_gb = size_bytes / (1024 ** 3)  # Convert bytes to gigabytes
-                size_str = f"{size_gb:.2f} GB"  # Format size string with two decimal places
-            else:  # When file path is empty or does not exist
-                size_str = "0.00 GB"  # Default size string for missing file
+            size_str = compute_file_size_str(input_path_str)  # Retrieve formatted file size string using helper in exception path
         except Exception:  # Fallback when size retrieval fails in exception path
             size_str = "0.00 GB"  # Use default size string on error
     pbar.set_description(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{rel}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{size_str}{BackgroundColors.GREEN}){Style.RESET_ALL}")  # Update the progress bar description with the relative path and file size
