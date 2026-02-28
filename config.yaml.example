@@ -652,6 +652,7 @@ dataloader:
 dataset_converter:
   verbose: false                      # Enable verbose output for dataset converter
   output_directory: "Converted"     # Default output directory for converted datasets
+  standardize_formats: ["csv"]             # List of formats to standardize to (e.g., ["csv"]) or empty to keep default behavior
   datasets:                           # Dictionary containing dataset paths
     CICDDoS2019-Dataset:
       - "./Datasets/CICDDoS2019/01-12/"
