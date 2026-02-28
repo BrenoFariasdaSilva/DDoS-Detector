@@ -989,10 +989,14 @@ def write_cleaned_lines_to_file(cleaned_path, cleaned_lines):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
+        cleaned_path = os.path.abspath(os.path.normpath(cleaned_path))  # Normalize and absolutize the cleaned file path
+        parent_dir = os.path.dirname(cleaned_path)  # Compute parent directory for the cleaned file path
+        if parent_dir and not os.path.exists(parent_dir):  # Verify parent directory existence before any write
+            os.makedirs(parent_dir, exist_ok=True)  # Create parent directory immediately before first write using exist_ok
         required_bytes = estimate_bytes_for_lines(cleaned_lines)  # Estimate bytes needed for cleaned lines
-        ensure_enough_space(cleaned_path, required_bytes)  # Ensure enough space to write the cleaned file
+        ensure_enough_space(cleaned_path, required_bytes)  # Ensure enough space to write the cleaned file using same path
 
-        with open(cleaned_path, "w", encoding="utf-8") as f:  # Open the cleaned file path for writing
+        with open(cleaned_path, "w", encoding="utf-8") as f:  # Open the cleaned file path for writing using normalized path
             f.writelines(cleaned_lines)  # Write all cleaned lines to the output file
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -1410,11 +1414,12 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
             return  # Return early to the caller when unsupported extension
 
         dest_dir = resolve_destination_directory(effective_input, input_path, effective_output_base)  # Determine destination directory preserving relative structure
+        dest_dir = os.path.abspath(os.path.normpath(str(dest_dir)))  # Normalize and convert destination directory to absolute path to avoid inconsistencies
 
         needed_targets = []  # Initialize list of formats that actually require conversion for this file
         for fmt in formats_list:  # Iterate requested formats to detect missing outputs
-            target_path = os.path.join(str(dest_dir), f"{name}.{fmt}")  # Compute full target path for candidate output format
-            if not os.path.exists(target_path):  # Verify if the target output file is missing on disk
+            target_path = os.path.join(dest_dir, f"{name}.{fmt}")  # Compute full target path for candidate output format using normalized dest_dir
+            if not os.path.exists(target_path):  # Verify if the target output file is missing on disk using normalized path
                 needed_targets.append(fmt)  # Append format when output file does not exist and conversion is required
 
         if not needed_targets:  # Verify whether any conversion is required after existence checks
@@ -1430,8 +1435,8 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
                 rel = os.path.basename(input_path)  # Use basename when relpath fails for pbar description
             pbar.set_description(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{rel}{Style.RESET_ALL}")  # Update the progress bar description with the relative path
 
-        dir_created = create_destination_if_missing(str(dest_dir), os.path.exists(str(dest_dir)))  # Verify and create destination directory lazily then update flag
-        cleaned_path = os.path.join(str(dest_dir), f"{name}{ext}")  # Path for saving the cleaned file prior to conversion
+        dir_created = create_destination_if_missing(dest_dir, os.path.exists(dest_dir))  # Verify and create destination directory lazily then update flag using normalized path
+        cleaned_path = os.path.join(dest_dir, f"{name}{ext}")  # Path for saving the cleaned file prior to conversion using normalized dest_dir
         clean_file(input_path, cleaned_path)  # Clean the file before conversion to normalize content
 
         df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame for conversion now that conversion is required
@@ -1646,11 +1651,12 @@ def process_single_input_file(idx: int, params: dict) -> None:
             return  # Return early to the caller when unsupported extension
 
         dest_dir = resolve_destination_directory(input_directory, input_path, output_directory)  # Determine destination directory for converted files
+        dest_dir = os.path.abspath(os.path.normpath(str(dest_dir)))  # Normalize and convert destination directory to absolute path to avoid inconsistencies
 
         needed_targets = []  # Initialize list for target formats that must be created for this file
         for fmt in formats_list:  # Iterate requested formats to verify if outputs already exist
-            target_path = os.path.join(str(dest_dir), f"{name}.{fmt}")  # Build expected target path for each candidate format
-            if not os.path.exists(target_path):  # Verify if the specific target file is missing on disk
+            target_path = os.path.join(dest_dir, f"{name}.{fmt}")  # Build expected target path for each candidate format using normalized dest_dir
+            if not os.path.exists(target_path):  # Verify if the specific target file is missing on disk using normalized path
                 needed_targets.append(fmt)  # Add format to needed_targets when output file does not exist
 
         if not needed_targets:  # Verify whether any output formats actually need to be generated
@@ -1659,7 +1665,8 @@ def process_single_input_file(idx: int, params: dict) -> None:
         size_str = compute_file_size_str(str(input_path))  # Retrieve formatted file size string for current input_path now that conversion is required
         send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path} ({size_str})")  # Notify progress via Telegram for current file with file size
 
-        cleaned_path = os.path.join(str(dest_dir), f"{name}{ext}")  # Path for saving the cleaned file prior to conversion
+        dir_created = create_destination_if_missing(dest_dir, os.path.exists(dest_dir))  # Verify and create destination directory lazily then update flag using normalized path
+        cleaned_path = os.path.join(dest_dir, f"{name}{ext}")  # Path for saving the cleaned file prior to conversion using normalized dest_dir
         clean_file(input_path, cleaned_path)  # Clean the file before conversion to normalize content
 
         df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame for conversion now that conversion is required
@@ -1764,6 +1771,7 @@ def perform_conversions(df, formats_list: Optional[list], dest_dir: Optional[str
 
     formats = formats_list or []  # Ensure formats is a list to avoid issues with None
     dest_dir_str = str(dest_dir) if dest_dir is not None else ""  # Ensure os.path.join receives a string
+    dest_dir_str = os.path.abspath(os.path.normpath(dest_dir_str))  # Normalize and absolutize dest_dir to ensure consistent writes and space checks
     name_str = str(name) if name is not None else ""  # Ensure filename component is a string
 
     dir_created = os.path.exists(dest_dir_str)  # Determine whether destination directory already exists
