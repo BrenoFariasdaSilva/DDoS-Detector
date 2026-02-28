@@ -19,6 +19,8 @@ Icon? # match Icon<CR>
 **/Data/*
 **/Dataset/*
 **/Datasets/*
+**/Dataset_Description/*
+**/Datasets_Description/*
 **/Results/*
 **/Result/*
 **/result/*
