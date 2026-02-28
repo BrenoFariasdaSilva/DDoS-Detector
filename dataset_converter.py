@@ -1389,9 +1389,6 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
     """
 
     try:  # Wrap per-file logic to ensure production-safe monitoring
-        size_str = compute_file_size_str(str(input_path))  # Retrieve formatted file size string for current input_path
-        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path} ({size_str})")  # Notify progress via Telegram before processing with file size
-
         file = os.path.basename(str(input_path))  # Extract the file name from the full path
         name, ext = os.path.splitext(file)  # Split file name into base name and extension
         ext = ext.lower()  # Normalize extension to lowercase for matching
@@ -1399,34 +1396,47 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
         formats_list = resolve_formats(formats_list) if formats_list is not None else []  # Normalize formats_list to a list when possible
         formats_list = resolve_standardize_formats(formats_list)  # Apply configured standardize_formats override when present
         orig_format = ext.lstrip('.')  # Compute original extension without leading dot for native-skip logic
-        
+
         if orig_format in formats_list:  # Verify whether native format is included in requested targets
             formats_list = [f for f in formats_list if f != orig_format]  # Remove native format to avoid rewriting original file
 
-        if pbar is not None:  # Verify progress bar instance exists before calling set_description
-            try:  # Attempt to compute a relative path for the description
-                rel = os.path.relpath(input_path, effective_input) if effective_input and os.path.isdir(effective_input) else os.path.basename(input_path)  # Compute relative path when possible
-            except Exception:  # Fallback to basename on error
-                rel = os.path.basename(input_path)  # Use basename when relpath fails
-            pbar.set_description(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{rel}{Style.RESET_ALL}")  # Update the progress bar description with the relative path
-
-        if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Skip unsupported file types early
+        if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Verify supported extension set before any further work
             return  # Return early to the caller when unsupported extension
 
         dest_dir = resolve_destination_directory(effective_input, input_path, effective_output_base)  # Determine destination directory preserving relative structure
-        create_directories(dest_dir)  # Ensure destination directory exists before writing
+
+        needed_targets = []  # Initialize list of formats that actually require conversion for this file
+        for fmt in formats_list:  # Iterate requested formats to detect missing outputs
+            target_path = os.path.join(str(dest_dir), f"{name}.{fmt}")  # Compute full target path for candidate output format
+            if not os.path.exists(target_path):  # Verify if the target output file is missing on disk
+                needed_targets.append(fmt)  # Append format when output file does not exist and conversion is required
+
+        if not needed_targets:  # Verify whether any conversion is required after existence checks
+            return  # Return early when the file is already standardized and no conversions are necessary
+
+        size_str = compute_file_size_str(str(input_path))  # Retrieve formatted file size string for current input_path now that conversion is required
+        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path} ({size_str})")  # Notify progress via Telegram before processing with file size
+
+        if pbar is not None:  # Verify progress bar instance exists before calling set_description
+            try:  # Attempt to compute a relative path for the description to show in pbar
+                rel = os.path.relpath(input_path, effective_input) if effective_input and os.path.isdir(effective_input) else os.path.basename(input_path)  # Compute relative path when possible
+            except Exception:  # Fallback to basename on error during relpath computation
+                rel = os.path.basename(input_path)  # Use basename when relpath fails for pbar description
+            pbar.set_description(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{rel}{Style.RESET_ALL}")  # Update the progress bar description with the relative path
+
+        create_directories(dest_dir)  # Ensure destination directory exists before writing outputs
 
         cleaned_path = os.path.join(str(dest_dir), f"{name}{ext}")  # Path for saving the cleaned file prior to conversion
         clean_file(input_path, cleaned_path)  # Clean the file before conversion to normalize content
 
-        df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame for conversion
-        if "arff" in formats_list:  # If ARFF format is requested for output
+        df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame for conversion now that conversion is required
+        if "arff" in needed_targets:  # If ARFF format is required for output after checks
             convert_to_arff(df, os.path.join(str(dest_dir), f"{name}.arff"))  # Convert and save as ARFF format
-        if "csv" in formats_list:  # If CSV format is requested for output
+        if "csv" in needed_targets:  # If CSV format is required for output after checks
             convert_to_csv(df, os.path.join(str(dest_dir), f"{name}.csv"))  # Convert and save as CSV format
-        if "parquet" in formats_list:  # If Parquet format is requested for output
+        if "parquet" in needed_targets:  # If Parquet format is required for output after checks
             convert_to_parquet(df, os.path.join(str(dest_dir), f"{name}.parquet"))  # Convert and save as Parquet format
-        if "txt" in formats_list:  # If TXT format is requested for output
+        if "txt" in needed_targets:  # If TXT format is required for output after checks
             convert_to_txt(df, os.path.join(str(dest_dir), f"{name}.txt"))  # Convert and save as TXT format
 
         print()  # Print a newline for better readability between files in terminal output
@@ -1614,9 +1624,6 @@ def process_single_input_file(idx: int, params: dict) -> None:
         len_dataset_files = params.get("len_dataset_files")  # Extract total count for progress messages
         pbar = params.get("pbar")  # Extract progress bar instance for updates
 
-        size_str = compute_file_size_str(str(input_path))  # Retrieve formatted file size string for current input_path
-        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path} ({size_str})")  # Notify progress via Telegram for current file with file size
-
         file = os.path.basename(str(input_path))  # Extract the file name from the full path
         name, ext = os.path.splitext(file)  # Split file name into base name and extension
         ext = ext.lower()  # Normalize extension to lowercase for matching
@@ -1624,24 +1631,37 @@ def process_single_input_file(idx: int, params: dict) -> None:
         formats_list = resolve_formats(formats_list) if formats_list is not None else []  # Normalize formats_list to a list when possible
         formats_list = resolve_standardize_formats(formats_list)  # Apply configured standardize_formats override when present
         orig_format = ext.lstrip('.')  # Compute original extension without leading dot for native-skip logic
-        
+
         if orig_format in formats_list:  # Verify whether native format is included in requested targets
             formats_list = [f for f in formats_list if f != orig_format]  # Remove native format to avoid rewriting original file
 
         update_progress_description(pbar, input_path, input_directory)  # Update progress bar description using helper
 
-        if not is_supported_extension(ext):  # Verify that the file has a supported extension
+        if not is_supported_extension(ext):  # Verify that the file has a supported extension before further work
             return  # Return early to the caller when unsupported extension
 
         dest_dir = resolve_destination_directory(input_directory, input_path, output_directory)  # Determine destination directory for converted files
-        create_directories(dest_dir)  # Ensure destination directory exists before writing
+
+        needed_targets = []  # Initialize list for target formats that must be created for this file
+        for fmt in formats_list:  # Iterate requested formats to verify if outputs already exist
+            target_path = os.path.join(str(dest_dir), f"{name}.{fmt}")  # Build expected target path for each candidate format
+            if not os.path.exists(target_path):  # Verify if the specific target file is missing on disk
+                needed_targets.append(fmt)  # Add format to needed_targets when output file does not exist
+
+        if not needed_targets:  # Verify whether any output formats actually need to be generated
+            return  # Return early when file is already standardized and no conversion is required
+
+        size_str = compute_file_size_str(str(input_path))  # Retrieve formatted file size string for current input_path now that conversion is required
+        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path} ({size_str})")  # Notify progress via Telegram for current file with file size
+
+        create_directories(dest_dir)  # Ensure destination directory exists before writing outputs
 
         cleaned_path = os.path.join(str(dest_dir), f"{name}{ext}")  # Path for saving the cleaned file prior to conversion
         clean_file(input_path, cleaned_path)  # Clean the file before conversion to normalize content
 
-        df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame for conversion
+        df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame for conversion now that conversion is required
 
-        perform_conversions(df, formats_list, dest_dir, name)  # Perform requested conversions using helper
+        perform_conversions(df, needed_targets, dest_dir, name)  # Perform only the conversions that were detected as necessary
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert for per-file failures
         print(str(e))  # Print error to terminal for server logs in case of per-file failure
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram when per-file failure occurs
