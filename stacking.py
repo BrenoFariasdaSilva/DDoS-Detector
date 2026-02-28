@@ -1452,7 +1452,7 @@ def generate_and_save_metric_plots(y_true, y_pred, stacking_config: dict, resolv
         if not enabled:
             return
 
-        dpi = plots_cfg.get("dpi", 300)
+        dpi = plots_cfg.get("dpi", 1000)
         fmt = plots_cfg.get("format", "png")
 
         if not isinstance(dpi, int) or dpi <= 0:
@@ -1834,7 +1834,7 @@ def compute_and_save_tsne_plot(X_scaled, labels, output_path, title, perplexity=
         plt.grid(True, alpha=0.3)  # Add grid with transparency
         plt.tight_layout()  # Adjust layout to prevent label cutoff
 
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')  # Save figure with high resolution
+        plt.savefig(output_path, dpi=1000, bbox_inches='tight')  # Save figure with high resolution
         plt.close()  # Close figure to free memory
 
         print(
@@ -2128,7 +2128,7 @@ def generate_feature_usage_heatmap(feature_counts_df, output_path, dataset_file=
         out_png = str(Path(output_path))  # Normalize output path to string
         Path(out_png).parent.mkdir(parents=True, exist_ok=True)  # Ensure parent directory exists
         plt.tight_layout()  # Tighten layout before saving
-        plt.savefig(out_png, dpi=300)  # Save figure to PNG with good resolution
+        plt.savefig(out_png, dpi=1000)  # Save figure to PNG with good resolution
         plt.close(fig)  # Close the figure to release resources
         return out_png  # Return saved PNG path
     except Exception:
@@ -3620,7 +3620,7 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
                 shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, show=False)  # Create summary plot
                 summary_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_summary.png")  # Build plot path
                 plt.tight_layout()  # Adjust layout
-                plt.savefig(summary_plot_path, dpi=150, bbox_inches='tight')  # Save plot
+                plt.savefig(summary_plot_path, dpi=1000, bbox_inches='tight')  # Save plot
                 plt.close()  # Close plot
             except Exception:  # If summary plot fails
                 plt.close()  # Close plot
@@ -3630,7 +3630,7 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
                 shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, plot_type="bar", show=False)  # Create bar plot
                 bar_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_bar.png")  # Build plot path
                 plt.tight_layout()  # Adjust layout
-                plt.savefig(bar_plot_path, dpi=150, bbox_inches='tight')  # Save plot
+                plt.savefig(bar_plot_path, dpi=1000, bbox_inches='tight')  # Save plot
                 plt.close()  # Close plot
             except Exception:  # If bar plot fails
                 plt.close()  # Close plot
@@ -3725,7 +3725,7 @@ def generate_lime_explanations(model, X_test, y_test, feature_names, output_dir,
                     fig = explanation.as_pyplot_figure()  # Get matplotlib figure
                     explanation_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_lime_instance_{idx}.png")  # Build plot path
                     plt.tight_layout()  # Adjust layout
-                    plt.savefig(explanation_plot_path, dpi=150, bbox_inches='tight')  # Save plot
+                    plt.savefig(explanation_plot_path, dpi=1000, bbox_inches='tight')  # Save plot
                     plt.close()  # Close plot
                 except Exception:  # If plot save fails
                     plt.close()  # Close plot
@@ -3819,7 +3819,7 @@ def generate_permutation_importance(model, X_test, y_test, feature_names, output
                 plt.grid(axis='x', alpha=0.3)  # Add X-axis grid
                 plt.tight_layout()  # Adjust layout
                 perm_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_permutation_importance.png")  # Build plot path
-                plt.savefig(perm_plot_path, dpi=150, bbox_inches='tight')  # Save plot
+                plt.savefig(perm_plot_path, dpi=1000, bbox_inches='tight')  # Save plot
                 plt.close()  # Close plot
             except Exception:  # If plot fails
                 plt.close()  # Close plot
@@ -3893,7 +3893,7 @@ def extract_model_feature_importance(model, feature_names, output_dir, model_nam
                     plt.grid(axis='x', alpha=0.3)  # Add X-axis grid
                     plt.tight_layout()  # Adjust layout
                     importance_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_feature_importance.png")  # Build plot path
-                    plt.savefig(importance_plot_path, dpi=150, bbox_inches='tight')  # Save plot
+                    plt.savefig(importance_plot_path, dpi=1000, bbox_inches='tight')  # Save plot
                     plt.close()  # Close plot
                 except Exception:  # If plot fails
                     plt.close()  # Close plot
