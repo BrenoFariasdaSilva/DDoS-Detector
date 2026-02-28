@@ -620,6 +620,33 @@ def resolve_formats(formats):
         raise  # Re-raise to preserve original failure semantics
 
 
+def resolve_standardize_formats(formats_list: Optional[list]) -> list:
+    """
+    Resolve standardize_formats from configuration and return final target formats.
+
+    :param formats_list: The formats requested via CLI or per-call.
+    :return: The list of formats to actually generate.
+    """
+
+    try:  # Wrap resolution to avoid raising from malformed DEFAULTS
+        cfg_section = DEFAULTS.get("dataset_converter", {}) if DEFAULTS else {}  # Retrieve dataset_converter section from DEFAULTS
+        std_formats = cfg_section.get("standardize_formats", None)  # Retrieve configured standardize_formats from config
+        
+        if std_formats is None:  # If configuration does not provide standardize_formats
+            return formats_list or []  # Return provided formats_list or empty list when not configured
+        
+        norm = [str(x).lower() for x in (std_formats or [])]  # Normalize configured entries to lowercase strings
+        allowed = ["arff", "csv", "parquet", "txt"]  # Allowed target formats list
+        final = [f for f in norm if f in allowed]  # Filter configured formats to allowed set
+        
+        if not final:  # If no valid configured formats remain after filtering
+            return formats_list or []  # Fallback to provided formats_list when config invalid or empty
+        
+        return final  # Return the configured list of formats to standardize to
+    except Exception:  # Fallback on any unexpected error during resolution
+        return formats_list or []  # Return provided formats_list or empty list on error
+
+
 def resolve_destination_directory(input_directory, input_path, output_directory):
     """
     Determine where converted files should be saved.
@@ -1370,6 +1397,11 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
         ext = ext.lower()  # Normalize extension to lowercase for matching
 
         formats_list = resolve_formats(formats_list) if formats_list is not None else []  # Normalize formats_list to a list when possible
+        formats_list = resolve_standardize_formats(formats_list)  # Apply configured standardize_formats override when present
+        orig_format = ext.lstrip('.')  # Compute original extension without leading dot for native-skip logic
+        
+        if orig_format in formats_list:  # Verify whether native format is included in requested targets
+            formats_list = [f for f in formats_list if f != orig_format]  # Remove native format to avoid rewriting original file
 
         if pbar is not None:  # Verify progress bar instance exists before calling set_description
             try:  # Attempt to compute a relative path for the description
@@ -1521,6 +1553,7 @@ def process_input_directory(context: dict) -> None:
             return  # Exit early when helper signaled empty discovery
 
         formats_list = resolve_formats(context.get("formats"))  # Normalize and validate output formats for the run
+        formats_list = resolve_standardize_formats(formats_list)  # Apply configured standardize_formats override when present
 
         pbar = create_progress_bar(dataset_files, len_dataset_files)  # Create a progress bar for the conversion process
 
@@ -1589,6 +1622,11 @@ def process_single_input_file(idx: int, params: dict) -> None:
         ext = ext.lower()  # Normalize extension to lowercase for matching
 
         formats_list = resolve_formats(formats_list) if formats_list is not None else []  # Normalize formats_list to a list when possible
+        formats_list = resolve_standardize_formats(formats_list)  # Apply configured standardize_formats override when present
+        orig_format = ext.lstrip('.')  # Compute original extension without leading dot for native-skip logic
+        
+        if orig_format in formats_list:  # Verify whether native format is included in requested targets
+            formats_list = [f for f in formats_list if f != orig_format]  # Remove native format to avoid rewriting original file
 
         update_progress_description(pbar, input_path, input_directory)  # Update progress bar description using helper
 
