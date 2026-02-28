@@ -1431,7 +1431,6 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
             pbar.set_description(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{rel}{Style.RESET_ALL}")  # Update the progress bar description with the relative path
 
         dir_created = create_destination_if_missing(str(dest_dir), os.path.exists(str(dest_dir)))  # Verify and create destination directory lazily then update flag
-        dir_created = create_destination_if_missing(str(dest_dir), os.path.exists(str(dest_dir)))  # Verify and create destination directory lazily then update flag
         cleaned_path = os.path.join(str(dest_dir), f"{name}{ext}")  # Path for saving the cleaned file prior to conversion
         clean_file(input_path, cleaned_path)  # Clean the file before conversion to normalize content
 
