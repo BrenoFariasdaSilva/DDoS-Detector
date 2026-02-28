@@ -375,7 +375,7 @@ def validate_and_prepare_input_paths(paths: list) -> list:  # Define a nested he
         raise  # Re-raise to preserve failure semantics
 
 
-def resolve_output_path(arg_output: Optional[str], cfg_section: dict) -> str:  # Define a nested helper to resolve output directory
+def resolve_output_path(arg_output: Optional[str], cfg_section: dict) -> str:
     """
     Resolve the output directory path from CLI argument or configuration.
 
@@ -386,12 +386,8 @@ def resolve_output_path(arg_output: Optional[str], cfg_section: dict) -> str:  #
 
     try:  # Wrap helper logic to ensure production-safe monitoring
         output_default = cfg_section.get("output_directory", "./Output") or "./Output"  # Determine configured default
-        out = arg_output if arg_output else output_default  # Choose CLI-provided output or fallback default
-        
-        if not verify_filepath_exists(out):  # Verify output path existence
-            create_directories(out)  # Create output directory when missing
-            
-        return out  # Return the resolved output path
+        out = arg_output if arg_output else output_default  # Choose CLI-provided output or fallback default; do not create directories here to keep creation lazy
+        return out  # Return the resolved output path without creating it (creation is performed lazily per-dataset)
     except Exception as e:  # Catch exceptions inside helper
         print(str(e))  # Print helper exception to terminal for logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send helper exception via Telegram
@@ -1434,8 +1430,6 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
                 rel = os.path.basename(input_path)  # Use basename when relpath fails for pbar description
             pbar.set_description(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{rel}{Style.RESET_ALL}")  # Update the progress bar description with the relative path
 
-        create_directories(dest_dir)  # Ensure destination directory exists before writing outputs
-
         cleaned_path = os.path.join(str(dest_dir), f"{name}{ext}")  # Path for saving the cleaned file prior to conversion
         clean_file(input_path, cleaned_path)  # Clean the file before conversion to normalize content
 
@@ -1664,8 +1658,6 @@ def process_single_input_file(idx: int, params: dict) -> None:
         size_str = compute_file_size_str(str(input_path))  # Retrieve formatted file size string for current input_path now that conversion is required
         send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path} ({size_str})")  # Notify progress via Telegram for current file with file size
 
-        create_directories(dest_dir)  # Ensure destination directory exists before writing outputs
-
         cleaned_path = os.path.join(str(dest_dir), f"{name}{ext}")  # Path for saving the cleaned file prior to conversion
         clean_file(input_path, cleaned_path)  # Clean the file before conversion to normalize content
 
@@ -1738,6 +1730,26 @@ def is_supported_extension(ext: str) -> bool:
     return ext in [".arff", ".csv", ".parquet", ".txt"]  # Return True for supported extensions and False otherwise
 
 
+def create_destination_if_missing(dest_dir: str, dir_created: bool) -> bool:
+    """
+    Ensure destination directory exists; create lazily before first write.
+
+    :param dest_dir: Destination directory path string.
+    :param dir_created: Boolean flag indicating whether directory already exists.
+    :return: Updated boolean flag indicating directory existence.
+    """
+
+    try:  # Enter guarded execution block to handle exceptions
+        if not dir_created:  # Verify destination directory is missing before creation
+            create_directories(dest_dir)  # Create destination directory lazily
+            dir_created = True  # Mark destination as created to avoid redundant creation attempts
+        return dir_created  # Return updated flag indicating directory existence
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def perform_conversions(df, formats_list: Optional[list], dest_dir: Optional[str], name: Optional[str]) -> None:
     """
     Convert a DataFrame into the requested output formats and save to destination directory.
@@ -1753,13 +1765,19 @@ def perform_conversions(df, formats_list: Optional[list], dest_dir: Optional[str
     dest_dir_str = str(dest_dir) if dest_dir is not None else ""  # Ensure os.path.join receives a string
     name_str = str(name) if name is not None else ""  # Ensure filename component is a string
 
+    dir_created = os.path.exists(dest_dir_str)  # Determine whether destination directory already exists
+
     if "arff" in formats:  # If ARFF format is requested for output
+        dir_created = create_destination_if_missing(dest_dir_str, dir_created)  # Verify and create destination directory lazily then update flag
         convert_to_arff(df, os.path.join(dest_dir_str, f"{name_str}.arff"))  # Convert and save as ARFF format
     if "csv" in formats:  # If CSV format is requested for output
+        dir_created = create_destination_if_missing(dest_dir_str, dir_created)  # Verify and create destination directory lazily then update flag
         convert_to_csv(df, os.path.join(dest_dir_str, f"{name_str}.csv"))  # Convert and save as CSV format
     if "parquet" in formats:  # If Parquet format is requested for output
+        dir_created = create_destination_if_missing(dest_dir_str, dir_created)  # Verify and create destination directory lazily then update flag
         convert_to_parquet(df, os.path.join(dest_dir_str, f"{name_str}.parquet"))  # Convert and save as Parquet format
     if "txt" in formats:  # If TXT format is requested for output
+        dir_created = create_destination_if_missing(dest_dir_str, dir_created)  # Verify and create destination directory lazily then update flag
         convert_to_txt(df, os.path.join(dest_dir_str, f"{name_str}.txt"))  # Convert and save as TXT format
 
 
