@@ -1474,7 +1474,8 @@ def create_progress_bar(dataset_files: list, len_dataset_files: int):
     """
 
     try:  # Wrap helper logic to ensure production-safe monitoring
-        pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len_dataset_files, leave=False, dynamic_ncols=True)  # Create a single-line progress bar for the conversion process
+        bar_format_str = BackgroundColors.CYAN + "{l_bar}{bar} " + BackgroundColors.CYAN + "{percentage:3.0f}%" + Style.RESET_ALL + "{r_bar}"  # Compose bar_format with cyan percentage field
+        pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len_dataset_files, leave=False, dynamic_ncols=True, bar_format=bar_format_str)  # Create a single-line progress bar for the conversion process with colored percentage
         return pbar  # Return the created progress bar instance
     except Exception as e:  # Catch exceptions inside helper
         print(str(e))  # Print helper exception to terminal for logs
