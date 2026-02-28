@@ -2770,7 +2770,7 @@ def plot_ga_convergence(
             plt.title(f"GA Convergence - {base_dataset_name} (run={run}, pop={pop_size}, cx={cxpb}, mut={mutpb})")  # Set plot title with run parameters
             plt.grid(True, linestyle="--", alpha=0.5)  # Add dashed grid with 50% transparency
             plt.tight_layout()  # Adjust subplot parameters for tight layout
-            plt.savefig(fig_path, dpi=150)  # Save figure to file with 150 DPI resolution
+            plt.savefig(fig_path, dpi=1000)  # Save figure to file with 150 DPI resolution
             plt.close()  # Close plot to free memory resources
             verbose_output(
                 f"{BackgroundColors.GREEN}Saved GA convergence plot to {BackgroundColors.CYAN}{fig_path}{Style.RESET_ALL}"
@@ -2874,7 +2874,7 @@ def generate_convergence_plots(
                     plt.grid(True, linestyle="--", alpha=0.5)  # Add grid with 50% transparency
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "01_best_f1_convergence.png")  # Define plot path
-                    plt.savefig(plot_path, dpi=150)  # Save figure with 150 DPI
+                    plt.savefig(plot_path, dpi=1000)  # Save figure with 150 DPI
                     plt.close()  # Close plot to free memory
                     saved_plots.append(plot_path)  # Add to saved plots list
                 except Exception:  # If plotting fails
@@ -2890,7 +2890,7 @@ def generate_convergence_plots(
                     plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "02_feature_count_evolution.png")  # Define plot path
-                    plt.savefig(plot_path, dpi=150)  # Save figure
+                    plt.savefig(plot_path, dpi=1000)  # Save figure
                     plt.close()  # Close plot
                     saved_plots.append(plot_path)  # Add to saved plots list
                 except Exception:  # If plotting fails
@@ -2906,7 +2906,7 @@ def generate_convergence_plots(
                     plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "03_pareto_front_size.png")  # Define plot path
-                    plt.savefig(plot_path, dpi=150)  # Save figure
+                    plt.savefig(plot_path, dpi=1000)  # Save figure
                     plt.close()  # Close plot
                     saved_plots.append(plot_path)  # Add to saved plots list
                 except Exception:  # If plotting fails
@@ -2922,7 +2922,7 @@ def generate_convergence_plots(
                     plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "04_avg_f1_evolution.png")  # Define plot path
-                    plt.savefig(plot_path, dpi=150)  # Save figure
+                    plt.savefig(plot_path, dpi=1000)  # Save figure
                     plt.close()  # Close plot
                     saved_plots.append(plot_path)  # Add to saved plots list
                 except Exception:  # If plotting fails
@@ -2938,7 +2938,7 @@ def generate_convergence_plots(
                     plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "05_avg_feature_count_evolution.png")  # Define plot path
-                    plt.savefig(plot_path, dpi=150)  # Save figure
+                    plt.savefig(plot_path, dpi=1000)  # Save figure
                     plt.close()  # Close plot
                     saved_plots.append(plot_path)  # Add to saved plots list
                 except Exception:  # If plotting fails
@@ -2954,7 +2954,7 @@ def generate_convergence_plots(
                     plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "06_hypervolume_evolution.png")  # Define plot path
-                    plt.savefig(plot_path, dpi=150)  # Save figure
+                    plt.savefig(plot_path, dpi=1000)  # Save figure
                     plt.close()  # Close plot
                     saved_plots.append(plot_path)  # Add to saved plots list
                 except Exception:  # If plotting fails
@@ -2970,7 +2970,7 @@ def generate_convergence_plots(
                     plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "07_diversity_evolution.png")  # Define plot path
-                    plt.savefig(plot_path, dpi=150)  # Save figure
+                    plt.savefig(plot_path, dpi=1000)  # Save figure
                     plt.close()  # Close plot
                     saved_plots.append(plot_path)  # Add to saved plots list
                 except Exception:  # If plotting fails
@@ -2998,7 +2998,7 @@ def generate_convergence_plots(
                     ax1.grid(True, linestyle="--", alpha=0.5)  # Add grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "08_multi_objective_convergence.png")  # Define plot path
-                    plt.savefig(plot_path, dpi=150)  # Save figure
+                    plt.savefig(plot_path, dpi=1000)  # Save figure
                     plt.close()  # Close plot
                     saved_plots.append(plot_path)  # Add to saved plots list
                 except Exception:  # If plotting fails
@@ -3584,7 +3584,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                     plt.legend(loc="best", fontsize=8, ncol=2)  # Add legend with 2 columns
                 plt.tight_layout()  # Adjust layout
                 plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_overlay_best_f1.png")  # Define plot path
-                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.savefig(plot_path, dpi=1000)  # Save figure
                 plt.close()  # Close plot
                 saved_plots.append(plot_path)  # Add to saved plots list
             except Exception:  # If plotting fails
@@ -3604,7 +3604,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                 plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
                 plt.tight_layout()  # Adjust layout
                 plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_dist_final_f1.png")  # Define plot path
-                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.savefig(plot_path, dpi=1000)  # Save figure
                 plt.close()  # Close plot
                 saved_plots.append(plot_path)  # Add to saved plots list
             except Exception:  # If plotting fails
@@ -3624,7 +3624,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                 plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
                 plt.tight_layout()  # Adjust layout
                 plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_dist_final_features.png")  # Define plot path
-                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.savefig(plot_path, dpi=1000)  # Save figure
                 plt.close()  # Close plot
                 saved_plots.append(plot_path)  # Add to saved plots list
             except Exception:  # If plotting fails
@@ -3649,7 +3649,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                     plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_dist_final_hypervolume.png")  # Define plot path
-                    plt.savefig(plot_path, dpi=150)  # Save figure
+                    plt.savefig(plot_path, dpi=1000)  # Save figure
                     plt.close()  # Close plot
                     saved_plots.append(plot_path)  # Add to saved plots list
             except Exception:  # If plotting fails
@@ -3679,7 +3679,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                 plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
                 plt.tight_layout()  # Adjust layout
                 plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_bar_final_f1.png")  # Define plot path
-                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.savefig(plot_path, dpi=1000)  # Save figure
                 plt.close()  # Close plot
                 saved_plots.append(plot_path)  # Add to saved plots list
             except Exception:  # If plotting fails
@@ -3698,7 +3698,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                 plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
                 plt.tight_layout()  # Adjust layout
                 plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_bar_final_features.png")  # Define plot path
-                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.savefig(plot_path, dpi=1000)  # Save figure
                 plt.close()  # Close plot
                 saved_plots.append(plot_path)  # Add to saved plots list
             except Exception:  # If plotting fails
@@ -3727,7 +3727,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                     plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_bar_final_hypervolume.png")  # Define plot path
-                    plt.savefig(plot_path, dpi=150)  # Save figure
+                    plt.savefig(plot_path, dpi=1000)  # Save figure
                     plt.close()  # Close plot
                     saved_plots.append(plot_path)  # Add to saved plots list
             except Exception:  # If plotting fails
@@ -3767,7 +3767,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                     plt.grid(True, linestyle="--", alpha=0.3)  # Add grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_aggregated_convergence.png")  # Define plot path
-                    plt.savefig(plot_path, dpi=150)  # Save figure
+                    plt.savefig(plot_path, dpi=1000)  # Save figure
                     plt.close()  # Close plot
                     saved_plots.append(plot_path)  # Add to saved plots list
             except Exception:  # If plotting fails
@@ -3787,7 +3787,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                 plt.grid(True, linestyle="--", alpha=0.3)  # Add grid
                 plt.tight_layout()  # Adjust layout
                 plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_scatter_f1_vs_features.png")  # Define plot path
-                plt.savefig(plot_path, dpi=150)  # Save figure
+                plt.savefig(plot_path, dpi=1000)  # Save figure
                 plt.close()  # Close plot
                 saved_plots.append(plot_path)  # Add to saved plots list
             except Exception:  # If plotting fails
@@ -3819,7 +3819,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                     plt.title(f"Metric Correlation Heatmap\\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_correlation_heatmap.png")  # Define plot path
-                    plt.savefig(plot_path, dpi=150)  # Save figure
+                    plt.savefig(plot_path, dpi=1000)  # Save figure
                     plt.close()  # Close plot
                     saved_plots.append(plot_path)  # Add to saved plots list
             except Exception:  # If plotting fails
@@ -3843,7 +3843,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                     plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_boxplot_f1_by_pop.png")  # Define plot path
-                    plt.savefig(plot_path, dpi=150)  # Save figure
+                    plt.savefig(plot_path, dpi=1000)  # Save figure
                     plt.close()  # Close plot
                     saved_plots.append(plot_path)  # Add to saved plots list
             except Exception:  # If plotting fails
