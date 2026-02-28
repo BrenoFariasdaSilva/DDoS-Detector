@@ -120,6 +120,7 @@ def get_default_config() -> dict:
             "include_data_augmentation_info": True,
             "generate_table_image": True,
             "table_image_format": "png",
+            "table_image_timeout_ms": 30000,
             "csv_output_suffix": "_description",
             "class_column_name": "Label",
             "dropna_before_analysis": False,
@@ -1886,12 +1887,31 @@ def export_dataframe_image(styled_df, output_path):
     :return: None
     """
 
-    try:  # Wrap to ensure exceptions bubble with logging consistent with module
-        dfi.export(styled_df, output_path)  # Export styled DataFrame to PNG using dataframe_image
-    except Exception as e:  # If export fails, do not swallow the error
-        print(str(e))  # Print export error for logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-        raise  # Re-raise to indicate failure
+    try:  # Wrap to ensure exceptions are handled and module logging conventions are preserved
+        cfg = load_config_file()  # Load configuration from config.yaml if present
+        timeout_ms = int((cfg or {}).get("dataset_descriptor", {}).get("table_image_timeout_ms", 30000))  # Determine timeout in ms with fallback
+        src = "config" if (cfg or {}).get("dataset_descriptor", {}).get("table_image_timeout_ms") is not None else "default"  # Determine config source
+        print(f"[CONFIG] table_image_timeout_ms = {timeout_ms} (source: {src})")  # Log the timeout value and its source
+        try:  # Attempt export with Playwright and specified timeout
+            dfi.export(styled_df, output_path, table_conversion="playwright", screenshot_timeout=timeout_ms)  # Export styled DataFrame to PNG with Playwright and configured timeout
+            print(f"[DEBUG] Exported image: {output_path}")  # Log successful export for diagnostics
+        except TypeError:  # Handle dataframe_image versions that do not accept screenshot_timeout parameter
+            dfi.export(styled_df, output_path, table_conversion="playwright")  # Fallback to export without explicit timeout parameter
+            print(f"[DEBUG] Exported image (fallback): {output_path}")  # Log fallback successful export for diagnostics
+    except Exception as e:  # If export fails, log warning and continue without crashing
+        try:  # Try to import Playwright-specific TimeoutError for precise detection
+            from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError  # Optional import of Playwright TimeoutError
+        except Exception:
+            PlaywrightTimeoutError = None  # Set to None when import fails
+        if PlaywrightTimeoutError is not None and isinstance(e, PlaywrightTimeoutError):  # Verify if exception is Playwright TimeoutError
+            print(f"[WARNING] Playwright screenshot timeout while exporting {output_path}: {e}")  # Warn when Playwright timeout occurs
+        else:
+            print(f"[WARNING] Failed to export image {output_path}: {e}")  # Warn for general export failures
+        try:  # Send exception trace via Telegram for observability
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        except Exception:
+            pass  # Ignore failures when sending Telegram notifications
+        return  # Return gracefully to avoid terminating the program
 
 
 def generate_table_image_from_dataframe(df, output_path, config: dict | None = None):
