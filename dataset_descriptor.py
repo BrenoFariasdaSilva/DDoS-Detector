@@ -1394,7 +1394,7 @@ def save_tsne_plot(X_emb, labels, output_path, title):
         plt.xlabel("t-SNE 1")  # X-axis label
         plt.ylabel("t-SNE 2")  # Y-axis label
         plt.tight_layout()  # Adjust layout
-        plt.savefig(output_path, dpi=150)  # Save figure to disk
+        plt.savefig(output_path, dpi=1000)  # Save figure to disk
         plt.close()  # Close figure to free memory
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -1442,7 +1442,7 @@ def save_tsne_3d_plot(X_emb, labels, output_path, title):
         ax.set_ylabel("t-SNE 2")  # Y-axis label
         cast(Any, ax).set_zlabel("t-SNE 3")  # Z-axis label (cast to Any for typing)
         plt.tight_layout()  # Adjust layout
-        plt.savefig(output_path, dpi=150)  # Save figure to disk
+        plt.savefig(output_path, dpi=1000)  # Save figure to disk
         plt.close()  # Close figure to free memory
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
