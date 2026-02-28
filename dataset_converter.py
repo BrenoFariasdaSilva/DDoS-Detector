@@ -63,6 +63,7 @@ from pathlib import Path  # For handling file paths
 from scipy.io import arff as scipy_arff  # Used to read ARFF files
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For Telegram utilities and global exception hook
 from tqdm import tqdm  # For showing a progress bar
+from typing import Optional  # For optional typing hints
 
 
 # Macros:
@@ -374,7 +375,7 @@ def validate_and_prepare_input_paths(paths: list) -> list:  # Define a nested he
         raise  # Re-raise to preserve failure semantics
 
 
-def resolve_output_path(arg_output: str, cfg_section: dict) -> str:  # Define a nested helper to resolve output directory
+def resolve_output_path(arg_output: Optional[str], cfg_section: dict) -> str:  # Define a nested helper to resolve output directory
     """
     Resolve the output directory path from CLI argument or configuration.
 
@@ -1586,14 +1587,9 @@ def process_single_input_file(idx: int, params: dict) -> None:
 
         formats_list = resolve_formats(formats_list) if formats_list is not None else []  # Normalize formats_list to a list when possible
 
-        if pbar is not None:  # Verify progress bar instance exists before calling set_description
-            try:  # Attempt to compute relative path for description
-                rel = os.path.relpath(input_path, input_directory) if input_directory and os.path.isdir(input_directory) else os.path.basename(input_path)  # Compute relative path when possible
-            except Exception:  # Fallback to basename on error
-                rel = os.path.basename(input_path)  # Use basename when relpath fails
-            pbar.set_description(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{rel}{Style.RESET_ALL}")  # Update the progress bar description with the relative path
+        update_progress_description(pbar, input_path, input_directory)  # Update progress bar description using helper
 
-        if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Skip unsupported file types early
+        if not is_supported_extension(ext):  # Verify that the file has a supported extension
             return  # Return early to the caller when unsupported extension
 
         dest_dir = resolve_destination_directory(input_directory, input_path, output_directory)  # Determine destination directory for converted files
@@ -1603,20 +1599,74 @@ def process_single_input_file(idx: int, params: dict) -> None:
         clean_file(input_path, cleaned_path)  # Clean the file before conversion to normalize content
 
         df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame for conversion
-        if "arff" in formats_list:  # If ARFF format is requested for output
-            convert_to_arff(df, os.path.join(str(dest_dir), f"{name}.arff"))  # Convert and save as ARFF format
-        if "csv" in formats_list:  # If CSV format is requested for output
-            convert_to_csv(df, os.path.join(str(dest_dir), f"{name}.csv"))  # Convert and save as CSV format
-        if "parquet" in formats_list:  # If Parquet format is requested for output
-            convert_to_parquet(df, os.path.join(str(dest_dir), f"{name}.parquet"))  # Convert and save as Parquet format
-        if "txt" in formats_list:  # If TXT format is requested for output
-            convert_to_txt(df, os.path.join(str(dest_dir), f"{name}.txt"))  # Convert and save as TXT format
 
-        print()  # Print a newline for better readability between files in terminal output
+        perform_conversions(df, formats_list, dest_dir, name)  # Perform requested conversions using helper
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert for per-file failures
         print(str(e))  # Print error to terminal for server logs in case of per-file failure
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram when per-file failure occurs
         raise  # Re-raise to preserve original failure semantics for upstream handling
+
+
+def update_progress_description(pbar, input_path: Optional[str], input_directory: Optional[str]) -> None:
+    """
+    Update the progress bar description with the relative path of the current file.
+
+    :param pbar: The tqdm progress bar instance to update.
+    :param input_path: The full path of the current input file.
+    :param input_directory: The base input directory to compute a relative path.
+    :return: None
+    """
+
+    if pbar is None:  # Verify that a progress bar instance was provided
+        return  # Return immediately when no progress bar is available
+    try:  # Wrap relative path computation to avoid raising inside progress update
+        input_path_str = str(input_path) if input_path is not None else ""  # Normalize input_path to string to satisfy os.path expectations
+        input_dir_str = str(input_directory) if input_directory is not None else ""  # Normalize input_directory to string to satisfy os.path expectations
+        if input_dir_str and os.path.isdir(input_dir_str):  # Verify the input directory exists before using relpath
+            rel = os.path.relpath(input_path_str, input_dir_str)  # Compute relative path when possible
+        else:  # If no valid input directory available
+            rel = os.path.basename(input_path_str)  # Use basename when relpath is not applicable
+    except Exception:  # Fallback when relpath computation fails for any reason
+        input_path_str = str(input_path) if input_path is not None else ""  # Normalize input_path again in exception path
+        rel = os.path.basename(input_path_str)  # Use basename when relpath fails
+    pbar.set_description(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{rel}{Style.RESET_ALL}")  # Update the progress bar description with the relative path
+
+
+def is_supported_extension(ext: str) -> bool:
+    """
+    Check whether the file extension is one of the supported dataset formats.
+
+    :param ext: The file extension to evaluate (including leading dot).
+    :param: None
+    :return: True when extension is supported, otherwise False.
+    """
+
+    return ext in [".arff", ".csv", ".parquet", ".txt"]  # Return True for supported extensions and False otherwise
+
+
+def perform_conversions(df, formats_list: Optional[list], dest_dir: Optional[str], name: Optional[str]) -> None:
+    """
+    Convert a DataFrame into the requested output formats and save to destination directory.
+
+    :param df: The pandas DataFrame to convert.
+    :param formats_list: The list of format names to generate (e.g., ['arff','csv']).
+    :param dest_dir: The destination directory where outputs will be saved.
+    :param name: The base filename (without extension) for output files.
+    :return: None
+    """
+
+    formats = formats_list or []  # Ensure formats is a list to avoid issues with None
+    dest_dir_str = str(dest_dir) if dest_dir is not None else ""  # Ensure os.path.join receives a string
+    name_str = str(name) if name is not None else ""  # Ensure filename component is a string
+
+    if "arff" in formats:  # If ARFF format is requested for output
+        convert_to_arff(df, os.path.join(dest_dir_str, f"{name_str}.arff"))  # Convert and save as ARFF format
+    if "csv" in formats:  # If CSV format is requested for output
+        convert_to_csv(df, os.path.join(dest_dir_str, f"{name_str}.csv"))  # Convert and save as CSV format
+    if "parquet" in formats:  # If Parquet format is requested for output
+        convert_to_parquet(df, os.path.join(dest_dir_str, f"{name_str}.parquet"))  # Convert and save as Parquet format
+    if "txt" in formats:  # If TXT format is requested for output
+        convert_to_txt(df, os.path.join(dest_dir_str, f"{name_str}.txt"))  # Convert and save as TXT format
 
 
 def batch_convert(input_directory=None, output_directory=None, formats=None):
@@ -1801,7 +1851,7 @@ def main():
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
         )  # Output the end of the program message
         
-        send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter started for input: {input_path} and output: {output_path} finished. Execution time: {calculate_execution_time(start_time, finish_time)}.")  # Notify finish via Telegram
+        send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter finished for input: {', '.join(input_paths)} and output: {output_path}. Execution time: {calculate_execution_time(start_time, finish_time)}.")  # Notify finish via Telegram
 
         (
             atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
