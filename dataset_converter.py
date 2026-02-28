@@ -658,11 +658,21 @@ def resolve_destination_directory(input_directory, input_path, output_directory)
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        if os.path.isfile(input_directory):  # If converting a single file
-            return output_directory  # Save directly
-
-        rel_dir = os.path.relpath(os.path.dirname(input_path), input_directory)  # Subdir path
-        return os.path.join(output_directory, rel_dir) if rel_dir != "." else output_directory  # Preserve structure
+        input_dir_str = str(input_directory) if input_directory is not None else ""  # Normalize input_directory to string
+        out_dir_str = str(output_directory) if output_directory is not None else ""  # Normalize output_directory to string
+        if not out_dir_str:  # Verify whether an output_directory was provided
+            out_dir_str = "Converted"  # Use 'Converted' as default when not provided
+        if os.path.isfile(input_dir_str):  # Verify when input_directory is actually a file path
+            input_dir_str = os.path.dirname(input_dir_str) or "."  # Normalize to parent directory when a file was passed
+        if os.path.isabs(out_dir_str):  # Verify if provided output_directory is absolute
+            base_output = out_dir_str  # Use absolute output_directory directly as base
+        else:  # When output_directory is relative, resolve it under the dataset input directory
+            if input_dir_str and os.path.isdir(input_dir_str):  # Verify the input directory exists before joining
+                base_output = os.path.join(input_dir_str, out_dir_str)  # Place relative output_directory inside the input dataset directory
+            else:  # Fallback when input directory is not available or does not exist
+                base_output = os.path.join(os.getcwd(), out_dir_str)  # Resolve relative output_directory under current working directory as last resort
+        rel_dir = os.path.relpath(os.path.dirname(input_path), input_dir_str)  # Compute subdirectory path relative to input directory
+        return os.path.join(base_output, rel_dir) if rel_dir != "." else base_output  # Preserve directory structure under resolved base
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
