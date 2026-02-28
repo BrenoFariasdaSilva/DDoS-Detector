@@ -1336,7 +1336,7 @@ def process_dataset_paths(ds_paths: list, context: dict, cfg: dict) -> None:
             formats_list = resolve_formats(context.get("formats"))  # Normalize and validate output formats for this path
             len_dataset_files = len(dataset_files)  # Count files to process for progress reporting
 
-            pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len_dataset_files)  # Create a progress bar for the conversion process
+            pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len_dataset_files, leave=False, dynamic_ncols=True)  # Create a single-line progress bar for the conversion process
 
             for idx, input_path in enumerate(pbar, start=1):  # Iterate files for this configured path with index
                 process_dataset_file(idx, len_dataset_files, input_path, effective_input, effective_output_base, formats_list, pbar)  # Delegate per-file processing to helper
@@ -1369,8 +1369,12 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
 
         formats_list = resolve_formats(formats_list) if formats_list is not None else []  # Normalize formats_list to a list when possible
 
-        if pbar is not None:  # Verify progress bar instance exists before calling set_postfix_str
-            pbar.set_postfix_str(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}")  # Display current file in progress bar
+        if pbar is not None:  # Verify progress bar instance exists before calling set_description
+            try:  # Attempt to compute a relative path for the description
+                rel = os.path.relpath(input_path, effective_input) if effective_input and os.path.isdir(effective_input) else os.path.basename(input_path)  # Compute relative path when possible
+            except Exception:  # Fallback to basename on error
+                rel = os.path.basename(input_path)  # Use basename when relpath fails
+            pbar.set_description(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{rel}{Style.RESET_ALL}")  # Update the progress bar description with the relative path
 
         if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Skip unsupported file types early
             return  # Return early to the caller when unsupported extension
@@ -1469,7 +1473,7 @@ def create_progress_bar(dataset_files: list, len_dataset_files: int):
     """
 
     try:  # Wrap helper logic to ensure production-safe monitoring
-        pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len_dataset_files)  # Create a progress bar for the conversion process
+        pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len_dataset_files, leave=False, dynamic_ncols=True)  # Create a single-line progress bar for the conversion process
         return pbar  # Return the created progress bar instance
     except Exception as e:  # Catch exceptions inside helper
         print(str(e))  # Print helper exception to terminal for logs
@@ -1582,8 +1586,12 @@ def process_single_input_file(idx: int, params: dict) -> None:
 
         formats_list = resolve_formats(formats_list) if formats_list is not None else []  # Normalize formats_list to a list when possible
 
-        if pbar is not None:  # Verify progress bar instance exists before calling set_postfix_str
-            pbar.set_postfix_str(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{name}{ext}{Style.RESET_ALL}")  # Display current file in progress bar
+        if pbar is not None:  # Verify progress bar instance exists before calling set_description
+            try:  # Attempt to compute relative path for description
+                rel = os.path.relpath(input_path, input_directory) if input_directory and os.path.isdir(input_directory) else os.path.basename(input_path)  # Compute relative path when possible
+            except Exception:  # Fallback to basename on error
+                rel = os.path.basename(input_path)  # Use basename when relpath fails
+            pbar.set_description(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{rel}{Style.RESET_ALL}")  # Update the progress bar description with the relative path
 
         if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Skip unsupported file types early
             return  # Return early to the caller when unsupported extension
