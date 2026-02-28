@@ -407,7 +407,42 @@ def verify_filepath_exists(filepath):
             f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
         )  # Output the verbose message
 
-        return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
+        if os.path.exists(filepath):  # Check if the file or folder exists at the specified path
+            return True  # Return True if it exists
+
+        candidate = str(filepath).strip()  # Normalize and sanitize common mis-formatting produced by config files
+
+        if (candidate.startswith("'") and candidate.endswith("'")) or (
+            candidate.startswith('"') and candidate.endswith('"')
+        ):  # Handle common case where paths in config files are accidentally wrapped in quotes, which can cause os.path.exists to fail. This trims matching leading/trailing quotes if they exist.
+            candidate = candidate[1:-1].strip()  # Remove leading/trailing quotes and whitespace
+
+        candidate_no_trail = candidate.rstrip("/\\")  # Remove trailing slashes or backslashes which can cause os.path.exists to fail on some platforms or configurations. This handles cases where a directory path is provided with an extra slash at the end.
+        if candidate_no_trail and os.path.exists(candidate_no_trail):  # Check existence of candidate without trailing slashes
+            return True  # Found candidate after removing trailing slash/backslash
+
+        repo_dir = os.path.dirname(os.path.abspath(__file__))  # If candidate looks like an absolute path but does not exist, try resolving it relative to the repository/script directory or the current working directory
+        cwd = os.getcwd()  # Current working directory to attempt alternate resolution
+
+        alt = candidate.lstrip("/") if candidate.startswith("/") else candidate  # If candidate starts with a leading slash, remove it and try repo-relative and cwd-relative
+
+        repo_candidate = os.path.join(repo_dir, alt)  # Build repo-relative candidate path
+        cwd_candidate = os.path.join(cwd, alt)  # Build cwd-relative candidate path
+
+        if os.path.exists(repo_candidate):  # Check if repo-relative candidate exists
+            return True  # Found repo-relative path
+
+        if os.path.exists(cwd_candidate):  # Check if cwd-relative candidate exists
+            return True  # Found cwd-relative path
+
+        try:  # As a last resort, try making an absolute path from candidate (handles './path')
+            abs_candidate = os.path.abspath(candidate)  # Build absolute path
+            if os.path.exists(abs_candidate):  # Check existence of absolute candidate
+                return True  # Found absolute candidate
+        except Exception:  # Ignore errors when resolving absolute candidate
+            pass  # Swallow resolution exceptions and continue
+
+        return False  # Not found after all heuristics
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
