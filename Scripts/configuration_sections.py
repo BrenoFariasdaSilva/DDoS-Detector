@@ -134,6 +134,74 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def EnsureStackLength(stack: list[str], level: int) -> None:
+    """
+    Ensure the stack has a slot for the given level.
+
+    :param stack: The stack of keys indexed by indentation level.
+    :param level: The indentation level that must be addressable.
+    :return: None.
+    """
+
+    while len(stack) <= level:  # Verify stack length and loop until level is addressable
+        stack.append("")  # Append placeholder entry so the stack is indexable at level
+
+
+def UpdateStackForKey(stack: list[str], level: int, key: str) -> None:
+    """
+    Update the stack with a key at the specified level and truncate deeper levels.
+
+    :param stack: The stack of keys indexed by indentation level.
+    :param level: The indentation level where the key belongs.
+    :param key: The mapping key to record at the specified level.
+    :return: None.
+    """
+
+    EnsureStackLength(stack, level)  # Ensure the stack has room for the specified level
+    stack[level] = key  # Record the provided key at the computed level in the stack
+    del stack[level + 1 :]  # Truncate any deeper levels beyond the current one
+
+
+def QuoteListItemIfNeeded(line: str) -> str:
+    """
+    Quote YAML list item scalars when they represent filesystem paths or contain spaces.
+
+    :param line: The YAML line to inspect (may be a list item like '- ./path').
+    :return: The possibly-updated YAML line with the scalar quoted when necessary.
+    """
+
+    m = re.match(r"^(\s*)-\s+(.*)$", line)  # Match indented list item lines like '- value'
+    
+    if not m:  # If not a list item, return original line unchanged
+        return line  # No change required when line is not a list entry
+    
+    indent = m.group(1)  # Leading indentation for the list item
+    item = m.group(2).strip()  # Extract the scalar portion after '-'
+    
+    if not item:  # Empty item requires no quoting
+        return line  # Return original when item is empty
+    
+    if (item.startswith('"') and item.endswith('"')) or (item.startswith("'") and item.endswith("'")):  # Already quoted
+        return line  # Preserve already-quoted scalars as-is
+    
+    needs_quote = False  # Default: do not quote
+    
+    if item.startswith('./') or item.startswith('.\\'):  # Filesystem relative path patterns
+        needs_quote = True  # Quote relative filesystem paths to preserve leading ./ or .\
+    
+    if ' ' in item:  # Items containing spaces need quoting
+        needs_quote = True  # Quote scalars that include whitespace
+    
+    if item.endswith('/') and item != '/':  # Trailing slash likely a directory path
+        needs_quote = True  # Quote directory-like scalars to preserve trailing slash
+    
+    if needs_quote:  # When quoting is required
+        quoted = f'"{item}"'  # Build double-quoted scalar preserving content
+        return f"{indent}- {quoted}"  # Return reconstructed list line with quotes
+    
+    return line  # Return original line when quoting not necessary
+
+
 def HandleMappingKey(line: str, stack: list[str]) -> bool:
     """
     Handle a YAML mapping key line and update the stack accordingly.
