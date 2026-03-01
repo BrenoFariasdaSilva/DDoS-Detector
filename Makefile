@@ -174,6 +174,12 @@ comments_standardizer: dependencies
 	$(CLEAR_CMD)
 	$(call RUN_AND_LOG, ./Scripts/comments_standardizer.py $(ARGS))
 
+# Configuration Sections Standardizer
+configuration_sections_standardizer: dependencies
+	$(ENSURE_LOG_DIR)
+	$(CLEAR_CMD)
+	$(call RUN_AND_LOG, ./Scripts/configuration_sections_standardizer.py $(ARGS))
+
 # Functions Validator
 functions_validator: dependencies
 	$(ENSURE_LOG_DIR)
@@ -222,4 +228,4 @@ clean:
 	find . -type f -name '*.pyc' -delete || del /S /Q *.pyc 2>nul
 	find . -type d -name '__pycache__' -delete || rmdir /S /Q __pycache__ 2>nul
 
-.PHONY: all check-build clean comments_standardizer dataset_converter dataset_descriptor dependencies download_datasets fix-style functions_validator functions_committer generate_requirements genetic_algorithm hyperparameters_optimization imports_placement imports_scanner main pca rfe stacking telegram_bot readme_committer standalone_comments_cleaner unused_functions_finder wgangp
+.PHONY: all check-build clean comments_standardizer configuration_sections_standardizer dataset_converter dataset_descriptor dependencies download_datasets fix-style functions_validator functions_committer generate_requirements genetic_algorithm hyperparameters_optimization imports_placement imports_scanner main pca rfe stacking telegram_bot readme_committer standalone_comments_cleaner unused_functions_finder wgangp
