@@ -1368,40 +1368,49 @@ def save_tsne_plot(X_emb, labels, output_path, title):
         dpi_given = 1000  # High DPI to ensure the output image has the desired pixel dimensions when saved
 
         figsize = (target_width_px / float(dpi_given), target_height_px / float(dpi_given))  # Calculate figure size in inches to achieve target pixel dimensions at the given DPI
-        plt.figure(figsize=figsize)  # Create matplotlib figure (DPI preserved by savefig)
+        fig = plt.figure(figsize=figsize)  # Create matplotlib figure (DPI preserved by savefig)
 
-        if labels is not None:  # Plot colored by class
-            labels_ser = pd.Series(labels)  # Ensure labels are a pandas Series
-            counts = labels_ser.value_counts()  # Count samples per class
-            unique = list(labels_ser.unique())  # Unique class labels (preserve order)
-            for cls in unique:  # Plot each class separately
-                mask = labels_ser == cls  # Boolean mask for class
-                plt.scatter(
-                    X_emb[mask, 0], X_emb[mask, 1], label=f"{cls} ({int(counts.get(cls, 0))})", s=8
-                )  # Scatter plot for class with count in label
-            plt.legend(markerscale=2, fontsize="small")  # Add legend for classes
-            try:  # Try to add counts text box
-                counts_text = "\n".join([f"{str(c)}: {int(counts[c])}" for c in counts.index])  # Prepare counts text
-                plt.gcf().text(
-                    0.99,
-                    0.01,
-                    counts_text,
-                    ha="right",
-                    va="bottom",
-                    fontsize=8,
-                    bbox=dict(facecolor="white", alpha=0.6, edgecolor="none"),
-                )  # Add text box with counts
-            except Exception:  # Ignore any errors in adding counts text
-                pass  # Do nothing
-        else:  # No labels provided
-            plt.scatter(X_emb[:, 0], X_emb[:, 1], s=8)  # Plot all points uniformly
+        try:  # Try plotting and saving to ensure figure is closed even if an error occurs
+            if labels is not None:  # Plot colored by class
+                labels_ser = pd.Series(labels)  # Ensure labels are a pandas Series
+                counts = labels_ser.value_counts()  # Count samples per class
+                unique = list(labels_ser.unique())  # Unique class labels (preserve order)
+                for cls in unique:  # Plot each class separately
+                    mask = labels_ser == cls  # Boolean mask for class
+                    plt.scatter(
+                        X_emb[mask, 0], X_emb[mask, 1], label=f"{cls} ({int(counts.get(cls, 0))})", s=8
+                    )  # Scatter plot for class with count in label
+                plt.legend(markerscale=2, fontsize="small")  # Add legend for classes
+                try:  # Try to add counts text box
+                    counts_text = "\n".join([f"{str(c)}: {int(counts[c])}" for c in counts.index])  # Prepare counts text
+                    fig.text(
+                        0.99,
+                        0.01,
+                        counts_text,
+                        ha="right",
+                        va="bottom",
+                        fontsize=8,
+                        bbox=dict(facecolor="white", alpha=0.6, edgecolor="none"),
+                    )  # Add text box with counts
+                except Exception:  # Ignore any errors in adding counts text
+                    pass  # Do nothing
+            else:  # No labels provided
+                plt.scatter(X_emb[:, 0], X_emb[:, 1], s=8)  # Plot all points uniformly
 
-        plt.title(title)  # Set plot title
-        plt.xlabel("t-SNE 1")  # X-axis label
-        plt.ylabel("t-SNE 2")  # Y-axis label
-        plt.tight_layout()  # Adjust layout
-        plt.savefig(output_path, dpi=500)  # Save figure to disk
-        plt.close()  # Close figure to free memory
+            plt.title(title)  # Set plot title
+            plt.xlabel("t-SNE 1")  # X-axis label
+            plt.ylabel("t-SNE 2")  # Y-axis label
+            plt.tight_layout()  # Adjust layout
+            try:  # Try saving the figure
+                fig.savefig(output_path, dpi=500)  # Save figure to disk
+            finally:  # Ensure the figure is closed to free memory
+                plt.close(fig)  # Close the figure to free memory
+        except Exception as e:  # Catch any exception during plotting or saving to ensure the figure is closed
+            try:  # Attempt to close the figure if an error occurs during plotting/saving
+                plt.close(fig)  # Close the figure to free memory
+            except Exception:  # Ignore any exceptions that occur while trying to close the figure
+                pass  # Do nothing if closing the figure fails
+            raise  # Re-raise the original exception to be caught by the outer block for logging and Telegram alert
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -1422,6 +1431,7 @@ def save_tsne_3d_plot(X_emb, labels, output_path, title):
     :return: None
     """
 
+    fig = None
     try:  # Wrap full function logic to ensure production-safe monitoring
         fig = plt.figure(figsize=(10, 8))  # Create matplotlib figure
         ax = fig.add_subplot(111, projection='3d')  # Create 3D axis
@@ -1448,8 +1458,10 @@ def save_tsne_3d_plot(X_emb, labels, output_path, title):
         ax.set_ylabel("t-SNE 2")  # Y-axis label
         cast(Any, ax).set_zlabel("t-SNE 3")  # Z-axis label (cast to Any for typing)
         plt.tight_layout()  # Adjust layout
-        plt.savefig(output_path, dpi=500)  # Save figure to disk
-        plt.close()  # Close figure to free memory
+        try:
+            fig.savefig(output_path, dpi=500)  # Save figure to disk
+        finally:
+            plt.close(fig)
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
