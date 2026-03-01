@@ -134,6 +134,51 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def separate_sections(config_dict: object, py_list: list) -> tuple:
+    """
+    Separate top-level YAML sections into general and python-specific groups.
+
+    :param config_dict: The parsed YAML top-level mapping as an object.
+    :param py_list: The list of python filenames (without .py) for matching.
+    :return: Tuple containing (general_sections_dict, python_sections_dict).
+    """
+
+    py_set = set(py_list)  # Convert list of python names to a set for fast membership checks
+    general = OrderedDict()  # Initialize ordered dict for general sections
+    python = OrderedDict()  # Initialize ordered dict for python-specific sections
+    if not isinstance(config_dict, dict):  # Verify config_dict is a mapping
+        try:
+            items_attr = getattr(config_dict, "items", None)  # Retrieve the items attribute if present
+            if callable(items_attr):  # Verify items attribute is callable to iterate mapping pairs
+                try:
+                    pairs_called = items_attr()  # Call items() to obtain key-value pairs
+                except Exception:
+                    pairs_called = []  # Fallback to empty when call fails
+                try:
+                    if isinstance(pairs_called, (list, tuple, set)):  # Verify common iterable containers
+                        iter_pairs = list(pairs_called)  # Convert container to list for iteration
+                    elif hasattr(pairs_called, "__iter__"):  # Verify object implements iteration protocol
+                        iter_pairs = list(cast(Iterable, pairs_called))  # Cast to Iterable and convert to list
+                    else:
+                        iter_pairs = []  # Fallback to empty list when not iterable
+                except Exception:
+                    iter_pairs = []  # Fallback to empty list when conversion to list fails
+                try:
+                    config_dict = dict(iter_pairs)  # Build dict from iterable pairs
+                except Exception:
+                    config_dict = {}  # Fallback to empty dict when dict construction fails
+            else:
+                config_dict = {}  # Fallback to empty dict when no items() available
+        except Exception:
+            config_dict = {}  # Fallback to empty dict when coercion fails
+    for key in sorted(config_dict.keys()):  # Iterate top-level keys in alphabetical order
+        if key in py_set:  # Verify if the key matches a python filename exactly
+            python[key] = config_dict[key]  # Assign to python-specific mapping when matched
+        else:
+            general[key] = config_dict[key]  # Otherwise assign to general mapping
+    return general, python  # Return the two grouped ordered mappings
+
+
 def load_and_prepare_sections(config_path: str) -> Tuple[Dict, Dict]:
     """
     Load YAML configuration, sort it recursively, and separate sections.
