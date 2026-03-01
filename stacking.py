@@ -1387,7 +1387,11 @@ def ensure_figure_min_4k_and_save(fig=None, path=None, dpi=None, **kwargs):
     if dpi is not None:  # Verify whether caller explicitly provided DPI
         save_kwargs["dpi"] = dpi  # Preserve caller DPI in save call
 
-    fig.savefig(path, **save_kwargs)  # Save the figure to disk using provided kwargs
+    resolved_fig = fig  # Ensure we close the exact figure used for saving
+    try:  # Save the figure to disk using provided kwargs
+        resolved_fig.savefig(path, **save_kwargs)  # Save the figure to disk using provided kwargs
+    finally:  # Ensure we close the figure to free memory regardless of save success
+        plt.close(resolved_fig)  # Close the figure to free memory
 
 
 def plot_per_class_metric(metric_dict: dict, metric_name: str, output_path: str, dpi: int, fmt: str) -> None:
@@ -3839,7 +3843,9 @@ def generate_permutation_importance(model, X_test, y_test, feature_names, output
                 max_display = explainer_config.get("max_display_features", 20)  # Max features to display
                 display_count = min(max_display, len(sorted_features))  # Number of features to display
 
+                resolved_fig = None  # Initialize resolved_fig to None for proper exception handling
                 plt.figure(figsize=(10, max(6, display_count * 0.3)))  # Create figure with dynamic height
+                resolved_fig = plt.gcf()  # Get the current figure to ensure we can close it in case of exceptions
                 y_pos = np.arange(display_count)  # Y positions for bars
                 plt.barh(y_pos, sorted_importances[:display_count], xerr=sorted_std[:display_count], align='center', alpha=0.7, color='steelblue')  # Create horizontal bar plot with error bars
                 plt.yticks(y_pos, sorted_features[:display_count])  # Set Y-axis labels
@@ -3849,10 +3855,16 @@ def generate_permutation_importance(model, X_test, y_test, feature_names, output
                 plt.grid(axis='x', alpha=0.3)  # Add X-axis grid
                 plt.tight_layout()  # Adjust layout
                 perm_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_permutation_importance.png")  # Build plot path
-                plt.savefig(perm_plot_path, dpi=500, bbox_inches='tight')  # Save plot
-                plt.close()  # Close plot
+                try:  # Ensure figure has at least 4k pixels before saving
+                    resolved_fig.savefig(perm_plot_path, dpi=500, bbox_inches='tight')  # Save plot
+                finally:  # Attempt to close the exact figure to free memory
+                    plt.close(resolved_fig)  # Close the exact figure to free memory
             except Exception:  # If plot fails
-                plt.close()  # Close plot
+                try:  # Attempt to close any figure that might be open to free memory
+                    if resolved_fig is not None:  # If we have a reference to the figure, close it
+                        plt.close(resolved_fig)  # Close the exact figure to free memory
+                except Exception:  # If closing the figure fails, just pass
+                    pass  # If plot creation or saving fails, we ignore the error and continue without the plot
 
             verbose_output(
                 f"{BackgroundColors.GREEN}Permutation importance saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
