@@ -3841,6 +3841,7 @@ def generate_permutation_importance(model, X_test, y_test, feature_names, output
             for feat, imp, std in zip(sorted_features, sorted_importances, sorted_std):  # For each feature
                 importance_dict[feat] = {"mean": float(imp), "std": float(std)}  # Store importance and std
 
+            resolved_fig = None  # Initialize resolved_fig to None before plotting to ensure it's defined for cleanup
             try:  # Try to create bar plot
                 max_display = explainer_config.get("max_display_features", 20)  # Max features to display
                 display_count = min(max_display, len(sorted_features))  # Number of features to display
