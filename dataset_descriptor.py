@@ -2109,8 +2109,12 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
         cfg = config or get_default_config()
         if output_filename is None:  # Verify if caller provided an output filename or use configured suffix
             output_filename = cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "_description")  # Get suffix from config or default
-        if not output_filename.lower().endswith(".csv"):  # Verify the output filename has a .csv extension
-            output_filename = f"{output_filename}.csv"  # Append .csv extension when missing
+
+        if not isinstance(output_filename, str):  # Validate that the output filename is a string
+            output_filename = str(output_filename or cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "_description"))  # Fallback to config suffix or default if provided filename is not a string
+
+        if not output_filename.lower().endswith(".csv"):  # Ensure the output filename ends with .csv
+            output_filename = f"{output_filename}.csv"  # Append .csv extension if not present
 
         file_dfs = {}  # filepath -> DataFrame (loaded once)
         headers_map = {}  # filepath -> list(columns)
