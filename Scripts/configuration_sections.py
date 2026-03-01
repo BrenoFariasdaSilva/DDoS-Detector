@@ -134,6 +134,36 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def HandleInlineComment(before: str, comment: str, stack: list[str], comments: dict) -> None:
+    """
+    Process the portion before an inline comment and record the comment for the key path.
+
+    :param before: The text before the inline '#' marker on the line.
+    :param comment: The inline comment text to associate with the key path.
+    :param stack: The stack tracking nested keys by indentation level.
+    :param comments: The mapping to populate from key-path tuples to comment strings.
+    :return: None.
+    """
+
+    m = re.match(r"^(\s*)([^:]+):(?:\s*(.*))?$", before)  # Parse the leading 'key:' portion before '#'
+    
+    if not m:  # If parsing fails, do not record anything for this line
+        return None  # Return None to indicate no action was performed
+    
+    indent = len(m.group(1))  # Determine indentation width in spaces
+    level = indent // 2  # Compute the YAML nesting level using two-space indent
+    key = m.group(2).strip()  # Extract the mapping key name
+    
+    EnsureStackLength(stack, level)  # Ensure the stack has room for this nesting level
+    
+    stack[level] = key  # Record the key at the computed level in the stack
+    del stack[level + 1 :]  # Truncate any deeper levels beyond the current one
+    path = tuple([k for k in stack if k])  # Build a tuple path from non-empty stack entries
+    
+    if path:  # Only record when path is non-empty
+        comments[path] = comment  # Associate the extracted comment with the key-path tuple
+
+
 def extract_inline_comments(file_path: str, unused: object) -> tuple:
     """
     Extract inline comments from an existing YAML file preserving their mapping to dotted key paths.
