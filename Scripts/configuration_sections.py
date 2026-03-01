@@ -134,6 +134,28 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def sort_recursive(obj: object, unused: object) -> object:
+    """
+    Recursively sort dictionary keys alphabetically and preserve nested structure.
+
+    :param obj: The object to sort (dict, list, or scalar).
+    :param unused: Placeholder parameter to preserve two-argument signature.
+    :return: A new object with dict keys sorted recursively.
+    """
+
+    if isinstance(obj, dict):  # Verify the object is a dictionary
+        ordered = OrderedDict()  # Create an ordered mapping for deterministic key order
+        
+        for key in sorted(obj.keys()):  # Iterate over sorted keys alphabetically
+            ordered[key] = sort_recursive(obj[key], None)  # Recursively sort nested values
+        return ordered  # Return the ordered mapping
+    
+    if isinstance(obj, list):  # Verify the object is a list
+        return [sort_recursive(item, None) for item in obj]  # Recursively sort each list item
+    
+    return obj  # Return scalars unchanged
+
+
 def separate_sections(config_dict: object, py_list: list) -> tuple:
     """
     Separate top-level YAML sections into general and python-specific groups.
