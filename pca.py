@@ -1143,7 +1143,7 @@ def save_pca_results(csv_path, all_results, cfg=None):
             raise PermissionError(f"Directory not writable: {resolved_dir}")
 
         csv_output = os.path.join(resolved_dir, results_filename)
-        print(f"[EXPORT] Results CSV path: {os.path.abspath(csv_output)}")
+        print(f"{BackgroundColors.GREEN}Exporting PCA results to CSV: {BackgroundColors.CYAN}{csv_output}{Style.RESET_ALL}")
 
         eval_model = "Random Forest"  # Evaluation model
         train_test_split = "80/20 split"  # Train/test split
