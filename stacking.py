@@ -1417,7 +1417,7 @@ def plot_per_class_metric(metric_dict: dict, metric_name: str, output_path: str,
             ax.text(b.get_x() + b.get_width() / 2.0, v + 0.01, f"{v:.2f}", ha="center", va="bottom", fontsize=8)
 
         plt.tight_layout()
-        ensure_figure_min_4k_and_save(fig, output_path, dpi=dpi, format=fmt, bbox_inches="tight")
+        ensure_figure_min_4k_and_save(fig=fig, path=output_path, dpi=dpi, format=fmt, bbox_inches="tight")
         plt.close(fig)
     except Exception as e:
         try:
@@ -1455,7 +1455,7 @@ def plot_global_metrics(global_metrics: dict, output_path: str, dpi: int, fmt: s
             ax.text(b.get_x() + b.get_width() / 2.0, v + 0.01, f"{v:.2f}", ha="center", va="bottom", fontsize=9)
 
         plt.tight_layout()
-        ensure_figure_min_4k_and_save(fig, output_path, dpi=dpi, format=fmt, bbox_inches="tight")
+        ensure_figure_min_4k_and_save(fig=fig, path=output_path, dpi=dpi, format=fmt, bbox_inches="tight")
         plt.close(fig)
     except Exception as e:
         try:
@@ -1864,7 +1864,7 @@ def compute_and_save_tsne_plot(X_scaled, labels, output_path, title, perplexity=
         plt.grid(True, alpha=0.3)  # Add grid with transparency
         plt.tight_layout()  # Adjust layout to prevent label cutoff
 
-        ensure_figure_min_4k_and_save(None, output_path, dpi=1000, bbox_inches='tight')  # Save figure with high resolution
+        ensure_figure_min_4k_and_save(fig=plt.gcf(), path=output_path, dpi=1000, bbox_inches='tight')  # Save figure with high resolution
         plt.close()  # Close figure to free memory
 
         print(
@@ -2137,7 +2137,7 @@ def generate_feature_usage_heatmap(feature_counts_df, output_path, dataset_file=
                 raise RuntimeError("dataset_file must be provided to safely resolve stacking results directory")
             base = get_stacking_output_dir(dataset_file, CONFIG)
             validate_output_path(base, out_png)
-            ensure_figure_min_4k_and_save(fig, out_png, bbox_inches="tight")  # Save PNG to disk
+            ensure_figure_min_4k_and_save(fig=fig, path=out_png, bbox_inches="tight")  # Save PNG to disk
             plt.close(fig)  # Close the figure to free memory
             return out_png  # Return path to generated PNG
 
@@ -2158,7 +2158,7 @@ def generate_feature_usage_heatmap(feature_counts_df, output_path, dataset_file=
         out_png = str(Path(output_path))  # Normalize output path to string
         Path(out_png).parent.mkdir(parents=True, exist_ok=True)  # Ensure parent directory exists
         plt.tight_layout()  # Tighten layout before saving
-        ensure_figure_min_4k_and_save(fig, out_png, dpi=1000)  # Save figure to PNG with good resolution
+        ensure_figure_min_4k_and_save(fig=fig, path=out_png, dpi=1000)  # Save figure to PNG with good resolution
         plt.close(fig)  # Close the figure to release resources
         return out_png  # Return saved PNG path
     except Exception:
@@ -3650,7 +3650,7 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
                 shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, show=False)  # Create summary plot
                 summary_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_summary.png")  # Build plot path
                 plt.tight_layout()  # Adjust layout
-                ensure_figure_min_4k_and_save(None, summary_plot_path, dpi=1000, bbox_inches='tight')  # Save plot
+                ensure_figure_min_4k_and_save(fig=plt.gcf(), path=summary_plot_path, dpi=1000, bbox_inches='tight')  # Save plot
                 plt.close()  # Close plot
             except Exception:  # If summary plot fails
                 plt.close()  # Close plot
@@ -3660,7 +3660,7 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
                 shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, plot_type="bar", show=False)  # Create bar plot
                 bar_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_bar.png")  # Build plot path
                 plt.tight_layout()  # Adjust layout
-                ensure_figure_min_4k_and_save(None, bar_plot_path, dpi=1000, bbox_inches='tight')  # Save plot
+                ensure_figure_min_4k_and_save(fig=plt.gcf(), path=bar_plot_path, dpi=1000, bbox_inches='tight')  # Save plot
                 plt.close()  # Close plot
             except Exception:  # If bar plot fails
                 plt.close()  # Close plot
@@ -3755,7 +3755,7 @@ def generate_lime_explanations(model, X_test, y_test, feature_names, output_dir,
                     fig = explanation.as_pyplot_figure()  # Get matplotlib figure
                     explanation_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_lime_instance_{idx}.png")  # Build plot path
                     plt.tight_layout()  # Adjust layout
-                    ensure_figure_min_4k_and_save(None, explanation_plot_path, dpi=1000, bbox_inches='tight')  # Save plot
+                    ensure_figure_min_4k_and_save(fig=plt.gcf(), path=explanation_plot_path, dpi=1000, bbox_inches='tight')  # Save plot
                     plt.close()  # Close plot
                 except Exception:  # If plot save fails
                     plt.close()  # Close plot
