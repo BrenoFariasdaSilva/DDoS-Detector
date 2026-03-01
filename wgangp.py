@@ -149,7 +149,8 @@ def safe_log(level: str, message: str):
     try:
         if logger and hasattr(logger, level): getattr(logger, level)(message)  # Use level method if present
         elif logger and hasattr(logger, "write"): logger.write(f"[{level.upper()}] {message}")  # Fallback to write()
-        else: print(f"[{level.upper()}] {message}")  # Last resort: print
+        else: 
+            print(f"{BackgroundColors.YELLOW}Logger not available; fallback to print: [{level.upper()}] {message}{Style.RESET_ALL}")  # Warn about logger unavailability
     except Exception:
         try:
             print(str(message))  # Best-effort fallback to print
@@ -1649,9 +1650,9 @@ def adjust_num_workers_for_file(csv_path: str, suggested_workers: int, config: O
         vm = psutil.virtual_memory()  # Capture virtual memory snapshot
         free_ram_gb = safe_float(vm.available, 0.0) / (1024.0 ** 3)  # Use AVAILABLE RAM (not total) in GB
 
-        print(f"[DEBUG] Detected file size: {file_size_gb:.4f} GB")  # Log detected file size
-        print(f"[DEBUG] Detected free RAM: {free_ram_gb:.4f} GB")  # Log detected available RAM
-        print(f"[DEBUG] Original suggested num_workers: {suggested_workers}")  # Log original suggestion
+        print(f"{BackgroundColors.GREEN}Detected file size: {BackgroundColors.CYAN}{file_size_gb:.4f} GB{Style.RESET_ALL}")  # Log detected file size
+        print(f"{BackgroundColors.GREEN}Detected free RAM: {BackgroundColors.CYAN}{free_ram_gb:.4f} GB{Style.RESET_ALL}")  # Log detected available RAM
+        print(f"{BackgroundColors.GREEN}Original suggested num_workers: {BackgroundColors.CYAN}{suggested_workers}{Style.RESET_ALL}")  # Log original suggestion
 
         computed = None
         if file_size_gb <= 0.0:  # If file size cannot be determined or is zero
@@ -1669,7 +1670,7 @@ def adjust_num_workers_for_file(csv_path: str, suggested_workers: int, config: O
         cpu_count = os.cpu_count() or 1  # Detect CPU count safely
         final = min(final, cpu_count)  # Do not exceed logical CPUs
 
-        print(f"[DEBUG] Computed num_workers (formula result): {final} (computed={computed if computed is not None else 'N/A'})")  # Log computed value
+        print(f"{BackgroundColors.GREEN}Computed num_workers based on formula: {BackgroundColors.CYAN}{computed:.4f}{Style.RESET_ALL}")  # Log computed value before final adjustment
 
         try:  # Notify via Telegram (non-blocking)
             send_telegram_message(
@@ -1807,7 +1808,7 @@ def train(args, config: Optional[Dict] = None):
             if total_ram_gb is None or total_ram_gb >= 8.0:  # If RAM unknown or sufficient
                 num_workers = max(1, (os.cpu_count() or 1))  # Ensure at least one worker for CUDA when RAM allows
             else:  # Low RAM and CUDA present: keep zero workers to avoid memory pressure
-                print(f"[WARNING] Low RAM ({total_ram_gb:.2f} GB) and CUDA present; keeping num_workers=0 to avoid memory pressure")  # Log decision
+                print(f"{BackgroundColors.YELLOW}Warning: num_workers set to 0 due to low RAM and CUDA presence{Style.RESET_ALL}")  # Warn about zero workers for CUDA
         pin_memory = True if device.type == "cuda" else False  # Always enable pin_memory on CUDA for faster host->device transfers
         persistent_workers = config.get("dataloader", {}).get("persistent_workers", True) if num_workers > 0 else False  # Get persistent_workers from config
         prefetch_factor = int(config.get("dataloader", {}).get("prefetch_factor", 2)) if num_workers > 0 else None  # Get prefetch_factor from config and cast to int
