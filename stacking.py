@@ -1388,6 +1388,8 @@ def ensure_figure_min_4k_and_save(fig=None, path=None, dpi=None, **kwargs):
         save_kwargs["dpi"] = dpi  # Preserve caller DPI in save call
 
     resolved_fig = fig  # Ensure we close the exact figure used for saving
+    if path is None:  # Verify that a valid path argument was provided
+        raise ValueError("path must be provided to save the figure")  # Raise explicit error when path is missing to avoid passing None to savefig
     try:  # Save the figure to disk using provided kwargs
         resolved_fig.savefig(path, **save_kwargs)  # Save the figure to disk using provided kwargs
     finally:  # Ensure we close the figure to free memory regardless of save success
