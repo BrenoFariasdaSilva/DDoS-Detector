@@ -1396,6 +1396,8 @@ def ensure_figure_min_4k_and_save(fig=None, path=None, dpi=None, **kwargs):
         save_kwargs["dpi"] = dpi  # Set DPI for saving
 
     resolved_fig = fig  # Ensure we close the exact figure used for saving
+    if path is None:  # Verify that a valid path argument was provided
+        raise ValueError("path must be provided to save the figure")  # Raise explicit error when path is missing to avoid passing None to savefig
     try:  # Save the figure to the specified path with the given parameters
         resolved_fig.savefig(path, **save_kwargs)  # Save the figure to the specified path with the given parameters
     finally:  # Ensure the figure is closed to free resources
@@ -2420,7 +2422,7 @@ def export_dataframe_image(styled_df: pd.io.formats.style.Styler, output_path: U
         # Ensure parent directory exists before writing
         out_p.parent.mkdir(parents=True, exist_ok=True)  # Create directories as needed
         # Use dataframe_image to export the styled dataframe to PNG
-        dfi.export(styled_df, str(out_p))  # Export to PNG using dataframe_image
+        dfi.export(cast(Any, styled_df), str(out_p))  # Export to PNG using dataframe_image with cast to satisfy static typing
     except Exception as e:
         print(str(e))  # Print export error for visibility
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram
