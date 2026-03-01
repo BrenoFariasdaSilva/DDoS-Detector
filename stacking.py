@@ -1495,7 +1495,7 @@ def generate_and_save_metric_plots(y_true, y_pred, stacking_config: dict, resolv
             raise ValueError("plots.format must be one of: png, jpg, pdf, svg")
 
         plots_dir = os.path.join(os.path.abspath(resolved_results_dir), config.get("paths", {}).get("plots_subdir", "Plots"))
-        print(f"[STACKING][PLOTS] Saving plots to: {plots_dir}")
+        print(f"{BackgroundColors.GREEN}Saving metric plots to: {BackgroundColors.CYAN}{plots_dir}{Style.RESET_ALL}")
 
         validate_output_path(os.path.abspath(resolved_results_dir), os.path.abspath(plots_dir))
         os.makedirs(plots_dir, exist_ok=True)
@@ -2771,17 +2771,17 @@ def verify_selected_features_exist(selected_features: list, dataset_columns: lis
     missing = [f for f in selected_features if f not in dataset_set]
 
     if missing and len(valid_features) > 0:
-        print(f"[WARNING] Missing features detected for {method_name}:")
+        print(f"{BackgroundColors.YELLOW}Missing features detected for {BackgroundColors.CYAN}{method_name}{Style.RESET_ALL}:")
         for m in missing:
             print(f"- {m}")
-        print(f"Using {len(valid_features)} out of {len(selected_features)} selected features.")
+        print(f"{BackgroundColors.GREEN}Proceeding with {len(valid_features)} valid features for {BackgroundColors.CYAN}{method_name}{Style.RESET_ALL}.")
         return valid_features
 
     if missing and len(valid_features) == 0:
-        print(f"[WARNING] Missing features detected for {method_name}:")
+        print(f"{BackgroundColors.RED}All selected features for {method_name} are missing from dataset columns.{Style.RESET_ALL}")
         for m in missing:
             print(f"- {m}")
-        print(f"Using 0 out of {len(selected_features)} selected features.")
+        print(f"{BackgroundColors.YELLOW}Using 0 out of {len(selected_features)} selected features for {BackgroundColors.CYAN}{method_name}{Style.RESET_ALL}.{Style.RESET_ALL}")
         raise ValueError(f"All selected features for {method_name} are missing from dataset columns")
 
     return list(dict.fromkeys(selected_features))
