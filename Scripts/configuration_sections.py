@@ -1,49 +1,46 @@
 """
 ================================================================================
-<PROJECT OR SCRIPT TITLE>
+YAML configuration sections updater - configuration_sections.py
 ================================================================================
 Author      : Breno Farias da Silva
-Created     : <YYYY-MM-DD>
+Created     : 2026-03-01
 Description :
-    <Provide a concise and complete overview of what this script does.>
-    <Mention its purpose, scope, and relevance to the larger project.>
-
-    Key features include:
-        - <Feature 1 — e.g., automatic data loading and preprocessing>
-        - <Feature 2 — e.g., model training and evaluation>
-        - <Feature 3 — e.g., visualization or report generation>
-        - <Feature 4 — e.g., logging or notification system>
-        - <Feature 5 — e.g., integration with other modules or datasets>
+    Utilities for loading, normalizing and rebuilding the project's `config.yaml`.
+    This module provides functions that:
+        - Parse an existing `config.yaml` and extract inline comments and original
+          quoting for list items.
+        - Recursively sort mapping keys and separate top-level sections into
+          "general" and per-script (python) sections.
+        - Reconstruct an annotated, human-readable `config.yaml` and write a
+          synchronized `config.yaml.example`.
 
 Usage:
-    1. <Explain any configuration steps before running, such as editing variables or paths.>
-    2. <Describe how to execute the script — typically via Makefile or Python.>
-        $ make <target>   or   $ python <script_name>.py
-    3. <List what outputs are expected or where results are saved.>
+    Run the script to regenerate `config.yaml` and `config.yaml.example` from
+    the repository configuration. It can also be used programmatically by
+    calling `write_configs(config_path, example_path)`.
+
+    $ python Scripts/configuration_sections.py
 
 Outputs:
-    - <Output file or directory 1 — e.g., results.csv>
-    - <Output file or directory 2 — e.g., Feature_Analysis/plots/>
-    - <Output file or directory 3 — e.g., logs/output.txt>
+    - Updated `config.yaml` at repository root.
+    - Synchronized `config.yaml.example` at repository root.
+    - Log file written to `Logs/configuration_sections.log`.
 
 TODOs:
-    - <Add a task or improvement — e.g., implement CLI argument parsing.>
-    - <Add another improvement — e.g., extend support to Parquet files.>
-    - <Add optimization — e.g., parallelize evaluation loop.>
-    - <Add robustness — e.g., error handling or data validation.>
+    - Add CLI options to target alternate config files and control verbosity.
+    - Add unit tests for comment extraction and list-quoting edge cases.
+    - Consider supporting configurable indentation widths and YAML anchors.
 
 Dependencies:
-    - Python >= <version>
-    - <Library 1 — e.g., pandas>
-    - <Library 2 — e.g., numpy>
-    - <Library 3 — e.g., scikit-learn>
-    - <Library 4 — e.g., matplotlib, seaborn, tqdm, colorama>
+    - Python 3.8+
+    - pyyaml
+    - colorama
 
 Assumptions & Notes:
-    - <List any key assumptions — e.g., last column is the target variable.>
-    - <Mention data format — e.g., CSV files only.>
-    - <Mention platform or OS-specific notes — e.g., sound disabled on Windows.>
-    - <Note on output structure or reusability.>
+    - The comment extractor assumes two-space indentation for nesting levels.
+    - The script preserves inline comments and whether list items were quoted
+      in the original file when reconstructing YAML blocks.
+    - Sound notification is skipped on Windows by design.
 """
 
 import atexit  # For playing a sound when the program finishes
