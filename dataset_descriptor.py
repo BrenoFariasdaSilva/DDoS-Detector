@@ -2107,8 +2107,10 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
             return False  # Exit the function
 
         cfg = config or get_default_config()
-        if output_filename is None:
-            output_filename = cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "_description")
+        if output_filename is None:  # Verify if caller provided an output filename or use configured suffix
+            output_filename = cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "_description")  # Get suffix from config or default
+        if not output_filename.lower().endswith(".csv"):  # Verify the output filename has a .csv extension
+            output_filename = f"{output_filename}.csv"  # Append .csv extension when missing
 
         file_dfs = {}  # filepath -> DataFrame (loaded once)
         headers_map = {}  # filepath -> list(columns)
@@ -2363,8 +2365,10 @@ def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memo
     try:  # Wrap full function logic to ensure production-safe monitoring
         cfg = config or get_default_config()
         if output_filename is None:  # If no output filename is provided
-            suffix = cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "_description")
-            output_filename = f"Cross_{suffix.lstrip('_')}" if suffix else "Cross_dataset_descriptor.csv"
+            suffix = cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "_description")  # Get suffix from config or default
+            output_filename = f"Cross_{suffix.lstrip('_')}" if suffix else "Cross_dataset_descriptor.csv"  # Build cross filename
+        if not output_filename.lower().endswith(".csv"):  # Verify the output filename has a .csv extension
+            output_filename = f"{output_filename}.csv"  # Append .csv extension when missing
 
         group_info = {}  # Map group_name -> {"files": [...], "common": set(), "union": set()}
         for group_name, paths in datasets_dict.items():  # Iterate over dataset groups
