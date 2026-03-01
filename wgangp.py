@@ -1394,7 +1394,11 @@ def ensure_figure_min_4k_and_save(fig=None, path=None, dpi=None, **kwargs):
     if dpi is not None:  # If a specific DPI was provided, ensure it is included in save parameters
         save_kwargs["dpi"] = dpi  # Set DPI for saving
 
-    fig.savefig(path, **save_kwargs)  # Save the figure to the specified path with the given parameters
+    resolved_fig = fig  # Ensure we close the exact figure used for saving
+    try:  # Save the figure to the specified path with the given parameters
+        resolved_fig.savefig(path, **save_kwargs)  # Save the figure to the specified path with the given parameters
+    finally:  # Ensure the figure is closed to free resources
+        plt.close(resolved_fig)  # Close the figure to free memory
 
 
 def plot_training_metrics(metrics_history, out_dir, filename=None, config: Optional[Dict] = None):
