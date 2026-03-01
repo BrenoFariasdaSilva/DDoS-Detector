@@ -2750,7 +2750,11 @@ def ensure_figure_min_4k_and_save(fig=None, path=None, dpi=None, **kwargs):
     if dpi is not None:  # Verify whether caller explicitly provided DPI
         save_kwargs["dpi"] = dpi  # Preserve caller DPI in save call
 
-    fig.savefig(path, **save_kwargs)  # Save the figure to disk using provided kwargs
+    resolved_fig = fig  # Ensure we close the exact figure used (don't rely on plt.gcf())
+    try:  # Attempt to save the figure with the provided path and kwargs
+        resolved_fig.savefig(path, **save_kwargs)  # Save the figure to disk using provided kwargs
+    finally:  # Ensure we close the figure to free memory resources
+        plt.close(resolved_fig)  # Close the specific figure we saved to avoid affecting other figures in memory
 
 
 def plot_ga_convergence(
