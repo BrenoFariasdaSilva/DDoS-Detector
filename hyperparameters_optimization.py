@@ -2795,7 +2795,7 @@ def main():
     DATASETS = hp.get("datasets", {})
 
     # Log results CSV path
-    print(f"[EXPORT] Results CSV path: {results_path}")
+    print(f"{BackgroundColors.GREEN}Results CSV will be saved to: {BackgroundColors.CYAN}{results_path}{Style.RESET_ALL}")
     # Start the optimization run
     run_optimization()
 
