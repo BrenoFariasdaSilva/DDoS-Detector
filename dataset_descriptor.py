@@ -66,6 +66,7 @@ import platform  # For getting the operating system name
 import re  # For regex operations
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
+import time  # Import time locally to perform retry timing and ensure dependency is available at runtime
 import traceback  # For printing full exception tracebacks
 import warnings  # For suppressing pandas warnings when requested
 import yaml  # For optional config.yaml loading when locating WGANGP outputs
@@ -1997,19 +1998,50 @@ def export_dataframe_image(styled_df, output_path):
 
         export_kwargs: dict[str, Any] = {"table_conversion": "playwright"}  # Prepare kwargs for dfi.export with Playwright conversion
         try:  # Attempt to inspect dfi.export signature to optionally provide screenshot timeout
-            if "screenshot_timeout" in signature(dfi.export).parameters:  # Verify if screenshot_timeout parameter is supported by dataframe_image
-                export_kwargs["screenshot_timeout"] = timeout_ms  # Attach configured screenshot timeout in milliseconds
-        except Exception:  # If signature inspection fails, proceed without adding timeout
-            pass  # Continue without explicit timeout when inspection fails
+            params = set(signature(dfi.export).parameters.keys())  # Retrieve parameter names supported by dfi.export for adaptive mapping
+            for _pname in ("screenshot_timeout", "timeout", "playwright_timeout", "playwright_screenshot_timeout"):  # Iterate candidate timeout parameter names supported by various dfi versions
+                if _pname in params:  # If this candidate parameter is present in dfi.export signature
+                    export_kwargs[_pname] = timeout_ms  # Attach configured timeout in milliseconds using discovered parameter name
+                    break  # Stop after first supported timeout parameter is attached to avoid conflicting kwargs
+        except Exception:  # If signature inspection or import fails, proceed without adding explicit timeout
+            pass  # Continue without explicit timeout when inspection fails to preserve original behavior
 
-        try:  # Attempt primary export using prepared kwargs (may raise TypeError on older dfi versions)
-            dfi.export(styled_df, output_path, **export_kwargs)  # Export styled DataFrame to PNG using dataframe_image
-            print(f"{BackgroundColors.GREEN}[DEBUG] Exported image: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log successful export for diagnostics with colored output
-            upscale_image_if_needed(output_path, fallback=False)  # Attempt to upscale exported image if below 4k
-        except TypeError:  # Handle dataframe_image versions that raise TypeError for unexpected kwargs
-            dfi.export(styled_df, output_path, table_conversion="playwright")  # Retry export without dynamic kwargs when TypeError occurs
-            print(f"{BackgroundColors.GREEN}[DEBUG] Exported image (fallback): {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log fallback export success for diagnostics with colored output
-            upscale_image_if_needed(output_path, fallback=True)  # Attempt to upscale exported image after fallback export
+        start_time = time.time()  # Record start time to bound retry attempts by configured timeout budget
+        attempt = 0  # Initialize export attempt counter for logging and diagnostics
+        while True:  # Loop to allow retrying export when Playwright raises transient TimeoutError within overall timeout budget
+            attempt += 1  # Increment attempt counter at loop start to track retries
+            try:  # Try exporting using the currently assembled kwargs which may include a timeout parameter
+                dfi.export(styled_df, output_path, **export_kwargs)  # Export styled DataFrame to PNG using dataframe_image and provided kwargs
+                print(f"{BackgroundColors.GREEN}[DEBUG] Exported image: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log successful export for diagnostics with colored output
+                upscale_image_if_needed(output_path, fallback=False)  # Attempt to upscale exported image if below 4k
+                break  # Exit retry loop on success to preserve original control flow
+            except TypeError:  # Handle dataframe_image versions that raise TypeError for unexpected kwargs
+                try:  # Attempt fallback export without dynamic kwargs when a TypeError indicates unsupported parameters
+                    dfi.export(styled_df, output_path, table_conversion="playwright")  # Retry export using explicit table_conversion only as fallback
+                    print(f"{BackgroundColors.GREEN}[DEBUG] Exported image (fallback): {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log fallback export success for diagnostics with colored output
+                    upscale_image_if_needed(output_path, fallback=True)  # Attempt to upscale exported image after fallback export
+                    break  # Exit retry loop after successful fallback export to preserve original behavior
+                except Exception as _inner_e:  # Capture exception from fallback attempt for downstream analysis and potential retry
+                    e_inner = _inner_e  # Assign inner exception to a common variable for outer handling below
+            except Exception as _e_export:  # Capture general export exceptions for potential retry decisions
+                e_inner = _e_export  # Assign caught exception to e_inner for downstream retry/raise logic
+
+            try:  # Try to import Playwright TimeoutError type for precise timeout detection
+                from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError  # Import Playwright TimeoutError class when available
+            except Exception:  # If Playwright TimeoutError cannot be imported, set to None to disable precise detection
+                PlaywrightTimeoutError = None  # Ensure variable exists and is None when import fails
+
+            elapsed_ms = int((time.time() - start_time) * 1000)  # Compute elapsed milliseconds since first attempt to respect configured timeout_ms budget
+            if PlaywrightTimeoutError is not None and isinstance(e_inner, PlaywrightTimeoutError):  # If the failure is a Playwright TimeoutError, consider retrying within budget
+                if elapsed_ms < timeout_ms:  # If still within allowed timeout budget, pause briefly and retry export
+                    sleep_seconds = min(0.5, (timeout_ms - elapsed_ms) / 1000.0)  # Compute short sleep interval that does not exceed remaining budget
+                    time.sleep(sleep_seconds)  # Sleep briefly to allow transient conditions to clear before next retry
+                    print(f"{BackgroundColors.YELLOW}[WARNING] Playwright screenshot timeout, retrying export (attempt {attempt})...{Style.RESET_ALL}")  # Log retry attempt for diagnostics with colored output
+                    continue  # Continue retry loop to attempt export again within budget
+                else:  # If the total configured timeout budget is exhausted, re-raise the Playwright TimeoutError to be handled by outer exception block
+                    raise e_inner  # Re-raise to preserve original exception propagation and outer logging behavior
+            else:  # For non-Playwright TimeoutError exceptions, re-raise to preserve original failure semantics
+                raise e_inner  # Re-raise the last encountered exception to be caught by outer try/except and logged identically
     except Exception as e:  # If export fails, log warning and continue without crashing
         try:  # Try to import Playwright-specific TimeoutError for precise detection
             from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError  # Optional import of Playwright TimeoutError for specific handling
