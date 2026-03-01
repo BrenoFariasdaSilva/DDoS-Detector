@@ -283,7 +283,7 @@ def log_config_sources(config: dict, cli_args: dict | None = None):
             src = "CLI"
         elif k not in (load_config_file().get("dataset_descriptor") or {}):
             src = "default"
-        print(f"{BackgroundColors.GREEN}[CONFIG] {BackgroundColors.CYAN}{k}{Style.RESET_ALL} = {v} (source: {src})")  # Log configuration key and value with colored output
+        print(f"{BackgroundColors.GREEN}[CONFIG] {BackgroundColors.CYAN}{k}{BackgroundColors.GREEN} = {BackgroundColors.CYAN}{v}{BackgroundColors.GREEN} (source: {BackgroundColors.CYAN}{src}{BackgroundColors.GREEN})")  # Log configuration key and value with colored output
 
 
 def validate_config_structure(config: dict):
