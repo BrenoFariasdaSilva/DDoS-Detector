@@ -77,11 +77,14 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
+ROOT_DIR = str(Path(__file__).resolve().parent / "..")  # Directory to scan
+
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
 sys.stdout = logger  # Redirect stdout to the logger
 sys.stderr = logger  # Redirect stderr to the logger
+
 
 # Sound Constants:
 SOUND_COMMANDS = {
@@ -91,10 +94,12 @@ SOUND_COMMANDS = {
 }  # The commands to play a sound for each operating system
 SOUND_FILE = "./.assets/Sounds/NotificationSound.wav"  # The path to the sound file
 
+
 # RUN_FUNCTIONS:
 RUN_FUNCTIONS = {
     "Play Sound": True,  # Set to True to play a sound when the program finishes
 }
+
 
 # Functions Definitions:
 
