@@ -1273,7 +1273,7 @@ def save_rfe_results(csv_path, run_results):
             raise PermissionError(f"Directory not writable: {resolved_dir}")
 
         run_csv_path = os.path.join(resolved_dir, results_filename)
-        print(f"[EXPORT] Results CSV path: {os.path.abspath(run_csv_path)}")
+        print(f"{BackgroundColors.GREEN}Resolved results directory: {BackgroundColors.CYAN}{resolved_dir}{Style.RESET_ALL}")
 
         if os.path.exists(run_csv_path):
             try:
