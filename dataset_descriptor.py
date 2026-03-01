@@ -534,7 +534,13 @@ def build_headers_map(filepaths, low_memory=True):
         headers = {}  # Dictionary that will map each filepath to its list of columns
         for fp in filepaths:  # Iterate over all given file paths
             try:  # Try header-only read
-                df_headers = pd.read_csv(fp, nrows=0)  # Extract columns without loading file content
+                try:  # Attempt UTF-8 header read first to prefer standard encoding
+                    df_headers = pd.read_csv(fp, nrows=0, encoding="utf-8")  # Read header with UTF-8 encoding
+                except UnicodeDecodeError:  # Handle UTF-8 decode failures specifically
+                    try:  # Attempt Latin-1 decoding as first fallback for legacy CSVs
+                        df_headers = pd.read_csv(fp, nrows=0, encoding="latin1")  # Read header with Latin-1 encoding
+                    except UnicodeDecodeError:  # Handle Latin-1 decode failures specifically
+                        df_headers = pd.read_csv(fp, nrows=0, encoding="cp1252")  # Read header with CP1252 encoding as final fallback
                 df_headers.columns = df_headers.columns.str.strip()  # Remove leading/trailing whitespace from column names
                 cols = df_headers.columns.tolist()  # Get column list
             except Exception:  # If header-only read fails
@@ -595,7 +601,13 @@ def load_dataset(filepath, low_memory=True):
         try:  # Try to load the dataset
             with warnings.catch_warnings():  # Suppress DtypeWarning warnings
                 warnings.simplefilter("ignore", pd.errors.DtypeWarning)  # Ignore DtypeWarning warnings
-                df = pd.read_csv(filepath, low_memory=low_memory)  # Load the dataset
+                try:  # Attempt to read file using UTF-8 as primary encoding
+                    df = pd.read_csv(filepath, low_memory=low_memory, encoding="utf-8")  # Read dataset using UTF-8 encoding
+                except UnicodeDecodeError:  # If UTF-8 decoding fails, try legacy encodings
+                    try:  # Attempt to read file using Latin-1 as fallback encoding
+                        df = pd.read_csv(filepath, low_memory=low_memory, encoding="latin1")  # Read dataset using Latin-1 encoding
+                    except UnicodeDecodeError:  # If Latin-1 decoding also fails, try CP1252 as final fallback
+                        df = pd.read_csv(filepath, low_memory=low_memory, encoding="cp1252")  # Read dataset using CP1252 encoding
                 df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
 
             return df  # Return the DataFrame
@@ -1611,8 +1623,14 @@ def get_augmented_sample_count(original_csv_path, config=None) -> int:
 
         if candidate.exists() and candidate.is_file() and candidate.suffix.lower() == ".csv":
             try:
-                df = pd.read_csv(candidate)
-                return int(len(df)) if len(df) > 0 else 0
+                try:  # Attempt UTF-8 read first to prefer standard encoding
+                    df = pd.read_csv(candidate, encoding="utf-8")  # Read augmented CSV using UTF-8 encoding
+                except UnicodeDecodeError:  # Handle UTF-8 decode failures specifically
+                    try:  # Attempt Latin-1 decoding as first fallback for legacy CSVs
+                        df = pd.read_csv(candidate, encoding="latin1")  # Read augmented CSV using Latin-1 encoding
+                    except UnicodeDecodeError:  # Handle Latin-1 decode failures specifically
+                        df = pd.read_csv(candidate, encoding="cp1252")  # Read augmented CSV using CP1252 encoding as final fallback
+                return int(len(df)) if len(df) > 0 else 0  # Return number of rows when read successfully
             except Exception as e:
                 raise RuntimeError(f"Failed to read augmented CSV '{candidate}': {e}")
 
