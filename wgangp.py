@@ -1370,6 +1370,33 @@ def gradient_penalty(critic, real_samples, fake_samples, labels, device, config:
         raise
 
 
+def ensure_figure_min_4k_and_save(fig=None, path=None, dpi=None, **kwargs):
+    """
+    Ensure a Matplotlib figure meets 4k minimum pixel dimensions and save it.
+
+    :param fig: Matplotlib Figure instance or None to use current figure.
+    :param path: Path where the image will be saved.
+    :param dpi: DPI to use for saving; preserved if provided.
+    :return: None
+    """
+
+    fig = fig or plt.gcf()  # Use provided figure or get current figure if None
+    effective_dpi = dpi if dpi is not None else fig.get_dpi()  # Determine effective DPI for size calculations
+    width_inch, height_inch = fig.get_size_inches()  # Get current figure size in inches
+
+    if width_inch * effective_dpi < 3840 or height_inch * effective_dpi < 2160:  # Check if current size is below 4k dimensions
+        new_w = max(width_inch, 3840.0 / effective_dpi)  # Calculate new width in inches to meet 4k width requirement
+        new_h = max(height_inch, 2160.0 / effective_dpi)  # Calculate new height in inches to meet 4k height requirement
+        fig.set_size_inches(new_w, new_h)  # Update figure size to ensure minimum 4k dimensions
+
+    save_kwargs = dict(kwargs)  # Copy additional save parameters
+
+    if dpi is not None:  # If a specific DPI was provided, ensure it is included in save parameters
+        save_kwargs["dpi"] = dpi  # Set DPI for saving
+
+    fig.savefig(path, **save_kwargs)  # Save the figure to the specified path with the given parameters
+
+
 def plot_training_metrics(metrics_history, out_dir, filename=None, config: Optional[Dict] = None):
     """
     Plot training metrics and save to output directory.
@@ -1464,7 +1491,7 @@ def plot_training_metrics(metrics_history, out_dir, filename=None, config: Optio
             save_dir = out_path  # Fallback to out_dir if subdirectories cannot be created
 
         plot_path = str(save_dir / filename)  # Construct full path for the plot file
-        plt.savefig(plot_path, dpi=dpi, bbox_inches="tight")  # Save figure to file
+        ensure_figure_min_4k_and_save(fig=plt.gcf(), path=plot_path, dpi=dpi, bbox_inches="tight")  # Save figure ensuring >=4k pixels without changing DPI
         print(f"{BackgroundColors.GREEN}Training metrics plot saved to: {BackgroundColors.CYAN}{plot_path}{Style.RESET_ALL}")  # Print save message
         plt.close()  # Close figure to free memory
     except Exception as e:
