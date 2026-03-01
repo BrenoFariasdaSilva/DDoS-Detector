@@ -134,6 +134,36 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def write_configs(config_path: str, example_path: str) -> bool:
+    """
+    Write the sorted configuration into config.yaml and sync to config.yaml.example.
+
+    :param config_path: Path to the destination config.yaml file.
+    :param example_path: Path to the destination config.yaml.example file.
+    :return: True when both files are written successfully, False otherwise.
+    """
+
+    general, python = load_and_prepare_sections(config_path)  # Load, sort, and separate configuration sections
+    header_top = build_header_top()  # Build top-level header block
+    general_header = build_general_header()  # Build general sections header block
+    
+    try:  # Attempt to write configuration files
+        final_text = build_final_text(general, python)  # Build final configuration text
+        config_file = Path(config_path)  # Convert config_path to Path for write
+        
+        with config_file.open("w", encoding="utf-8") as fh:  # Open config.yaml for writing
+            fh.write(final_text)  # Write the final merged YAML text
+        example_file = Path(example_path)  # Convert example_path to Path for write
+        
+        with example_file.open("w", encoding="utf-8") as fh2:  # Open config.yaml.example for writing
+            fh2.write(final_text)  # Write identical YAML text to example file
+        
+        return True  # Indicate success when both writes complete
+    except Exception as exc:  # Handle exceptions raised during file write operations
+        print(f"Failed to write config files: {exc}")  # Log error message when write fails
+        return False  # Indicate failure when exception occurs
+
+
 def to_seconds(obj):
     """
     Converts various time-like objects to seconds.
