@@ -246,17 +246,30 @@ def main():
     """
 
     print(
-        f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Main Template Python{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
+        f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}YAML Configuration Sections Updater{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
         end="\n\n",
     )  # Output the welcome message
+    
     start_time = datetime.datetime.now()  # Get the start time of the program
     
-    # Implement logic here
+    try:  # Attempt the configuration read, sort, and write operations
+        repo_root = Path(__file__).resolve().parent.parent  # Determine repository root from this script location
+        config_path = repo_root / "config.yaml"  # Build path to config.yaml in repository root
+        example_path = repo_root / "config.yaml.example"  # Build path to config.yaml.example in repository root
+        success = write_configs(str(config_path), str(example_path))  # Invoke writer to update both files
+        if success:  # Verify writer returned success
+            print(f"Config files updated: {config_path} and {example_path}")  # Inform user that files were updated
+        else:  # Writer indicated failure
+            print(f"Failed to update config files")  # Inform user that update failed
+    except Exception as err:  # Catch unexpected exceptions during processing
+        print(f"Error while processing config files: {err}")  # Print the raised exception message
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
+    
     print(
         f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
     )  # Output the start and finish times
+    
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
     )  # Output the end of the program message
