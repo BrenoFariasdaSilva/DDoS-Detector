@@ -134,6 +134,36 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def HandleMappingKey(line: str, stack: list[str]) -> bool:
+    """
+    Handle a YAML mapping key line and update the stack accordingly.
+
+    :param line: The raw line from the YAML file to inspect.
+    :param stack: The stack tracking nested mapping keys by level.
+    :return: True when the line contained a mapping key, False otherwise.
+    """
+
+    m = re.match(r"^(\s*)([^:\n]+):(?:\s*)$", line)  # Match indented mapping key lines like 'key:'
+    
+    if m:  # When a mapping key line without a value is detected
+        indent = len(m.group(1))  # Measure leading spaces to infer nesting
+        level = indent // 2  # Compute YAML nesting level using two-space indent convention
+        key = m.group(2).strip()  # Extract the mapping key name from the match
+        UpdateStackForKey(stack, level, key)  # Update stack with key and truncate deeper levels
+        return True  # Indicate the line was handled as a mapping key
+    
+    m2 = re.match(r"^(\s*)([^:]+):\s*(.+)$", line)  # Match single-line 'key: value' entries
+    
+    if m2:  # When a single-line mapping with a value is detected
+        indent = len(m2.group(1))  # Measure leading spaces for nesting computation
+        level = indent // 2  # Compute the nesting level using two-space indentation
+        key = m2.group(2).strip()  # Extract the mapping key before the ':'
+        UpdateStackForKey(stack, level, key)  # Update stack with key and truncate deeper levels
+        return True  # Indicate the line was handled as a single-line mapping
+    
+    return False  # Indicate the line did not represent a mapping key
+
+
 def HandleInlineComment(before: str, comment: str, stack: list[str], comments: dict) -> None:
     """
     Process the portion before an inline comment and record the comment for the key path.
