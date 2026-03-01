@@ -43,14 +43,25 @@ Assumptions & Notes:
     - Sound notification is skipped on Windows by design.
 """
 
+
 import atexit  # For playing a sound when the program finishes
 import datetime  # For getting the current date and time
 import os  # For running a command in the terminal
 import platform  # For getting the operating system name
+import re  # For parsing inline comments from existing YAML files
 import sys  # For system-specific parameters and functions
+import yaml  # YAML loader and dumper
+from collections import OrderedDict  # Ordered mapping for deterministic output
 from colorama import Style  # For coloring the terminal
-from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
+from typing import cast, Iterable, Any  # Cast and Iterable and Any for safe type coercion
+from typing import Dict, Tuple  # Type hints for function signatures
+
+
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)  # Project root directory
+if PROJECT_ROOT not in sys.path:  # Ensure project root is in sys.path
+    sys.path.insert(0, PROJECT_ROOT)  # Insert at the beginning
+from Logger import Logger  # For logging output to both terminal and file
 
 
 # Macros:
