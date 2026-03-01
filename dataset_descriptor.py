@@ -1361,6 +1361,32 @@ def initialize_and_fit_tsne(X, n_components=2, perplexity=30, n_iter=1000, rando
         raise  # Re-raise to preserve original failure semantics
 
 
+def sanitize_plot_text(text: str) -> str:
+    """
+    Normalize text to safe UTF-8 for matplotlib rendering.
+
+    :param text: Original text string.
+    :return: Sanitized text string.
+    """
+    
+    if text is None:  # Handle None inputs gracefully
+        return ""  # Return empty string for None inputs
+    
+    try:  # Try explicit replacements and UTF-8 normalization
+        sanitized = str(text).replace("\x96", "-")  # Replace CP1252 EN DASH with ASCII hyphen
+        sanitized = sanitized.replace("–", "-")  # Replace Unicode EN DASH with ASCII hyphen
+        sanitized = sanitized.replace("—", "-")  # Replace EM DASH with ASCII hyphen
+        sanitized = sanitized.replace("\x92", "'")  # Replace CP1252 smart quote with apostrophe
+        sanitized = sanitized.encode("utf-8", "ignore").decode("utf-8")  # Remove invalid UTF-8 sequences
+        sanitized = "".join(ch for ch in sanitized if (ch.isprintable() or ch in "\t\n\r"))  # Remove control characters
+        return sanitized  # Return cleaned text
+    except Exception:  # In case of unexpected errors during sanitization
+        try:  # Best-effort fallback to safe ASCII representation
+            return str(text).encode("ascii", "ignore").decode("ascii")  # Fallback to ASCII-only string
+        except Exception:  # If fallback also fails
+            return ""  # Return empty string as ultimate fallback
+
+
 def save_tsne_plot(X_emb, labels, output_path, title):
     """
     Create and save a 2D t-SNE scatter plot.
@@ -1390,12 +1416,11 @@ def save_tsne_plot(X_emb, labels, output_path, title):
                 unique = list(labels_ser.unique())  # Unique class labels (preserve order)
                 for cls in unique:  # Plot each class separately
                     mask = labels_ser == cls  # Boolean mask for class
-                    plt.scatter(
-                        X_emb[mask, 0], X_emb[mask, 1], label=f"{cls} ({int(counts.get(cls, 0))})", s=8
-                    )  # Scatter plot for class with count in label
+                    plt.scatter(X_emb[mask, 0], X_emb[mask, 1], label=sanitize_plot_text(f"{cls} ({int(counts.get(cls, 0))})"), s=8)  # Scatter plot for class with sanitized count label
                 plt.legend(markerscale=2, fontsize="small")  # Add legend for classes
                 try:  # Try to add counts text box
                     counts_text = "\n".join([f"{str(c)}: {int(counts[c])}" for c in counts.index])  # Prepare counts text
+                    counts_text = sanitize_plot_text(counts_text)  # Sanitize counts text before rendering
                     fig.text(
                         0.99,
                         0.01,
@@ -1410,9 +1435,10 @@ def save_tsne_plot(X_emb, labels, output_path, title):
             else:  # No labels provided
                 plt.scatter(X_emb[:, 0], X_emb[:, 1], s=8)  # Plot all points uniformly
 
+            title = sanitize_plot_text(title)  # Sanitize incoming title before plotting
             plt.title(title)  # Set plot title
-            plt.xlabel("t-SNE 1")  # X-axis label
-            plt.ylabel("t-SNE 2")  # Y-axis label
+            plt.xlabel(sanitize_plot_text("t-SNE 1"))  # X-axis label sanitized
+            plt.ylabel(sanitize_plot_text("t-SNE 2"))  # Y-axis label sanitized
             plt.tight_layout()  # Adjust layout
             try:  # Try saving the figure
                 fig.savefig(output_path, dpi=600)  # Save figure to disk
@@ -1459,17 +1485,17 @@ def save_tsne_3d_plot(X_emb, labels, output_path, title):
                     X_emb[mask, 0],
                     X_emb[mask, 1],
                     X_emb[mask, 2],
-                    label=f"{cls} ({int(counts.get(cls, 0))})",
+                    label=sanitize_plot_text(f"{cls} ({int(counts.get(cls, 0))})"),  # Sanitize class label before passing to matplotlib
                     s=8,
                 )  # 3D scatter plot for class with count in label
             ax.legend(markerscale=2, fontsize="small")  # Add legend for classes
         else:  # No labels provided
             cast(Any, ax).scatter(X_emb[:, 0], X_emb[:, 1], X_emb[:, 2], s=8)  # Plot all points uniformly
 
-        ax.set_title(title)  # Set plot title
-        ax.set_xlabel("t-SNE 1")  # X-axis label
-        ax.set_ylabel("t-SNE 2")  # Y-axis label
-        cast(Any, ax).set_zlabel("t-SNE 3")  # Z-axis label (cast to Any for typing)
+        ax.set_title(sanitize_plot_text(title))  # Set sanitized plot title
+        ax.set_xlabel(sanitize_plot_text("t-SNE 1"))  # X-axis label sanitized
+        ax.set_ylabel(sanitize_plot_text("t-SNE 2"))  # Y-axis label sanitized
+        cast(Any, ax).set_zlabel(sanitize_plot_text("t-SNE 3"))  # Z-axis label sanitized (cast to Any for typing)
         plt.tight_layout()  # Adjust layout
         try:
             fig.savefig(output_path, dpi=600)  # Save figure to disk
@@ -1945,9 +1971,19 @@ def apply_zebra_style(df):
     """
 
     try:  # Wrap function body for consistent error handling
-        
-
-        styled = df.style.apply(_stripe, axis=1)  # Apply zebra striping across rows
+        sanitized_df = df.copy()  # Make a shallow copy to avoid mutating caller DataFrame
+        sanitized_df.columns = [sanitize_plot_text(str(c)) for c in sanitized_df.columns]  # Sanitize all column names to safe UTF-8
+        try:  # Attempt to sanitize index labels when present to avoid glyph issues in table exports
+            sanitized_df.index = sanitized_df.index.map(lambda x: sanitize_plot_text(str(x)) if pd.notnull(x) else x)  # Sanitize index entries
+        except Exception:  # Ignore index sanitization errors to preserve original behavior
+            pass  # Continue even if index mapping fails
+        for col in list(sanitized_df.columns):  # Iterate over a static list of columns to sanitize values
+            try:  # Guard per-column sanitization to avoid failing entire styling pipeline
+                if sanitized_df[col].dtype == object or pd.api.types.is_string_dtype(sanitized_df[col]):  # Detect string-like columns
+                    sanitized_df[col] = sanitized_df[col].apply(lambda x: sanitize_plot_text(str(x)) if pd.notnull(x) else x)  # Sanitize each cell in string columns
+            except Exception:  # Ignore individual column sanitization errors to preserve original behavior
+                pass  # Continue processing remaining columns even if one fails
+        styled = sanitized_df.style.apply(_stripe, axis=1)  # Apply zebra striping across rows on sanitized DataFrame
         return styled  # Return the styled DataFrame
     except Exception as e:  # Preserve exception handling style
         print(str(e))  # Print error to terminal for server logs
