@@ -134,6 +134,45 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def build_final_text(general: Dict, python: Dict) -> str:
+    """
+    Build final YAML configuration text with headers and sections.
+
+    :param general: Dictionary of general sections.
+    :param python: Dictionary of python-specific sections.
+    :return: Final formatted YAML configuration text.
+    """
+
+    try:  # Attempt to extract inline comments and quoted-items info from repository config.yaml
+        repo_config_path = Path(__file__).resolve().parent.parent / "config.yaml"  # Compute path to repo config.yaml
+        comments_map, quoted_items_map = extract_inline_comments(str(repo_config_path), None)  # Extract inline comments and quote flags keyed by tuple path
+    except Exception:  # If extraction fails, fallback to empty mappings
+        comments_map = {}  # Use empty comments map when extraction fails
+        quoted_items_map = {}  # Use empty quoted-items map when extraction fails
+
+    out_lines = []  # Initialize list to accumulate output text parts
+    out_lines.append(build_header_top())  # Append top-level header block
+    
+    if len(general) > 0:  # Verify presence of general sections before writing header
+        out_lines.append(build_general_header())  # Append general sections header when present
+        for sec in general.keys():  # Iterate sorted general section names
+            conv = convert_ordered_dicts(general[sec])  # Convert OrderedDicts to plain dicts recursively
+            raw_block = yaml.safe_dump({sec: conv}, sort_keys=False, default_flow_style=False)  # Dump the section mapping to YAML text
+            annotated_block = insert_comments_in_yaml_block(raw_block, comments_map, quoted_items_map)  # Inject preserved inline comments into dumped YAML block
+            out_lines.append(annotated_block + "\n")  # Append the annotated YAML block and one blank line after the section
+    
+    for sec in python.keys():  # Iterate python-specific section names in sorted order
+        out_lines.append(build_python_header(sec))  # Append python-specific header before section
+        conv = convert_ordered_dicts(python[sec])  # Convert OrderedDicts to plain dicts recursively
+        raw_block = yaml.safe_dump({sec: conv}, sort_keys=False, default_flow_style=False)  # Dump the python-specific section to YAML text
+        annotated_block = insert_comments_in_yaml_block(raw_block, comments_map, quoted_items_map)  # Inject preserved inline comments into dumped YAML block
+        out_lines.append(annotated_block + "\n")  # Append the annotated YAML block and one blank line after the section
+    
+    final_text = "".join(out_lines)  # Join all parts into a single string
+    
+    return final_text  # Return fully constructed YAML text
+
+
 def EnsureStackLength(stack: list[str], level: int) -> None:
     """
     Ensure the stack has a slot for the given level.
