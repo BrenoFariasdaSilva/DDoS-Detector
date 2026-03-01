@@ -134,6 +134,64 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def insert_comments_in_yaml_block(block_text: str, comments_map: dict, quoted_items_map: dict) -> str:
+    """
+    Insert inline comments into a YAML text block using a mapping of key-path tuples to comment strings.
+
+    :param block_text: YAML text produced by safe_dump for a single top-level section.
+    :param comments_map: Mapping from tuple key-path (e.g., ("execution","verbose")) to comment string.
+    :param quoted_items_map: Mapping from tuple key-path to list of booleans indicating whether each list item was originally quoted.
+    :return: Annotated YAML block with inline comments inserted and standardized spacing.
+    """
+
+    out_lines: list[str] = []  # Accumulate modified lines
+    stack: list[str] = []  # Track current key path by indentation level while iterating lines
+    list_counters: dict = {}  # Track current index for list items per path
+
+    for raw in block_text.splitlines():  # Process block line-by-line
+        line = raw.rstrip()  # Remove trailing newline and spaces for clean processing
+        m_key_val = re.match(r"^(\s*)([^:\n]+):\s*(.*)$", line)  # Match 'key:' or 'key: value' lines
+
+        if m_key_val:  # Handle mapping lines where a key is present
+            indent = len(m_key_val.group(1))  # Number of leading spaces
+            level = indent // 2  # Compute nesting level using two-space indentation standard
+            key = m_key_val.group(2).strip()  # Extract the key name
+
+            if len(stack) <= level:
+                while len(stack) <= level:
+                    stack.append("")  # Extend stack to required level
+
+            stack[level] = key  # Set key for current level in stack
+            stack = stack[: level + 1]  # Truncate deeper entries
+            path = tuple([k for k in stack if k])  # Build tuple path for comment lookup
+
+            left = m_key_val.group(0).rstrip()  # Left portion including key and value
+            comment = comments_map.get(path)  # Look up comment for this path
+
+            if comment is not None:  # If a preserved comment exists for this key path
+                annotated = f"{left}  # {comment}"  # Append two spaces then hash and comment text
+                out_lines.append(annotated)  # Add annotated line to output
+                continue  # Continue to next input line after adding annotated line
+
+        # If this line is a list item, decide quoting based on original file's quoted-items info
+        m_list = re.match(r"^(\s*)-\s+(.*)$", line)  # Match list items like '- value'
+        if m_list:  # When current line is a list item
+            path = tuple([k for k in stack if k])  # Parent key-path for this list
+            idx = list_counters.get(path, 0)  # Index of this list item under its parent path
+            orig_list = quoted_items_map.get(path)  # Original quoted flags list for this path
+            if orig_list is not None and idx < len(orig_list) and orig_list[idx]:  # If original had a quoted entry at this index
+                item = m_list.group(2).strip()  # Extract scalar after '-'
+                if not ((item.startswith('"') and item.endswith('"')) or (item.startswith("'") and item.endswith("'"))):  # If currently not quoted
+                    line = f"{m_list.group(1)}- \"{item}\""  # Force double-quoting to preserve original style
+            else:
+                line = QuoteListItemIfNeeded(line)  # Otherwise apply heuristic quoting when useful
+            list_counters[path] = idx + 1  # Increment index for next list item under this path
+
+        out_lines.append(line)  # Append the possibly modified or original line to output
+
+    return "\n".join(out_lines)  # Return the reconstructed block with injected comments
+
+
 def write_configs(config_path: str, example_path: str) -> bool:
     """
     Write the sorted configuration into config.yaml and sync to config.yaml.example.
