@@ -1949,7 +1949,18 @@ def upscale_image_if_needed(path, fallback=False):
                 target_h = max(2160, h)  # Compute target height ensuring at least 2160
                 scale = max(target_w / float(w), target_h / float(h))  # Compute scale factor to meet both dimensions
                 new_size = (int(w * scale), int(h * scale))  # Compute new integer dimensions for resizing
-                im_resized = im.resize(new_size, Image.LANCZOS)  # Resize using high-quality LANCZOS filter
+                resample_filter = getattr(Image, "LANCZOS", None)  # Attempt to get LANCZOS attribute from PIL.Image
+                if resample_filter is None:  # If LANCZOS attribute is not present on PIL.Image
+                    resampling_enum = getattr(Image, "Resampling", None)  # Attempt to get Resampling enum from PIL.Image
+                    resample_filter = getattr(resampling_enum, "LANCZOS", None) if resampling_enum is not None else None  # Use Resampling.LANCZOS if available else None
+                if resample_filter is None:  # If no LANCZOS candidate was found
+                    resample_filter = getattr(Image, "BICUBIC", None)  # Attempt to get BICUBIC attribute from PIL.Image
+                    if resample_filter is None:  # If BICUBIC is not present on PIL.Image
+                        resampling_enum = getattr(Image, "Resampling", None)  # Attempt to get Resampling enum from PIL.Image again
+                        resample_filter = getattr(resampling_enum, "BICUBIC", None) if resampling_enum is not None else None  # Use Resampling.BICUBIC if available else None
+                    if resample_filter is None:  # If still no BICUBIC candidate was found
+                        resample_filter = getattr(Image, "NEAREST", 0)  # Fallback to Image.NEAREST constant via getattr with numeric default
+                im_resized = im.resize(new_size, resample=resample_filter)  # Resize using chosen resample filter with explicit resample argument
                 orig_dpi = im.info.get("dpi") if hasattr(im, "info") else None  # Retrieve original DPI metadata if available
                 
                 if orig_dpi:  # Verify if DPI metadata exists
