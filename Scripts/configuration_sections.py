@@ -134,6 +134,64 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def extract_inline_comments(file_path: str, unused: object) -> tuple:
+    """
+    Extract inline comments from an existing YAML file preserving their mapping to dotted key paths.
+
+    :param file_path: Path to the YAML file to parse for inline comments.
+    :param unused: Placeholder parameter to preserve two-argument signature.
+    :return: Mapping from tuple key-path (e.g., ("execution","verbose")) to comment string.
+    """
+
+    comments: dict = {}  # Initialize mapping for extracted inline comments
+    quoted_items: dict = {}  # Initialize mapping for recording quoted list-item flags per key-path
+    p = Path(file_path)  # Convert to Path for operations
+    if not p.exists():  # Verify file exists before attempting to read
+        return comments, quoted_items  # Return empty maps when file missing
+
+    with p.open("r", encoding="utf-8") as fh:  # Open original YAML for reading
+        stack: list[str] = []  # Stack to track current key path by indentation level
+        for raw_line in fh:  # Iterate each line in the original file
+            line = raw_line.rstrip("\n")  # Strip newline but preserve trailing spaces for comment detection
+            if not line.strip():  # Skip empty lines silently
+                continue  # Continue to next line when blank
+            stripped = line.lstrip(" ")  # Left-trim spaces for content inspection
+            if stripped.startswith("#"):  # Skip full-line comments (not inline)
+                continue  # Continue to next line when full-line comment
+            hash_idx = line.find("#")  # Find inline comment marker position if present
+            if hash_idx == -1:  # No inline comment on this line
+                
+                mlist = re.match(r"^(\s*)-\s*(.*)$", line)  # Match list item lines like '- value'
+                if mlist:  # When a list item without inline comment is present
+                    item = mlist.group(2).strip()  # Extract the scalar portion after '-'
+                    path = tuple([k for k in stack if k])  # Build current key-path tuple from stack
+                    quoted = False  # Default: not quoted
+                    if (item.startswith('"') and item.endswith('"')) or (item.startswith("'") and item.endswith("'")):  # Already quoted in original
+                        quoted = True  # Mark as originally quoted
+                    quoted_items.setdefault(path, []).append(quoted)  # Record quoted flag for this list item index
+                    handled = HandleMappingKey(line, stack)  # Try to handle mapping key or single-line mapping (no-op for list items)
+                    if handled:  # If mapping key was handled update next line
+                        continue  # Continue to next line when mapping handled
+                    continue  # Continue to next line after recording list-item quote flag
+                handled = HandleMappingKey(line, stack)  # Try to handle mapping key or single-line mapping
+                if handled:  # If mapping key was handled update next line
+                    continue  # Continue to next line when mapping handled
+                continue  # Continue to next line when no inline comment to record
+            comment = line[hash_idx + 1 :].strip()  # Extract the comment text after '#'
+            before = line[:hash_idx].rstrip()  # Portion before the inline comment
+            
+            mlist2 = re.match(r"^(\s*)-\s*(.*)$", before)  # Match list-item before '#' (inline-comment on list item)
+            if mlist2:  # When inline comment is attached to a list item
+                item = mlist2.group(2).strip()  # Extract the scalar portion after '-'
+                path = tuple([k for k in stack if k])  # Build current key-path tuple from stack
+                quoted = False  # Default: not quoted
+                if (item.startswith('"') and item.endswith('"')) or (item.startswith("'") and item.endswith("'")):  # Already quoted in original
+                    quoted = True  # Mark as originally quoted
+                quoted_items.setdefault(path, []).append(quoted)  # Record quoted flag for this list item index
+            HandleInlineComment(before, comment, stack, comments)  # Process and record the inline comment for the key path
+    return comments, quoted_items  # Return both comment mapping and quoted-items mapping keyed by tuple path
+
+
 def insert_comments_in_yaml_block(block_text: str, comments_map: dict, quoted_items_map: dict) -> str:
     """
     Insert inline comments into a YAML text block using a mapping of key-path tuples to comment strings.
