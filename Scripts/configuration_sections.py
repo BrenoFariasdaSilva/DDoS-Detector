@@ -134,6 +134,26 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def load_yaml(file_path: str, unused: object) -> dict:
+    """
+    Load a YAML file and return its content as a dictionary.
+
+    :param file_path: Path to the YAML file to load.
+    :param unused: Placeholder parameter to preserve two-argument signature.
+    :return: Parsed YAML content as a dictionary (empty dict if file missing).
+    """
+
+    path = Path(file_path)  # Convert file_path to Path for operations
+    
+    if not path.exists():  # Verify the file exists before reading
+        return {}  # Return empty dict when file is not present
+    
+    with path.open("r", encoding="utf-8") as fh:  # Open the YAML file for reading
+        data = yaml.safe_load(fh) or {}  # Load YAML safely and default to empty dict
+        
+    return data  # Return the parsed YAML structure
+
+
 def sort_recursive(obj: object, unused: object) -> object:
     """
     Recursively sort dictionary keys alphabetically and preserve nested structure.
