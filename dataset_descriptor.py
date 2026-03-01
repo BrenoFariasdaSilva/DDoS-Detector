@@ -283,7 +283,7 @@ def log_config_sources(config: dict, cli_args: dict | None = None):
             src = "CLI"
         elif k not in (load_config_file().get("dataset_descriptor") or {}):
             src = "default"
-        print(f"[CONFIG] {k} = {v} (source: {src})")
+        print(f"{BackgroundColors.GREEN}[CONFIG] {BackgroundColors.CYAN}{k}{Style.RESET_ALL} = {v} (source: {src})")  # Log configuration key and value with colored output
 
 
 def validate_config_structure(config: dict):
@@ -1973,9 +1973,9 @@ def upscale_image_if_needed(path, fallback=False):
                     im_resized.save(path)  # Save resized image without explicit DPI metadata
                 
                 if fallback:  # Verify whether this upscale was triggered from fallback export
-                    print(f"[DEBUG] Upscaled image to meet 4k (fallback): {path}")  # Log fallback upscale event
-                else:
-                    print(f"[DEBUG] Upscaled image to meet 4k: {path}")  # Log normal upscale event
+                    print(f"{BackgroundColors.GREEN}[DEBUG] Upscaled image to meet 4k (fallback): {BackgroundColors.CYAN}{path}{Style.RESET_ALL}")  # Log fallback upscale event with colored output
+                else:  # Verify whether this upscale was a normal upscale
+                    print(f"{BackgroundColors.GREEN}[DEBUG] Upscaled image to meet 4k: {BackgroundColors.CYAN}{path}{Style.RESET_ALL}")  # Log normal upscale event with colored output
     except Exception:  # Ignore any image processing errors to avoid cascading failures
         pass  # Continue silently on upscale failures to preserve original behavior
 
@@ -1993,7 +1993,7 @@ def export_dataframe_image(styled_df, output_path):
         cfg = load_config_file()  # Load configuration from config.yaml if present
         timeout_ms = int((cfg or {}).get("dataset_descriptor", {}).get("table_image_timeout_ms", 30000))  # Determine timeout in ms with fallback
         src = "config" if (cfg or {}).get("dataset_descriptor", {}).get("table_image_timeout_ms") is not None else "default"  # Determine config source
-        print(f"[CONFIG] table_image_timeout_ms = {timeout_ms} (source: {src})")  # Log the timeout value and its source
+        print(f"{BackgroundColors.GREEN}[CONFIG] table_image_timeout_ms = {BackgroundColors.CYAN}{timeout_ms}{Style.RESET_ALL} (source: {src})")  # Log the timeout value and its source with colored output
 
         export_kwargs: dict[str, Any] = {"table_conversion": "playwright"}  # Prepare kwargs for dfi.export with Playwright conversion
         try:  # Attempt to inspect dfi.export signature to optionally provide screenshot timeout
@@ -2004,11 +2004,11 @@ def export_dataframe_image(styled_df, output_path):
 
         try:  # Attempt primary export using prepared kwargs (may raise TypeError on older dfi versions)
             dfi.export(styled_df, output_path, **export_kwargs)  # Export styled DataFrame to PNG using dataframe_image
-            print(f"[DEBUG] Exported image: {output_path}")  # Log successful export for diagnostics
+            print(f"{BackgroundColors.GREEN}[DEBUG] Exported image: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log successful export for diagnostics with colored output
             upscale_image_if_needed(output_path, fallback=False)  # Attempt to upscale exported image if below 4k
         except TypeError:  # Handle dataframe_image versions that raise TypeError for unexpected kwargs
             dfi.export(styled_df, output_path, table_conversion="playwright")  # Retry export without dynamic kwargs when TypeError occurs
-            print(f"[DEBUG] Exported image (fallback): {output_path}")  # Log fallback export success for diagnostics
+            print(f"{BackgroundColors.GREEN}[DEBUG] Exported image (fallback): {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log fallback export success for diagnostics with colored output
             upscale_image_if_needed(output_path, fallback=True)  # Attempt to upscale exported image after fallback export
     except Exception as e:  # If export fails, log warning and continue without crashing
         try:  # Try to import Playwright-specific TimeoutError for precise detection
@@ -2016,9 +2016,9 @@ def export_dataframe_image(styled_df, output_path):
         except Exception:  # If import fails, ensure variable is defined for downstream checks
             PlaywrightTimeoutError = None  # Set to None when Playwright TimeoutError cannot be imported
         if PlaywrightTimeoutError is not None and isinstance(e, PlaywrightTimeoutError):  # Verify if exception is Playwright TimeoutError
-            print(f"[WARNING] Playwright screenshot timeout while exporting {output_path}: {e}")  # Warn when Playwright timeout occurs
+            print(f"{BackgroundColors.YELLOW}[WARNING] Playwright screenshot timeout while exporting {BackgroundColors.CYAN}{output_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}")  # Warn when Playwright timeout occurs with colored output
         else:  # General failure when not a Playwright TimeoutError
-            print(f"[WARNING] Failed to export image {output_path}: {e}")  # Warn for general export failures
+            print(f"{BackgroundColors.YELLOW}[WARNING] Failed to export image {BackgroundColors.CYAN}{output_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}")  # Warn for general export failures with colored output
         try:  # Send exception trace via Telegram for observability
             send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram for remote debugging
         except Exception:  # Ignore failures when sending Telegram notifications to avoid cascading errors
