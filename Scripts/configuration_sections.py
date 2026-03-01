@@ -134,6 +134,30 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def get_python_filenames(base_dir: str, scripts_dir: str) -> list:
+    """
+    Get python filenames without extension.
+
+    :param base_dir: Base directory path to search for .py files.
+    :param scripts_dir: Scripts directory path to search for .py files.
+    :return: List of python filenames without the .py extension.
+    """
+
+    base_path = Path(base_dir)  # Convert base_dir to Path for filesystem operations
+    scripts_path = Path(scripts_dir)  # Convert scripts_dir to Path for filesystem operations
+    py_names = set()  # Initialize a set to collect unique python filenames
+    
+    if base_path.exists() and base_path.is_dir():  # Verify base_path exists and is a directory
+        for p in base_path.glob("*.py"):  # Iterate over Python files in base_path
+            py_names.add(p.stem)  # Add the filename without extension to the set
+    
+    if scripts_path.exists() and scripts_path.is_dir():  # Verify scripts_path exists and is a directory
+        for p in scripts_path.glob("*.py"):  # Iterate over Python files in scripts_path
+            py_names.add(p.stem)  # Add the filename without extension to the set
+    
+    return sorted(py_names)  # Return an alphabetically sorted list of python filenames
+
+
 def load_yaml(file_path: str, unused: object) -> dict:
     """
     Load a YAML file and return its content as a dictionary.
