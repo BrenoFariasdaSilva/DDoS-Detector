@@ -134,6 +134,100 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def load_and_prepare_sections(config_path: str) -> Tuple[Dict, Dict]:
+    """
+    Load YAML configuration, sort it recursively, and separate sections.
+
+    :param config_path: Path to the destination config.yaml file.
+    :return: Tuple containing general and python-specific sections.
+    """
+
+    repo_root = Path(config_path).parent  # Determine repository root from config_path
+    raw = load_yaml(str(repo_root / "config.yaml"), None)  # Load original YAML content
+    sorted_raw = sort_recursive(raw, None)  # Recursively sort keys in the loaded YAML
+    py_names = get_python_filenames(str(repo_root), str(repo_root / "Scripts"))  # Discover python filenames
+    general, python = separate_sections(sorted_raw, py_names)  # Separate sections into groups and coerce types
+    
+    return general, python  # Return separated configuration sections
+
+
+def build_header_top() -> str:
+    """
+    Build the top-level configuration header block.
+
+    :param: No parameters.
+    :return: Header string for top of configuration file.
+    """
+
+    header_top = (
+        "# ================================================================================\n"
+        "# DDoS-Detector — Unified Configuration File\n"
+        "# ================================================================================\n\n"
+    )  # Construct top-level header block
+    
+    return header_top  # Return top-level header string
+
+
+def build_general_header() -> str:
+    """
+    Build the general sections header block.
+
+    :param: No parameters.
+    :return: Header string for general sections.
+    """
+
+    general_header = (
+        "# ==============================================================================\n"
+        "# General Sections — Used by multiple scripts\n"
+        "# ==============================================================================\n\n"
+    )  # Construct general sections header block
+    return general_header  # Return general sections header string
+
+
+def build_python_header(sec: str) -> str:
+    """
+    Build the python-specific section header block.
+
+    :param sec: Section name.
+    :return: Header string for a python-specific section.
+    """
+
+    py_header = (
+        "# ==============================================================================\n"
+        f"# {sec.upper()} — Used by {sec}.py\n"
+        "# ==============================================================================\n\n"
+    )  # Construct python-specific header block
+    
+    return py_header  # Return python-specific header string
+
+
+def convert_ordered_dicts(obj: Any) -> Any:
+    """
+    Recursively convert OrderedDict instances to plain dicts.
+
+    :param obj: Object to convert (can be OrderedDict, dict, list, or scalar).
+    :return: Converted object with OrderedDict replaced by dict (or original scalar).
+    """
+
+    if isinstance(obj, OrderedDict):  # Verify the object is an OrderedDict
+        new = {}  # Create a plain dict to preserve insertion order
+        for k, v in obj.items():  # Iterate over mapping items in order
+            new[k] = convert_ordered_dicts(v)  # Recurse to convert nested structures
+        return new  # Return the converted plain dict
+    
+    if isinstance(obj, dict):  # Verify the object is a dict (non-OrderedDict)
+        new = {}  # Create a new dict for converted contents
+        for k, v in obj.items():  # Iterate over mapping items
+            new[k] = convert_ordered_dicts(v)  # Recurse to convert nested structures
+        return new  # Return the converted dict
+    
+    if isinstance(obj, list):  # Verify the object is a list container
+        converted_list = [convert_ordered_dicts(i) for i in obj]  # Recurse convert each list element
+        return converted_list  # Return the converted list
+    
+    return obj  # Return scalar or unsupported type unchanged
+
+
 def build_final_text(general: Dict, python: Dict) -> str:
     """
     Build final YAML configuration text with headers and sections.
