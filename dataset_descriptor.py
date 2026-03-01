@@ -1633,6 +1633,8 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
         verbose_output(
             f"{BackgroundColors.GREEN}Extracting dataset information from: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
         )  # Output start message for dataset info extraction
+        print(f"{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Print message indicating which dataset is being processed
+        send_telegram_message(TELEGRAM_BOT, [f"Starting processing dataset: {os.path.basename(filepath)}"])  # Send Telegram notification indicating start of processing for dataset
 
         if df is None:
             df = load_dataset(filepath, low_memory)  # Load the dataset
@@ -1684,6 +1686,8 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
             raise
         result["data_augmentation_samples"] = int(aug_count)
 
+        print(f"{BackgroundColors.GREEN}Finished processing dataset: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Print message indicating completion of processing for dataset
+        send_telegram_message(TELEGRAM_BOT, [f"Finished processing dataset: {os.path.basename(filepath)}"])  # Send Telegram notification indicating completion of processing for dataset
         return result  # Return the dataset information
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
