@@ -141,7 +141,7 @@ class TelegramBot:
             print(f"{BackgroundColors.RED}Bot initialization failed due to configuration errors.{Style.RESET_ALL}")
             self.bot = None  # Set bot to None
 
-    def _get_chat_id(self, chat_id):
+    def get_chat_id(self, chat_id):
         """
         Get the chat ID to use, defaulting to self.CHAT_ID if not provided.
 
@@ -162,7 +162,7 @@ class TelegramBot:
         :return: None
         """
 
-        chat_id = self._get_chat_id(chat_id)  # Get the chat ID to use
+        chat_id = self.get_chat_id(chat_id)  # Get the chat ID to use
 
         if chat_id is None:  # If chat ID is not set
             print(f"{BackgroundColors.RED}Chat ID not set.{Style.RESET_ALL}")
@@ -187,7 +187,7 @@ class TelegramBot:
         :return: None
         """
 
-        chat_id = self._get_chat_id(chat_id)  # Get the chat ID to use
+        chat_id = self.get_chat_id(chat_id)  # Get the chat ID to use
 
         if chat_id is None:  # If chat ID is not set
             print(f"{BackgroundColors.RED}Chat ID not set.{Style.RESET_ALL}")
@@ -220,7 +220,7 @@ class TelegramBot:
         :return: None
         """
 
-        chat_id = self._get_chat_id(chat_id)  # Get the chat ID to use
+        chat_id = self.get_chat_id(chat_id)  # Get the chat ID to use
 
         if chat_id is None:  # If chat ID is not set
             print(f"{BackgroundColors.RED}Chat ID not set.{Style.RESET_ALL}")
