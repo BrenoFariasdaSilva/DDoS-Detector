@@ -1441,7 +1441,7 @@ def save_tsne_plot(X_emb, labels, output_path, title):
             plt.ylabel(sanitize_plot_text("t-SNE 2"))  # Y-axis label sanitized
             plt.tight_layout()  # Adjust layout
             try:  # Try saving the figure
-                fig.savefig(output_path, dpi=600)  # Save figure to disk
+                fig.savefig(output_path, dpi=300)  # Save figure to disk
             finally:  # Ensure the figure is closed to free memory
                 plt.close(fig)  # Close the figure to free memory
         except Exception as e:  # Catch any exception during plotting or saving to ensure the figure is closed
@@ -1498,7 +1498,7 @@ def save_tsne_3d_plot(X_emb, labels, output_path, title):
         cast(Any, ax).set_zlabel(sanitize_plot_text("t-SNE 3"))  # Z-axis label sanitized (cast to Any for typing)
         plt.tight_layout()  # Adjust layout
         try:
-            fig.savefig(output_path, dpi=600)  # Save figure to disk
+            fig.savefig(output_path, dpi=300)  # Save figure to disk
         finally:
             plt.close(fig)
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -2134,7 +2134,7 @@ def export_dataframe_image(styled_df, output_path):
                 table.auto_set_font_size(False)  # Disable auto font sizing for consistent output
                 table.set_fontsize(6)  # Set small font size to fit large tables
                 fig.tight_layout()  # Adjust layout to fit table within figure
-                fig.savefig(output_path, dpi=600)  # Save rendered matplotlib table to disk
+                fig.savefig(output_path, dpi=300)  # Save rendered matplotlib table to disk
                 plt.close(fig)  # Close the figure to free memory immediately after saving
                 if os.path.exists(output_path):  # Verify that the saved file exists before declaring success
                     print(f"{BackgroundColors.GREEN}[DEBUG] Exported image (matplotlib fallback): {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log matplotlib fallback debug message
