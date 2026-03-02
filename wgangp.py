@@ -740,7 +740,7 @@ class CSVFlowDataset(Dataset):
 
         return len(self.X)  # Return number of feature vectors
 
-    def __getitem__(self, idx):  # Fetch one item by index
+    def getitem(self, idx):  # Fetch one item by index
         """
         Fetch a single sample by index.
 
