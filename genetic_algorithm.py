@@ -1799,6 +1799,17 @@ def load_cached_run_if_any(
         raise  # Re-raise to preserve original failure semantics
 
 
+def attr_bool() -> int:
+    """
+    Generate a random binary value (0 or 1) for use as a gene in the genetic algorithm.
+    
+    :param: None
+    :return: 0 or 1
+    """
+    
+    return random.randint(0, 1)  # Return random 0 or 1 for binary gene
+        
+        
 def setup_genetic_algorithm(n_features, population_size=None, pool=None):
     """
     Setup DEAP Genetic Algorithm: creator, toolbox, population, and Hall of Fame.
@@ -1832,12 +1843,9 @@ def setup_genetic_algorithm(n_features, population_size=None, pool=None):
 
         toolbox: Any = base.Toolbox()  # Toolbox (typed Any to avoid analyzer confusion)
 
-        def _attr_bool() -> int:  # Binary attribute generator
-            return random.randint(0, 1)  # Return random 0 or 1 for binary gene
-
         toolbox.register("attr_bool", random.randint, 0, 1)  # Register binary attribute generator in toolbox
 
-        individual_factory: Callable[[], Any] = partial(tools.initRepeat, Individual, _attr_bool, n_features)  # Individual factory and registration
+        individual_factory: Callable[[], Any] = partial(tools.initRepeat, Individual, attr_bool, n_features)  # Individual factory and registration
         toolbox.register("individual", individual_factory)  # Register individual factory in toolbox
 
         toolbox.register("population", tools.initRepeat, list, individual_factory)  # Population factory and registration
