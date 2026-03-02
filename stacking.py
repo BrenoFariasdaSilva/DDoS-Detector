@@ -3109,6 +3109,19 @@ def extract_hyperparameter_optimization_results(csv_path, config=None):
         raise
 
 
+def normalize(name):
+    """
+    Normalize a model name by removing non-alphanumeric characters and converting to lowercase.
+    
+    :param name: The model name to normalize.
+    :return: Normalized model name string.
+    """
+    
+    return "".join(
+        [c.lower() for c in str(name) if c.isalnum()]
+    )  # Normalize model name by removing non-alphanumeric characters and converting to lowercase
+
+
 def apply_hyperparameters_to_models(hyperparams_map, models_map, config=None):
     """
     Apply hyperparameter mappings to instantiated models.
@@ -3140,13 +3153,8 @@ def apply_hyperparameters_to_models(hyperparams_map, models_map, config=None):
         if not hyperparams_map:  # Nothing to apply
             return models_map  # Return models unchanged
 
-        def _normalize(name):  # Convert to alphanumeric lowercase
-            return "".join(
-                [c.lower() for c in str(name) if c.isalnum()]
-            )  # Normalize model name by removing non-alphanumeric characters and converting to lowercase
-
         hp_keys = list(hyperparams_map.keys())  # List of provided model names
-        hp_normalized = {k: _normalize(k) for k in hp_keys}  # Normalized lookup for matching
+        hp_normalized = {k: normalize(k) for k in hp_keys}  # Normalized lookup for matching
 
         for model_name, model in models_map.items():  # Iterate over each instantiated model
             try:  # Try to match hyperparameters to this model
@@ -3159,7 +3167,7 @@ def apply_hyperparameters_to_models(hyperparams_map, models_map, config=None):
                     if lower_matches:  # If case-insensitive match found
                         params = hyperparams_map[lower_matches[0]]  # Use the matched parameters
                     else:  # Try normalized match
-                        norm = _normalize(model_name)  # Compute normalized name
+                        norm = normalize(model_name)  # Compute normalized name
                         norm_matches = [k for k, nk in hp_normalized.items() if nk == norm]  # Normalized match
                         if norm_matches:  # If normalized match found
                             params = hyperparams_map[norm_matches[0]]  # Use the matched parameters
