@@ -1955,7 +1955,14 @@ def print_preprocessing_summary_table(df):
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
         raise  # Re-raise to preserve original failure semantics
 
-def _stripe(row):  # Small helper to produce row-wise styles
+def stripe(row):
+    """
+    Helper function to apply zebra striping to DataFrame rows for styling.
+    
+    :param row: pandas Series representing a DataFrame row
+    :return: List of CSS styles for each cell in the row to achieve zebra striping
+    """
+    
     return [
         "background-color: #ffffff" if row.name % 2 == 0 else "background-color: #f2f2f2"
         for _ in row
@@ -1983,7 +1990,7 @@ def apply_zebra_style(df):
                     sanitized_df[col] = sanitized_df[col].apply(lambda x: sanitize_plot_text(str(x)) if pd.notnull(x) else x)  # Sanitize each cell in string columns
             except Exception:  # Ignore individual column sanitization errors to preserve original behavior
                 pass  # Continue processing remaining columns even if one fails
-        styled = sanitized_df.style.apply(_stripe, axis=1)  # Apply zebra striping across rows on sanitized DataFrame
+        styled = sanitized_df.style.apply(stripe, axis=1)  # Apply zebra striping across rows on sanitized DataFrame
         return styled  # Return the styled DataFrame
     except Exception as e:  # Preserve exception handling style
         print(str(e))  # Print error to terminal for server logs
