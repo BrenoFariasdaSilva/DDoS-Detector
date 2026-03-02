@@ -834,6 +834,16 @@ def evaluate_model(model, X_test, y_test, duration_str):
         raise
 
 
+def zebra(row):
+    """
+    Helper function to apply zebra striping to a DataFrame row for styling.
+    
+    :param row: A row of the DataFrame
+    :return: List of CSS styles for the row (alternating background colors)
+    """
+    return ["background-color: #ffffff" if i % 2 == 0 else "background-color: #f2f2f2" for i in range(len(row))]  # Return CSS list per column
+
+
 def apply_zebra_style(df):
     """
     Apply zebra-striping style to a pandas DataFrame using Styler.
@@ -842,10 +852,7 @@ def apply_zebra_style(df):
     :return: pandas.io.formats.style.Styler styled object ready for export
     """
     try:
-        def _zebra(row):  # Define row-wise zebra function
-            return ["background-color: #ffffff" if i % 2 == 0 else "background-color: #f2f2f2" for i in range(len(row))]  # Return CSS list per column
-
-        styled = df.style.apply(_zebra, axis=1)  # Create Styler with zebra striping applied
+        styled = df.style.apply(zebra, axis=1)  # Create Styler with zebra striping applied
         return styled  # Return styled object
     except Exception as e:  # If styling fails
         raise  # Propagate exception without swallowing
