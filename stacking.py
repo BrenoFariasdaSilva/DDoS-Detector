@@ -1948,6 +1948,17 @@ def generate_augmentation_tsne_visualization(original_file, original_df, augment
         raise
 
 
+def zebra(row):
+    """
+    Apply zebra-striping style to a DataFrame row for visual clarity in exported images.
+    
+    :param row: pandas Series representing a DataFrame row
+    :return: List of CSS styles for each column in the row, alternating background colors
+    """
+    
+    return ["background-color: #ffffff" if i % 2 == 0 else "background-color: #f2f2f2" for i in range(len(row))]  # Return CSS list per column
+
+
 def apply_zebra_style(df):
     """
     Apply zebra-striping style to a pandas DataFrame using Styler.
@@ -1957,10 +1968,8 @@ def apply_zebra_style(df):
     """
 
     try:
-        def _zebra(row):  # Define row-wise zebra function
-            return ["background-color: #ffffff" if i % 2 == 0 else "background-color: #f2f2f2" for i in range(len(row))]  # Return CSS list per column
 
-        styled = df.style.apply(_zebra, axis=1)  # Create Styler with zebra striping applied
+        styled = df.style.apply(zebra, axis=1)  # Create Styler with zebra striping applied
         return styled  # Return styled object
     except Exception as e:  # If styling fails
         raise  # Propagate exception without swallowing
