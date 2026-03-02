@@ -4429,6 +4429,26 @@ def get_cache_file_path(csv_path, config=None):
         raise
 
 
+def safe_load_json(val):
+    """
+    Safely load a JSON string if it's a string, otherwise return the value as is.
+    
+    :param val: The value to load as JSON if it's a string
+    :return: The loaded JSON object if val is a string, None if val is Na
+    """
+    
+    if pd.isna(val):  # Check for NaN values and return None
+        return None  # Return None for NaN values
+    
+    if isinstance(val, str):  # If the value is a string, attempt to parse it as JSON
+        try:  # Try to load the string as JSON
+            return json.loads(val)  # Return the loaded JSON object
+        except Exception:  # If parsing fails, return the original string value
+            return val  # Return the original value if it's a string but not valid JSON
+    
+    return val  # For non-string values, return as is
+            
+                
 def load_cache_results(csv_path, config=None):
     """
     Load cached results from the cache file if it exists.
@@ -4466,16 +4486,6 @@ def load_cache_results(csv_path, config=None):
                 model_name = row.get("model_name", "")  # Get model name
                 cache_key = (feature_set, model_name)  # Create cache key tuple
 
-                def _safe_load_json(val):
-                    if pd.isna(val):
-                        return None
-                    if isinstance(val, str):
-                        try:
-                            return json.loads(val)
-                        except Exception:
-                            return val
-                    return val
-
                 result_entry = {
                     "model": row.get("model", ""),
                     "dataset": row.get("dataset", ""),
@@ -4497,10 +4507,10 @@ def load_cache_results(csv_path, config=None):
                     "fnr": float(row["fnr"]) if "fnr" in row and not pd.isna(row["fnr"]) else None,
                     "elapsed_time_s": float(row["elapsed_time_s"]) if "elapsed_time_s" in row and not pd.isna(row["elapsed_time_s"]) else None,
                     "cv_method": row.get("cv_method", None),
-                    "top_features": _safe_load_json(row.get("top_features", None)),
-                    "rfe_ranking": _safe_load_json(row.get("rfe_ranking", None)),
-                    "hyperparameters": _safe_load_json(row.get("hyperparameters", None)),
-                    "features_list": _safe_load_json(row.get("features_list", None)),
+                    "top_features": safe_load_json(row.get("top_features", None)),
+                    "rfe_ranking": safe_load_json(row.get("rfe_ranking", None)),
+                    "hyperparameters": safe_load_json(row.get("hyperparameters", None)),
+                    "features_list": safe_load_json(row.get("features_list", None)),
                     "Hardware": row.get("Hardware", None),
                 }
 
