@@ -731,7 +731,7 @@ class CSVFlowDataset(Dataset):
         self.n_classes = len(self.label_encoder.classes_)  # Count number of unique classes
         self.feature_dim = self.X.shape[1]  # Determine dimensionality of features
 
-    def len(self):  # Return number of samples in the dataset
+    def __len__(self):  # Return number of samples in the dataset
         """
         Return the number of samples in the dataset.
 
@@ -740,7 +740,7 @@ class CSVFlowDataset(Dataset):
 
         return len(self.X)  # Return number of feature vectors
 
-    def getitem(self, idx):  # Fetch one item by index
+    def __getitem__(self, idx):  # Fetch one item by index
         """
         Fetch a single sample by index.
 
