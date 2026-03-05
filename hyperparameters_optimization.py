@@ -232,19 +232,17 @@ def get_default_config() -> Dict[str, Any]:
                     "Feature_Analysis",
                 ],
             },
-            "models": {
-                "enabled_models": [
-                    "Random Forest",
-                    "SVM",
-                    "XGBoost",
-                    "Logistic Regression",
-                    "KNN",
-                    "Nearest Centroid",
-                    "Gradient Boosting",
-                    "LightGBM",
-                    "MLP (Neural Net)",
-                ]
-            },
+            "enabled_models": [
+                "Random Forest",
+                "SVM",
+                "XGBoost",
+                "Logistic Regression",
+                "KNN",
+                "Nearest Centroid",
+                "Gradient Boosting",
+                "LightGBM",
+                "MLP (Neural Net)",
+            ],  # List of model names enabled for hyperparameter optimization
             "datasets": {
                 "CICDDoS2019-Dataset": [
                     "./Datasets/CICDDoS2019/01-12/",
@@ -2784,8 +2782,7 @@ def main():
     hp = merged["hyperparameters_optimization"]
     exec_cfg = hp["execution"]
     export = hp["export"]
-    dp = hp.get("dataset_processing", {})
-    models_cfg = hp.get("models", {})
+    dp = hp.get("dataset_processing", {})  # Extract dataset processing configuration sub-section
 
     VERBOSE = bool(exec_cfg.get("verbose", False))
     N_JOBS = int(exec_cfg.get("n_jobs", -2))
@@ -2799,8 +2796,10 @@ def main():
     IGNORE_FILES = dp.get("ignore_files", [RESULTS_FILENAME])
     IGNORE_DIRS = dp.get("ignore_dirs", [])
 
-    HYPERPARAMETERS_RESULTS_CSV_COLUMNS = hp.get("results_schema", {}).get("columns", [])
-    ENABLED_MODELS = models_cfg.get("enabled_models", [])
+    HYPERPARAMETERS_RESULTS_CSV_COLUMNS = hp.get("results_schema", {}).get("columns", [])  # Load results CSV column ordering from configuration schema
+    ENABLED_MODELS = hp.get("enabled_models", [])  # Load enabled models directly from hyperparameters_optimization configuration section
+    if not ENABLED_MODELS:  # Raise error when no models are configured to prevent silent optimization bypass
+        raise ValueError("Configuration error: 'enabled_models' under 'hyperparameters_optimization' is empty or missing. At least one model must be enabled.")  # Abort with descriptive error message
     DATASETS = hp.get("datasets", {})
 
     # Log results CSV path
