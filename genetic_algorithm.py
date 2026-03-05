@@ -3250,10 +3250,15 @@ def run_single_ga_iteration(
         metrics_with_iteration_time = metrics + (iteration_elapsed_time,)  # Add total iteration time as 7th element
 
         try:  # Try to generate comprehensive convergence plots (if function exists)
-            if 'generate_convergence_plots' in globals():  # Check if plotting function is available
+            if 'generate_convergence_plots' in globals():  # Verify plotting function is available
                 generate_convergence_plots(
                     history_data, csv_path, pop_size, run, dataset_name, n_generations=n_generations, cxpb=cxpb, mutpb=mutpb
                 )  # Generate all convergence and progress plots
+            best_f1_history = history_data.get("best_f1", []) if isinstance(history_data, dict) else []  # Extract best F1 per generation for simple convergence curve
+            if best_f1_history:  # Verify fitness history is non-empty before plotting
+                plot_ga_convergence(
+                    csv_path, pop_size, run, best_f1_history, dataset_name=dataset_name, n_generations=n_generations, cxpb=cxpb, mutpb=mutpb
+                )  # Generate and save the simple best-F1 convergence plot for this run
         except Exception as e:  # On any plotting error
             verbose_output(
                 f"{BackgroundColors.YELLOW}Failed to generate convergence plots: {e}{Style.RESET_ALL}"
