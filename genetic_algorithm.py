@@ -5010,15 +5010,16 @@ def analyze_top_features(df, y, top_features, csv_path="."):
             str
         )  # Add the target variable to the DataFrame
 
+        base_dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Base name of the dataset
+        
         ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})
-        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")
+        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm", "Classes_Distribution", base_dataset_name)
+        
         if os.path.isabs(ga_results_dir_raw):
             output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))
         else:
             output_dir = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir_raw)))
         os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
-
-        base_dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Base name of the dataset
 
         summary = df_analysis.groupby("Target")[top_features].agg(
             ["mean", "std"]
