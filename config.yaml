@@ -70,17 +70,16 @@ hyperparameters_optimization:
       - "Data_Separability"
       - "Feature_Analysis"
 
-  models:
-    enabled_models:
-      - "Random Forest"
-      - "SVM"
-      - "XGBoost"
-      - "Logistic Regression"
-      - "KNN"
-      - "Nearest Centroid"
-      - "Gradient Boosting"
-      - "LightGBM"
-      - "MLP (Neural Net)"
+  enabled_models:
+    - "Random Forest"
+    - "SVM"
+    - "XGBoost"
+    - "Logistic Regression"
+    - "KNN"
+    - "Nearest Centroid"
+    - "Gradient Boosting"
+    - "LightGBM"
+    - "MLP (Neural Net)"
 
   datasets:
     CICDDoS2019-Dataset:
