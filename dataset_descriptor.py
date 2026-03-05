@@ -123,7 +123,7 @@ def get_default_config() -> dict:
             "generate_table_image": True,
             "table_image_format": "png",
             "table_image_timeout_ms": 30000,
-            "csv_output_suffix": "_description",
+            "csv_output_suffix": "description",
             "class_column_name": "Label",
             "dropna_before_analysis": False,
             "compute_class_distribution": True,
@@ -261,7 +261,7 @@ def init_runtime(config: dict):
         "logger": logger,
         "verbose": bool(config.get("execution", {}).get("verbose", False)),
         "results_dir": os.path.join(".", config.get("paths", {}).get("dataset_description_subdir", "Dataset_Description")),
-        "results_filename_suffix": config.get("dataset_descriptor", {}).get("csv_output_suffix", "_description"),
+        "results_filename_suffix": config.get("dataset_descriptor", {}).get("csv_output_suffix", "description"),
         "ignore_files": list(config.get("paths", {}).get("ignore_files", []) or []),
         "ignore_dirs": list(config.get("paths", {}).get("ignore_dirs", []) or []),
     }
@@ -2252,10 +2252,10 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
 
         cfg = config or get_default_config()
         if output_filename is None:  # Verify if caller provided an output filename or use configured suffix
-            output_filename = cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "_description")  # Get suffix from config or default
+            output_filename = cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "description")  # Get suffix from config or default
 
         if not isinstance(output_filename, str):  # Validate that the output filename is a string
-            output_filename = str(output_filename or cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "_description"))  # Fallback to config suffix or default if provided filename is not a string
+            output_filename = str(output_filename or cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "description"))  # Fallback to config suffix or default if provided filename is not a string
 
         if not output_filename.lower().endswith(".csv"):  # Ensure the output filename ends with .csv
             output_filename = f"{output_filename}.csv"  # Append .csv extension if not present
@@ -2513,7 +2513,7 @@ def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memo
     try:  # Wrap full function logic to ensure production-safe monitoring
         cfg = config or get_default_config()
         if output_filename is None:  # If no output filename is provided
-            suffix = cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "_description")  # Get suffix from config or default
+            suffix = cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "description")  # Get suffix from config or default
             output_filename = f"Cross_{suffix.lstrip('_')}" if suffix else "Cross_dataset_descriptor.csv"  # Build cross filename
         if not output_filename.lower().endswith(".csv"):  # Verify the output filename has a .csv extension
             output_filename = f"{output_filename}.csv"  # Append .csv extension when missing
@@ -2716,7 +2716,7 @@ def main():
         send_telegram_message(TELEGRAM_BOT, [f"Starting Dataset Descriptor at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])
 
         datasets = config.get("dataset_descriptor", {}).get("datasets", {}) or config.get("datasets") or {}
-        results_suffix = config.get("dataset_descriptor", {}).get("csv_output_suffix", "_description")
+        results_suffix = config.get("dataset_descriptor", {}).get("csv_output_suffix", "description")
 
         for dataset_name, paths in datasets.items():
             print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")
