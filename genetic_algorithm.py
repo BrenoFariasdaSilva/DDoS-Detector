@@ -2789,7 +2789,9 @@ def plot_ga_convergence(
             output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))
         else:
             output_dir = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir_raw)))
-        os.makedirs(output_dir, exist_ok=True)  # Ensure directory exists
+        os.makedirs(output_dir, exist_ok=True)  # Ensure base output directory exists
+        convergence_dir = os.path.join(output_dir, "Convergence")  # Subdirectory dedicated to convergence plot PNG files
+        os.makedirs(convergence_dir, exist_ok=True)  # Ensure convergence subdirectory exists before writing any file
 
         base_dataset_name = (
             safe_filename(os.path.splitext(os.path.basename(csv_path))[0])
@@ -2800,8 +2802,8 @@ def plot_ga_convergence(
         cx_part = f"cx{int(cxpb*100)}"  # Format crossover probability as percentage for filename
         mut_part = f"mut{int(mutpb*100)}"  # Format mutation probability as percentage for filename
         fig_path = os.path.join(
-            output_dir, f"{base_dataset_name}_run{run}_pop{pop_size}_{gens_part}_{cx_part}_{mut_part}_convergence.png"
-        )  # Path to save the figure
+            convergence_dir, f"{base_dataset_name}_run{run}_pop{pop_size}_{gens_part}_{cx_part}_{mut_part}_convergence.png"
+        )  # Path to save the convergence figure inside the Convergence subdirectory
 
         try:  # Try to plot and save the figure
             plt.figure(figsize=(8, 4))  # Create a matplotlib figure with 8x4 dimensions
