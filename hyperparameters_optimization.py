@@ -2445,7 +2445,16 @@ def save_optimization_results(csv_path, results_list):
             except Exception:  # If truncation fails
                 pass  # Keep original value
 
-        generate_csv_and_image(df_results, output_path, is_visualizable=True)  # Save results CSV and generate PNG image
+        if os.path.exists(output_path):  # Verify if the results CSV file already exists to determine write mode
+            df_results.to_csv(output_path, mode="a", header=False, index=False)  # Append new rows to existing CSV without duplicating the header
+            try:  # Try to regenerate the PNG visualization using combined results from the full file
+                combined_df = pd.read_csv(output_path)  # Load all rows including previously saved results for combined image
+                png_path = Path(output_path).with_suffix(".png")  # Construct the PNG file path by replacing the CSV extension
+                generate_table_image_from_dataframe(combined_df, png_path)  # Regenerate the table image from all accumulated results
+            except Exception:  # If combined image regeneration fails, skip it without aborting the save
+                pass  # Continue without image on failure to preserve CSV integrity
+        else:  # If the results CSV file does not yet exist, create it normally with header included
+            generate_csv_and_image(df_results, output_path, is_visualizable=True)  # Save results CSV and generate PNG image
         print(f"{BackgroundColors.GREEN}Results saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Print success message
 
         remove_cache_file(csv_path)  # Clean up cache
