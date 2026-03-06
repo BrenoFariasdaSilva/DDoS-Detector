@@ -1679,6 +1679,32 @@ def get_used_disk_percentage(config: Optional[Dict] = None) -> float:
         return 0.0  # Return safe fallback of zero percent on failure
 
 
+def get_total_disk_space_gb(config: Optional[Dict] = None) -> float:
+    """
+    Return the total disk space in GB for the current working directory.
+
+    Uses psutil.disk_usage when available and falls back to shutil.disk_usage
+    when psutil is not installed. Returns a safe fallback of 0.0 on failure.
+
+    :param config: Optional configuration dictionary.
+    :return: Total disk space in GB as a float.
+    """
+
+    try:
+        cwd_str = str(Path(".").resolve())  # Resolve current working directory for disk usage query
+        if psutil is not None:  # Prefer psutil for disk usage query when available
+            disk_stat = psutil.disk_usage(cwd_str)  # Query disk usage via psutil
+            total_bytes = disk_stat.total  # Total disk space in bytes from psutil
+        else:  # Fall back to stdlib shutil.disk_usage when psutil is unavailable
+            print(f"{BackgroundColors.YELLOW}[WARNING] psutil not available; falling back to shutil.disk_usage for total disk space query{Style.RESET_ALL}")  # Warn about psutil unavailability and fallback
+            shutil_stat = shutil.disk_usage(cwd_str)  # Query disk usage via shutil stdlib fallback
+            total_bytes = shutil_stat.total  # Total disk space in bytes from shutil
+        return safe_float(total_bytes, 0.0) / (1024.0 ** 3)  # Convert bytes to GB and return safely
+    except Exception as e:  # On unexpected errors, warn and return safe fallback
+        print(f"{BackgroundColors.YELLOW}[WARNING] Failed to query total disk space: {e}; returning 0.0 GB{Style.RESET_ALL}")  # Warn about query failure
+        return 0.0  # Return safe fallback of zero GB on failure
+
+
 def adjust_num_workers_for_file(csv_path: str, suggested_workers: int, config: Optional[Dict] = None) -> int:
     """
     Adjust DataLoader `num_workers` based on CSV file size and total FREE system RAM.
@@ -1733,13 +1759,14 @@ def adjust_num_workers_for_file(csv_path: str, suggested_workers: int, config: O
         print(f"{BackgroundColors.GREEN}Computed num_workers based on formula: {BackgroundColors.CYAN}{computed:.4f}{Style.RESET_ALL}")  # Log computed value before final adjustment
 
         available_disk_gb = get_available_disk_space_gb()  # Retrieve available disk space in GB for Telegram notification
+        total_disk_gb = get_total_disk_space_gb()  # Retrieve total disk space in GB for Telegram notification
         used_disk_percent = get_used_disk_percentage()  # Retrieve used disk percentage for Telegram notification
         try:  # Notify via Telegram (non-blocking)
             send_telegram_message(
                 TELEGRAM_BOT,
                 f"[INFO] num_workers adjusted for {Path(csv_path).name} | "
                 f"file={file_size_gb:.2f}GB | free_ram={free_ram_gb:.2f}GB | "
-                f"disk_free={available_disk_gb:.2f}GB | disk_used={used_disk_percent:.2f}% | "
+                f"storage={available_disk_gb:.2f}/{total_disk_gb:.2f}GB ({used_disk_percent:.2f}%) | "
                 f"final_workers={final}",
             )
         except Exception:
