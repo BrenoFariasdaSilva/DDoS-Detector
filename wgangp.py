@@ -1730,6 +1730,53 @@ def compute_epoch_milestones(total_epochs: int) -> List[int]:
         raise  # Re-raise exception to be handled by outer logic
 
 
+def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict] = None) -> bool:
+    """
+    Determine whether sufficient disk space exists before saving checkpoints.
+
+    Recursively computes the total size of all dataset directories and compares it
+    against available free disk space. Checkpoint saving is permitted only when
+    available free space is at least twice the total dataset size.
+
+    :param dataset_dirs: List of dataset directory paths to measure total size from.
+    :param config: Optional configuration dictionary.
+    :return: True if available disk space is at least twice the dataset size, False otherwise.
+    """
+
+    try:
+        if psutil is None:  # If psutil is unavailable, assume space is available
+            print(f"{BackgroundColors.YELLOW}[WARNING] psutil not available; assuming checkpoint space is available{Style.RESET_ALL}")  # Warn about psutil unavailability
+            return False  # Return False to deny checkpoint saving when detection is impossible
+        total_dataset_size = 0  # Initialize total dataset size accumulator in bytes
+        for dir_path in dataset_dirs:  # Iterate all provided dataset directory paths
+            try:  # Guard per-directory size calculation to avoid aborting on individual failures
+                p = Path(dir_path)  # Create Path object for the directory
+                if not p.exists():  # Verify directory exists before recursing
+                    continue  # Skip non-existent directories silently
+                for file_entry in p.rglob("*"):  # Recursively walk all entries in the directory
+                    try:  # Guard per-file stat to avoid crashing on permission errors
+                        if file_entry.is_file():  # Only accumulate size for regular files
+                            total_dataset_size += file_entry.stat().st_size  # Add file size in bytes to accumulator
+                    except Exception:  # If stat fails due to permission error or similar issue
+                        pass  # Continue without accumulating this file's size
+            except Exception:  # If directory traversal fails unexpectedly
+                pass  # Continue with remaining directories
+        disk_stat = psutil.disk_usage(str(Path(".").resolve()))  # Query disk usage for current working directory
+        free_bytes = disk_stat.free  # Available disk space in bytes
+        required_bytes = total_dataset_size * 2  # Minimum required free space is twice the total dataset size
+        dataset_size_gb = safe_float(total_dataset_size, 0.0) / (1024.0 ** 3)  # Convert dataset size to GB for logging
+        free_gb = safe_float(free_bytes, 0.0) / (1024.0 ** 3)  # Convert free space to GB for logging
+        required_gb = safe_float(required_bytes, 0.0) / (1024.0 ** 3)  # Convert required space to GB for logging
+        print(f"{BackgroundColors.GREEN}Disk space verification: dataset_size={BackgroundColors.CYAN}{dataset_size_gb:.2f} GB{BackgroundColors.GREEN}, free={BackgroundColors.CYAN}{free_gb:.2f} GB{BackgroundColors.GREEN}, required={BackgroundColors.CYAN}{required_gb:.2f} GB{Style.RESET_ALL}")  # Print disk space verification summary
+        if free_bytes < required_bytes:  # If free space is below the required threshold
+            print(f"{BackgroundColors.YELLOW}[WARNING] Insufficient disk space for checkpoint saving. Skipping checkpoint creation.{Style.RESET_ALL}")  # Warn about insufficient space
+            return False  # Deny checkpoint saving when space is insufficient
+        return True  # Permit checkpoint saving when sufficient space is available
+    except Exception as e:  # On unexpected errors, warn but allow checkpoint saving
+        print(f"{BackgroundColors.YELLOW}[WARNING] Disk space verification failed: {e}; assuming checkpoint space is available{Style.RESET_ALL}")  # Warn about verification failure
+        return True  # Default to allowing checkpoint saving when verification fails
+
+
 def train(args, config: Optional[Dict] = None):
     """
     Train the WGAN-GP model using the provided arguments and configuration.
@@ -2190,62 +2237,99 @@ def train(args, config: Optional[Dict] = None):
                 print(f"{BackgroundColors.YELLOW}Warning: failed to write epoch row to results CSV: {_cw}{Style.RESET_ALL}")  # Warn but do not abort
 
             if (epoch + 1) % args.save_every == 0 or epoch == args.epochs - 1:  # Save checkpoints periodically
-                if args.csv_path:  # If CSV path is provided
-                    csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
-                    checkpoint_dir = csv_path_obj.parent / "Data_Augmentation" / "Checkpoints"  # Create Checkpoints subdirectory
-                    os.makedirs(checkpoint_dir, exist_ok=True)  # Ensure directory exists
-                    checkpoint_prefix = csv_path_obj.stem  # Use input filename as prefix
-                else:  # No CSV path, use default out_dir
-                    checkpoint_dir = Path(args.out_dir) / "Checkpoints"  # Create Checkpoints subdirectory in out_dir
-                    os.makedirs(checkpoint_dir, exist_ok=True)  # Ensure directory exists
-                    checkpoint_prefix = "model"  # Default prefix
-                
-                g_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{epoch+1}.pt"  # Path for generator checkpoint
-                d_path = checkpoint_dir / f"{checkpoint_prefix}_discriminator_epoch{epoch+1}.pt"  # Path for discriminator checkpoint
-                
-                unique_labels, label_counts = np.unique(dataset.labels, return_counts=True)  # Get class distribution
-                class_distribution = dict(zip(unique_labels.tolist(), label_counts.tolist()))  # Create label:count mapping
-                
-                g_checkpoint = {
-                "epoch": epoch + 1,  # Save current epoch number
-                    "state_dict": (cast(Any, G).module.state_dict() if isinstance(cast(Any, G), torch.nn.DataParallel) else cast(Any, G).state_dict()),  # Save generator state dict (unwrap DataParallel.module if present)
-                    "opt_G_state": cast(Any, opt_G).state_dict(),  # Save generator optimizer state
-                    "scaler": dataset.scaler,  # Save scaler for inverse transform
-                    "label_encoder": dataset.label_encoder,  # Save label encoder for mapping
-                    "feature_cols": dataset.feature_cols,  # Save feature column names for generation
-                    "class_distribution": class_distribution,  # Save class distribution for percentage-based generation
-                    "metrics_history": metrics_history,  # Save metrics history for resume
-                    "args": vars(args),  # Save training arguments
-                }
+                dataset_dir_entries = config.get("dataset", {}).get("datasets", {}) if isinstance(config, dict) else {}  # Get dataset section from config
+                dataset_dirs_list = []  # Accumulate all dataset directory paths for disk space verification
+                for ck_v in dataset_dir_entries.values():  # Iterate dataset group values from config
+                    if isinstance(ck_v, list):  # If value is a list of directory paths
+                        dataset_dirs_list.extend(ck_v)  # Add all paths from this group to accumulator
+                if not dataset_dirs_list and getattr(args, "csv_path", None):  # If no dirs from config, fallback to csv_path parent
+                    dataset_dirs_list.append(str(Path(args.csv_path).parent))  # Use CSV file's parent directory as fallback
+                skip_checkpoint = not is_checkpoint_space_available(dataset_dirs_list, config)  # Verify sufficient disk space before creating checkpoint directories
+                if not skip_checkpoint:  # Only proceed when disk space is sufficient for checkpoint saving
+                    if args.csv_path:  # If CSV path is provided
+                        csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
+                        checkpoint_dir = csv_path_obj.parent / "Data_Augmentation" / "Checkpoints"  # Create Checkpoints subdirectory
+                        try:  # Guard directory creation against disk-full and other I/O errors
+                            os.makedirs(checkpoint_dir, exist_ok=True)  # Ensure directory exists
+                        except OSError as _ose_dir:  # Catch filesystem errors including disk full during makedirs
+                            if _ose_dir.errno == 28:  # If error is errno 28 (ENOSPC - no space left on device)
+                                print(f"{BackgroundColors.YELLOW}[WARNING] Checkpoint could not be saved due to disk space exhaustion.{Style.RESET_ALL}")  # Warn about disk exhaustion
+                            else:  # If error is unrelated to disk space
+                                print(f"{BackgroundColors.YELLOW}Warning: Failed to create checkpoint directory: {_ose_dir}{Style.RESET_ALL}")  # Warn about directory creation failure
+                            skip_checkpoint = True  # Mark checkpoint as skipped due to directory creation failure
+                        checkpoint_prefix = csv_path_obj.stem  # Use input filename as prefix
+                    else:  # No CSV path, use default out_dir
+                        checkpoint_dir = Path(args.out_dir) / "Checkpoints"  # Create Checkpoints subdirectory in out_dir
+                        try:  # Guard directory creation against disk-full and other I/O errors
+                            os.makedirs(checkpoint_dir, exist_ok=True)  # Ensure directory exists
+                        except OSError as _ose_dir:  # Catch filesystem errors including disk full during makedirs
+                            if _ose_dir.errno == 28:  # If error is errno 28 (ENOSPC - no space left on device)
+                                print(f"{BackgroundColors.YELLOW}[WARNING] Checkpoint could not be saved due to disk space exhaustion.{Style.RESET_ALL}")  # Warn about disk exhaustion
+                            else:  # If error is unrelated to disk space
+                                print(f"{BackgroundColors.YELLOW}Warning: Failed to create checkpoint directory: {_ose_dir}{Style.RESET_ALL}")  # Warn about directory creation failure
+                            skip_checkpoint = True  # Mark checkpoint as skipped due to directory creation failure
+                        checkpoint_prefix = "model"  # Default prefix
+                if not skip_checkpoint:  # Only save files when directory creation succeeded and space is available
+                    g_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{epoch+1}.pt"  # Path for generator checkpoint
+                    d_path = checkpoint_dir / f"{checkpoint_prefix}_discriminator_epoch{epoch+1}.pt"  # Path for discriminator checkpoint
 
-                if scaler is not None:  # If using AMP
-                    g_checkpoint["scaler_state"] = scaler.state_dict()  # Save scaler state
-                
-                try:  # Time model saving to measure save phase duration
-                    model_save_start_time = time.time()  # Record model save start timestamp
-                    torch.save(g_checkpoint, str(g_path))  # Save generator checkpoint to disk
-                    
-                    d_checkpoint = {
+                    unique_labels, label_counts = np.unique(dataset.labels, return_counts=True)  # Get class distribution
+                    class_distribution = dict(zip(unique_labels.tolist(), label_counts.tolist()))  # Create label:count mapping
+
+                    g_checkpoint = {
                     "epoch": epoch + 1,  # Save current epoch number
-                    "state_dict": (cast(Any, D).module.state_dict() if isinstance(cast(Any, D), torch.nn.DataParallel) else cast(Any, D).state_dict()),  # Save discriminator state dict (unwrap DataParallel.module if present)
-                    "opt_D_state": cast(Any, opt_D).state_dict(),  # Save discriminator optimizer state
-                    "args": vars(args),  # Save training arguments
-                }
-                    torch.save(d_checkpoint, str(d_path))  # Save discriminator checkpoint to disk
-                    latest_path = checkpoint_dir / f"{checkpoint_prefix}_generator_latest.pt"  # Path for latest generator
-                    torch.save((cast(Any, G).module.state_dict() if isinstance(cast(Any, G), torch.nn.DataParallel) else cast(Any, G).state_dict()), str(latest_path))  # Save latest generator weights safely handling DataParallel
-                    model_save_elapsed = time.time() - model_save_start_time  # Compute model save elapsed seconds
-                    args._last_model_save_time = safe_float(model_save_elapsed, 0.0)  # Store last model save elapsed on args safely
-                    print(f"{BackgroundColors.GREEN}Model save elapsed: {BackgroundColors.CYAN}{model_save_elapsed:.2f}s{Style.RESET_ALL}")  # Print model save elapsed
-                except Exception as _ms:  # If saving failed, warn but continue
-                    print(f"{BackgroundColors.YELLOW}Warning: model save failed: {_ms}{Style.RESET_ALL}")  # Warn about save failure
-                    args._last_model_save_time = ""  # Ensure attribute exists even on failure
-                
-                metrics_path = checkpoint_dir / f"{checkpoint_prefix}_metrics_history.json"  # Path for metrics JSON
-                with open(metrics_path, "w") as f:  # Open file for writing
-                    json.dump(metrics_history, f, indent=2)  # Save metrics as JSON
-                print(f"{BackgroundColors.GREEN}Saved metrics history to {BackgroundColors.CYAN}{metrics_path}{Style.RESET_ALL}")  # Print metrics save message
-                print(f"{BackgroundColors.GREEN}Saved generator to {BackgroundColors.CYAN}{g_path}{Style.RESET_ALL}")  # Print checkpoint save message
+                        "state_dict": (cast(Any, G).module.state_dict() if isinstance(cast(Any, G), torch.nn.DataParallel) else cast(Any, G).state_dict()),  # Save generator state dict (unwrap DataParallel.module if present)
+                        "opt_G_state": cast(Any, opt_G).state_dict(),  # Save generator optimizer state
+                        "scaler": dataset.scaler,  # Save scaler for inverse transform
+                        "label_encoder": dataset.label_encoder,  # Save label encoder for mapping
+                        "feature_cols": dataset.feature_cols,  # Save feature column names for generation
+                        "class_distribution": class_distribution,  # Save class distribution for percentage-based generation
+                        "metrics_history": metrics_history,  # Save metrics history for resume
+                        "args": vars(args),  # Save training arguments
+                    }
+
+                    if scaler is not None:  # If using AMP
+                        g_checkpoint["scaler_state"] = scaler.state_dict()  # Save scaler state
+
+                    try:  # Time model saving to measure save phase duration
+                        model_save_start_time = time.time()  # Record model save start timestamp
+                        torch.save(g_checkpoint, str(g_path))  # Save generator checkpoint to disk
+
+                        d_checkpoint = {
+                        "epoch": epoch + 1,  # Save current epoch number
+                        "state_dict": (cast(Any, D).module.state_dict() if isinstance(cast(Any, D), torch.nn.DataParallel) else cast(Any, D).state_dict()),  # Save discriminator state dict (unwrap DataParallel.module if present)
+                        "opt_D_state": cast(Any, opt_D).state_dict(),  # Save discriminator optimizer state
+                        "args": vars(args),  # Save training arguments
+                    }
+                        torch.save(d_checkpoint, str(d_path))  # Save discriminator checkpoint to disk
+                        latest_path = checkpoint_dir / f"{checkpoint_prefix}_generator_latest.pt"  # Path for latest generator
+                        torch.save((cast(Any, G).module.state_dict() if isinstance(cast(Any, G), torch.nn.DataParallel) else cast(Any, G).state_dict()), str(latest_path))  # Save latest generator weights safely handling DataParallel
+                        model_save_elapsed = time.time() - model_save_start_time  # Compute model save elapsed seconds
+                        args._last_model_save_time = safe_float(model_save_elapsed, 0.0)  # Store last model save elapsed on args safely
+                        print(f"{BackgroundColors.GREEN}Model save elapsed: {BackgroundColors.CYAN}{model_save_elapsed:.2f}s{Style.RESET_ALL}")  # Print model save elapsed
+                    except OSError as _ose_ms:  # Catch filesystem errors during model checkpoint save
+                        if _ose_ms.errno == 28:  # If error is errno 28 (ENOSPC - no space left on device)
+                            print(f"{BackgroundColors.YELLOW}[WARNING] Checkpoint could not be saved due to disk space exhaustion.{Style.RESET_ALL}")  # Warn about disk exhaustion
+                        else:  # If error is unrelated to disk space
+                            print(f"{BackgroundColors.YELLOW}Warning: model save failed: {_ose_ms}{Style.RESET_ALL}")  # Warn about save failure
+                        args._last_model_save_time = ""  # Ensure attribute exists even on failure
+                    except Exception as _ms:  # If saving failed for any other reason, warn but continue
+                        print(f"{BackgroundColors.YELLOW}Warning: model save failed: {_ms}{Style.RESET_ALL}")  # Warn about save failure
+                        args._last_model_save_time = ""  # Ensure attribute exists even on failure
+
+                    try:  # Guard metrics JSON write against disk-full and other I/O errors
+                        metrics_path = checkpoint_dir / f"{checkpoint_prefix}_metrics_history.json"  # Path for metrics JSON
+                        with open(metrics_path, "w") as f:  # Open file for writing
+                            json.dump(metrics_history, f, indent=2)  # Save metrics as JSON
+                        print(f"{BackgroundColors.GREEN}Saved metrics history to {BackgroundColors.CYAN}{metrics_path}{Style.RESET_ALL}")  # Print metrics save message
+                    except OSError as _ose_mj:  # Catch filesystem errors during metrics JSON write
+                        if _ose_mj.errno == 28:  # If error is errno 28 (ENOSPC - no space left on device)
+                            print(f"{BackgroundColors.YELLOW}[WARNING] Checkpoint could not be saved due to disk space exhaustion.{Style.RESET_ALL}")  # Warn about disk exhaustion
+                        else:  # If error is unrelated to disk space
+                            print(f"{BackgroundColors.YELLOW}Warning: failed to write metrics history: {_ose_mj}{Style.RESET_ALL}")  # Warn about metrics write failure
+                    except Exception as _mj:  # If metrics write failed for any other reason
+                        print(f"{BackgroundColors.YELLOW}Warning: failed to write metrics history: {_mj}{Style.RESET_ALL}")  # Warn about failure
+                    print(f"{BackgroundColors.GREEN}Saved generator to {BackgroundColors.CYAN}{g_path}{Style.RESET_ALL}")  # Print checkpoint save message
 
             try:
                 if telegram_enabled and args.epochs > 0:  # Only notify when enabled and epochs is positive
