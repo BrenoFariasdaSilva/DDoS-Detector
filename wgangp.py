@@ -69,6 +69,7 @@ import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import time  # For elapsed time tracking
 import threading  # For background resource watcher thread
+import shutil  # For disk space queries when psutil is unavailable
 import signal  # For sending signals to this process when critical
 import torch  # PyTorch core
 import torch.nn as nn  # Neural network modules
@@ -1744,9 +1745,6 @@ def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict
     """
 
     try:
-        if psutil is None:  # If psutil is unavailable, assume space is available
-            print(f"{BackgroundColors.YELLOW}[WARNING] psutil not available; assuming checkpoint space is available{Style.RESET_ALL}")  # Warn about psutil unavailability
-            return False  # Return False to deny checkpoint saving when detection is impossible
         total_dataset_size = 0  # Initialize total dataset size accumulator in bytes
         for dir_path in dataset_dirs:  # Iterate all provided dataset directory paths
             try:  # Guard per-directory size calculation to avoid aborting on individual failures
@@ -1761,8 +1759,14 @@ def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict
                         pass  # Continue without accumulating this file's size
             except Exception:  # If directory traversal fails unexpectedly
                 pass  # Continue with remaining directories
-        disk_stat = psutil.disk_usage(str(Path(".").resolve()))  # Query disk usage for current working directory
-        free_bytes = disk_stat.free  # Available disk space in bytes
+        cwd_str = str(Path(".").resolve())  # Resolve current working directory for disk usage query
+        if psutil is not None:  # Prefer psutil for disk usage query when available
+            disk_stat = psutil.disk_usage(cwd_str)  # Query disk usage via psutil
+            free_bytes = disk_stat.free  # Available disk space in bytes from psutil
+        else:  # Fall back to stdlib shutil.disk_usage when psutil is unavailable
+            print(f"{BackgroundColors.YELLOW}[WARNING] psutil not available; falling back to shutil.disk_usage for disk space check{Style.RESET_ALL}")  # Warn about psutil unavailability and fallback
+            shutil_stat = shutil.disk_usage(cwd_str)  # Query disk usage via shutil stdlib fallback
+            free_bytes = shutil_stat.free  # Available disk space in bytes from shutil
         required_bytes = total_dataset_size * 2  # Minimum required free space is twice the total dataset size
         dataset_size_gb = safe_float(total_dataset_size, 0.0) / (1024.0 ** 3)  # Convert dataset size to GB for logging
         free_gb = safe_float(free_bytes, 0.0) / (1024.0 ** 3)  # Convert free space to GB for logging
