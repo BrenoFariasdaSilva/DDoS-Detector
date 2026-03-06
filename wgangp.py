@@ -1761,13 +1761,14 @@ def adjust_num_workers_for_file(csv_path: str, suggested_workers: int, config: O
         available_disk_gb = get_available_disk_space_gb()  # Retrieve available disk space in GB for Telegram notification
         total_disk_gb = get_total_disk_space_gb()  # Retrieve total disk space in GB for Telegram notification
         used_disk_percent = get_used_disk_percentage()  # Retrieve used disk percentage for Telegram notification
+        total_cores = os.cpu_count() or 1  # Detect total logical CPU cores with safe fallback for reporting
         try:  # Notify via Telegram (non-blocking)
             send_telegram_message(
                 TELEGRAM_BOT,
                 f"[INFO] num_workers adjusted for {Path(csv_path).name} | "
                 f"file={file_size_gb:.2f}GB | free_ram={free_ram_gb:.2f}GB | "
                 f"storage={available_disk_gb:.2f}/{total_disk_gb:.2f}GB ({used_disk_percent:.2f}%) | "
-                f"final_workers={final}",
+                f"final_workers={final} (total cores: {total_cores})",
             )
         except Exception:
             pass  # Never allow Telegram failure to affect training
