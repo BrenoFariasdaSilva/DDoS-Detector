@@ -1699,7 +1699,7 @@ def adjust_num_workers_for_file(csv_path: str, suggested_workers: int, config: O
         file_size_gb = safe_float(file_size_bytes, 0.0) / (1024.0 ** 3)  # Convert bytes to gigabytes (GB) safely
 
         if psutil is None:  # If psutil is unavailable
-            print("[WARNING] psutil not available; keeping suggested num_workers")  # Warn and keep suggested
+            print(f"{BackgroundColors.YELLOW}Warning: psutil not available, cannot detect free RAM; using suggested num_workers: {suggested_workers}{Style.RESET_ALL}")  # Warn about fallback to suggested_workers
             final = max(0, int(suggested_workers))  # Fallback to suggested
             try:
                 send_telegram_message(TELEGRAM_BOT, f"[INFO] num_workers for {Path(csv_path).name}: {final} (psutil unavailable)")  # Notify via Telegram
@@ -1732,11 +1732,14 @@ def adjust_num_workers_for_file(csv_path: str, suggested_workers: int, config: O
 
         print(f"{BackgroundColors.GREEN}Computed num_workers based on formula: {BackgroundColors.CYAN}{computed:.4f}{Style.RESET_ALL}")  # Log computed value before final adjustment
 
+        available_disk_gb = get_available_disk_space_gb()  # Retrieve available disk space in GB for Telegram notification
+        used_disk_percent = get_used_disk_percentage()  # Retrieve used disk percentage for Telegram notification
         try:  # Notify via Telegram (non-blocking)
             send_telegram_message(
                 TELEGRAM_BOT,
                 f"[INFO] num_workers adjusted for {Path(csv_path).name} | "
                 f"file={file_size_gb:.2f}GB | free_ram={free_ram_gb:.2f}GB | "
+                f"disk_free={available_disk_gb:.2f}GB | disk_used={used_disk_percent:.2f}% | "
                 f"final_workers={final}",
             )
         except Exception:
