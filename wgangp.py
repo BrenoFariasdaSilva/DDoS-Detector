@@ -1622,6 +1622,32 @@ def compose_training_start_message(args, file_progress_prefix) -> str:
         raise  # Re-raise exception to allow outer handler to manage it
 
 
+def get_available_disk_space_gb(config: Optional[Dict] = None) -> float:
+    """
+    Return the available disk space in GB for the current working directory.
+
+    Uses psutil.disk_usage when available and falls back to shutil.disk_usage
+    when psutil is not installed. Returns a safe fallback of 0.0 on failure.
+
+    :param config: Optional configuration dictionary.
+    :return: Available disk space in GB as a float.
+    """
+
+    try:
+        cwd_str = str(Path(".").resolve())  # Resolve current working directory for disk usage query
+        if psutil is not None:  # Prefer psutil for disk usage query when available
+            disk_stat = psutil.disk_usage(cwd_str)  # Query disk usage via psutil
+            free_bytes = disk_stat.free  # Available disk space in bytes from psutil
+        else:  # Fall back to stdlib shutil.disk_usage when psutil is unavailable
+            print(f"{BackgroundColors.YELLOW}[WARNING] psutil not available; falling back to shutil.disk_usage for available disk space query{Style.RESET_ALL}")  # Warn about psutil unavailability and fallback
+            shutil_stat = shutil.disk_usage(cwd_str)  # Query disk usage via shutil stdlib fallback
+            free_bytes = shutil_stat.free  # Available disk space in bytes from shutil
+        return safe_float(free_bytes, 0.0) / (1024.0 ** 3)  # Convert bytes to GB and return safely
+    except Exception as e:  # On unexpected errors, warn and return safe fallback
+        print(f"{BackgroundColors.YELLOW}[WARNING] Failed to query available disk space: {e}; returning 0.0 GB{Style.RESET_ALL}")  # Warn about query failure
+        return 0.0  # Return safe fallback of zero GB on failure
+
+
 def adjust_num_workers_for_file(csv_path: str, suggested_workers: int, config: Optional[Dict] = None) -> int:
     """
     Adjust DataLoader `num_workers` based on CSV file size and total FREE system RAM.
@@ -1759,17 +1785,9 @@ def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict
                         pass  # Continue without accumulating this file's size
             except Exception:  # If directory traversal fails unexpectedly
                 pass  # Continue with remaining directories
-        cwd_str = str(Path(".").resolve())  # Resolve current working directory for disk usage query
-        if psutil is not None:  # Prefer psutil for disk usage query when available
-            disk_stat = psutil.disk_usage(cwd_str)  # Query disk usage via psutil
-            free_bytes = disk_stat.free  # Available disk space in bytes from psutil
-        else:  # Fall back to stdlib shutil.disk_usage when psutil is unavailable
-            print(f"{BackgroundColors.YELLOW}[WARNING] psutil not available; falling back to shutil.disk_usage for disk space check{Style.RESET_ALL}")  # Warn about psutil unavailability and fallback
-            shutil_stat = shutil.disk_usage(cwd_str)  # Query disk usage via shutil stdlib fallback
-            free_bytes = shutil_stat.free  # Available disk space in bytes from shutil
+        free_gb = get_available_disk_space_gb(config)  # Retrieve available disk space in GB via helper
         required_bytes = total_dataset_size * 2  # Minimum required free space is twice the total dataset size
         dataset_size_gb = safe_float(total_dataset_size, 0.0) / (1024.0 ** 3)  # Convert dataset size to GB for logging
-        free_gb = safe_float(free_bytes, 0.0) / (1024.0 ** 3)  # Convert free space to GB for logging
         required_gb = safe_float(required_bytes, 0.0) / (1024.0 ** 3)  # Convert required space to GB for logging
         print(f"{BackgroundColors.GREEN}Disk space verification: dataset_size={BackgroundColors.CYAN}{dataset_size_gb:.2f} GB{BackgroundColors.GREEN}, free={BackgroundColors.CYAN}{free_gb:.2f} GB{BackgroundColors.GREEN}, required={BackgroundColors.CYAN}{required_gb:.2f} GB{Style.RESET_ALL}")  # Print disk space verification summary
         if free_bytes < required_bytes:  # If free space is below the required threshold
