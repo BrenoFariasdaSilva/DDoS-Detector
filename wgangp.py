@@ -3191,6 +3191,38 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
         return True
 
 
+def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List, all_labels: List, scaler: Any, label_encoder: Any, feature_cols: List[str], device: torch.device, n: int, file_progress_prefix: str) -> pd.DataFrame:
+    """
+    Stack generated arrays, inverse-transform, and build output DataFrame.
+
+    :param args: Parsed arguments namespace with label_col and out_file.
+    :param config: Configuration dictionary with hardware_tracking setting.
+    :param all_fake: List of generated feature batch arrays.
+    :param all_labels: List of corresponding label arrays.
+    :param scaler: Fitted StandardScaler for inverse transformation.
+    :param label_encoder: Fitted LabelEncoder for label decoding.
+    :param feature_cols: List of feature column names.
+    :param device: Torch device used for hardware column population.
+    :param n: Total number of generated samples.
+    :param file_progress_prefix: Colored prefix string for progress display.
+    :return: DataFrame with inverse-transformed features and decoded labels.
+    """
+
+    X_fake = np.vstack(all_fake)  # Stack all generated feature batches
+    Y_fake = np.concatenate(all_labels)  # Concatenate all label arrays
+    X_orig = scaler.inverse_transform(X_fake)  # Inverse transform features to original scale
+    df = pd.DataFrame(X_orig, columns=feature_cols)  # Create DataFrame with original feature names
+    df[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
+    if config.get("hardware_tracking", False):  # If enabled in config
+        try:  # Guard hardware population to avoid breaking generation
+            df = populate_hardware_column(df, column_name="hardware", device_used=device)  # Populate hardware column
+        except Exception:
+            pass  # Ignore hardware population errors and continue
+    generate_csv_and_image(df, args.out_file, is_visualizable=True)  # Save CSV and generate PNG image when appropriate
+    print(f"{file_progress_prefix} {BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} generated samples to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message with prefix
+    return df  # Return constructed DataFrame
+
+
 def record_sample_generation_timing(args, sample_generation_start_time: float) -> None:
     """
     Compute and record the elapsed time for sample generation.
