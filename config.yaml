@@ -35,8 +35,7 @@ execution:  # Execution control and per-script overrides
   csv_file: null                      # Optional single CSV file to process (null = process all)
   process_entire_dataset: false       # Process all files in dataset (true) or single file (false)
   test_data_augmentation: true        # Enable data augmentation testing experiments
-  execution_mode: both                # Execution mode: "both" (default, runs binary and multi-class sequentially), "binary" (one file per eval), or "multi-class" (combined attacks)
-  results_suffix: "_data_augmented"   # Suffix to add to generated filenames
+  results_suffix: "_result"           # Suffix to add to generated filenames
   match_filenames_to_process: [""]    # List of specific filenames to match
   ignore_files: ["_data_augmented"]   # List of filename substrings to ignore
   ignore_dirs:                        # List of directory names to ignore
@@ -571,6 +570,8 @@ wgangp:
   force_cpu: false                    # Force CPU usage even if CUDA available
   from_scratch: false                 # Force training from scratch, ignore checkpoints
   generating_order: "off"             # Dataset file processing order by file size: "off", "Ascending", or "Descending"
+  execution_mode: both                # Execution mode: "both" (default, runs binary and multi-class sequentially), "binary" (one file per eval), or "multi-class" (combined attacks)
+  results_suffix: "_data_augmented"   # Suffix to add to generated filenames
   results_dir: "Feature_Analysis/PCA"
   results_filename: "PCA_Results.csv"
   results_csv_columns:                # Columns for per-directory data augmentation results CSV
