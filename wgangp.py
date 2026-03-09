@@ -1622,6 +1622,62 @@ def compose_training_start_message(args, file_progress_prefix) -> str:
         raise  # Re-raise exception to allow outer handler to manage it
 
 
+def send_file_saved_and_timing_messages(args: Any, config: Dict) -> None:  # Create helper to send saved-file and timing messages
+    """
+    Compose and send messages about saved files, sizes, and timing.
+
+    :param args: Runtime arguments namespace containing timing and path attributes.
+    :param config: Configuration dictionary for path and formatting values.
+    :return: None
+    """
+
+    file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Build colored prefix from args or default
+    gen_file = getattr(args, "out_file", None) or ""  # Retrieve explicit out_file from args if present
+    if not gen_file and getattr(args, "csv_path", None):  # Derive augmented path when out_file not provided
+        try:  # Attempt derivation of default generated file path from csv_path and config
+            csv_obj = Path(args.csv_path)  # Construct Path from provided CSV path
+            suffix = config.get("execution", {}).get("results_suffix", "_data_augmented")  # Read results suffix from config
+            derived = csv_obj.parent / config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / f"{csv_obj.stem}{suffix}.csv"  # Build derived path
+            gen_file = str(derived)  # Use derived path string as generated file path
+        except Exception:  # If derivation fails, fall back to empty string silently
+            gen_file = ""  # Leave generated file string empty on failure
+
+    gen_path = Path(gen_file) if gen_file else None  # Create Path object when gen_file is available
+    try:  # Obtain file size bytes if file exists
+        size_bytes = gen_path.stat().st_size if gen_path and gen_path.exists() else 0  # Get file size in bytes or zero
+    except Exception:  # On error, default to zero bytes
+        size_bytes = 0  # Default size when stat fails
+
+    if size_bytes >= 1024 ** 3:  # If file is at least 1 GiB
+        size_str = f"{size_bytes / (1024 ** 3):.2f} GB"  # Format as gigabytes
+    else:  # Otherwise present in megabytes for readability
+        size_str = f"{size_bytes / (1024 ** 2):.2f} MB"  # Format as megabytes
+
+    training_time = getattr(args, "_last_training_time", "")  # Read stored training elapsed seconds from args
+    file_time = getattr(args, "_last_file_time", "")  # Read stored per-file elapsed seconds from args
+    model_save_time = getattr(args, "_last_model_save_time", "")  # Read last model save elapsed seconds from args
+    generation_time = getattr(args, "_last_sample_generation_time", "")  # Read sample generation elapsed seconds from args
+
+    print(f"{file_progress_prefix} {BackgroundColors.GREEN}Saved generated file to {BackgroundColors.CYAN}{gen_file} {BackgroundColors.GREEN}({size_str}){Style.RESET_ALL}")  # Print saved file path and human-readable size
+    print(f"{file_progress_prefix} {BackgroundColors.GREEN}Training time: {BackgroundColors.CYAN}{training_time}s{Style.RESET_ALL}")  # Print total training elapsed seconds
+    print(f"{file_progress_prefix} {BackgroundColors.GREEN}File processing time: {BackgroundColors.CYAN}{file_time}s{Style.RESET_ALL}")  # Print per-file processing elapsed seconds
+    if model_save_time != "":  # Only print model save time when available
+        print(f"{file_progress_prefix} {BackgroundColors.GREEN}Model save time: {BackgroundColors.CYAN}{model_save_time}s{Style.RESET_ALL}")  # Print model save elapsed seconds
+    if generation_time != "":  # Only print generation time when available
+        print(f"{file_progress_prefix} {BackgroundColors.GREEN}Generation time: {BackgroundColors.CYAN}{generation_time}s{Style.RESET_ALL}")  # Print sample generation elapsed seconds
+
+    try:  # Attempt to notify via Telegram with a compact summary message
+        msg = (
+            f"{file_progress_prefix} Saved file {Path(gen_file).name if gen_file else 'unknown'} ({size_str}) | "  # Compose file name and size part
+            f"Training: {training_time}s | Generation: {generation_time}s"  # Append timing summary part
+        )  # End compact message composition
+        send_telegram_message(TELEGRAM_BOT, msg)  # Send composed summary by Telegram using shared helper
+    except Exception as e:
+        print(str(e))  # Print exception for visibility
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception information via Telegram
+        raise  # Re-raise exception to allow outer handler to manage it
+
+
 def get_available_disk_space_gb(config: Optional[Dict] = None) -> float:
     """
     Return the available disk space in GB for the current working directory.
@@ -2551,6 +2607,7 @@ def train(args, config: Optional[Dict] = None):
             else:  # No CSV path, use default out_dir
                 plot_training_metrics(metrics_history, args.out_dir, "training_metrics.png", config)  # Create and save plots with config
 
+        send_file_saved_and_timing_messages(args, config)  # Send saved-file, size and timing messages via helper
         send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Finished WGAN-GP training on {Path(args.csv_path).name} after {args.epochs} epochs")  # Telegram finish with prefix
     except Exception as e:
         print(str(e))
