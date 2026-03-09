@@ -3191,6 +3191,33 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
         return True
 
 
+def generate_batches_and_collect_results(args, G: nn.Module, device: torch.device, labels: np.ndarray, n: int) -> tuple:
+    """
+    Generate synthetic samples in batches and collect all results.
+
+    :param args: Parsed arguments namespace with gen_batch_size and latent_dim.
+    :param G: Generator model in evaluation mode.
+    :param device: Torch device for tensor allocation.
+    :param labels: Numpy array of integer labels for generation.
+    :param n: Total number of samples to generate.
+    :return: Tuple of (all_fake, all_labels, sample_generation_start_time).
+    """
+
+    batch_size = args.gen_batch_size  # Set generation batch size
+    all_fake = []  # List to store generated feature batches
+    all_labels = []  # List to store corresponding labels
+    sample_generation_start_time = time.time()  # Record sample generation start timestamp
+    with torch.no_grad():  # Disable gradient computation for generation
+        for i in range(0, n, batch_size):  # Loop over batches for generation
+            b = min(batch_size, n - i)  # Calculate current batch size
+            z = torch.randn(b, args.latent_dim, device=device)  # Sample noise for batch
+            y = torch.from_numpy(labels[i : i + b]).to(device, dtype=torch.long)  # Convert labels to tensor
+            fake = G(z, y).cpu().numpy()  # Generate fake samples and move to CPU
+            all_fake.append(fake)  # Append generated features to list
+            all_labels.append(labels[i : i + b])  # Append labels to list
+    return (all_fake, all_labels, sample_generation_start_time)  # Return generated batches and timing start
+
+
 def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List, all_labels: List, scaler: Any, label_encoder: Any, feature_cols: List[str], device: torch.device, n: int, file_progress_prefix: str) -> pd.DataFrame:
     """
     Stack generated arrays, inverse-transform, and build output DataFrame.
