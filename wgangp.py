@@ -1673,9 +1673,22 @@ def send_file_saved_and_timing_messages(args: Any, config: Dict) -> None:  # Cre
         display_path = os.path.relpath(gen_file) if gen_file else "unknown"  # Compute relative path for generated file or 'unknown'
         training_time_str = calculate_execution_time(training_time)  # Convert training_time to human-readable duration string
         generation_time_str = calculate_execution_time(generation_time) if generation_time != "" else ""  # Convert generation_time when present otherwise empty
-        msg = (  # Compose compact message using relative path and formatted durations
+        samples_written = ""  # Initialize samples written placeholder
+        try:  # Attempt to count data rows in the generated CSV when file exists
+            if gen_file and Path(gen_file).exists():  # Verify generated file path exists before counting
+                with open(gen_file, "r", encoding="utf-8") as _f:  # Open generated file for reading rows
+                    _reader = csv.reader(_f)  # Create CSV reader to iterate rows
+                    _total_rows = sum(1 for _ in _reader)  # Count total rows including header
+                if _total_rows > 0:  # If at least one row present deduct header to estimate data rows
+                    samples_written = str(max(0, _total_rows - 1))  # Compute data rows as total minus header
+                else:
+                    samples_written = "0"  # Zero rows when file empty
+        except Exception:  # On counting failure, leave samples_written empty to avoid breaking flow
+            samples_written = ""  # Preserve empty when counting fails
+        samples_display = samples_written if samples_written != "" else "unknown"  # Derive display value for samples or unknown
+        msg = (  # Compose compact message using relative path, sample count and formatted durations
             f"{file_progress_prefix} Saved file {Path(display_path).name if gen_file else 'unknown'} ({size_str}) | Path: {display_path} | "
-            f"Training: {training_time_str} | Generation: {generation_time_str}"
+            f"Samples: {samples_display} | Training: {training_time_str} | Generation: {generation_time_str}"
         )  # End message composition
         send_telegram_message(TELEGRAM_BOT, msg)  # Send composed summary by Telegram using shared helper
     except Exception as e:
