@@ -1918,6 +1918,157 @@ def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict
         return True  # Default to allowing checkpoint saving when verification fails
 
 
+def send_epoch_telegram_notifications(args, telegram_enabled: bool, epoch: int, next_notify: int, progress_pct: int) -> int:
+    """
+    Send telegram progress notifications when epoch completion crosses percentage thresholds.
+
+    :param args: parsed arguments namespace with epochs count and csv_path
+    :param telegram_enabled: whether telegram notifications are active
+    :param epoch: current epoch index (zero-based)
+    :param next_notify: next percentage threshold to trigger notification
+    :param progress_pct: percentage increment between notifications
+    :return: Updated next_notify threshold
+    """
+
+    try:  # Guard notification logic to avoid interrupting training
+        if telegram_enabled and args.epochs > 0:  # Only notify when enabled and epochs is positive
+            percent = int(((epoch + 1) / float(args.epochs)) * 100)  # Compute percent completed after this epoch
+            while percent >= next_notify and next_notify <= 100:  # Send notifications for each crossed threshold
+                msg = (
+                    f"WGAN-GP training progress: {next_notify}% "  # Short progress message text
+                    f"({epoch+1}/{args.epochs} epochs) on {Path(args.csv_path).name if args.csv_path else 'unknown file'}"  # Include filename and epoch info
+                )  # Compose progress message
+                send_telegram_message(TELEGRAM_BOT, msg)  # Send message via shared helper
+                next_notify += progress_pct  # Advance to next threshold to avoid duplicate sends
+    except Exception as _err:  # Catch any notification errors and continue training
+        pass  # Intentionally ignore notification failures to not interrupt training
+
+    return next_notify  # Return updated notification threshold
+
+
+def write_final_timing_and_csv_row(args, config: Dict, device: torch.device, dataset, training_start_time: float, file_start_time: float, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history: Dict, opt_G, opt_D) -> None:
+    """
+    Compute final training elapsed times and write the summary CSV row.
+
+    :param args: parsed arguments namespace with training settings
+    :param config: configuration dictionary with hardware_tracking and paths settings
+    :param device: torch device used for training
+    :param dataset: loaded CSVFlowDataset instance for sample counts
+    :param training_start_time: timestamp when training session started
+    :param file_start_time: timestamp when file processing started
+    :param results_csv_writer: CSV writer object (may be None)
+    :param results_csv_file: open CSV file handle (may be None)
+    :param results_cols_cfg: list of configured CSV column names
+    :param metrics_history: dictionary of tracked training metrics
+    :param opt_G: generator optimizer for learning rate extraction
+    :param opt_D: discriminator optimizer for learning rate extraction
+    :return: None
+    """
+
+    try:  # Safely compute total training and file elapsed times
+        training_elapsed = time.time() - training_start_time  # Calculate total training elapsed seconds
+        args._last_training_time = safe_float(training_elapsed, 0.0)  # Store total training elapsed on args for downstream use safely
+        file_elapsed = time.time() - file_start_time  # Calculate file processing elapsed seconds
+        args._last_file_time = safe_float(file_elapsed, 0.0)  # Store file elapsed on args for downstream use safely
+        print(f"{BackgroundColors.GREEN}Training finished! Total training elapsed: {BackgroundColors.CYAN}{training_elapsed:.2f}s{Style.RESET_ALL}")  # Print total training elapsed message
+        print(f"{BackgroundColors.GREEN}File processing elapsed: {BackgroundColors.CYAN}{file_elapsed:.2f}s{Style.RESET_ALL}")  # Print per-file elapsed message
+    except Exception as _tt:  # If timing calculation fails, warn but do not interrupt
+        print(f"{BackgroundColors.YELLOW}Warning: failed to compute final training/file elapsed times: {_tt}{Style.RESET_ALL}")  # Warn on failure
+        args._last_training_time = ""  # Ensure attribute exists even on failure
+        args._last_file_time = ""  # Ensure attribute exists even on failure
+
+    try:  # Wrap writes to avoid crashing on I/O errors
+        if results_csv_writer and results_cols_cfg:  # Only write if writer and schema are available
+            final_runtime: Dict[str, Any] = {}  # Build runtime-only values for final per-file row with explicit typing
+            final_runtime["original_file"] = Path(args.csv_path).name if getattr(args, "csv_path", None) else ""  # Original filename
+            final_runtime["original_num_samples"] = getattr(dataset, "original_num_samples", "")  # Original sample count after preprocessing
+            gen_file = getattr(args, "out_file", None) or ""  # Prefer explicit out_file if set
+            if not gen_file and getattr(args, "csv_path", None):  # Derive augmented filename when not explicitly set
+                try:  # Attempt to construct derived augmented file path
+                    csv_obj = Path(args.csv_path)  # Path object for csv
+                    suffix = config.get("execution", {}).get("results_suffix", "_data_augmented")  # Suffix from config
+                    derived = csv_obj.parent / config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / f"{csv_obj.stem}{suffix}.csv"  # Construct path
+                    gen_file = str(derived)  # Use derived path string
+                except Exception:  # If derivation fails
+                    gen_file = ""  # Leave blank on failure
+            final_runtime["generated_file"] = gen_file  # Store generated file path (may be empty)
+            final_runtime["total_generated_samples"] = ""  # Placeholder, generation may fill this later
+            final_runtime["generated_ratio"] = ""  # Placeholder ratio
+            final_runtime["training_time_s"] = getattr(args, "_last_training_time", "")  # Total training elapsed
+            final_runtime["file_time_s"] = getattr(args, "_last_file_time", "")  # Per-file processing elapsed
+            final_runtime["testing_time_s"] = 0.0  # Default testing/generation time is zero unless generation runs
+            final_runtime["epoch"] = ""  # Final summary must not include a per-epoch value
+            final_runtime["epoch_time_s"] = ""  # Final summary must not include last epoch duration
+            final_runtime["epochs"] = getattr(args, "epochs", "")  # Total epochs configured
+            final_runtime["batch_size"] = getattr(args, "batch_size", "")  # Effective batch size used
+            final_runtime["lambda_gp"] = getattr(args, "lambda_gp", "")  # Gradient penalty coefficient
+            final_runtime["latent_dim"] = getattr(args, "latent_dim", "")  # Latent noise dimensionality
+            final_runtime["critic_iterations"] = getattr(args, "critic_steps", "")  # Critic iterations per generator update
+            try:  # Attempt to read optimizer learning rates safely
+                final_runtime["learning_rate_generator"] = safe_float(opt_G.param_groups[0].get("lr", None), getattr(args, "lr", 0.0))  # Generator LR safely
+            except Exception:  # If reading fails
+                final_runtime["learning_rate_generator"] = getattr(args, "lr", "")  # Fallback to args.lr
+            try:  # Attempt to read optimizer learning rates safely
+                final_runtime["learning_rate_critic"] = safe_float(opt_D.param_groups[0].get("lr", None), getattr(args, "lr", 0.0))  # Critic LR safely
+            except Exception:  # If reading fails
+                final_runtime["learning_rate_critic"] = getattr(args, "lr", "")  # Fallback to args.lr
+            final_runtime["critic_loss"] = metrics_history.get("loss_D", [])[-1] if metrics_history.get("loss_D") else ""  # Final critic loss
+            final_runtime["generator_loss"] = metrics_history.get("loss_G", [])[-1] if metrics_history.get("loss_G") else ""  # Final generator loss
+            final_runtime["gp"] = metrics_history.get("gp", [])[-1] if metrics_history.get("gp") else ""  # Final gradient penalty
+            final_runtime["D_real"] = metrics_history.get("D_real", [])[-1] if metrics_history.get("D_real") else ""  # Final avg real score
+            final_runtime["D_fake"] = metrics_history.get("D_fake", [])[-1] if metrics_history.get("D_fake") else ""  # Final avg fake score
+            final_runtime["wasserstein"] = metrics_history.get("wasserstein", [])[-1] if metrics_history.get("wasserstein") else ""  # Final wasserstein estimate
+            try:  # Safely compute generated_ratio using safe conversions
+                total_generated = safe_float(final_runtime.get("total_generated_samples"), 0.0)  # Total generated safely
+                original_samples = safe_float(final_runtime.get("original_num_samples"), 0.0)  # Original samples safely
+                final_runtime["generated_ratio"] = (total_generated / original_samples) if original_samples > 0.0 else 0.0  # Guard division and avoid ZeroDivisionError
+            except Exception:  # If computation fails
+                final_runtime["generated_ratio"] = ""  # Leave blank on failure
+            ordered_final = []  # Prepare ordered list according to configured schema
+            for c in results_cols_cfg:  # For each configured column name
+                if c in final_runtime:  # If runtime mapping contains key
+                    ordered_final.append(final_runtime.get(c))  # Use runtime value
+                else:  # Attempt to obtain from configuration when not a runtime metric
+                    cfg_val = None  # Default missing
+                    try:  # Guard recursive lookup
+                        cfg_val = find_config_value(config, c)  # Search config for matching key
+                    except Exception:  # If lookup fails
+                        cfg_val = None  # On error treat as missing
+                    if cfg_val is not None:  # If found in config
+                        ordered_final.append(cfg_val)  # Use configured hyperparameter value
+                    else:  # Not found anywhere; use None silently
+                        ordered_final.append(None)  # Explicit None for missing value
+            if config.get("hardware_tracking", False):  # If hardware tracking requested in config
+                try:  # Guard hardware detection to avoid breaking flow
+                    hw_specs = get_hardware_specifications(device_used=device)  # Query hardware specs dict
+                    hw_part = hw_specs.get("gpu", "None") if hw_specs.get("gpu", None) is not None else "None"  # GPU part
+                    hardware_str = (  # Build human-readable hardware string
+                        f"{hw_specs.get('cpu_model','Unknown')} | Cores: {hw_specs.get('cores','N/A')}"
+                        f" | RAM: {hw_specs.get('ram_gb','N/A')} GB | OS: {hw_specs.get('os','Unknown')}"
+                        f" | GPU: {hw_part} | CUDA: {hw_specs.get('cuda','No')} | Device Used: {hw_specs.get('device_used','Unknown')}"
+                    )  # End hardware string
+                    if "hardware" in results_cols_cfg:  # If a hardware column exists in configured schema
+                        try:  # Protect index operations
+                            idx_hw = results_cols_cfg.index("hardware")  # Find hardware column index
+                            if idx_hw < len(ordered_final):  # Ensure index is within the ordered_final list
+                                ordered_final[idx_hw] = hardware_str  # Place hardware string in final row
+                        except Exception:  # If index operation fails
+                            pass  # Ignore hardware insertion errors
+                except Exception:  # If hardware detection fails
+                    pass  # Ignore any hardware detection errors to keep flow
+            results_csv_writer.writerow(ordered_final)  # Write final per-file ordered row to CSV
+            try:  # Flush buffer to persist row immediately
+                if results_csv_file is not None:  # Only call flush when file handle exists
+                    try:  # Guard flush call to avoid raising
+                        results_csv_file.flush()  # Flush file buffer to disk
+                    except Exception:  # If flush fails
+                        pass  # Ignore flush errors
+            except Exception:  # If outer flush logic fails
+                pass  # Ignore outer errors as well
+    except Exception as _fw:  # If writing fails, warn and continue
+        print(f"{BackgroundColors.YELLOW}Warning: failed to write final file row to results CSV: {_fw}{Style.RESET_ALL}")  # Warn about failure
+
+
 def generate_training_plots(args, config: Dict, metrics_history: Dict, file_progress_prefix: str) -> None:
     """
     Generate and save training metrics plots when metrics data is available.
