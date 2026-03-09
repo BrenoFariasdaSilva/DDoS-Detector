@@ -2353,9 +2353,15 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
     :return: Updated global step counter
     """
 
-    for batch_idx, (real_x_np, labels_np) in enumerate(pbar):  # Enumerate batches to obtain current batch index
-        real_x = real_x_np.to(device, non_blocking=True)  # Move real features to device with non_blocking when pinned
-        labels = labels_np.to(device, dtype=torch.long, non_blocking=True)  # Move labels to device with non_blocking when pinned
+    _cached_loss_D = 0.0  # Cached discriminator loss scalar for progress display without CUDA sync
+    _cached_g_loss = 0.0  # Cached generator loss scalar for progress display without CUDA sync
+    _cached_gp = 0.0  # Cached gradient penalty scalar for progress display without CUDA sync
+    _cached_d_real = 0.0  # Cached real score scalar for progress display without CUDA sync
+    _cached_d_fake = 0.0  # Cached fake score scalar for progress display without CUDA sync
+
+    for batch_idx, (real_x_batch, labels_batch) in enumerate(pbar):  # Enumerate batches to obtain current batch index
+        real_x = real_x_batch.to(device, non_blocking=True)  # Move real features to device with non_blocking when pinned
+        labels = labels_batch.to(device, dtype=torch.long, non_blocking=True)  # Move labels to device with non_blocking when pinned
 
         loss_D = torch.tensor(0.0, device=device)  # Initialize discriminator loss
         gp = torch.tensor(0.0, device=device)  # Initialize gradient penalty
@@ -2371,7 +2377,7 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
                 gp = gradient_penalty(D, real_x, fake_x, labels, device, config)  # Compute gradient penalty with config
                 loss_D = d_fake.mean() - d_real.mean() + args.lambda_gp * gp  # Calculate WGAN-GP discriminator loss
 
-            opt_D.zero_grad()  # Zero discriminator gradients
+            opt_D.zero_grad(set_to_none=True)  # Reset discriminator gradients to None for reduced memory overhead
             if scaler is not None:  # If using mixed precision
                 scaler.scale(loss_D).backward()  # Scale loss and backpropagate
                 scaler.step(opt_D)  # Update discriminator parameters with scaled gradients
@@ -2389,7 +2395,7 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
             fake_x = G(z, gen_labels)  # Generate fake samples with generator
             g_loss = -D(fake_x, gen_labels).mean()  # Calculate generator loss
 
-        opt_G.zero_grad()  # Zero generator gradients
+        opt_G.zero_grad(set_to_none=True)  # Reset generator gradients to None for reduced memory overhead
         if scaler is not None:  # If using mixed precision
             scaler.scale(g_loss).backward()  # Scale loss and backpropagate
             scaler.step(opt_G)  # Update generator parameters with scaled gradients
@@ -2398,30 +2404,36 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
             g_loss.backward()  # Backpropagate generator loss
             opt_G.step()  # Update generator parameters
 
-        pbar.set_description(  # Update tqdm description with epoch and step/total information
+        if step % args.log_interval == 0:  # Extract scalar metrics only at log interval to avoid per-batch CUDA synchronization
+            _cached_loss_D = loss_D.item()  # Cache discriminator loss as Python float
+            _cached_g_loss = g_loss.item()  # Cache generator loss as Python float
+            _cached_gp = gp.item()  # Cache gradient penalty as Python float
+            _cached_d_real = d_real_score.item()  # Cache average real score as Python float
+            _cached_d_fake = d_fake_score.item()  # Cache average fake score as Python float
+            wasserstein_dist = _cached_d_real - _cached_d_fake  # Compute Wasserstein distance from cached values
+
+            metrics_history["steps"].append(step)  # Record step number
+            metrics_history["loss_D"].append(_cached_loss_D)  # Record discriminator loss
+            metrics_history["loss_G"].append(_cached_g_loss)  # Record generator loss
+            metrics_history["gp"].append(_cached_gp)  # Record gradient penalty
+            metrics_history["D_real"].append(_cached_d_real)  # Record real score
+            metrics_history["D_fake"].append(_cached_d_fake)  # Record fake score
+            metrics_history["wasserstein"].append(wasserstein_dist)  # Record Wasserstein distance
+
+        pbar.set_description(  # Update tqdm description using cached scalars to avoid CUDA synchronization
             (
                 f"{getattr(args, 'file_progress_prefix', '')} "  # File progress prefix (may include colored index)
                 f"{BackgroundColors.CYAN}{(Path(getattr(args, 'csv_path', '')).name if getattr(args, 'csv_path', None) else '')}{Style.RESET_ALL} | "  # Current filename
             )
             + f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL} | "  # Current epoch and total epochs
             + f"{BackgroundColors.YELLOW}step {batch_idx+1}/{total_steps}{Style.RESET_ALL} | "  # Current batch index and total batches per epoch
-            + f"{BackgroundColors.RED}loss_D: {loss_D.item():.4f}{Style.RESET_ALL} | "  # Discriminator loss formatted
-            + f"{BackgroundColors.GREEN}loss_G: {g_loss.item():.4f}{Style.RESET_ALL} | "  # Generator loss formatted
-            + f"gp: {gp.item():.4f} | "  # Gradient penalty value
-            + f"D(real): {d_real_score.item():.4f} | "  # Average critic score on real samples
-            + f"D(fake): {d_fake_score.item():.4f}"  # Average critic score on fake samples
+            + f"{BackgroundColors.RED}loss_D: {_cached_loss_D:.4f}{Style.RESET_ALL} | "  # Discriminator loss from cached value
+            + f"{BackgroundColors.GREEN}loss_G: {_cached_g_loss:.4f}{Style.RESET_ALL} | "  # Generator loss from cached value
+            + f"gp: {_cached_gp:.4f} | "  # Gradient penalty from cached value
+            + f"D(real): {_cached_d_real:.4f} | "  # Average critic score on real from cached value
+            + f"D(fake): {_cached_d_fake:.4f}"  # Average critic score on fake from cached value
         )
 
-        if step % args.log_interval == 0:  # Log training progress periodically
-            wasserstein_dist = (d_real_score - d_fake_score).item()  # Compute W-distance
-
-            metrics_history["steps"].append(step)  # Record step number
-            metrics_history["loss_D"].append(loss_D.item())  # Record discriminator loss
-            metrics_history["loss_G"].append(g_loss.item())  # Record generator loss
-            metrics_history["gp"].append(gp.item())  # Record gradient penalty
-            metrics_history["D_real"].append(d_real_score.item())  # Record real score
-            metrics_history["D_fake"].append(d_fake_score.item())  # Record fake score
-            metrics_history["wasserstein"].append(wasserstein_dist)  # Record Wasserstein distance
         step += 1  # Increment global step counter
 
     return step  # Return updated step counter
