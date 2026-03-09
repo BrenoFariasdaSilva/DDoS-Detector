@@ -1918,6 +1918,47 @@ def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict
         return True  # Default to allowing checkpoint saving when verification fails
 
 
+def generate_training_plots(args, config: Dict, metrics_history: Dict, file_progress_prefix: str) -> None:
+    """
+    Generate and save training metrics plots when metrics data is available.
+
+    :param args: parsed arguments namespace with csv_path and out_dir
+    :param config: configuration dictionary passed to plot_training_metrics
+    :param metrics_history: dictionary of tracked training metrics with steps list
+    :param file_progress_prefix: colored prefix string for console messages
+    :return: None
+    """
+
+    if len(metrics_history["steps"]) > 0:  # If metrics were collected
+        print(f"{file_progress_prefix} {BackgroundColors.GREEN}Generating training metrics plots...{Style.RESET_ALL}")  # Print plotting message with prefix
+        if args.csv_path:  # If CSV path is provided
+            csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
+            plot_dir = csv_path_obj.parent / "Data_Augmentation"  # Create Data_Augmentation subdirectory
+            os.makedirs(plot_dir, exist_ok=True)  # Ensure directory exists
+            plot_filename = csv_path_obj.stem + "_training_metrics.png"  # Use input filename for plot
+            original_out_dir = args.out_dir  # Save original out_dir
+            args.out_dir = str(plot_dir)  # Set out_dir to Data_Augmentation
+            temp_metrics = metrics_history.copy()  # Copy metrics
+            plot_training_metrics(temp_metrics, str(plot_dir), plot_filename, config)  # Create and save plots with config
+            args.out_dir = original_out_dir  # Restore original out_dir
+        else:  # No CSV path, use default out_dir
+            plot_training_metrics(metrics_history, args.out_dir, "training_metrics.png", config)  # Create and save plots with config
+
+
+def send_final_telegram_messages(args, config: Dict, file_progress_prefix: str) -> None:
+    """
+    Send final training completion messages via telegram and saved-file helper.
+
+    :param args: parsed arguments namespace with csv_path and epochs
+    :param config: configuration dictionary passed to send_file_saved_and_timing_messages
+    :param file_progress_prefix: colored prefix string for telegram message
+    :return: None
+    """
+
+    send_file_saved_and_timing_messages(args, config)  # Send saved-file, size and timing messages via helper
+    send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Finished WGAN-GP training on {Path(args.csv_path).name} after {args.epochs} epochs")  # Telegram finish with prefix
+
+
 def train(args, config: Optional[Dict] = None):
     """
     Train the WGAN-GP model using the provided arguments and configuration.
