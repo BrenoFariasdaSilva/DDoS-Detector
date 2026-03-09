@@ -3469,8 +3469,8 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
     :return: DataFrame with inverse-transformed features and decoded labels.
     """
 
-    X_fake = np.vstack(all_fake)  # Stack all generated feature batches
-    Y_fake = np.concatenate(all_labels)  # Concatenate all label arrays
+    X_fake = np.vstack(all_fake) if isinstance(all_fake, list) else all_fake  # Stack batches if list or use pre-allocated array directly
+    Y_fake = np.concatenate(all_labels) if isinstance(all_labels, list) else all_labels  # Concatenate if list or use array directly
     X_orig = scaler.inverse_transform(X_fake)  # Inverse transform features to original scale
     df = pd.DataFrame(X_orig, columns=feature_cols)  # Create DataFrame with original feature names
     df[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
