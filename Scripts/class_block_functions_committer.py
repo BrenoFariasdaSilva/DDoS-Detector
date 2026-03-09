@@ -561,7 +561,7 @@ def main():
     git_dir = FILE_PATH.resolve().parent  # Get the directory containing the file
     subprocess.run(["git", "-C", str(git_dir), "push"], check=True)  # Push all commits to the remote repository
     
-    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}All methods committed successfully!{Style.RESET_ALL}", end="\n\n")  # Output success message
+    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}All {len(methods)} methods committed successfully!{Style.RESET_ALL}", end="\n\n")  # Output success message
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
