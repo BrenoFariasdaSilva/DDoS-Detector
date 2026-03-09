@@ -3191,6 +3191,39 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
         return True
 
 
+def normalize_args_and_load_checkpoint(args, config: Dict) -> tuple:
+    """
+    Normalize argument types, select device, and load generator checkpoint.
+
+    :param args: Parsed arguments namespace containing generation options.
+    :param config: Configuration dictionary with generation settings.
+    :return: Tuple of (ckpt, args_ck, scaler, label_encoder, feature_cols, class_distribution, device, file_progress_prefix).
+    """
+
+    args.latent_dim = int(args.latent_dim)  # Ensure latent_dim is int
+    args.embed_dim = int(args.embed_dim)  # Ensure embed_dim is int
+    args.n_resblocks = int(args.n_resblocks)  # Ensure n_resblocks is int
+    args.gen_batch_size = int(args.gen_batch_size)  # Ensure gen_batch_size is int
+    if args.feature_dim is not None:  # If feature_dim provided
+        args.feature_dim = int(args.feature_dim)  # Ensure feature_dim is int
+    if args.n_samples is not None:  # If n_samples provided
+        args.n_samples = float(args.n_samples)  # Ensure n_samples is float
+    if args.label is not None:  # If label provided
+        args.label = int(args.label)  # Ensure label is int
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
+    )  # Select device for generation
+    file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Build colored prefix (default single-file)
+    send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Starting WGAN-GP generation from {Path(args.checkpoint).name}")  # Telegram start with colored prefix
+    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)  # Load checkpoint from disk with sklearn objects
+    args_ck = ckpt.get("args", {})  # Retrieve saved arguments from checkpoint
+    scaler = ckpt.get("scaler", None)  # Try to get scaler from checkpoint
+    label_encoder = ckpt.get("label_encoder", None)  # Try to get label encoder from checkpoint
+    feature_cols = ckpt.get("feature_cols", None)  # Try to get feature column names from checkpoint
+    class_distribution = ckpt.get("class_distribution", None)  # Try to get class distribution from checkpoint
+    return (ckpt, args_ck, scaler, label_encoder, feature_cols, class_distribution, device, file_progress_prefix)  # Return checkpoint data and device info
+
+
 def reconstruct_missing_preprocessing_objects(args, scaler: Optional[Any], label_encoder: Optional[Any], feature_cols: Optional[List[str]], class_distribution: Optional[Dict]) -> tuple:
     """
     Reconstruct missing preprocessing objects from CSV when checkpoint is incomplete.
