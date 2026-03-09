@@ -1918,6 +1918,107 @@ def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict
         return True  # Default to allowing checkpoint saving when verification fails
 
 
+def write_epoch_csv_row(args, config: Dict, device: torch.device, dataset, epoch: int, epoch_start_time: float, epoch_milestones, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history: Dict, opt_G, opt_D) -> None:
+    """
+    Compute epoch elapsed time and write a milestone CSV row for the current epoch.
+
+    :param args: parsed arguments namespace with training settings
+    :param config: configuration dictionary with hardware_tracking settings
+    :param device: torch device used for training
+    :param dataset: loaded CSVFlowDataset instance for sample counts
+    :param epoch: current epoch index (zero-based)
+    :param epoch_start_time: timestamp when the current epoch started
+    :param epoch_milestones: set of milestone epoch numbers for CSV writes
+    :param results_csv_writer: CSV writer object (may be None)
+    :param results_csv_file: open CSV file handle (may be None)
+    :param results_cols_cfg: list of configured CSV column names
+    :param metrics_history: dictionary of tracked training metrics
+    :param opt_G: generator optimizer for learning rate extraction
+    :param opt_D: discriminator optimizer for learning rate extraction
+    :return: None
+    """
+
+    try:  # Safely compute and print epoch elapsed time without interrupting training
+        epoch_elapsed = time.time() - epoch_start_time  # Calculate epoch elapsed seconds
+        print(f"{BackgroundColors.GREEN}Epoch {epoch+1} elapsed: {BackgroundColors.CYAN}{epoch_elapsed:.2f}s{Style.RESET_ALL}")  # Print epoch elapsed time
+        args._last_epoch_time = safe_float(epoch_elapsed, 0.0)  # Store last epoch elapsed on args for external use safely
+    except Exception as _te:  # If timing calculation fails
+        print(f"{BackgroundColors.YELLOW}Warning: failed to measure epoch time: {_te}{Style.RESET_ALL}")  # Warn but continue
+
+    try:  # Wrap CSV write to avoid crashing on I/O errors
+        if results_csv_writer and results_cols_cfg:  # Only write if we have a valid writer and columns
+            row_runtime = {}  # Collect runtime-derived metrics into a dedicated mapping
+            row_runtime["original_file"] = Path(args.csv_path).name if getattr(args, "csv_path", None) else ""  # Original file name
+            row_runtime["epoch"] = epoch + 1  # Current epoch number (1-based)
+            row_runtime["epochs"] = getattr(args, "epochs", "")  # Total epochs configured
+            row_runtime["epoch_time_s"] = getattr(args, "_last_epoch_time", "")  # Epoch elapsed seconds
+            row_runtime["training_time_s"] = getattr(args, "_last_training_time", "")  # Total training elapsed seconds
+            row_runtime["file_time_s"] = getattr(args, "_last_file_time", "")  # File processing elapsed seconds
+            row_runtime["batch_size"] = getattr(args, "batch_size", "")  # Effective batch size used
+            row_runtime["lambda_gp"] = getattr(args, "lambda_gp", "")  # Gradient penalty coefficient
+            row_runtime["latent_dim"] = getattr(args, "latent_dim", "")  # Latent noise dimensionality
+            row_runtime["critic_loss"] = metrics_history.get("loss_D", [])[-1] if metrics_history.get("loss_D") else ""  # Last discriminator/critic loss
+            row_runtime["generator_loss"] = metrics_history.get("loss_G", [])[-1] if metrics_history.get("loss_G") else ""  # Last generator loss
+            row_runtime["gp"] = metrics_history.get("gp", [])[-1] if metrics_history.get("gp") else ""  # Last gradient penalty value
+            row_runtime["D_real"] = metrics_history.get("D_real", [])[-1] if metrics_history.get("D_real") else ""  # Avg critic score for real samples
+            row_runtime["D_fake"] = metrics_history.get("D_fake", [])[-1] if metrics_history.get("D_fake") else ""  # Avg critic score for fake samples
+            row_runtime["wasserstein"] = metrics_history.get("wasserstein", [])[-1] if metrics_history.get("wasserstein") else ""  # Estimated wasserstein distance
+            row_runtime["original_num_samples"] = getattr(dataset, "original_num_samples", "")  # Original sample count after preprocessing
+            row_runtime["critic_iterations"] = getattr(args, "critic_steps", "")  # Critic iterations per generator update
+            try:  # Attempt to read current optimizer learning rates
+                row_runtime["learning_rate_generator"] = safe_float(opt_G.param_groups[0].get("lr", None), getattr(args, "lr", 0.0))  # Generator LR safely
+            except Exception:  # If reading fails
+                row_runtime["learning_rate_generator"] = getattr(args, "lr", "")  # Fallback to args.lr
+            try:  # Attempt to read current optimizer learning rates
+                row_runtime["learning_rate_critic"] = safe_float(opt_D.param_groups[0].get("lr", None), getattr(args, "lr", 0.0))  # Critic LR safely
+            except Exception:  # If reading fails
+                row_runtime["learning_rate_critic"] = getattr(args, "lr", "")  # Fallback to args.lr
+            ordered = []  # Prepare ordered list following config order
+            for c in results_cols_cfg:  # For each configured column name
+                if c in row_runtime:  # If runtime metric provides this column
+                    ordered.append(row_runtime.get(c))  # Use runtime value
+                else:  # Otherwise attempt to find value in configuration
+                    cfg_val = None  # Default when not found
+                    try:  # Guard config lookup
+                        cfg_val = find_config_value(config, c)  # Search config recursively for key
+                    except Exception:  # If lookup fails
+                        cfg_val = None  # Treat as missing on failure
+                    if cfg_val is not None:  # If config provided a value
+                        ordered.append(cfg_val)  # Use configured hyperparameter value
+                    else:  # Neither runtime nor config provided the column value
+                        ordered.append(None)  # Use None to indicate missing value explicitly
+            if config.get("hardware_tracking", False):  # If hardware tracking requested in config
+                try:  # Guard hardware detection to avoid breaking training
+                    hw_specs = get_hardware_specifications(device_used=device)  # Query hardware specs dict
+                    hw_part = hw_specs.get("gpu", "None") if hw_specs.get("gpu", None) is not None else "None"  # GPU part
+                    hardware_str = (  # Build human-readable hardware string
+                        f"{hw_specs.get('cpu_model','Unknown')} | Cores: {hw_specs.get('cores','N/A')}"
+                        f" | RAM: {hw_specs.get('ram_gb','N/A')} GB | OS: {hw_specs.get('os','Unknown')}"
+                        f" | GPU: {hw_part} | CUDA: {hw_specs.get('cuda','No')} | Device Used: {hw_specs.get('device_used','Unknown')}"
+                    )  # End hardware string
+                    if "hardware" in results_cols_cfg:  # If a hardware column exists in configured schema
+                        try:  # Protect index operations
+                            idx_hw = results_cols_cfg.index("hardware")  # Find hardware column index
+                            if idx_hw < len(ordered):  # Ensure index is within the ordered list
+                                ordered[idx_hw] = hardware_str  # Place hardware string in row
+                        except Exception:  # If index operation fails
+                            pass  # Ignore hardware insertion errors
+                except Exception:  # If hardware detection fails
+                    pass  # Ignore any hardware detection errors to keep training running
+            if (epoch + 1) in epoch_milestones:  # Only write per-epoch row when this epoch is a milestone
+                results_csv_writer.writerow(ordered)  # Write ordered row following configured schema for milestone epoch
+                try:  # Flush to disk right away to persist progressively after milestone write
+                    if results_csv_file is not None:  # Only call flush when file handle exists
+                        try:  # Guard flush call to avoid raising
+                            results_csv_file.flush()  # Flush OS buffer for safety
+                        except Exception:  # If flush fails
+                            pass  # Continue when flush fails
+                except Exception:  # If outer flush logic fails
+                    pass  # Continue regardless of flush errors
+    except Exception as _cw:  # If writing fails, warn and continue training
+        print(f"{BackgroundColors.YELLOW}Warning: failed to write epoch row to results CSV: {_cw}{Style.RESET_ALL}")  # Warn but do not abort
+
+
 def save_training_checkpoint(args, config: Dict, device: torch.device, G, D, opt_G, opt_D, scaler, dataset, epoch: int, metrics_history: Dict) -> None:
     """
     Save generator and discriminator checkpoints with metrics at periodic intervals.
