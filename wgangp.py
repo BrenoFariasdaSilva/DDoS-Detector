@@ -1918,6 +1918,155 @@ def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict
         return True  # Default to allowing checkpoint saving when verification fails
 
 
+def init_telegram_progress(args, config: Dict, start_epoch: int) -> tuple:
+    """
+    Initialize telegram notification progress tracking for epoch-based notifications.
+
+    :param args: parsed arguments namespace with epochs count
+    :param config: configuration dictionary with telegram settings
+    :param start_epoch: starting epoch for progress calculation when resuming
+    :return: Tuple of (telegram_enabled, next_notify, progress_pct)
+    """
+
+    telegram_cfg = config.get("telegram", {}) if isinstance(config, dict) else {}  # Retrieve telegram config dict from merged config
+    telegram_enabled = bool(telegram_cfg.get("enabled", True))  # Whether telegram notifications are enabled
+    try:  # Parse progress_pct from config, ensuring valid integer percentage between 1 and 100
+        progress_pct = int(telegram_cfg.get("progress_pct", 10) or 10)  # Percentage step for notifications (default 10)
+    except Exception:  # Catch any exception during parsing
+        progress_pct = 10  # Fallback to 10% on parse error
+    if progress_pct <= 0 or progress_pct > 100:  # If percentage is invalid
+        progress_pct = 10  # Sanitize invalid percentage values
+
+    next_notify = progress_pct  # Initialize next notification threshold
+    try:  # Calculate percent complete at resume point
+        percent_done = int((start_epoch / float(max(1, args.epochs))) * 100)  # Percent complete at resume point
+    except Exception:  # If calculation fails
+        percent_done = 0  # Assume 0% done on failure
+    while percent_done >= next_notify and next_notify <= 100:  # Advance next_notify past already-completed thresholds
+        next_notify += progress_pct  # Skip thresholds already passed when resuming
+
+    return telegram_enabled, next_notify, progress_pct  # Return telegram progress state
+
+
+def create_epoch_progress_bar(dataloader, args, epoch: int) -> tuple:
+    """
+    Create a tqdm progress bar for the current training epoch.
+
+    :param dataloader: training data loader to iterate over
+    :param args: parsed arguments namespace with epochs count
+    :param epoch: current epoch index (zero-based)
+    :return: Tuple of (pbar, total_steps)
+    """
+
+    pbar = tqdm(
+        dataloader,
+        desc=f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL}",
+        unit="batch",
+        file=sys.stdout,  # Use stdout before Logger redirection
+        ncols=None,  # Auto-detect terminal width
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"  # Custom format
+    )  # Create tqdm progress bar for epoch batches
+    total_steps = len(dataloader)  # Number of batches per epoch (explicit total for logging)
+
+    return pbar, total_steps  # Return progress bar and batch count
+
+
+def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, args, config: Dict, n_classes: int, pbar, step: int, metrics_history: Dict, total_steps: int, epoch: int, file_progress_prefix: str) -> int:
+    """
+    Execute one full epoch of batch training steps for generator and discriminator.
+
+    :param G: generator model
+    :param D: discriminator model
+    :param opt_G: generator optimizer
+    :param opt_D: discriminator optimizer
+    :param scaler: AMP gradient scaler (may be None)
+    :param device: torch device for tensor allocation
+    :param args: parsed arguments namespace with training hyperparameters
+    :param config: configuration dictionary for gradient penalty computation
+    :param n_classes: number of label classes for conditional generation
+    :param pbar: tqdm progress bar wrapping the dataloader
+    :param step: current global step counter
+    :param metrics_history: metrics dictionary to append to in-place
+    :param total_steps: number of batches per epoch for display
+    :param epoch: current epoch index (zero-based)
+    :param file_progress_prefix: colored prefix string for progress display
+    :return: Updated global step counter
+    """
+
+    for batch_idx, (real_x_np, labels_np) in enumerate(pbar):  # Enumerate batches to obtain current batch index
+        real_x = real_x_np.to(device, non_blocking=True)  # Move real features to device with non_blocking when pinned
+        labels = labels_np.to(device, dtype=torch.long, non_blocking=True)  # Move labels to device with non_blocking when pinned
+
+        loss_D = torch.tensor(0.0, device=device)  # Initialize discriminator loss
+        gp = torch.tensor(0.0, device=device)  # Initialize gradient penalty
+        d_real_score = torch.tensor(0.0, device=device)  # Initialize real score tracker
+        d_fake_score = torch.tensor(0.0, device=device)  # Initialize fake score tracker
+
+        for _ in range(args.critic_steps):  # Train discriminator multiple steps
+            with autocast(device.type, enabled=(scaler is not None)):  # Enable AMP if available
+                z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for discriminator step
+                fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
+                d_real = D(real_x, labels)  # Get discriminator score for real samples
+                d_fake = D(fake_x, labels)  # Get discriminator score for fake samples
+                gp = gradient_penalty(D, real_x, fake_x, labels, device, config)  # Compute gradient penalty with config
+                loss_D = d_fake.mean() - d_real.mean() + args.lambda_gp * gp  # Calculate WGAN-GP discriminator loss
+
+            opt_D.zero_grad()  # Zero discriminator gradients
+            if scaler is not None:  # If using mixed precision
+                scaler.scale(loss_D).backward()  # Scale loss and backpropagate
+                scaler.step(opt_D)  # Update discriminator parameters with scaled gradients
+                scaler.update()  # Update scaler for next iteration
+            else:  # Standard precision
+                loss_D.backward()  # Backpropagate discriminator loss
+                opt_D.step()  # Update discriminator parameters
+
+            d_real_score = d_real.mean()  # Store average real score
+            d_fake_score = d_fake.mean()  # Store average fake score
+
+        with autocast(device.type, enabled=(scaler is not None)):  # Enable AMP if available
+            z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for generator step
+            gen_labels = torch.randint(0, n_classes, (args.batch_size,), device=device)  # Sample labels for generator
+            fake_x = G(z, gen_labels)  # Generate fake samples with generator
+            g_loss = -D(fake_x, gen_labels).mean()  # Calculate generator loss
+
+        opt_G.zero_grad()  # Zero generator gradients
+        if scaler is not None:  # If using mixed precision
+            scaler.scale(g_loss).backward()  # Scale loss and backpropagate
+            scaler.step(opt_G)  # Update generator parameters with scaled gradients
+            scaler.update()  # Update scaler for next iteration
+        else:  # Standard precision
+            g_loss.backward()  # Backpropagate generator loss
+            opt_G.step()  # Update generator parameters
+
+        pbar.set_description(  # Update tqdm description with epoch and step/total information
+            (
+                f"{getattr(args, 'file_progress_prefix', '')} "  # File progress prefix (may include colored index)
+                f"{BackgroundColors.CYAN}{(Path(getattr(args, 'csv_path', '')).name if getattr(args, 'csv_path', None) else '')}{Style.RESET_ALL} | "  # Current filename
+            )
+            + f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL} | "  # Current epoch and total epochs
+            + f"{BackgroundColors.YELLOW}step {batch_idx+1}/{total_steps}{Style.RESET_ALL} | "  # Current batch index and total batches per epoch
+            + f"{BackgroundColors.RED}loss_D: {loss_D.item():.4f}{Style.RESET_ALL} | "  # Discriminator loss formatted
+            + f"{BackgroundColors.GREEN}loss_G: {g_loss.item():.4f}{Style.RESET_ALL} | "  # Generator loss formatted
+            + f"gp: {gp.item():.4f} | "  # Gradient penalty value
+            + f"D(real): {d_real_score.item():.4f} | "  # Average critic score on real samples
+            + f"D(fake): {d_fake_score.item():.4f}"  # Average critic score on fake samples
+        )
+
+        if step % args.log_interval == 0:  # Log training progress periodically
+            wasserstein_dist = (d_real_score - d_fake_score).item()  # Compute W-distance
+
+            metrics_history["steps"].append(step)  # Record step number
+            metrics_history["loss_D"].append(loss_D.item())  # Record discriminator loss
+            metrics_history["loss_G"].append(g_loss.item())  # Record generator loss
+            metrics_history["gp"].append(gp.item())  # Record gradient penalty
+            metrics_history["D_real"].append(d_real_score.item())  # Record real score
+            metrics_history["D_fake"].append(d_fake_score.item())  # Record fake score
+            metrics_history["wasserstein"].append(wasserstein_dist)  # Record Wasserstein distance
+        step += 1  # Increment global step counter
+
+    return step  # Return updated step counter
+
+
 def write_epoch_csv_row(args, config: Dict, device: torch.device, dataset, epoch: int, epoch_start_time: float, epoch_milestones, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history: Dict, opt_G, opt_D) -> None:
     """
     Compute epoch elapsed time and write a milestone CSV row for the current epoch.
