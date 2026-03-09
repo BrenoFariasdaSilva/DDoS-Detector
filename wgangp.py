@@ -3191,6 +3191,35 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
         return True
 
 
+def determine_feature_dim_and_n_classes(args, scaler: Optional[Any], label_encoder: Any) -> tuple:
+    """
+    Determine feature dimensionality and number of classes from args or scaler.
+
+    :param args: Parsed arguments namespace with optional feature_dim.
+    :param scaler: Fitted StandardScaler with mean_ attribute.
+    :param label_encoder: Fitted LabelEncoder with classes_ attribute.
+    :return: Tuple of (feature_dim, n_classes).
+    """
+
+    if args.feature_dim is not None:  # If feature dimension is provided
+        feature_dim = args.feature_dim  # Use provided feature dimension
+    else:  # Try to infer feature dimension from scaler's mean_ attribute if available
+        mean_attr = getattr(scaler, "mean_", None) if scaler is not None else None  # Get mean_ attribute from scaler if available
+        if mean_attr is not None:  # If mean_ attribute exists, infer feature dimension from it
+            mean_arr = np.asarray(mean_attr)  # Convert mean_ to numpy array
+            if mean_arr.ndim == 0:  # If mean_ is scalar, cannot infer feature dimension
+                raise RuntimeError(
+                    "Scaler.mean_ is scalar; unable to infer feature dimension. Provide --feature_dim."
+                )  # Raise error if mean_ is not an array
+            feature_dim = int(mean_arr.shape[0])  # Infer feature dimension from scaler
+        else:  # If no way to infer feature dimension, raise error
+            raise RuntimeError(
+                "Unable to determine feature dimension; provide --feature_dim or a checkpoint with scaler."
+            )  # Raise error if not available
+    n_classes = len(label_encoder.classes_)  # Get number of classes from label encoder
+    return (feature_dim, n_classes)  # Return feature dimensionality and class count
+
+
 def build_and_load_generator(args, config: Dict, ckpt: Dict, device: torch.device, feature_dim: int, n_classes: int) -> nn.Module:
     """
     Build the generator model and load weights from checkpoint.
