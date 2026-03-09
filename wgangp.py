@@ -1918,6 +1918,151 @@ def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict
         return True  # Default to allowing checkpoint saving when verification fails
 
 
+def normalize_args_and_setup_hardware(args, config: Dict) -> tuple:
+    """
+    Normalize argument types and configure hardware settings for training.
+
+    :param args: parsed arguments namespace to normalize in-place
+    :param config: configuration dictionary with training settings
+    :return: Tuple of (device, training_start_time, file_start_time, epoch_milestones, file_progress_prefix)
+    """
+
+    args.lr = safe_float(getattr(args, "lr", None), config.get("training", {}).get("lr", 1e-4))  # Ensure learning rate is float safely
+    args.beta1 = safe_float(getattr(args, "beta1", None), config.get("training", {}).get("beta1", 0.5))  # Ensure beta1 is float safely
+    args.beta2 = safe_float(getattr(args, "beta2", None), config.get("training", {}).get("beta2", 0.9))  # Ensure beta2 is float safely
+    args.lambda_gp = safe_float(getattr(args, "lambda_gp", None), config.get("training", {}).get("lambda_gp", 10.0))  # Ensure lambda_gp is float safely
+    args.n_samples = safe_float(getattr(args, "n_samples", None), config.get("generation", {}).get("n_samples", 1.0))  # Ensure n_samples is float safely
+    args.seed = int(args.seed)  # Ensure seed is int
+    args.epochs = int(args.epochs)  # Ensure epochs is int
+    epoch_milestones = compute_epoch_milestones(int(args.epochs))  # Precompute milestone epochs after epochs finalized
+    args.batch_size = int(args.batch_size)  # Ensure batch_size is int
+    args.critic_steps = int(args.critic_steps)  # Ensure critic_steps is int
+    args.save_every = int(args.save_every)  # Ensure save_every is int
+    args.log_interval = int(args.log_interval)  # Ensure log_interval is int
+    args.sample_batch = int(args.sample_batch)  # Ensure sample_batch is int
+    args.latent_dim = int(args.latent_dim)  # Ensure latent_dim is int
+    args.embed_dim = int(args.embed_dim)  # Ensure embed_dim is int
+    args.n_resblocks = int(args.n_resblocks)  # Ensure n_resblocks is int
+    args.gen_batch_size = int(args.gen_batch_size)  # Ensure gen_batch_size is int
+    args.num_workers = int(args.num_workers)  # Ensure num_workers is int
+
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
+    )  # Select device for training
+    training_start_time = time.time()  # Record training session start timestamp
+    file_start_time = training_start_time  # Record this file processing start timestamp
+    set_seed(args.seed)  # Set random seed for reproducibility
+
+    gpu_count = torch.cuda.device_count() if (torch.cuda.is_available() and not args.force_cpu) else 0  # Detect number of CUDA devices available
+    use_dataparallel = gpu_count > 1  # Whether to use DataParallel when multiple GPUs present
+    
+    if gpu_count > 0:  # If at least one GPU is available
+        torch.backends.cudnn.benchmark = True  # Enable cuDNN autotuner for potential speedups
+        
+    batch_multiplier = min(8, max(1, 2 * gpu_count)) if gpu_count > 0 else 1  # Scale by 2x per GPU but cap to 8x to avoid OOM
+    scaled_batch = int(args.batch_size) * batch_multiplier  # Compute scaled batch size
+    args.batch_size = int(scaled_batch)  # Apply scaled batch size to args
+    args.use_amp = bool(args.use_amp or (gpu_count > 0 and _torch_autocast is not None))  # Enable AMP when CUDA and autocast available
+    suggested_workers = min(max(1, (os.cpu_count() or 1) // 2), 32)  # Suggest a conservative default for num_workers
+    file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Build colored prefix (default single-file)
+    
+    print(f"{BackgroundColors.GREEN}Detected {gpu_count} GPUs.{Style.RESET_ALL}")  # Print GPU count
+    print(f"{BackgroundColors.GREEN}Using DataParallel: {use_dataparallel}{Style.RESET_ALL}")  # Print whether DataParallel will be used
+    print(f"{BackgroundColors.GREEN}Batch size: {BackgroundColors.CYAN}{args.batch_size}{Style.RESET_ALL}")  # Print effective batch size after scaling
+    print(f"{BackgroundColors.GREEN}Suggested num_workers: {BackgroundColors.CYAN}{suggested_workers}{Style.RESET_ALL}")  # Print suggested workers value
+    print(f"{BackgroundColors.GREEN}AMP enabled: {BackgroundColors.CYAN}{args.use_amp}{Style.RESET_ALL}")  # Print AMP usage
+    print(f"{BackgroundColors.GREEN}cuDNN benchmark: {BackgroundColors.CYAN}{torch.backends.cudnn.benchmark}{Style.RESET_ALL}")  # Print cuDNN benchmark status
+    send_telegram_message(TELEGRAM_BOT, compose_training_start_message(args, file_progress_prefix))  # Telegram start with colored prefix and file statistics
+
+    print(f"{BackgroundColors.GREEN}Device: {BackgroundColors.CYAN}{device.type.upper()}{Style.RESET_ALL}")  # Print device type
+    if args.use_amp and device.type == "cuda":  # If AMP enabled and using CUDA
+        print(f"{BackgroundColors.GREEN}Using Automatic Mixed Precision (AMP) for faster training{Style.RESET_ALL}")  # Print AMP detail
+    if args.compile:  # If torch.compile requested
+        print(f"{BackgroundColors.GREEN}Using torch.compile() for optimized execution{Style.RESET_ALL}")  # Print compile detail
+
+    return device, training_start_time, file_start_time, epoch_milestones, file_progress_prefix  # Return hardware setup results
+
+
+def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> tuple:
+    """
+    Create the CSV flow dataset and configure the training data loader.
+
+    :param args: parsed arguments namespace with csv_path, feature_cols, label_col, and batch_size
+    :param config: configuration dictionary with dataloader settings
+    :param device: torch device for pin_memory optimization
+    :return: Tuple of (dataset, dataloader)
+    """
+
+    dataset = CSVFlowDataset(
+        args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols
+    )  # Load dataset from CSV
+
+    num_workers = int(config.get("dataloader", {}).get("num_workers", 8))  # Get base num_workers from config and cast to int
+    num_workers = adjust_num_workers_for_file(args.csv_path, num_workers, config)  # Adjust num_workers based on file size and system RAM
+    
+    if device.type == "cuda" and num_workers == 0:  # If CUDA available but adjusted workers is 0
+        try:  # Attempt to fetch total RAM to decide whether to raise workers for CUDA
+            total_ram_gb = (safe_float(psutil.virtual_memory().total, 0.0) / (1024.0 ** 3)) if psutil is not None else None  # Detect total RAM if psutil available safely
+        except Exception:  # If detection fails
+            total_ram_gb = None  # Unknown RAM when detection fails
+        if total_ram_gb is None or total_ram_gb >= 8.0:  # If RAM unknown or sufficient
+            num_workers = max(1, (os.cpu_count() or 1))  # Ensure at least one worker for CUDA when RAM allows
+        else:  # Low RAM and CUDA present: keep zero workers to avoid memory pressure
+            print(f"{BackgroundColors.YELLOW}Warning: num_workers set to 0 due to low RAM and CUDA presence{Style.RESET_ALL}")  # Warn about zero workers for CUDA
+    
+    pin_memory = True if device.type == "cuda" else False  # Always enable pin_memory on CUDA for faster host->device transfers
+    persistent_workers = config.get("dataloader", {}).get("persistent_workers", True) if num_workers > 0 else False  # Get persistent_workers from config
+    prefetch_factor = int(config.get("dataloader", {}).get("prefetch_factor", 2)) if num_workers > 0 else None  # Get prefetch_factor from config and cast to int
+
+    dataloader = DataLoader(
+        dataset,  # Dataset object to load data from
+        batch_size=args.batch_size,  # Batch size for training
+        shuffle=True,  # Shuffle data each epoch for better training
+        drop_last=True,  # Drop last incomplete batch for consistent batch sizes
+        num_workers=num_workers,  # Number of subprocesses for data loading
+        pin_memory=pin_memory,  # Faster CPU->GPU transfer
+        persistent_workers=persistent_workers,  # Keep workers alive between epochs
+        prefetch_factor=prefetch_factor,  # Prefetch batches for better GPU utilization
+    )  # Create dataloader for batching
+
+    return dataset, dataloader  # Return dataset and configured dataloader
+
+
+def init_results_csv_and_feature_dims(args, config: Dict, dataset) -> tuple:
+    """
+    Initialize the results CSV writer and extract feature dimensions from the dataset.
+
+    :param args: parsed arguments namespace with csv_path
+    :param config: configuration dictionary with wgangp results_csv_columns and paths
+    :param dataset: loaded CSVFlowDataset instance
+    :return: Tuple of (results_csv_file, results_csv_writer, results_cols_cfg, feature_dim, n_classes)
+    """
+
+    results_csv_file = None  # Placeholder for per-dataset open results CSV file object
+    results_csv_writer = None  # Placeholder for per-dataset CSV writer
+    results_cols_cfg = config.get("wgangp", {}).get("results_csv_columns", [])  # Read configured results columns list
+    
+    if not isinstance(results_cols_cfg, list) or len(results_cols_cfg) == 0:  # Validate list exists and is non-empty
+        print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Clear error message
+        raise ValueError("'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration")  # Stop safely
+    
+    if getattr(args, "csv_path", None):  # If csv_path provided, prepare persistent results CSV handle
+        try:  # Attempt to open results CSV once with header written if needed
+            csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
+            data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read Data_Augmentation subdir from config
+            data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation directory under dataset folder
+            os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before writing
+            results_csv_path = data_aug_dir / "data_augmentation_results.csv"  # Place results CSV inside Data_Augmentation dir
+            results_csv_file, results_csv_writer = open_results_csv(results_csv_path, results_cols_cfg)  # Open and cache writer
+        except Exception as _rw:  # On failure, warn and continue without persistent csv
+            print(f"{BackgroundColors.YELLOW}Warning: could not initialize results CSV writer: {_rw}{Style.RESET_ALL}")  # Warn and continue
+
+    feature_dim = dataset.feature_dim  # Get feature dimensionality from dataset
+    n_classes = dataset.n_classes  # Get number of label classes from dataset
+
+    return results_csv_file, results_csv_writer, results_cols_cfg, feature_dim, n_classes  # Return CSV handles and feature dimensions
+
+
 def create_models_and_optimizers(args, config: Dict, device: torch.device, feature_dim: int, n_classes: int) -> tuple:
     """
     Create generator and discriminator models, optimizers, and initialize training state.
