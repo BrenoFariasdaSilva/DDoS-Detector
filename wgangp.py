@@ -3266,7 +3266,7 @@ def reconstruct_missing_preprocessing_objects(args, scaler: Optional[Any], label
         scaler = tmp_ds.scaler  # Use scaler from rebuilt dataset
         label_encoder = tmp_ds.label_encoder  # Use label encoder from rebuilt dataset
         feature_cols = tmp_ds.feature_cols  # Use feature column names from rebuilt dataset
-        if args.n_samples < 1.0:  # If percentage mode, calculate class distribution
+        if args.n_samples <= 1.0:  # If percentage mode or 100% requested, calculate class distribution
             unique_labels, label_counts = np.unique(tmp_ds.labels, return_counts=True)  # Get class distribution
             class_distribution = dict(zip(unique_labels.tolist(), label_counts.tolist()))  # Create label:count mapping
     return (scaler, label_encoder, feature_cols, class_distribution)  # Return reconstructed or original preprocessing objects
