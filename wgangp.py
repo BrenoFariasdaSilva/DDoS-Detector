@@ -1670,10 +1670,13 @@ def send_file_saved_and_timing_messages(args: Any, config: Dict) -> None:  # Cre
         print(f"{file_progress_prefix} {BackgroundColors.GREEN}Generation time: {BackgroundColors.CYAN}{generation_time}s{Style.RESET_ALL}")  # Print sample generation elapsed seconds
 
     try:  # Attempt to notify via Telegram with a compact summary message
-        msg = (
-            f"{file_progress_prefix} Saved file {Path(gen_file).name if gen_file else 'unknown'} ({size_str}) | "  # Compose file name and size part
-            f"Training: {training_time}s | Generation: {generation_time}s"  # Append timing summary part
-        )  # End compact message composition
+        display_path = os.path.relpath(gen_file) if gen_file else "unknown"  # Compute relative path for generated file or 'unknown'
+        training_time_str = calculate_execution_time(training_time)  # Convert training_time to human-readable duration string
+        generation_time_str = calculate_execution_time(generation_time) if generation_time != "" else ""  # Convert generation_time when present otherwise empty
+        msg = (  # Compose compact message using relative path and formatted durations
+            f"{file_progress_prefix} Saved file {Path(display_path).name if gen_file else 'unknown'} ({size_str}) | Path: {display_path} | "
+            f"Training: {training_time_str} | Generation: {generation_time_str}"
+        )  # End message composition
         send_telegram_message(TELEGRAM_BOT, msg)  # Send composed summary by Telegram using shared helper
     except Exception as e:
         print(str(e))  # Print exception for visibility
