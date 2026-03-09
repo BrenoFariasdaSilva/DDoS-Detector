@@ -330,6 +330,7 @@ def get_default_config():
             "seed": 42,  # Random seed for reproducibility
             "force_cpu": False,  # Force CPU usage even if CUDA available
             "from_scratch": False,  # Force training from scratch, ignore checkpoints
+            "generating_order": "off",  # Dataset file processing order by file size: "off", "Ascending", or "Descending"
         },
         "dataset": {  # Dataset configuration
             "remove_zero_variance": True,  # Remove zero-variance features during preprocessing
@@ -4408,6 +4409,17 @@ def main():
                     files_to_process = get_files_to_process(
                         input_path, file_extension=".csv", config=config
                     )  # Get list of CSV files to process
+                    generating_order = config.get("wgangp", {}).get("generating_order", "off")  # Read dataset generation order from config
+                    if generating_order not in ("off", "Ascending", "Descending"):  # Validate the generating_order value against allowed values
+                        generating_order = "off"  # Fall back to "off" on invalid value
+                    if generating_order == "Ascending":  # Sort files from smallest to largest by file size
+                        files_to_process = sorted(files_to_process, key=lambda f: os.path.getsize(f))  # Sort ascending by file size
+                        safe_debug("WGANGP dataset generation order: Ascending")  # Log chosen ordering
+                    elif generating_order == "Descending":  # Sort files from largest to smallest by file size
+                        files_to_process = sorted(files_to_process, key=lambda f: os.path.getsize(f), reverse=True)  # Sort descending by file size
+                        safe_debug("WGANGP dataset generation order: Descending")  # Log chosen ordering
+                    else:  # No sorting applied, preserve original discovery order
+                        safe_debug("WGANGP dataset generation order: Off")  # Log chosen ordering
                     total_files = len(files_to_process)  # Compute total files once per input_path
                     for index, file in enumerate(files_to_process, start=1):  # Iterate with index and file
                         try:  # Wrap per-file processing so exceptions are caught by the outer handler
