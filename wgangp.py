@@ -3191,6 +3191,35 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
         return True
 
 
+def reconstruct_missing_preprocessing_objects(args, scaler: Optional[Any], label_encoder: Optional[Any], feature_cols: Optional[List[str]], class_distribution: Optional[Dict]) -> tuple:
+    """
+    Reconstruct missing preprocessing objects from CSV when checkpoint is incomplete.
+
+    :param args: Parsed arguments namespace with csv_path and label_col.
+    :param scaler: Scaler from checkpoint or None if missing.
+    :param label_encoder: Label encoder from checkpoint or None if missing.
+    :param feature_cols: Feature column names from checkpoint or None if missing.
+    :param class_distribution: Class distribution from checkpoint or None if missing.
+    :return: Tuple of (scaler, label_encoder, feature_cols, class_distribution).
+    """
+
+    if scaler is None or label_encoder is None or feature_cols is None or (args.n_samples <= 1.0 and class_distribution is None):  # If critical data missing
+        if args.csv_path is None:  # Verify if CSV path is provided
+            raise RuntimeError(
+                "Checkpoint missing scaler/label_encoder/feature_cols/class_distribution. Provide --csv_path to reconstruct them."
+            )  # Raise error if not
+        tmp_ds = CSVFlowDataset(
+            args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols
+        )  # Rebuild dataset to get scaler, encoder, feature names, and class distribution
+        scaler = tmp_ds.scaler  # Use scaler from rebuilt dataset
+        label_encoder = tmp_ds.label_encoder  # Use label encoder from rebuilt dataset
+        feature_cols = tmp_ds.feature_cols  # Use feature column names from rebuilt dataset
+        if args.n_samples < 1.0:  # If percentage mode, calculate class distribution
+            unique_labels, label_counts = np.unique(tmp_ds.labels, return_counts=True)  # Get class distribution
+            class_distribution = dict(zip(unique_labels.tolist(), label_counts.tolist()))  # Create label:count mapping
+    return (scaler, label_encoder, feature_cols, class_distribution)  # Return reconstructed or original preprocessing objects
+
+
 def determine_feature_dim_and_n_classes(args, scaler: Optional[Any], label_encoder: Any) -> tuple:
     """
     Determine feature dimensionality and number of classes from args or scaler.
