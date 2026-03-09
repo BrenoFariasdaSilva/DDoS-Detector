@@ -3191,6 +3191,157 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
         return True
 
 
+def prepare_and_write_results_csv_row(args, config: Dict, args_ck: Dict, ckpt: Dict, n: int, device: torch.device) -> None:
+    """
+    Prepare and write a results CSV row with generation metrics and hyperparameters.
+
+    :param args: Parsed arguments namespace with csv_path and out_file.
+    :param config: Configuration dictionary with wgangp and paths settings.
+    :param args_ck: Saved arguments dictionary from checkpoint.
+    :param ckpt: Loaded checkpoint dictionary containing metrics_history.
+    :param n: Total number of generated samples.
+    :param device: Torch device used for hardware specification lookup.
+    :return: None.
+    """
+
+    results_cols_cfg = config.get("wgangp", {}).get("results_csv_columns", [])  # Read configured results columns list
+    if not isinstance(results_cols_cfg, list) or len(results_cols_cfg) == 0:  # Validate list exists and is non-empty
+        print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Clear error message
+        raise ValueError("'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration")  # Stop safely
+    results_csv_path = None  # Initialize results CSV path variable
+    ck_csv_path = None  # Initialize checkpoint csv Path placeholder to satisfy static analysis
+    if getattr(args, "csv_path", None):  # If csv_path available on args
+        csv_path_obj = Path(args.csv_path)  # Create Path object from args.csv_path
+        data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read configured subdir name
+        data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation directory under dataset folder
+        os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before writing
+        results_csv_path = data_aug_dir / "data_augmentation_results.csv"  # Use results CSV inside Data_Augmentation dir
+    else:  # Try to recover original csv_path from checkpoint args saved in checkpoint
+        ck_csv_path = None
+        try:
+            if args_ck and args_ck.get("csv_path"):  # Use saved args from checkpoint (args_ck defined earlier)
+                ck_csv_value = args_ck.get("csv_path")
+                if ck_csv_value:
+                    ck_csv_path = Path(ck_csv_value)  # Path object for saved csv_path from checkpoint
+                    ck_data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read subdir name from config
+                    ck_data_aug_dir = ck_csv_path.parent / ck_data_aug_subdir  # Construct Data_Augmentation directory for checkpoint csv_path
+                    os.makedirs(ck_data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists for checkpoint recover
+                    results_csv_path = ck_data_aug_dir / "data_augmentation_results.csv"  # Use results CSV inside Data_Augmentation dir for checkpoint
+                else:
+                    ck_csv_path = None
+        except Exception:
+            results_csv_path = None  # Leave as None if recovery fails
+    if results_csv_path is not None:  # If we have a place to record results
+        if getattr(args, "csv_path", None):  # Verify args.csv_path exists and is not None
+            original_file_name = Path(args.csv_path).name  # Use basename from args.csv_path when available
+        else:  # Fallback to checkpoint saved path when args.csv_path missing
+            if ck_csv_path:  # Use guarded Path object from checkpoint when available
+                try:
+                    original_file_name = ck_csv_path.name  # Use basename from guarded checkpoint Path
+                except Exception:
+                    original_file_name = ""  # Use empty string on any failure
+            else:
+                original_file_name = ""  # Default to empty when no path available
+        generated_file_name = Path(args.out_file).name if getattr(args, "out_file", None) else ""  # Generated file name
+        try:
+            original_num = None  # Default original count
+            if getattr(args, "csv_path", None):  # If csv_path provided, try reading length
+                original_num = len(pd.read_csv(args.csv_path, low_memory=False))  # Count original CSV rows
+        except Exception:
+            original_num = None  # Leave as None if reading fails
+        total_generated = int(n) if n is not None else ""  # Total generated samples
+        generated_ratio = ""  # Default generated ratio
+        try:
+            if original_num and original_num > 0:  # If original count available
+                generated_ratio = float(total_generated) / float(original_num)  # Compute ratio
+        except Exception:
+            generated_ratio = ""  # Leave blank on failure
+        timing_values = {  # Map common column names to stored timing attributes
+            "training_time_s": getattr(args, "_last_training_time", ""),  # Total training elapsed seconds
+            "file_time_s": getattr(args, "_last_file_time", ""),  # Per-file processing elapsed seconds
+            "epoch_time_s": getattr(args, "_last_epoch_time", ""),  # Last epoch elapsed seconds
+            "sample_generation_time_s": getattr(args, "_last_sample_generation_time", ""),  # Sample generation elapsed seconds
+            "model_save_time_s": getattr(args, "_last_model_save_time", ""),  # Model save phase elapsed seconds
+        }  # End timing values map
+        training_time_val = timing_values.get("training_time_s", "")  # Pull training time in case caller expects that key
+        testing_time_val = ""  # No testing time available by default
+        row_runtime_defaults = {
+            "critic_iterations": getattr(args, "critic_steps", ""),
+            "learning_rate_generator": getattr(args, "lr", ""),
+            "learning_rate_critic": getattr(args, "lr", ""),
+            "testing_time_s": testing_time_val,
+            "hardware": None,
+        }
+        critic_loss_val = ""  # Default critic loss
+        generator_loss_val = ""  # Default generator loss
+        try:
+            metrics_history = ckpt.get("metrics_history")  # Try to get metrics history from checkpoint (may be None)
+            if isinstance(metrics_history, dict):  # If metrics_history is a dict
+                ld = metrics_history.get("loss_D") or []  # Safe list for discriminator losses
+                lg = metrics_history.get("loss_G") or []  # Safe list for generator losses
+                if isinstance(ld, (list, tuple)) and len(ld) > 0:  # If list-like and non-empty
+                    critic_loss_val = ld[-1]  # Use last recorded discriminator loss
+                if isinstance(lg, (list, tuple)) and len(lg) > 0:  # If list-like and non-empty
+                    generator_loss_val = lg[-1]  # Use last recorded generator loss
+        except Exception:
+            critic_loss_val = ""  # Ignore failures and leave blank
+            generator_loss_val = ""  # Ignore failures and leave blank
+        row_runtime = {}  # Dictionary to hold runtime values for configured columns
+        row_runtime["original_file"] = original_file_name  # Original CSV filename
+        row_runtime["generated_file"] = generated_file_name  # Generated output filename
+        row_runtime["original_num_samples"] = original_num if original_num is not None else ""  # Original sample count
+        row_runtime["total_generated_samples"] = total_generated  # Total generated count
+        row_runtime["generated_ratio"] = generated_ratio  # Generated/original ratio
+        row_runtime["critic_loss"] = critic_loss_val  # Last critic loss from checkpoint metrics
+        row_runtime["generator_loss"] = generator_loss_val  # Last generator loss from checkpoint metrics
+        for k, v in timing_values.items():  # For each timing key known
+            row_runtime[k] = v  # Store timing value under the timing key
+        try:
+            for kk, vv in row_runtime_defaults.items():
+                if kk not in row_runtime or row_runtime.get(kk) in (None, ""):
+                    row_runtime[kk] = vv
+        except Exception:
+            pass
+        try:
+            if (row_runtime.get("hardware") is None) or row_runtime.get("hardware") == "":
+                hw_specs = get_hardware_specifications(device_used=device) if 'get_hardware_specifications' in globals() else None
+                if isinstance(hw_specs, dict):
+                    hw_part = hw_specs.get("gpu", "None") if hw_specs.get("gpu", None) is not None else "None"
+                    hardware_str = (
+                        f"{hw_specs.get('cpu_model','Unknown')} | Cores: {hw_specs.get('cores','N/A')}"
+                        f" | RAM: {hw_specs.get('ram_gb','N/A')} GB | OS: {hw_specs.get('os','Unknown')}"
+                        f" | GPU: {hw_part} | CUDA: {hw_specs.get('cuda','No')} | Device Used: {hw_specs.get('device_used','Unknown')}"
+                    )
+                    row_runtime["hardware"] = hardware_str
+        except Exception:
+            pass
+        try:  # Wrap open/write in try/except to avoid crashing on I/O issues
+            f_handle, writer = open_results_csv(results_csv_path, results_cols_cfg)  # Get persistent handle and writer
+            if f_handle and writer:  # If we successfully opened or reused a writer
+                ordered = []  # Build ordered list following configured schema
+                for c in results_cols_cfg:  # For each configured column name
+                    if c in row_runtime:  # If runtime has this value
+                        ordered.append(row_runtime.get(c))  # Use runtime value
+                    else:  # Otherwise attempt to fetch from configuration
+                        cfg_val = None  # Default to missing
+                        try:  # Guard recursive lookup
+                            cfg_val = find_config_value(config, c)  # Search config for matching key
+                        except Exception:
+                            cfg_val = None  # On error treat as missing
+                        if cfg_val is not None:  # If found in config
+                            ordered.append(cfg_val)  # Use configured hyperparameter value
+                        else:  # Not found anywhere; warn and use None
+                            print(f"{BackgroundColors.YELLOW}Warning: results CSV column '{c}' not found in runtime metrics or config; writing None{Style.RESET_ALL}")  # Warn about missing column
+                            ordered.append(None)  # Explicit None for missing value
+                writer.writerow(ordered)  # Write the ordered row to CSV
+                try:  # Flush to persist immediately
+                    f_handle.flush()  # Flush file buffer to disk
+                except Exception:
+                    pass  # Ignore flush errors
+        except Exception as _we:  # On any write/open failure, warn and continue
+            print(f"{BackgroundColors.YELLOW}Warning: failed to persist generation row: {_we}{Style.RESET_ALL}")  # Warn but do not abort
+
+
 def warn_on_results_csv_failure(e: Exception) -> None:
     """
     Print a warning when results CSV preparation fails.
