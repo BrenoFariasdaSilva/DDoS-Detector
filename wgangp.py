@@ -3191,6 +3191,39 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
         return True
 
 
+def build_and_load_generator(args, config: Dict, ckpt: Dict, device: torch.device, feature_dim: int, n_classes: int) -> nn.Module:
+    """
+    Build the generator model and load weights from checkpoint.
+
+    :param args: Parsed arguments namespace with architecture hyperparameters.
+    :param config: Configuration dictionary with generator settings.
+    :param ckpt: Loaded checkpoint dictionary containing state_dict.
+    :param device: Torch device for model placement.
+    :param feature_dim: Dimensionality of the output features.
+    :param n_classes: Number of label classes for conditional generation.
+    :return: Generator model in evaluation mode.
+    """
+
+    g_leaky_relu_alpha = safe_float(config.get("generator", {}).get("leaky_relu_alpha", 0.2), 0.2)  # Get generator LeakyReLU alpha safely from config
+    G = Generator(
+        latent_dim=args.latent_dim,  # Noise vector dimensionality for generator input
+        feature_dim=feature_dim,  # Dimensionality of the output features (matches dataset)
+        n_classes=n_classes,  # Number of classes for conditional generation (matches dataset)
+        hidden_dims=args.g_hidden,  # List of hidden layer sizes for generator MLP
+        embed_dim=args.embed_dim,  # Dimensionality of label embedding in generator
+        n_resblocks=args.n_resblocks,  # Number of residual blocks in generator architecture
+        leaky_relu_alpha=g_leaky_relu_alpha,  # Use config value
+    ).to(
+        device
+    )  # Initialize generator model
+    if isinstance(G, torch.nn.DataParallel):  # If generator wrapped by DataParallel
+        G.module.load_state_dict(ckpt["state_dict"] if "state_dict" in ckpt else ckpt)  # Load into underlying module
+    else:  # Not DataParallel
+        G.load_state_dict(ckpt["state_dict"] if "state_dict" in ckpt else ckpt)  # Load generator weights from checkpoint
+    G.eval()  # Set generator to evaluation mode
+    return G  # Return generator model ready for inference
+
+
 def compute_generation_counts_and_labels(args, config: Dict, class_distribution: Optional[Dict], label_encoder: Any, n_classes: int) -> tuple:
     """
     Compute per-class counts and build the label array for generation.
