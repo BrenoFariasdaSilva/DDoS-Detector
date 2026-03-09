@@ -213,18 +213,35 @@ def extract_functions_between(text, start_name, end_name):
              Each function in the list is a tuple: (name, code, start_pos, end_pos)
     """
 
-    verbose_output(f"{BackgroundColors.GREEN}Extracting functions between {BackgroundColors.CYAN}{start_name}{BackgroundColors.GREEN} and {BackgroundColors.CYAN}{end_name}{Style.RESET_ALL}")
+    verbose_output(f"{BackgroundColors.GREEN}Extracting functions between {BackgroundColors.CYAN}{start_name}{BackgroundColors.GREEN} and {BackgroundColors.CYAN}{end_name}{Style.RESET_ALL}")  # Log extraction start
     
-    pattern = r"^def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(.*?\):.*?(?=^def\s|\Z)"  # Regex pattern for top-level defs
-    matches = list(re.finditer(pattern, text, flags=re.DOTALL | re.MULTILINE))  # Find all matches
-    funcs = [(m.group(1), m.group(0), m.start(), m.end()) for m in matches]  # Extract function details
-    start_idx = next(i for i, f in enumerate(funcs) if f[0] == start_name)  # Find start function index
-    end_idx = next(i for i, f in enumerate(funcs) if f[0] == end_name)  # Find end function index
-    selected = funcs[start_idx:end_idx + 1]  # Get all functions in range (inclusive)
-    prefix = text[:selected[0][2]]  # Text before the first selected function
-    suffix = text[selected[-1][3]:]  # Text after the last selected function
+    name_pattern = r"^def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\("  # Regex pattern to capture function name at line start
+    name_matches = list(re.finditer(name_pattern, text, flags=re.MULTILINE))  # Find all name occurrences
+    funcs = []  # Container for (name, code, start, end)
+    for i, m in enumerate(name_matches):
+        func_name = m.group(1)  # Extract function name from match group
+        start_pos = m.start()  # Start index of this function definition in the text
+        end_pos = name_matches[i + 1].start() if i + 1 < len(name_matches) else len(text)  # End index (next def start or EOF)
+        func_code = text[start_pos:end_pos]  # Slice function code block from start to end
+        funcs.append((func_name, func_code, start_pos, end_pos))  # Append tuple for downstream processing
+
+    # Locate start and end indices; raise informative error if missing
+    try:
+        start_idx = next(i for i, f in enumerate(funcs) if f[0] == start_name)  # Find index of START function
+    except StopIteration:
+        available = [f[0] for f in funcs]  # Collect available function names for error message
+        raise ValueError(f"START function '{start_name}' not found. Available: {available}")  # Inform caller
+    try:
+        end_idx = next(i for i, f in enumerate(funcs) if f[0] == end_name)  # Find index of END function
+    except StopIteration:
+        available = [f[0] for f in funcs]  # Collect available function names for error message
+        raise ValueError(f"END function '{end_name}' not found. Available: {available}")  # Inform caller
+
+    selected = funcs[start_idx:end_idx + 1]  # Select functions inclusively between markers
+    prefix = text[: selected[0][2]] if selected else text  # Text before the first selected function
+    suffix = text[selected[-1][3] :] if selected else ""  # Text after the last selected function
     
-    verbose_output(f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{len(selected)}{BackgroundColors.GREEN} functions between markers{Style.RESET_ALL}")
+    verbose_output(f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{len(selected)}{BackgroundColors.GREEN} functions between markers{Style.RESET_ALL}")  # Log count
     
     return prefix, suffix, selected  # Return the components
 
