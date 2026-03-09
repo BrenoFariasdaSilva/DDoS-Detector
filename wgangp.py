@@ -3436,8 +3436,10 @@ def generate_batches_and_collect_results(args, G: nn.Module, device: torch.devic
     """
 
     batch_size = args.gen_batch_size  # Set generation batch size
-    all_fake = []  # List to store generated feature batches
-    all_labels = []  # List to store corresponding labels
+    _gen_model = getattr(G, "module", G)  # Unwrap DataParallel if present to access feature_dim attribute
+    feat_dim = _gen_model.feature_dim  # Get output feature dimensionality from generator for pre-allocation
+    all_fake = np.empty((n, feat_dim), dtype=np.float32)  # Pre-allocate contiguous output array to avoid list-append-then-vstack overhead
+    offset = 0  # Track write position in pre-allocated array
     sample_generation_start_time = time.time()  # Record sample generation start timestamp
     with torch.no_grad():  # Disable gradient computation for generation
         for i in range(0, n, batch_size):  # Loop over batches for generation
@@ -3445,9 +3447,9 @@ def generate_batches_and_collect_results(args, G: nn.Module, device: torch.devic
             z = torch.randn(b, args.latent_dim, device=device)  # Sample noise for batch
             y = torch.from_numpy(labels[i : i + b]).to(device, dtype=torch.long)  # Convert labels to tensor
             fake = G(z, y).cpu().numpy()  # Generate fake samples and move to CPU
-            all_fake.append(fake)  # Append generated features to list
-            all_labels.append(labels[i : i + b])  # Append labels to list
-    return (all_fake, all_labels, sample_generation_start_time)  # Return generated batches and timing start
+            all_fake[offset : offset + b] = fake  # Write batch directly into pre-allocated array slice
+            offset += b  # Advance write offset by current batch size
+    return (all_fake, labels, sample_generation_start_time)  # Return pre-allocated array and original labels array
 
 
 def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List, all_labels: List, scaler: Any, label_encoder: Any, feature_cols: List[str], device: torch.device, n: int, file_progress_prefix: str) -> pd.DataFrame:
