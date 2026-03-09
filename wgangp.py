@@ -311,7 +311,7 @@ def get_default_config():
         "execution": {  # Execution control parameters
             "verbose": False,  # Enable verbose output messages
             "play_sound": True,  # Play sound notification when complete
-            "results_suffix": "_data_augmented",  # Suffix to add to generated filenames
+            "results_suffix": "result",  # Suffix to add to generated filenames
             "match_filenames_to_process": [""],  # List of specific filenames to search for a match
             "ignore_files": ["_data_augmented"],  # List of filename substrings to ignore
             "ignore_dirs": [  # List of directory names to ignore when searching for datasets
@@ -331,6 +331,8 @@ def get_default_config():
             "force_cpu": False,  # Force CPU usage even if CUDA available
             "from_scratch": False,  # Force training from scratch, ignore checkpoints
             "generating_order": "off",  # Dataset file processing order by file size: "off", "Ascending", or "Descending"
+            "execution_mode": "both",  # Execution mode: train, gen, or both for WGANGP
+            "results_suffix": "_data_augmented",  # Suffix to add to generated filenames for WGANGP
         },
         "dataset": {  # Dataset configuration
             "remove_zero_variance": True,  # Remove zero-variance features during preprocessing
@@ -1637,7 +1639,7 @@ def send_file_saved_and_timing_messages(args: Any, config: Dict) -> None:  # Cre
     if not gen_file and getattr(args, "csv_path", None):  # Derive augmented path when out_file not provided
         try:  # Attempt derivation of default generated file path from csv_path and config
             csv_obj = Path(args.csv_path)  # Construct Path from provided CSV path
-            suffix = config.get("execution", {}).get("results_suffix", "_data_augmented")  # Read results suffix from config
+            suffix = config.get("wgangp", {}).get("results_suffix", "_data_augmented")  # Read results suffix from wgangp config
             derived = csv_obj.parent / config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / f"{csv_obj.stem}{suffix}.csv"  # Build derived path
             gen_file = str(derived)  # Use derived path string as generated file path
         except Exception:  # If derivation fails, fall back to empty string silently
@@ -2694,7 +2696,7 @@ def write_final_timing_and_csv_row(args, config: Dict, device: torch.device, dat
             if not gen_file and getattr(args, "csv_path", None):  # Derive augmented filename when not explicitly set
                 try:  # Attempt to construct derived augmented file path
                     csv_obj = Path(args.csv_path)  # Path object for csv
-                    suffix = config.get("execution", {}).get("results_suffix", "_data_augmented")  # Suffix from config
+                    suffix = config.get("wgangp", {}).get("results_suffix", "_data_augmented")  # Suffix from wgangp config
                     derived = csv_obj.parent / config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / f"{csv_obj.stem}{suffix}.csv"  # Construct path
                     gen_file = str(derived)  # Use derived path string
                 except Exception:  # If derivation fails
@@ -3454,7 +3456,7 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
     if getattr(args, "csv_path", None):  # Verify csv_path is available to derive augmented output path
         try:  # Guard augmented file save to avoid breaking generation on path derivation failure
             csv_src = Path(args.csv_path)  # Create Path object from original training dataset path
-            suffix = config.get("execution", {}).get("results_suffix", "_data_augmented")  # Read results suffix from config with fallback
+            suffix = config.get("wgangp", {}).get("results_suffix", "_data_augmented")  # Read results suffix from wgangp config with fallback
             augmented_path = csv_src.parent / f"{csv_src.stem}{suffix}.csv"  # Derive augmented path in same directory as original dataset
             df.to_csv(str(augmented_path), index=False)  # Save generated samples to augmented file without row index
             print(f"{file_progress_prefix} {BackgroundColors.GREEN}Saved augmented dataset to {BackgroundColors.CYAN}{augmented_path}{Style.RESET_ALL}")  # Print augmented file save confirmation
@@ -4261,7 +4263,7 @@ def main():
 
         mode = config.get("wgangp", {}).get("mode", "both")  # Get mode
         csv_path = config.get("wgangp", {}).get("csv_path")  # Get CSV path
-        results_suffix = config.get("execution", {}).get("results_suffix", "_data_augmented")  # Get results suffix
+        results_suffix = config.get("wgangp", {}).get("results_suffix", "_data_augmented")  # Get results suffix from wgangp config
         datasets = config.get("dataset", {}).get("datasets", {})  # Get datasets dictionary
 
         class ConfigNamespace:
