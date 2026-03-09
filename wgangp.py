@@ -735,6 +735,9 @@ class CSVFlowDataset(Dataset):
         self.n_classes = len(self.label_encoder.classes_)  # Count number of unique classes
         self.feature_dim = self.X.shape[1]  # Determine dimensionality of features
 
+        self.X = torch.from_numpy(np.ascontiguousarray(self.X)).float()  # Pre-convert features to float tensor to avoid per-batch numpy-to-tensor conversion overhead
+        self._labels_tensor = torch.from_numpy(np.asarray(self.labels, dtype=np.int64))  # Pre-convert encoded labels to long tensor for efficient DataLoader collation
+
     def __len__(self):  # Return number of samples in the dataset
         """
         Return the number of samples in the dataset.
@@ -749,12 +752,10 @@ class CSVFlowDataset(Dataset):
         Fetch a single sample by index.
 
         :param idx: Index of the sample to retrieve
-        :return: Tuple of (features, label) where features is a numpy array and label is an integer
+        :return: Tuple of (features_tensor, label_tensor) as pre-converted tensors for efficient DataLoader collation
         """
 
-        x = self.X[idx]  # Get feature row
-        y = int(self.labels[idx])  # Get encoded label
-        return x, y  # Return (features, label)
+        return self.X[idx], self._labels_tensor[idx]  # Return pre-converted tensor views directly without numpy-to-tensor overhead
 
 
 class ResidualBlockFC(nn.Module):
