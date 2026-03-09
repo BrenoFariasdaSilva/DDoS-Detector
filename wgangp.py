@@ -3191,6 +3191,24 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
         return True
 
 
+def record_sample_generation_timing(args, sample_generation_start_time: float) -> None:
+    """
+    Compute and record the elapsed time for sample generation.
+
+    :param args: Parsed arguments namespace to store timing on.
+    :param sample_generation_start_time: Timestamp when sample generation started.
+    :return: None.
+    """
+
+    try:  # Safely compute and print sample generation elapsed time
+        sample_generation_elapsed = time.time() - sample_generation_start_time  # Calculate sample generation elapsed seconds
+        args._last_sample_generation_time = float(sample_generation_elapsed)  # Store sample generation elapsed on args for downstream use
+        print(f"{BackgroundColors.GREEN}Sample generation elapsed: {BackgroundColors.CYAN}{sample_generation_elapsed:.2f}s{Style.RESET_ALL}")  # Print sample generation elapsed
+    except Exception as _sg:  # If timing calculation fails
+        print(f"{BackgroundColors.YELLOW}Warning: failed to measure sample generation time: {_sg}{Style.RESET_ALL}")  # Warn but continue
+        args._last_sample_generation_time = ""  # Ensure attribute exists even on failure
+
+
 def notify_generation_finish_via_telegram(args, n: int, file_progress_prefix: str) -> None:
     """
     Build and send a Telegram notification about generation completion.
