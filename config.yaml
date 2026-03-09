@@ -40,7 +40,7 @@ execution:  # Execution control and per-script overrides
   match_filenames_to_process: [""]    # List of specific filenames to match
   ignore_files: ["_data_augmented"]   # List of filename substrings to ignore
   ignore_dirs:                        # List of directory names to ignore
-    - "Classifiers"
+    - "Classifiers" 
     - "Classifiers_Hyperparameters"
     - "Dataset_Description"
     - "Data_Separability"
@@ -570,6 +570,7 @@ wgangp:
   seed: 42                            # Random seed for reproducibility
   force_cpu: false                    # Force CPU usage even if CUDA available
   from_scratch: false                 # Force training from scratch, ignore checkpoints
+  generating_order: "off"             # Dataset file processing order by file size: "off", "Ascending", or "Descending"
   results_dir: "Feature_Analysis/PCA"
   results_filename: "PCA_Results.csv"
   results_csv_columns:                # Columns for per-directory data augmentation results CSV
