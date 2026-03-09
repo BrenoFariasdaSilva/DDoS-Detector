@@ -1918,6 +1918,124 @@ def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict
         return True  # Default to allowing checkpoint saving when verification fails
 
 
+def resume_from_checkpoint(args, config: Dict, device: torch.device, G, D, opt_G, opt_D, scaler, metrics_history: Dict, start_epoch: int, step: int) -> tuple:
+    """
+    Attempt to resume training from the latest checkpoint if available.
+
+    :param args: parsed arguments namespace with csv_path and from_scratch flag
+    :param config: configuration dictionary
+    :param device: torch device for checkpoint loading
+    :param G: generator model to restore weights into
+    :param D: discriminator model to restore weights into
+    :param opt_G: generator optimizer to restore state into
+    :param opt_D: discriminator optimizer to restore state into
+    :param scaler: AMP gradient scaler to restore state into (may be None)
+    :param metrics_history: metrics dictionary to potentially replace from checkpoint
+    :param start_epoch: current starting epoch to potentially update
+    :param step: current global step counter to potentially update
+    :return: Tuple of (metrics_history, start_epoch, step)
+    """
+
+    if not args.from_scratch and args.csv_path:  # If not forcing from scratch and CSV path provided
+        csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
+        checkpoint_dir = csv_path_obj.parent / "Data_Augmentation" / "Checkpoints"  # Expected checkpoint directory
+        checkpoint_prefix = csv_path_obj.stem  # Expected filename prefix
+
+        if checkpoint_dir.exists():  # If checkpoint directory exists
+            checkpoint_files = sorted(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))  # Find matching checkpoints
+
+            if checkpoint_files:  # If checkpoints found for this file
+                g_checkpoint_path = checkpoint_files[-1]  # Get latest checkpoint
+                epoch_num = g_checkpoint_path.stem.split("epoch")[-1]  # Extract epoch number
+                d_checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_discriminator_epoch{epoch_num}.pt"  # Build discriminator path
+
+                print(f"{BackgroundColors.CYAN}Found existing checkpoints for {csv_path_obj.name}{Style.RESET_ALL}")  # Notify checkpoint discovery
+                print(f"{BackgroundColors.CYAN}Attempting to resume from epoch {epoch_num}...{Style.RESET_ALL}")  # Notify resume attempt
+
+                if g_checkpoint_path.exists():  # If generator checkpoint exists
+                    try:  # Try to load checkpoint
+                        print(f"{BackgroundColors.GREEN}Loading generator checkpoint: {g_checkpoint_path.name}{Style.RESET_ALL}")  # Print loading message
+                        g_checkpoint = torch.load(g_checkpoint_path, map_location=device, weights_only=False)  # Load generator checkpoint with sklearn objects
+                        if isinstance(cast(Any, G), torch.nn.DataParallel):  # If model wrapped by DataParallel
+                            cast(Any, G).module.load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights into module
+                        else:  # Not DataParallel
+                            cast(Any, G).load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights
+                        start_epoch = g_checkpoint["epoch"]  # Set starting epoch
+
+                        if "opt_G_state" in g_checkpoint:  # If optimizer state saved
+                            opt_G.load_state_dict(g_checkpoint["opt_G_state"])  # Restore generator optimizer
+                            print(f"{BackgroundColors.GREEN}✓ Restored generator optimizer state{Style.RESET_ALL}")  # Confirm optimizer restoration
+
+                        metrics_loaded = False  # Flag to track if metrics were loaded
+                        if "metrics_history" in g_checkpoint:  # If metrics history saved in checkpoint
+                            metrics_history = g_checkpoint["metrics_history"]  # Restore metrics from checkpoint
+                            step = metrics_history["steps"][-1] if metrics_history["steps"] else 0  # Restore step counter
+                            metrics_loaded = True  # Mark as loaded
+                            print(f"{BackgroundColors.GREEN}✓ Restored metrics history from checkpoint ({len(metrics_history["steps"])} steps){Style.RESET_ALL}")  # Confirm metrics restoration
+                        else:  # Try loading from separate JSON file
+                            metrics_json_path = checkpoint_dir / f"{checkpoint_prefix}_metrics_history.json"  # Path to metrics JSON
+                            if metrics_json_path.exists():  # If JSON file exists
+                                try:  # Try to load metrics
+                                    with open(metrics_json_path, "r") as f:  # Open file for reading
+                                        metrics_history = json.load(f)  # Load metrics from JSON
+                                    step = metrics_history["steps"][-1] if metrics_history["steps"] else 0  # Restore step counter
+                                    metrics_loaded = True  # Mark as loaded
+                                    print(f"{BackgroundColors.GREEN}✓ Restored metrics history from JSON file ({len(metrics_history['steps'])} steps){Style.RESET_ALL}")  # Confirm JSON metrics restoration
+                                except Exception as e:  # If loading fails
+                                    print(f"{BackgroundColors.YELLOW}⚠ Warning: Failed to load metrics from JSON: {e}{Style.RESET_ALL}")  # Warn about JSON load failure
+
+                        if scaler is not None and "scaler_state" in g_checkpoint:  # If using AMP and scaler state saved
+                            scaler.load_state_dict(g_checkpoint["scaler_state"])  # Restore scaler state
+                            print(f"{BackgroundColors.GREEN}✓ Restored AMP scaler state{Style.RESET_ALL}")  # Confirm scaler restoration
+
+                        if d_checkpoint_path.exists():  # If discriminator checkpoint exists
+                            print(f"{BackgroundColors.GREEN}Loading discriminator checkpoint: {d_checkpoint_path.name}{Style.RESET_ALL}")  # Print loading message
+                            d_checkpoint = torch.load(d_checkpoint_path, map_location=device, weights_only=False)  # Load discriminator checkpoint
+                            if isinstance(cast(Any, D), torch.nn.DataParallel):  # If discriminator wrapped by DataParallel
+                                cast(Any, D).module.load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights into module
+                            else:  # Not DataParallel
+                                cast(Any, D).load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights
+
+                            if "opt_D_state" in d_checkpoint:  # If optimizer state saved
+                                opt_D.load_state_dict(d_checkpoint["opt_D_state"])  # Restore discriminator optimizer
+                                print(f"{BackgroundColors.GREEN}✓ Restored discriminator optimizer state{Style.RESET_ALL}")  # Confirm optimizer restoration
+                        else:  # Discriminator checkpoint not found
+                            print(f"{BackgroundColors.YELLOW}⚠ Warning: Discriminator checkpoint not found{Style.RESET_ALL}")  # Warn about missing discriminator
+
+                        plot_dir = csv_path_obj.parent / "Data_Augmentation"  # Plot directory
+                        plot_filename = csv_path_obj.stem + "_training_metrics.png"  # Plot filename
+                        plot_path = plot_dir / plot_filename  # Full plot path
+
+                        if not plot_path.exists():  # If plot doesn't exist
+                            if metrics_loaded and len(metrics_history.get("steps", [])) > 0:  # If metrics available
+                                print(f"{BackgroundColors.YELLOW}Training metrics plot not found, generating from metrics history...{Style.RESET_ALL}")  # Notify plot generation
+                                os.makedirs(plot_dir, exist_ok=True)  # Ensure directory exists
+                                plot_training_metrics(metrics_history, str(plot_dir), plot_filename)  # Generate plot
+                                print(f"{BackgroundColors.GREEN}✓ Generated training metrics plot: {plot_filename}{Style.RESET_ALL}")  # Confirm plot generation
+                            else:  # No metrics available
+                                print(f"{BackgroundColors.YELLOW}⚠ Warning: Training metrics plot not found and no metrics history available to generate it{Style.RESET_ALL}")  # Warn about missing plot and metrics
+                        else:  # Plot already exists
+                            print(f"{BackgroundColors.GREEN}✓ Training metrics plot already exists{Style.RESET_ALL}")  # Confirm existing plot
+
+                        print(f"{BackgroundColors.GREEN}✓ Resuming training from epoch {start_epoch} (step {step}){Style.RESET_ALL}")  # Confirm resume point
+                    except Exception as e:  # If loading fails
+                        print(f"{BackgroundColors.YELLOW}⚠ Failed to load checkpoint: {e}{Style.RESET_ALL}")  # Warn about load failure
+                        print(f"{BackgroundColors.YELLOW}⚠ Starting training from scratch{Style.RESET_ALL}")  # Notify scratch start
+                        start_epoch = 0  # Reset to start from beginning
+                        step = 0  # Reset step counter
+            else:  # No checkpoints found for this file
+                print(f"{BackgroundColors.CYAN}No existing checkpoints found for {csv_path_obj.name}{Style.RESET_ALL}")  # Notify no checkpoints
+                print(f"{BackgroundColors.CYAN}Starting training from scratch{Style.RESET_ALL}")  # Notify scratch start
+        else:  # Checkpoint directory doesn't exist
+            print(f"{BackgroundColors.CYAN}No checkpoint directory found{Style.RESET_ALL}")  # Notify no directory
+            print(f"{BackgroundColors.CYAN}Starting training from scratch{Style.RESET_ALL}")  # Notify scratch start
+    elif args.from_scratch:  # If user explicitly requested from scratch
+        print(f"{BackgroundColors.CYAN}--from_scratch flag set, ignoring existing checkpoints{Style.RESET_ALL}")  # Notify from_scratch flag
+        print(f"{BackgroundColors.CYAN}Starting training from scratch{Style.RESET_ALL}")  # Notify scratch start
+
+    return metrics_history, start_epoch, step  # Return potentially updated training state
+
+
 def init_telegram_progress(args, config: Dict, start_epoch: int) -> tuple:
     """
     Initialize telegram notification progress tracking for epoch-based notifications.
