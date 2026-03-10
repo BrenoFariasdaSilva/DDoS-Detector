@@ -637,6 +637,19 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def handle_generate_top_level_exception(e: Exception) -> None:
+    """
+    Handle top-level exceptions in the generate function by logging and re-raising.
+
+    :param e: Exception that was caught at the top level.
+    :return: None.
+    """
+
+    print(str(e))  # Print exception message to terminal
+    send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full exception via Telegram
+    raise e  # Re-raise the exception to propagate
+
+
 def generate(args, config: Optional[Dict] = None):
     """
     Generate synthetic samples from a saved generator checkpoint.
