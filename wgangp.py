@@ -637,6 +637,56 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def load_configuration(config_path: Optional[str] = None, cli_overrides: Optional[Dict] = None):
+    """
+    Load configuration from config.yaml with fallback to defaults.
+
+    Priority order (highest to lowest):
+    1. CLI arguments (cli_overrides)
+    2. config.yaml (if exists)
+    3. config.yaml.example (if exists)
+    4. Hard-coded defaults (from get_default_config)
+
+    :param config_path: Optional path to config.yaml file (default: search in current dir)
+    :param cli_overrides: Optional dictionary of CLI argument overrides
+    :return: Merged configuration dictionary
+    """
+
+    try:
+        global CONFIG  # Declare global CONFIG variable
+        
+        config = get_default_config()  # Start with default configuration
+
+        if config_path is None:  # If no config path provided
+            path = Path("config.yaml")  # Try config.yaml first
+        else:  # If config path provided
+            path = Path(config_path)  # Convert to Path object
+
+        if not path.exists():  # If config.yaml not found
+            path = Path("config.yaml.example")  # Fallback to example config
+
+        if path.exists():  # If a config file exists
+            try:  # Try to load configuration from file
+                with open(path, "r") as f:  # Open config file for reading
+                    file_config = yaml.safe_load(f)  # Load YAML configuration
+                if file_config:  # If config loaded successfully
+                    config = deep_merge(config, file_config)  # Merge with defaults
+                    print(f"{BackgroundColors.GREEN}Loaded configuration from: {BackgroundColors.CYAN}{path}{Style.RESET_ALL}")  # Print success message
+            except Exception as e:  # If loading fails
+                print(f"{BackgroundColors.YELLOW}Warning: Failed to load {path}: {e}{Style.RESET_ALL}")  # Print warning
+                print(f"{BackgroundColors.YELLOW}Using default configuration{Style.RESET_ALL}")  # Fallback message
+
+        if cli_overrides:  # If CLI overrides provided
+            config = deep_merge(config, cli_overrides)  # Merge CLI args (highest priority)
+
+        CONFIG = config  # Store in global variable
+        return config  # Return merged configuration
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def deep_merge(base: Dict, override: Dict) -> Dict:
     """
     Deep merge two dictionaries, with override taking precedence.
