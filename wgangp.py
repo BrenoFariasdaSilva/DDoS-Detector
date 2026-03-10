@@ -637,6 +637,72 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def compute_expected_samples_for_percentage(percent: float, args, config: Optional[Dict] = None) -> Optional[int]:
+    """
+    Compute the expected number of generated samples when n_samples is given as a percentage.
+
+    This reproduces the same small-class logic used during generation to ensure
+    consistency between verification and generation steps.
+
+    :param percent: Percentage value in decimal form (e.g., 1.0 for 100%)
+    :param args: Runtime arguments (may include checkpoint, csv_path, label_col, feature_cols)
+    :param config: Optional configuration dictionary
+    :return: Expected total number of samples or None if undeterminable
+    """
+
+    try:
+        if config is None:  # Use global config if not provided
+            config = CONFIG or get_default_config()  # Load default configuration if necessary
+
+        class_dist = None  # Initialize class distribution container
+
+        if getattr(args, "checkpoint", None):  # If checkpoint path exists in args
+            try:
+                ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)  # Load checkpoint
+                class_dist = ck.get("class_distribution", None)  # Extract class distribution
+            except Exception:
+                class_dist = None  # Fallback if checkpoint loading fails
+
+        if class_dist is None and getattr(args, "csv_path", None):  # If no checkpoint distribution available
+            try:
+                ds = CSVFlowDataset(
+                    args.csv_path,  # CSV dataset path
+                    label_col=getattr(
+                        args,
+                        "label_col",
+                        config.get("wgangp", {}).get("label_col", "Label"),
+                    ),  # Resolve label column
+                    feature_cols=getattr(args, "feature_cols", None),  # Optional feature columns
+                )
+                unique, counts = np.unique(ds.labels, return_counts=True)  # Compute label counts
+                class_dist = dict(zip([int(u) for u in unique.tolist()], counts.tolist()))  # Build distribution dict
+            except Exception:
+                class_dist = None  # Fallback if dataset loading fails
+
+        if class_dist is None:  # If still undetermined
+            return None  # Cannot compute expected value safely
+
+        threshold = int(config.get("generation", {}).get("small_class_threshold", 100))  # Small class threshold
+        small_min = int(config.get("generation", {}).get("small_class_min_samples", 10))  # Minimum small class samples
+
+        n_per_class = {}  # Container for computed samples per class
+
+        for label, original_count in class_dist.items():  # Iterate over classes
+            calculated = int(original_count * percent)  # Percentage-based computation
+            final_count = max(
+                small_min if original_count < threshold else 1,
+                calculated,
+            )  # Apply small-class logic
+            n_per_class[int(label)] = final_count  # Store per-class result
+
+        return sum(n_per_class.values())  # Return total expected samples
+
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def resolve_expected_sample_count(args, config: Dict) -> Optional[int]:
     """
     Resolve the expected number of generated samples from configuration and args.
