@@ -1707,6 +1707,8 @@ def send_file_saved_and_timing_messages(args: Any, config: Dict) -> None:  # Cre
     except Exception:  # On error, default to zero bytes
         size_bytes = 0  # Default size when stat fails
 
+    file_exists = gen_path is not None and gen_path.exists() and size_bytes > 0  # Determine whether the generated file exists with content on disk
+
     if size_bytes >= 1024 ** 3:  # If file is at least 1 GiB
         size_str = f"{size_bytes / (1024 ** 3):.2f} GB"  # Format as gigabytes
     else:  # Otherwise present in megabytes for readability
@@ -1717,7 +1719,8 @@ def send_file_saved_and_timing_messages(args: Any, config: Dict) -> None:  # Cre
     model_save_time = getattr(args, "_last_model_save_time", "")  # Read last model save elapsed seconds from args
     generation_time = getattr(args, "_last_sample_generation_time", "")  # Read sample generation elapsed seconds from args
 
-    print(f"{file_progress_prefix} {BackgroundColors.GREEN}Saved generated file to {BackgroundColors.CYAN}{gen_file} {BackgroundColors.GREEN}({size_str}){Style.RESET_ALL}")  # Print saved file path and human-readable size
+    if file_exists:  # Only print generated file path and size when the file exists with content
+        print(f"{file_progress_prefix} {BackgroundColors.GREEN}Saved generated file to {BackgroundColors.CYAN}{gen_file} {BackgroundColors.GREEN}({size_str}){Style.RESET_ALL}")  # Print saved file path and human-readable size
     print(f"{file_progress_prefix} {BackgroundColors.GREEN}Training time: {BackgroundColors.CYAN}{training_time}s{Style.RESET_ALL}")  # Print total training elapsed seconds
     print(f"{file_progress_prefix} {BackgroundColors.GREEN}File processing time: {BackgroundColors.CYAN}{file_time}s{Style.RESET_ALL}")  # Print per-file processing elapsed seconds
     if model_save_time != "":  # Only print model save time when available
@@ -1726,26 +1729,31 @@ def send_file_saved_and_timing_messages(args: Any, config: Dict) -> None:  # Cre
         print(f"{file_progress_prefix} {BackgroundColors.GREEN}Generation time: {BackgroundColors.CYAN}{generation_time}s{Style.RESET_ALL}")  # Print sample generation elapsed seconds
 
     try:  # Attempt to notify via Telegram with a compact summary message
-        display_path = os.path.relpath(gen_file) if gen_file else "unknown"  # Compute relative path for generated file or 'unknown'
         training_time_str = calculate_execution_time(training_time)  # Convert training_time to human-readable duration string
         generation_time_str = calculate_execution_time(generation_time) if generation_time != "" else ""  # Convert generation_time when present otherwise empty
-        samples_written = ""  # Initialize samples written placeholder
-        try:  # Attempt to count data rows in the generated CSV when file exists
-            if gen_file and Path(gen_file).exists():  # Verify generated file path exists before counting
-                with open(gen_file, "r", encoding="utf-8") as _f:  # Open generated file for reading rows
-                    _reader = csv.reader(_f)  # Create CSV reader to iterate rows
-                    _total_rows = sum(1 for _ in _reader)  # Count total rows including header
-                if _total_rows > 0:  # If at least one row present deduct header to estimate data rows
-                    samples_written = str(max(0, _total_rows - 1))  # Compute data rows as total minus header
-                else:
-                    samples_written = "0"  # Zero rows when file empty
-        except Exception:  # On counting failure, leave samples_written empty to avoid breaking flow
-            samples_written = ""  # Preserve empty when counting fails
-        samples_display = samples_written if samples_written != "" else "unknown"  # Derive display value for samples or unknown
-        msg = (  # Compose compact message using relative path, sample count and formatted durations
-            f"{file_progress_prefix} Saved file {Path(display_path).name if gen_file else 'unknown'} ({size_str}) | Path: {display_path} | "
-            f"Samples: {samples_display} | Training: {training_time_str} | Generation: {generation_time_str}"
-        )  # End message composition
+        if file_exists:  # Only include file info in Telegram when the generated file exists with content
+            display_path = os.path.relpath(gen_file) if gen_file else "unknown"  # Compute relative path for generated file or 'unknown'
+            samples_written = ""  # Initialize samples written placeholder
+            try:  # Attempt to count data rows in the generated CSV when file exists
+                if gen_file and Path(gen_file).exists():  # Verify generated file path exists before counting
+                    with open(gen_file, "r", encoding="utf-8") as _f:  # Open generated file for reading rows
+                        _reader = csv.reader(_f)  # Create CSV reader to iterate rows
+                        _total_rows = sum(1 for _ in _reader)  # Count total rows including header
+                    if _total_rows > 0:  # If at least one row present deduct header to estimate data rows
+                        samples_written = str(max(0, _total_rows - 1))  # Compute data rows as total minus header
+                    else:  # File exists but has no rows
+                        samples_written = "0"  # Zero rows when file empty
+            except Exception:  # On counting failure, leave samples_written empty to avoid breaking flow
+                samples_written = ""  # Preserve empty when counting fails
+            samples_display = samples_written if samples_written != "" else "unknown"  # Derive display value for samples or unknown
+            msg = (  # Compose compact message using relative path, sample count and formatted durations
+                f"{file_progress_prefix} Saved file {Path(display_path).name if gen_file else 'unknown'} ({size_str}) | Path: {display_path} | "
+                f"Samples: {samples_display} | Training: {training_time_str} | Generation: {generation_time_str}"
+            )  # End message composition with file info included
+        else:  # File does not exist yet (training phase before generation)
+            msg = (  # Compose timing-only message without file info for training phase
+                f"{file_progress_prefix} Training completed | Training: {training_time_str}"
+            )  # End training-only message composition
         send_telegram_message(TELEGRAM_BOT, msg)  # Send composed summary by Telegram using shared helper
     except Exception as e:
         print(str(e))  # Print exception for visibility
@@ -3031,12 +3039,15 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
         if not os.access(str(parent), os.W_OK):  # If not writable
             raise PermissionError(f"Directory not writable: {parent}")  # Raise permission error
         df.to_csv(str(csv_p), index=False)  # Save CSV to disk preserving DataFrame content/order
-        # Only generate image when explicitly requested
+        
         if is_visualizable:  # If a visual representation is desired
-            png_path = csv_p.with_suffix('.png')  # Replace CSV extension with PNG
-            generate_table_image_from_dataframe(df, png_path)  # Generate PNG from in-memory DataFrame
+            try:  # Guard PNG rendering to prevent aborting the CSV pipeline on image export failures
+                png_path = csv_p.with_suffix(".png")  # Replace CSV extension with PNG
+                generate_table_image_from_dataframe(df, png_path)  # Generate PNG from in-memory DataFrame
+            except Exception as _png_e:  # If PNG generation fails, warn but preserve the already-written CSV
+                print(f"{BackgroundColors.YELLOW}Warning: PNG generation failed for {csv_p.name}: {_png_e}{Style.RESET_ALL}")  # Warn about PNG failure without aborting
     except Exception:
-        raise  # Propagate exceptions to caller (do not swallow)
+        raise  # Propagate CSV write exceptions to caller (do not swallow)
 
 
 def compose_generation_start_message(
