@@ -637,6 +637,31 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def regenerate_missing_training_plot(csv_path_obj: Path, metrics_loaded: bool, metrics_history: Dict) -> None:
+    """
+    Regenerate training metrics plot from metrics history when the plot file is missing.
+
+    :param csv_path_obj: Path object for the input CSV file used to derive plot filename.
+    :param metrics_loaded: Whether metrics history was successfully loaded from checkpoint.
+    :param metrics_history: Dictionary of tracked training metrics for plot generation.
+    :return: None
+    """
+
+    plot_dir = csv_path_obj.parent / "Data_Augmentation"  # Plot directory
+    plot_filename = csv_path_obj.stem + "_training_metrics.png"  # Plot filename
+    plot_path = plot_dir / plot_filename  # Full plot path
+    if not plot_path.exists():  # If plot doesn't exist
+        if metrics_loaded and len(metrics_history.get("steps", [])) > 0:  # If metrics available
+            print(f"{BackgroundColors.YELLOW}Training metrics plot not found, generating from metrics history...{Style.RESET_ALL}")  # Notify plot generation
+            os.makedirs(plot_dir, exist_ok=True)  # Ensure directory exists
+            plot_training_metrics(metrics_history, str(plot_dir), plot_filename)  # Generate plot
+            print(f"{BackgroundColors.GREEN}✓ Generated training metrics plot: {plot_filename}{Style.RESET_ALL}")  # Confirm plot generation
+        else:  # No metrics available
+            print(f"{BackgroundColors.YELLOW}⚠ Warning: Training metrics plot not found and no metrics history available to generate it{Style.RESET_ALL}")  # Warn about missing plot and metrics
+    else:  # Plot already exists
+        print(f"{BackgroundColors.GREEN}✓ Training metrics plot already exists{Style.RESET_ALL}")  # Confirm existing plot
+
+
 def resume_from_checkpoint(args, config: Dict, device: torch.device, G, D, opt_G, opt_D, scaler, metrics_history: Dict, start_epoch: int, step: int) -> tuple:
     """
     Attempt to resume training from the latest checkpoint if available.
