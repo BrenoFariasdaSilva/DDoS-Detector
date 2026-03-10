@@ -4319,6 +4319,20 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def execute_training_with_timing(args: Any, config: Dict) -> None:
+    """
+    Execute model training and store elapsed time on args.
+
+    :param args: Argument namespace with all training configuration settings.
+    :param config: Configuration dictionary passed to the train function.
+    :return: None
+    """
+
+    training_start_time = time.time()  # Record training start timestamp for elapsed time calculation
+    train(args, config)  # Execute WGAN-GP training loop with provided configuration
+    args._last_training_time = time.time() - training_start_time  # Store elapsed training seconds on args for reporting
+
+
 def execute_generation_with_verification(args: Any, config: Dict) -> None:
     """
     Verify whether generation is needed and execute it if so.
