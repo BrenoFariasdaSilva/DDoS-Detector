@@ -637,6 +637,26 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def verify_filepath_exists(filepath):
+    """
+    Verify if a file or folder exists at the specified path.
+
+    :param filepath: Path to the file or folder
+    :return: True if the file or folder exists, False otherwise
+    """
+
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
+        )  # Output the verbose message
+
+        return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def get_files_to_process(directory_path, file_extension=".csv", config: Optional[Dict] = None):
     """
     Collect all files with a given extension inside a directory (non-recursive).
