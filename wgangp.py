@@ -3437,10 +3437,12 @@ def generate_batches_and_collect_results(args, G: nn.Module, device: torch.devic
 
     batch_size = args.gen_batch_size  # Set generation batch size
     _gen_model = getattr(G, "module", G)  # Unwrap DataParallel if present to access feature_dim attribute
-    feat_dim = _gen_model.feature_dim  # Get output feature dimensionality from generator for pre-allocation
-    all_fake = np.empty((n, feat_dim), dtype=np.float32)  # Pre-allocate contiguous output array to avoid list-append-then-vstack overhead
+    feat_dim = cast(Any, _gen_model.feature_dim)  # Get output feature dimensionality cast to Any to suppress type-checker attribute errors
+    feat_dim_int = int(feat_dim)  # Convert feature dimension to plain int for numpy shape allocation
+    all_fake = np.empty((int(n), feat_dim_int), dtype=np.float32)  # Pre-allocate contiguous output array to avoid list-append-then-vstack overhead
     offset = 0  # Track write position in pre-allocated array
     sample_generation_start_time = time.time()  # Record sample generation start timestamp
+    
     with torch.no_grad():  # Disable gradient computation for generation
         for i in range(0, n, batch_size):  # Loop over batches for generation
             b = min(batch_size, n - i)  # Calculate current batch size
@@ -3449,6 +3451,7 @@ def generate_batches_and_collect_results(args, G: nn.Module, device: torch.devic
             fake = G(z, y).cpu().numpy()  # Generate fake samples and move to CPU
             all_fake[offset : offset + b] = fake  # Write batch directly into pre-allocated array slice
             offset += b  # Advance write offset by current batch size
+    
     return (all_fake, labels, sample_generation_start_time)  # Return pre-allocated array and original labels array
 
 
