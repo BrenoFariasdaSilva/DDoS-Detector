@@ -637,6 +637,33 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def verify_dot_env_file(config: Optional[Dict] = None):
+    """
+    Verifies if the .env file exists in the current directory.
+
+    :param config: Optional configuration dictionary containing telegram settings
+    :return: True if the .env file exists, False otherwise
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG or get_default_config()  # Use global or default config
+        
+        if not config.get("telegram", {}).get("verify_env", True):  # If verification disabled
+            return True  # Skip verification
+        
+        env_path = Path(__file__).parent / ".env"  # Path to the .env file
+        if not env_path.exists():  # If the .env file does not exist
+            print(f"{BackgroundColors.CYAN}.env{BackgroundColors.YELLOW} file not found at {BackgroundColors.CYAN}{env_path}{BackgroundColors.YELLOW}. Telegram messages may not be sent.{Style.RESET_ALL}")
+            return False  # Return False
+
+        return True  # Return True if the .env file exists
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def setup_telegram_bot(config: Optional[Dict] = None):
     """
     Sets up the Telegram bot for progress messages.
