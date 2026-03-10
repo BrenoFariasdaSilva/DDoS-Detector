@@ -637,6 +637,44 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def apply_generation_and_data_cli_overrides(args, overrides: Dict) -> None:
+    """
+    Apply generation, dataloader, and dataset CLI argument overrides.
+
+    Mutates the overrides dictionary in-place with values for checkpoint,
+    n_samples, force_new_samples, gen_label, out_file, gen_batch_size,
+    feature_dim, num_workers, remove_zero_variance, and
+    no_remove_zero_variance arguments.
+
+    :param args: argparse.Namespace containing CLI arguments
+    :param overrides: Overrides dictionary to mutate in-place
+    :return: None
+    """
+
+    if args.checkpoint is not None:  # If checkpoint specified
+        overrides.setdefault("generation", {})["checkpoint"] = args.checkpoint  # Set checkpoint
+    if args.n_samples is not None:  # If n_samples specified
+        overrides.setdefault("generation", {})["n_samples"] = args.n_samples  # Set n_samples
+    if getattr(args, "force_new_samples", False):  # If force_new_samples flag set
+        overrides.setdefault("generation", {})["force_new_samples"] = True  # Set force_new_samples
+    if args.gen_label is not None:  # If gen_label specified
+        overrides.setdefault("generation", {})["label"] = args.gen_label  # Set label
+    if args.out_file is not None:  # If out_file specified
+        overrides.setdefault("generation", {})["out_file"] = args.out_file  # Set out_file
+    if args.gen_batch_size is not None:  # If gen_batch_size specified
+        overrides.setdefault("generation", {})["gen_batch_size"] = args.gen_batch_size  # Set gen_batch_size
+    if args.feature_dim is not None:  # If feature_dim specified
+        overrides.setdefault("generation", {})["feature_dim"] = args.feature_dim  # Set feature_dim
+
+    if args.num_workers is not None:  # If num_workers specified
+        overrides.setdefault("dataloader", {})["num_workers"] = args.num_workers  # Set num_workers
+
+    if args.remove_zero_variance:  # If remove_zero_variance flag set
+        overrides.setdefault("dataset", {})["remove_zero_variance"] = True  # Enable remove_zero_variance
+    if args.no_remove_zero_variance:  # If no_remove_zero_variance flag set
+        overrides.setdefault("dataset", {})["remove_zero_variance"] = False  # Disable remove_zero_variance
+
+
 def args_to_config_overrides(args):
     """
     Convert parsed CLI arguments to configuration overrides dictionary.
