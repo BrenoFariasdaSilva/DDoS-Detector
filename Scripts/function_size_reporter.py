@@ -135,6 +135,19 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def read_source_file(filepath: Path) -> str:
+    """
+    Reads and returns the full text content of a Python source file.
+
+    :param filepath: Path object pointing to the target Python source file.
+    :return: The full text content of the file as a UTF-8 decoded string.
+    """
+
+    verbose_output(f"{BackgroundColors.GREEN}Reading source file: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Log the file read operation
+
+    return filepath.read_text(encoding="utf-8")  # Read and return the file content with UTF-8 encoding
+
+
 def parse_ast_tree(source_text: str, filepath: Path) -> ast.Module:
     """
     Parses Python source text into an AST module node.
