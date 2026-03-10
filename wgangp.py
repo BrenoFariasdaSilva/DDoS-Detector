@@ -637,6 +637,49 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def dispatch_wgangp_execution_mode(args, final_config: Dict) -> None:
+    """
+    Dispatch WGAN-GP execution based on the selected mode (train, gen, or both).
+
+    Handles mode routing, training time tracking, checkpoint resolution for
+    combined mode, and generation invocation.
+
+    :param args: ConfigNamespace holding resolved execution arguments
+    :param final_config: Merged configuration dictionary
+    :return: None
+    """
+
+    try:
+        if args.mode == "train":  # Training mode
+            training_start_time = time.time()  # Record training start time using time.time()
+            train(args, final_config)  # Train model
+            args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
+        elif args.mode == "gen":  # Generation mode
+            if args.checkpoint is None:  # Verify checkpoint provided
+                raise ValueError("Generation mode requires checkpoint path")
+            generate(args, final_config)  # Generate samples
+        elif args.mode == "both":  # Combined mode
+            training_start_time = time.time()  # Record training start time using time.time()
+            train(args, final_config)  # Train first
+            args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
+            if args.csv_path:  # If CSV provided
+                csv_path_obj = Path(args.csv_path)
+                checkpoint_dir = csv_path_obj.parent / final_config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / final_config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")
+                checkpoint_path = checkpoint_dir / f"{csv_path_obj.stem}_generator_epoch{args.epochs}.pt"
+                if not checkpoint_path.exists():  # Find latest if specific epoch not found
+                    checkpoints = sorted(checkpoint_dir.glob(f"{csv_path_obj.stem}_generator_epoch*.pt"))
+                    if checkpoints:
+                        checkpoint_path = checkpoints[-1]
+                args.checkpoint = str(checkpoint_path)
+            generate(args, final_config)  # Generate samples
+        else:  # Invalid mode
+            raise ValueError(f"Invalid mode: {args.mode}")
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def run_wgangp(config: Optional[Union[Dict, str]] = None, **kwargs) -> None:  # Entry point wrapper accepting optional config dict or path
     """
     Programmatic entry point for WGAN-GP execution from external orchestrators.
