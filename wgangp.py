@@ -4319,6 +4319,26 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def handle_single_file_mode(args: Any, config: Dict, mode: str, csv_path: str, results_cols: list, results_suffix: str) -> None:
+    """
+    Orchestrate all processing steps for a single input CSV file.
+
+    :param args: Argument namespace updated with output file path during execution.
+    :param config: Configuration dictionary with paths and execution settings.
+    :param mode: Execution mode string (train, gen, or both).
+    :param csv_path: String path to the single input CSV file.
+    :param results_cols: List of column names for the results CSV header.
+    :param results_suffix: Suffix appended to the input filename for the output file.
+    :return: None
+    """
+
+    csv_path_obj = Path(csv_path)  # Create Path object from csv_path string for downstream path operations
+    data_aug_dir = setup_single_file_output_path(args, config, csv_path_obj, mode, results_suffix)  # Configure output path and retrieve canonical data augmentation directory
+    results_csv_path = data_aug_dir / "data_augmentation_results.csv"  # Construct results CSV path inside data augmentation directory
+    create_results_csv_if_absent(results_csv_path, results_cols)  # Write header to results CSV when file does not exist
+    dispatch_single_file_mode(args, config, mode, csv_path_obj, data_aug_dir)  # Dispatch configured mode to appropriate handler
+
+
 def apply_dataset_ordering(files: list, generating_order: str) -> list:
     """
     Sort the list of files according to the configured dataset ordering strategy.
