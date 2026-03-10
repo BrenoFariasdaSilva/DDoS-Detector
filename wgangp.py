@@ -132,7 +132,349 @@ RESOURCE_MONITOR_STOP_EVENT = None  # Event to signal watcher to stop
 RESOURCE_MONITOR_THREAD = None  # Background thread running the watcher
 
 
+# Classes Definitions:
+
+
+class CSVFlowDataset(Dataset):
+    """
+    Dataset class for loading and preprocessing CSV flow data with automatic scaling and label encoding."""
+
+    def __init__(
+        self,
+        csv_path: str,
+        label_col: str,
+        feature_cols: Optional[List[str]] = None,
+        scaler: Optional[StandardScaler] = None,
+        label_encoder: Optional[LabelEncoder] = None,
+        fit_scaler: bool = True,
+    ):
+        """
+        Initialize the CSVFlowDataset for loading flow data from CSV with automatic preprocessing.
+
+        :param csv_path: Path to CSV file containing flows and labels
+        :param label_col: Column name that contains the class labels
+        :param feature_cols: Optional list of feature column names (None = use all numeric columns)
+        :param scaler: Optional pre-fitted StandardScaler to use for features
+        :param label_encoder: Optional pre-fitted LabelEncoder to transform labels
+        :param fit_scaler: If True and scaler is None, fit a new StandardScaler on the data
+        :return: None
+        """
+        
+        df = pd.read_csv(csv_path, low_memory=False)  # Load CSV file into a DataFrame with low_memory=False to avoid DtypeWarning
+
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+
+        if label_col not in df.columns:  # If the specified label column is not found
+            detected_col = detect_label_column(df.columns)  # Try to detect the label column
+            if detected_col is not None:  # If a label column was detected
+                print(f"{BackgroundColors.YELLOW}Warning: Label column '{label_col}' not found. Using detected column: '{detected_col}'{Style.RESET_ALL}")  # Warn user
+                label_col = detected_col  # Use the detected column
+            else:  # If no label column was detected
+                raise ValueError(f"Label column '{label_col}' not found in CSV. Available columns: {list(df.columns)}")  # Raise error
+
+        df = preprocess_dataframe(df, label_col, remove_zero_variance=True)  # Clean and filter DataFrame
+        self.original_num_samples = len(df)  # Store number of samples after preprocessing (NaN/inf removed)
+
+        if len(df) == 0:  # If all rows were dropped
+            raise ValueError(f"No valid data remaining after preprocessing {csv_path}")  # Raise error
+
+        available_features = [c for c in df.columns if c != label_col]  # List numeric features
+
+        if feature_cols is None:  # When user does not specify features
+            feature_cols = available_features  # Use all available numeric features
+        else:  # User specified features
+            feature_cols = [c for c in feature_cols if c in available_features]  # Keep valid features
+            if not feature_cols:  # If no valid features remain
+                raise ValueError(f"None of the specified feature columns are numeric or available in {csv_path}")  # Raise error
+
+        self.label_col = label_col  # Save label column name
+        self.feature_cols = feature_cols  # Save list of feature columns
+
+        self.labels_raw: np.ndarray = np.asarray(df[label_col].values, dtype=str)  # Extract raw labels as string array for consistent encoding, store as instance variable
+
+        self.labels: Any  # Must be Any or Pylance will error
+
+        labels_arr = np.asarray(self.labels_raw, dtype=str)  # Convert labels to string array for consistent encoding
+
+        if label_encoder is None:  # If no label encoder is given
+            self.label_encoder = LabelEncoder()  # Create a fresh label encoder
+            self.labels = self.label_encoder.fit_transform(labels_arr)  # Fit encoder and encode labels
+        else:  # If encoder is provided
+            self.label_encoder = label_encoder  # Store provided encoder
+            self.labels = self.label_encoder.transform(labels_arr)  # Encode labels with given encoder
+
+        X = df[feature_cols].values.astype(np.float32)  # Extract features and cast to float32
+
+        if scaler is None:  # If no scaler is provided
+            self.scaler = StandardScaler()  # Instantiate a default scaler
+            if fit_scaler:  # Fit scaler when requested
+                self.X = self.scaler.fit_transform(X)  # Fit and transform features
+            else:  # Do not fit scaler
+                self.X = self.scaler.transform(X)  # Only transform features
+        else:  # Scaler is provided
+            self.scaler = scaler  # Store provided scaler
+            self.X = self.scaler.transform(X)  # Transform features with external scaler
+
+        self.n_classes = len(self.label_encoder.classes_)  # Count number of unique classes
+        self.feature_dim = self.X.shape[1]  # Determine dimensionality of features
+
+        self.X = torch.from_numpy(np.ascontiguousarray(self.X)).float()  # Pre-convert features to float tensor to avoid per-batch numpy-to-tensor conversion overhead
+        self._labels_tensor = torch.from_numpy(np.asarray(self.labels, dtype=np.int64))  # Pre-convert encoded labels to long tensor for efficient DataLoader collation
+
+    def __len__(self):  # Return number of samples in the dataset
+        """
+        Return the number of samples in the dataset.
+
+        :return: Total number of feature vectors in the dataset
+        """
+
+        return len(self.X)  # Return number of feature vectors
+
+    def __getitem__(self, idx):  # Fetch one item by index
+        """
+        Fetch a single sample by index.
+
+        :param idx: Index of the sample to retrieve
+        :return: Tuple of (features_tensor, label_tensor) as pre-converted tensors for efficient DataLoader collation
+        """
+
+        return self.X[idx], self._labels_tensor[idx]  # Return pre-converted tensor views directly without numpy-to-tensor overhead
+
+
+class ResidualBlockFC(nn.Module):
+    """
+    Simple fully-connected residual block with skip connection for generator network."""
+
+    def __init__(self, dim, leaky_relu_alpha=0.2):
+        """
+        Initialize a residual fully-connected block for the generator.
+
+        :param dim: Input and output dimensionality of the block
+        :param leaky_relu_alpha: Negative slope for LeakyReLU activation (default: 0.2)
+        :return: None
+        """
+
+        super().__init__()  # Initialize the parent nn.Module class
+
+        self.net = nn.Sequential(  # Define the residual transformation path
+            nn.Linear(dim, dim),  # First linear projection
+            nn.BatchNorm1d(dim),  # Normalize activations
+            nn.LeakyReLU(leaky_relu_alpha, inplace=True),  # Apply nonlinearity
+            nn.Linear(dim, dim),  # Second linear projection
+            nn.BatchNorm1d(dim),  # Second batch normalization
+        )  # End of sequential block
+
+        self.act = nn.LeakyReLU(leaky_relu_alpha, inplace=True)  # Activation after merging residual shortcut
+
+    def forward(self, x):  # Forward computation of the block
+        """
+        Perform forward pass through the residual block.
+
+        :param x: Input tensor of shape (batch_size, dim)
+        :return: Output tensor after residual connection and activation
+        """
+
+        out = self.net(x)  # Compute residual branch output
+        out = out + x  # Apply skip connection
+        return self.act(out)  # Apply activation to merged result
+
+
+class Generator(nn.Module):
+    """
+    Conditional generator network that maps noise and class labels to synthetic feature vectors using residual blocks.
+    """
+
+    def __init__(
+        self,
+        latent_dim: int,
+        feature_dim: int,
+        n_classes: int,
+        hidden_dims: Optional[List[int]] = None,
+        embed_dim: int = 32,
+        n_resblocks: int = 3,
+        leaky_relu_alpha: float = 0.2,
+    ):
+        """
+        Initialize conditional generator that maps (z, y) -> feature vector.
+
+        :param latent_dim: Dimensionality of noise vector z
+        :param feature_dim: Dimensionality of output feature vector
+        :param n_classes: Number of conditioning classes
+        :param hidden_dims: List of hidden layer sizes for initial MLP (default: [256, 512])
+        :param embed_dim: Size of label embedding (default: 32)
+        :param n_resblocks: Number of residual blocks to apply (default: 3)
+        :param leaky_relu_alpha: Negative slope for LeakyReLU activation (default: 0.2)
+        :return: None
+        """
+
+        super().__init__()  # Initialize module internals
+
+        if hidden_dims is None:  # Use default architecture if none given
+            hidden_dims = [256, 512]  # Default MLP layer widths
+
+        self.latent_dim = latent_dim  # Store latent input size
+        self.feature_dim = feature_dim  # Store output size
+        self.n_classes = n_classes  # Store number of classes
+        self.embed = nn.Embedding(n_classes, embed_dim)  # Create label embedding table
+
+        input_dim = latent_dim + embed_dim  # Combined dimension of noise + embedding
+        layers = []  # Container for MLP layers
+        prev = input_dim  # Track previous layer width
+
+        for h in hidden_dims:  # Build MLP layers
+            layers.append(nn.Linear(prev, h))  # Add linear layer
+            layers.append(nn.BatchNorm1d(h))  # Normalize activations
+            layers.append(nn.LeakyReLU(leaky_relu_alpha, inplace=True))  # Apply activation
+            prev = h  # Update width tracker
+
+        res_dim = prev  # Width entering residual blocks
+        self.pre = nn.Sequential(*layers)  # Store assembled MLP
+
+        self.resblocks = nn.ModuleList(  # Build list of residual blocks
+            [ResidualBlockFC(res_dim, leaky_relu_alpha) for _ in range(n_resblocks)]  # Create required count of blocks
+        )  # End block list
+
+        self.out = nn.Sequential(  # Output mapping layer
+            nn.Linear(res_dim, feature_dim),  # Final linear projection
+        )  # End output block
+
+    def forward(self, z, y):  # Compute generator output
+        """
+        Generate synthetic features conditioned on labels.
+
+        :param z: Noise tensor of shape (batch_size, latent_dim)
+        :param y: Label tensor of shape (batch_size,) containing class indices
+        :return: Generated feature tensor of shape (batch_size, feature_dim)
+        """
+
+        y_e = self.embed(y)  # Convert class ID to embedding
+        x = torch.cat([z, y_e], dim=1)  # Concatenate noise and embedding
+        x = self.pre(x)  # Process through MLP
+        for b in self.resblocks:  # Loop through residual blocks
+            x = b(x)  # Apply block
+        out = self.out(x)  # Produce final feature vector
+        return out  # Return generated sample
+
+
+class Discriminator(nn.Module):
+    """
+    Conditional discriminator network (Wasserstein critic) that scores feature vectors conditioned on class labels.
+    """
+
+    def __init__(
+        self,
+        feature_dim: int,
+        n_classes: int,
+        hidden_dims: Optional[List[int]] = None,
+        embed_dim: int = 32,
+        leaky_relu_alpha: float = 0.2,
+    ):
+        """
+        Initialize conditional critic/discriminator network that scores (x, y).
+
+        :param feature_dim: Dimensionality of input feature vector
+        :param n_classes: Number of classes for conditioning
+        :param hidden_dims: List of hidden layer sizes (default: [512, 256, 128])
+        :param embed_dim: Dimensionality of label embedding (default: 32)
+        :param leaky_relu_alpha: Negative slope for LeakyReLU activation (default: 0.2)
+        :return: None
+        """
+
+        super().__init__()  # Initialize discriminator internals
+
+        if hidden_dims is None:  # Assign default architecture when unspecified
+            hidden_dims = [512, 256, 128]  # Standard critic hierarchy
+
+        self.embed = nn.Embedding(n_classes, embed_dim)  # Store label embedding table
+
+        input_dim = feature_dim + embed_dim  # Combined input dimension
+        layers = []  # List to accumulate layers
+        prev = input_dim  # Initialize previous width
+
+        for h in hidden_dims:  # Build critic layers
+            layers.append(nn.Linear(prev, h))  # Linear transformation
+            layers.append(nn.LeakyReLU(leaky_relu_alpha, inplace=True))  # Activation function
+            prev = h  # Update width tracker
+
+        layers.append(nn.Linear(prev, 1))  # Output layer producing scalar score
+        self.net = nn.Sequential(*layers)  # Create critic network
+
+    def forward(self, x, y):  # Compute critic score
+        """
+        Compute critic score for input features conditioned on labels.
+
+        :param x: Feature tensor of shape (batch_size, feature_dim)
+        :param y: Label tensor of shape (batch_size,) containing class indices
+        :return: Scalar critic score tensor of shape (batch_size,)
+        """
+
+        y_e = self.embed(y)  # Convert label to embedding
+        inp = torch.cat([x, y_e], dim=1)  # Join features with embedding
+        return self.net(inp).squeeze(1)  # Produce scalar score
+
+
+class ConfigNamespace:
+    """
+    Namespace wrapper for config dict.
+    """
+    
+    def __init__(self, cfg):
+        """
+        Initialize the ConfigNamespace with a configuration dictionary.
+        
+        :param self: The instance of the ConfigNamespace.
+        :param cfg: The configuration dictionary to wrap.
+        :return: None
+        """
+        
+        self.config = cfg  # Store the original config dictionary
+        self.mode = cfg.get("wgangp", {}).get("mode", "both")
+        self.csv_path = cfg.get("wgangp", {}).get("csv_path")
+        self.label_col = cfg.get("wgangp", {}).get("label_col", "Label")
+        self.feature_cols = cfg.get("wgangp", {}).get("feature_cols")
+        self.seed = int(cfg.get("wgangp", {}).get("seed", 42))  # Cast to int
+        self.force_cpu = cfg.get("wgangp", {}).get("force_cpu", False)
+        self.from_scratch = cfg.get("wgangp", {}).get("from_scratch", False)
+        self.out_dir = cfg.get("paths", {}).get("out_dir", "outputs")
+        self.epochs = int(cfg.get("training", {}).get("epochs", 60))  # Cast to int
+        self.batch_size = int(cfg.get("training", {}).get("batch_size", 64))  # Cast to int
+        self.critic_steps = int(cfg.get("training", {}).get("critic_steps", 5))  # Cast to int
+        self.lr = float(cfg.get("training", {}).get("lr", 1e-4))  # Cast to float
+        self.beta1 = float(cfg.get("training", {}).get("beta1", 0.5))  # Cast to float
+        self.beta2 = float(cfg.get("training", {}).get("beta2", 0.9))  # Cast to float
+        self.lambda_gp = float(cfg.get("training", {}).get("lambda_gp", 10.0))  # Cast to float
+        self.save_every = int(cfg.get("training", {}).get("save_every", 5))  # Cast to int
+        self.log_interval = int(cfg.get("training", {}).get("log_interval", 50))  # Cast to int
+        self.sample_batch = int(cfg.get("training", {}).get("sample_batch", 16))  # Cast to int
+        self.use_amp = cfg.get("training", {}).get("use_amp", False)
+        self.compile = cfg.get("training", {}).get("compile", False)
+        self.latent_dim = int(cfg.get("generator", {}).get("latent_dim", 100))  # Cast to int
+        self.g_hidden = cfg.get("generator", {}).get("hidden_dims", [256, 512])
+        self.embed_dim = int(cfg.get("generator", {}).get("embed_dim", 32))  # Cast to int
+        self.n_resblocks = int(cfg.get("generator", {}).get("n_resblocks", 3))  # Cast to int
+        self.d_hidden = cfg.get("discriminator", {}).get("hidden_dims", [512, 256, 128])
+        self.checkpoint = cfg.get("generation", {}).get("checkpoint")
+        self.n_samples = float(cfg.get("generation", {}).get("n_samples", 1.0))  # Cast to float
+        self.label = cfg.get("generation", {}).get("label")
+        
+        if self.label is not None:  # If label is not None
+            self.label = int(self.label)  # Cast to int
+            
+        self.out_file = cfg.get("generation", {}).get("out_file", "generated.csv")
+        self.gen_batch_size = int(cfg.get("generation", {}).get("gen_batch_size", 256))  # Cast to int
+        self.feature_dim = cfg.get("generation", {}).get("feature_dim")
+        
+        if self.feature_dim is not None:  # If feature_dim is not None
+            self.feature_dim = int(self.feature_dim)  # Cast to int
+        
+        self.force_new_samples = cfg.get("generation", {}).get("force_new_samples", False)
+        self.num_workers = int(cfg.get("dataloader", {}).get("num_workers", 8))  # Cast to int
+        self._last_training_time = 0.0  # Placeholder for last training elapsed time (set after train)
+        self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
+
+
 # Functions Definitions:
+
 
 setup_global_exception_hook()  # Set global exception hook to shared Telegram handler
 
@@ -647,346 +989,6 @@ def preprocess_dataframe(df, label_col, remove_zero_variance=None, config: Optio
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
-
-
-# Classes Definitions:
-
-
-class CSVFlowDataset(Dataset):
-    """
-    Dataset class for loading and preprocessing CSV flow data with automatic scaling and label encoding."""
-
-    def __init__(
-        self,
-        csv_path: str,
-        label_col: str,
-        feature_cols: Optional[List[str]] = None,
-        scaler: Optional[StandardScaler] = None,
-        label_encoder: Optional[LabelEncoder] = None,
-        fit_scaler: bool = True,
-    ):
-        """
-        Initialize the CSVFlowDataset for loading flow data from CSV with automatic preprocessing.
-
-        :param csv_path: Path to CSV file containing flows and labels
-        :param label_col: Column name that contains the class labels
-        :param feature_cols: Optional list of feature column names (None = use all numeric columns)
-        :param scaler: Optional pre-fitted StandardScaler to use for features
-        :param label_encoder: Optional pre-fitted LabelEncoder to transform labels
-        :param fit_scaler: If True and scaler is None, fit a new StandardScaler on the data
-        :return: None
-        """
-        
-        df = pd.read_csv(csv_path, low_memory=False)  # Load CSV file into a DataFrame with low_memory=False to avoid DtypeWarning
-
-        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
-
-        if label_col not in df.columns:  # If the specified label column is not found
-            detected_col = detect_label_column(df.columns)  # Try to detect the label column
-            if detected_col is not None:  # If a label column was detected
-                print(f"{BackgroundColors.YELLOW}Warning: Label column '{label_col}' not found. Using detected column: '{detected_col}'{Style.RESET_ALL}")  # Warn user
-                label_col = detected_col  # Use the detected column
-            else:  # If no label column was detected
-                raise ValueError(f"Label column '{label_col}' not found in CSV. Available columns: {list(df.columns)}")  # Raise error
-
-        df = preprocess_dataframe(df, label_col, remove_zero_variance=True)  # Clean and filter DataFrame
-        self.original_num_samples = len(df)  # Store number of samples after preprocessing (NaN/inf removed)
-
-        if len(df) == 0:  # If all rows were dropped
-            raise ValueError(f"No valid data remaining after preprocessing {csv_path}")  # Raise error
-
-        available_features = [c for c in df.columns if c != label_col]  # List numeric features
-
-        if feature_cols is None:  # When user does not specify features
-            feature_cols = available_features  # Use all available numeric features
-        else:  # User specified features
-            feature_cols = [c for c in feature_cols if c in available_features]  # Keep valid features
-            if not feature_cols:  # If no valid features remain
-                raise ValueError(f"None of the specified feature columns are numeric or available in {csv_path}")  # Raise error
-
-        self.label_col = label_col  # Save label column name
-        self.feature_cols = feature_cols  # Save list of feature columns
-
-        self.labels_raw: np.ndarray = np.asarray(df[label_col].values, dtype=str)  # Extract raw labels as string array for consistent encoding, store as instance variable
-
-        self.labels: Any  # Must be Any or Pylance will error
-
-        labels_arr = np.asarray(self.labels_raw, dtype=str)  # Convert labels to string array for consistent encoding
-
-        if label_encoder is None:  # If no label encoder is given
-            self.label_encoder = LabelEncoder()  # Create a fresh label encoder
-            self.labels = self.label_encoder.fit_transform(labels_arr)  # Fit encoder and encode labels
-        else:  # If encoder is provided
-            self.label_encoder = label_encoder  # Store provided encoder
-            self.labels = self.label_encoder.transform(labels_arr)  # Encode labels with given encoder
-
-        X = df[feature_cols].values.astype(np.float32)  # Extract features and cast to float32
-
-        if scaler is None:  # If no scaler is provided
-            self.scaler = StandardScaler()  # Instantiate a default scaler
-            if fit_scaler:  # Fit scaler when requested
-                self.X = self.scaler.fit_transform(X)  # Fit and transform features
-            else:  # Do not fit scaler
-                self.X = self.scaler.transform(X)  # Only transform features
-        else:  # Scaler is provided
-            self.scaler = scaler  # Store provided scaler
-            self.X = self.scaler.transform(X)  # Transform features with external scaler
-
-        self.n_classes = len(self.label_encoder.classes_)  # Count number of unique classes
-        self.feature_dim = self.X.shape[1]  # Determine dimensionality of features
-
-        self.X = torch.from_numpy(np.ascontiguousarray(self.X)).float()  # Pre-convert features to float tensor to avoid per-batch numpy-to-tensor conversion overhead
-        self._labels_tensor = torch.from_numpy(np.asarray(self.labels, dtype=np.int64))  # Pre-convert encoded labels to long tensor for efficient DataLoader collation
-
-    def __len__(self):  # Return number of samples in the dataset
-        """
-        Return the number of samples in the dataset.
-
-        :return: Total number of feature vectors in the dataset
-        """
-
-        return len(self.X)  # Return number of feature vectors
-
-    def __getitem__(self, idx):  # Fetch one item by index
-        """
-        Fetch a single sample by index.
-
-        :param idx: Index of the sample to retrieve
-        :return: Tuple of (features_tensor, label_tensor) as pre-converted tensors for efficient DataLoader collation
-        """
-
-        return self.X[idx], self._labels_tensor[idx]  # Return pre-converted tensor views directly without numpy-to-tensor overhead
-
-
-class ResidualBlockFC(nn.Module):
-    """
-    Simple fully-connected residual block with skip connection for generator network."""
-
-    def __init__(self, dim, leaky_relu_alpha=0.2):
-        """
-        Initialize a residual fully-connected block for the generator.
-
-        :param dim: Input and output dimensionality of the block
-        :param leaky_relu_alpha: Negative slope for LeakyReLU activation (default: 0.2)
-        :return: None
-        """
-
-        super().__init__()  # Initialize the parent nn.Module class
-
-        self.net = nn.Sequential(  # Define the residual transformation path
-            nn.Linear(dim, dim),  # First linear projection
-            nn.BatchNorm1d(dim),  # Normalize activations
-            nn.LeakyReLU(leaky_relu_alpha, inplace=True),  # Apply nonlinearity
-            nn.Linear(dim, dim),  # Second linear projection
-            nn.BatchNorm1d(dim),  # Second batch normalization
-        )  # End of sequential block
-
-        self.act = nn.LeakyReLU(leaky_relu_alpha, inplace=True)  # Activation after merging residual shortcut
-
-    def forward(self, x):  # Forward computation of the block
-        """
-        Perform forward pass through the residual block.
-
-        :param x: Input tensor of shape (batch_size, dim)
-        :return: Output tensor after residual connection and activation
-        """
-
-        out = self.net(x)  # Compute residual branch output
-        out = out + x  # Apply skip connection
-        return self.act(out)  # Apply activation to merged result
-
-
-class Generator(nn.Module):
-    """
-    Conditional generator network that maps noise and class labels to synthetic feature vectors using residual blocks.
-    """
-
-    def __init__(
-        self,
-        latent_dim: int,
-        feature_dim: int,
-        n_classes: int,
-        hidden_dims: Optional[List[int]] = None,
-        embed_dim: int = 32,
-        n_resblocks: int = 3,
-        leaky_relu_alpha: float = 0.2,
-    ):
-        """
-        Initialize conditional generator that maps (z, y) -> feature vector.
-
-        :param latent_dim: Dimensionality of noise vector z
-        :param feature_dim: Dimensionality of output feature vector
-        :param n_classes: Number of conditioning classes
-        :param hidden_dims: List of hidden layer sizes for initial MLP (default: [256, 512])
-        :param embed_dim: Size of label embedding (default: 32)
-        :param n_resblocks: Number of residual blocks to apply (default: 3)
-        :param leaky_relu_alpha: Negative slope for LeakyReLU activation (default: 0.2)
-        :return: None
-        """
-
-        super().__init__()  # Initialize module internals
-
-        if hidden_dims is None:  # Use default architecture if none given
-            hidden_dims = [256, 512]  # Default MLP layer widths
-
-        self.latent_dim = latent_dim  # Store latent input size
-        self.feature_dim = feature_dim  # Store output size
-        self.n_classes = n_classes  # Store number of classes
-        self.embed = nn.Embedding(n_classes, embed_dim)  # Create label embedding table
-
-        input_dim = latent_dim + embed_dim  # Combined dimension of noise + embedding
-        layers = []  # Container for MLP layers
-        prev = input_dim  # Track previous layer width
-
-        for h in hidden_dims:  # Build MLP layers
-            layers.append(nn.Linear(prev, h))  # Add linear layer
-            layers.append(nn.BatchNorm1d(h))  # Normalize activations
-            layers.append(nn.LeakyReLU(leaky_relu_alpha, inplace=True))  # Apply activation
-            prev = h  # Update width tracker
-
-        res_dim = prev  # Width entering residual blocks
-        self.pre = nn.Sequential(*layers)  # Store assembled MLP
-
-        self.resblocks = nn.ModuleList(  # Build list of residual blocks
-            [ResidualBlockFC(res_dim, leaky_relu_alpha) for _ in range(n_resblocks)]  # Create required count of blocks
-        )  # End block list
-
-        self.out = nn.Sequential(  # Output mapping layer
-            nn.Linear(res_dim, feature_dim),  # Final linear projection
-        )  # End output block
-
-    def forward(self, z, y):  # Compute generator output
-        """
-        Generate synthetic features conditioned on labels.
-
-        :param z: Noise tensor of shape (batch_size, latent_dim)
-        :param y: Label tensor of shape (batch_size,) containing class indices
-        :return: Generated feature tensor of shape (batch_size, feature_dim)
-        """
-
-        y_e = self.embed(y)  # Convert class ID to embedding
-        x = torch.cat([z, y_e], dim=1)  # Concatenate noise and embedding
-        x = self.pre(x)  # Process through MLP
-        for b in self.resblocks:  # Loop through residual blocks
-            x = b(x)  # Apply block
-        out = self.out(x)  # Produce final feature vector
-        return out  # Return generated sample
-
-
-class Discriminator(nn.Module):
-    """
-    Conditional discriminator network (Wasserstein critic) that scores feature vectors conditioned on class labels.
-    """
-
-    def __init__(
-        self,
-        feature_dim: int,
-        n_classes: int,
-        hidden_dims: Optional[List[int]] = None,
-        embed_dim: int = 32,
-        leaky_relu_alpha: float = 0.2,
-    ):
-        """
-        Initialize conditional critic/discriminator network that scores (x, y).
-
-        :param feature_dim: Dimensionality of input feature vector
-        :param n_classes: Number of classes for conditioning
-        :param hidden_dims: List of hidden layer sizes (default: [512, 256, 128])
-        :param embed_dim: Dimensionality of label embedding (default: 32)
-        :param leaky_relu_alpha: Negative slope for LeakyReLU activation (default: 0.2)
-        :return: None
-        """
-
-        super().__init__()  # Initialize discriminator internals
-
-        if hidden_dims is None:  # Assign default architecture when unspecified
-            hidden_dims = [512, 256, 128]  # Standard critic hierarchy
-
-        self.embed = nn.Embedding(n_classes, embed_dim)  # Store label embedding table
-
-        input_dim = feature_dim + embed_dim  # Combined input dimension
-        layers = []  # List to accumulate layers
-        prev = input_dim  # Initialize previous width
-
-        for h in hidden_dims:  # Build critic layers
-            layers.append(nn.Linear(prev, h))  # Linear transformation
-            layers.append(nn.LeakyReLU(leaky_relu_alpha, inplace=True))  # Activation function
-            prev = h  # Update width tracker
-
-        layers.append(nn.Linear(prev, 1))  # Output layer producing scalar score
-        self.net = nn.Sequential(*layers)  # Create critic network
-
-    def forward(self, x, y):  # Compute critic score
-        """
-        Compute critic score for input features conditioned on labels.
-
-        :param x: Feature tensor of shape (batch_size, feature_dim)
-        :param y: Label tensor of shape (batch_size,) containing class indices
-        :return: Scalar critic score tensor of shape (batch_size,)
-        """
-
-        y_e = self.embed(y)  # Convert label to embedding
-        inp = torch.cat([x, y_e], dim=1)  # Join features with embedding
-        return self.net(inp).squeeze(1)  # Produce scalar score
-
-
-class ConfigNamespace:
-    """
-    Namespace wrapper for config dict.
-    """
-    
-    def __init__(self, cfg):
-        """
-        Initialize the ConfigNamespace with a configuration dictionary.
-        
-        :param self: The instance of the ConfigNamespace.
-        :param cfg: The configuration dictionary to wrap.
-        :return: None
-        """
-        
-        self.config = cfg  # Store the original config dictionary
-        self.mode = cfg.get("wgangp", {}).get("mode", "both")
-        self.csv_path = cfg.get("wgangp", {}).get("csv_path")
-        self.label_col = cfg.get("wgangp", {}).get("label_col", "Label")
-        self.feature_cols = cfg.get("wgangp", {}).get("feature_cols")
-        self.seed = int(cfg.get("wgangp", {}).get("seed", 42))  # Cast to int
-        self.force_cpu = cfg.get("wgangp", {}).get("force_cpu", False)
-        self.from_scratch = cfg.get("wgangp", {}).get("from_scratch", False)
-        self.out_dir = cfg.get("paths", {}).get("out_dir", "outputs")
-        self.epochs = int(cfg.get("training", {}).get("epochs", 60))  # Cast to int
-        self.batch_size = int(cfg.get("training", {}).get("batch_size", 64))  # Cast to int
-        self.critic_steps = int(cfg.get("training", {}).get("critic_steps", 5))  # Cast to int
-        self.lr = float(cfg.get("training", {}).get("lr", 1e-4))  # Cast to float
-        self.beta1 = float(cfg.get("training", {}).get("beta1", 0.5))  # Cast to float
-        self.beta2 = float(cfg.get("training", {}).get("beta2", 0.9))  # Cast to float
-        self.lambda_gp = float(cfg.get("training", {}).get("lambda_gp", 10.0))  # Cast to float
-        self.save_every = int(cfg.get("training", {}).get("save_every", 5))  # Cast to int
-        self.log_interval = int(cfg.get("training", {}).get("log_interval", 50))  # Cast to int
-        self.sample_batch = int(cfg.get("training", {}).get("sample_batch", 16))  # Cast to int
-        self.use_amp = cfg.get("training", {}).get("use_amp", False)
-        self.compile = cfg.get("training", {}).get("compile", False)
-        self.latent_dim = int(cfg.get("generator", {}).get("latent_dim", 100))  # Cast to int
-        self.g_hidden = cfg.get("generator", {}).get("hidden_dims", [256, 512])
-        self.embed_dim = int(cfg.get("generator", {}).get("embed_dim", 32))  # Cast to int
-        self.n_resblocks = int(cfg.get("generator", {}).get("n_resblocks", 3))  # Cast to int
-        self.d_hidden = cfg.get("discriminator", {}).get("hidden_dims", [512, 256, 128])
-        self.checkpoint = cfg.get("generation", {}).get("checkpoint")
-        self.n_samples = float(cfg.get("generation", {}).get("n_samples", 1.0))  # Cast to float
-        self.label = cfg.get("generation", {}).get("label")
-        if self.label is not None:  # If label is not None
-            self.label = int(self.label)  # Cast to int
-        self.out_file = cfg.get("generation", {}).get("out_file", "generated.csv")
-        self.gen_batch_size = int(cfg.get("generation", {}).get("gen_batch_size", 256))  # Cast to int
-        self.feature_dim = cfg.get("generation", {}).get("feature_dim")
-        if self.feature_dim is not None:  # If feature_dim is not None
-            self.feature_dim = int(self.feature_dim)  # Cast to int
-        self.force_new_samples = cfg.get("generation", {}).get("force_new_samples", False)
-        self.num_workers = int(cfg.get("dataloader", {}).get("num_workers", 8))  # Cast to int
-        self._last_training_time = 0.0  # Placeholder for last training elapsed time (set after train)
-        self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
-
-
-# Functions Definitions:
 
 
 def verbose_output(true_string="", false_string="", config: Optional[Dict] = None):
