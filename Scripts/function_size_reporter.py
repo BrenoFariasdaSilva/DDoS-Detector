@@ -464,28 +464,70 @@ def main():
 
     start_time = datetime.datetime.now()  # Get the start time of the program
 
-    if not verify_filepath_exists(TARGET_FILE_PATH):  # Verify if the target file exists
-        print(f"{BackgroundColors.RED}Error: Target file {BackgroundColors.CYAN}{TARGET_FILE_PATH}{BackgroundColors.RED} not found!{Style.RESET_ALL}")  # Log the missing file error
-        return  # Exit the main function early
+    target_path = None  # Initialize target_path variable to None before validating TARGET_FILE_PATH
+    if TARGET_FILE_PATH is not None and str(TARGET_FILE_PATH).strip():  # Verify if TARGET_FILE_PATH is not None and not empty before attempting to create a Path object
+        try:  # Attempt to create a Path object from TARGET_FILE_PATH for further validation
+            target_path = Path(str(TARGET_FILE_PATH))  # Create a Path object from the TARGET_FILE_PATH string for easier validation and manipulation
+        except Exception:  # Handle any exceptions that occur during Path object creation
+            target_path = None  # Set target_path to None if an error occurs during Path creation, which will trigger multi-file mode
 
-    print(f"{BackgroundColors.GREEN}Analyzing file: {BackgroundColors.CYAN}{TARGET_FILE_PATH}{Style.RESET_ALL}")  # Log the analysis start message
+    is_multi_file_mode = (
+        TARGET_FILE_PATH is None
+        or not str(TARGET_FILE_PATH).strip()
+        or (target_path is not None and target_path.exists() and target_path.is_dir())
+    )  # Determine if multi-file mode is active based on TARGET_FILE_PATH value
 
-    source_text = read_source_file(TARGET_FILE_PATH)  # Read the source file content
-    tree = parse_ast_tree(source_text, TARGET_FILE_PATH)  # Parse the source text into an AST tree
-    report = build_report(tree)  # Build the complete function size report
+    if not is_multi_file_mode:  # Verify if single-file mode is active
+        if not verify_filepath_exists(TARGET_FILE_PATH):  # Verify if the target file exists
+            print(f"{BackgroundColors.RED}Error: Target file {BackgroundColors.CYAN}{TARGET_FILE_PATH}{BackgroundColors.RED} not found!{Style.RESET_ALL}")  # Log the missing file error
+            return  # Exit the main function early
 
-    report = {"filename": TARGET_FILE_PATH.name, **report}  # Prepend filename as first entry in the final report
-    save_report(report, Path(OUTPUT_FILE))  # Save the report to the output JSON file
+        print(f"{BackgroundColors.GREEN}Analyzing file: {BackgroundColors.CYAN}{TARGET_FILE_PATH}{Style.RESET_ALL}")  # Log the analysis start message
 
-    total = report["total_functions"]  # Retrieve the total function count from the report
-    class_count = sum(len(v) for v in report["classes"].values())  # Compute the total class method count
-    top_count = len(report["top-level functions"])  # Retrieve the top-level function count
-    nested_count = len(report["nested functions"])  # Retrieve the nested function count
+        if target_path is None:  # Verify if target_path is still None after validation, which indicates an invalid path format
+            print(f"{BackgroundColors.RED}Error: Invalid TARGET_FILE_PATH: {TARGET_FILE_PATH}{Style.RESET_ALL}")
+            return  # Exit the main function early due to invalid path format
 
-    print(f"{BackgroundColors.GREEN}Total functions detected: {BackgroundColors.CYAN}{total}{Style.RESET_ALL}")  # Log the total function count
-    print(f"{BackgroundColors.GREEN}Class methods: {BackgroundColors.CYAN}{class_count}{Style.RESET_ALL}")  # Log the class method count
-    print(f"{BackgroundColors.GREEN}Top-level functions: {BackgroundColors.CYAN}{top_count}{Style.RESET_ALL}")  # Log the top-level function count
-    print(f"{BackgroundColors.GREEN}Nested functions: {BackgroundColors.CYAN}{nested_count}{Style.RESET_ALL}")  # Log the nested function count
+        if not target_path.exists() or not target_path.is_file():  # Verify if the target_path exists and is a file
+            print(f"{BackgroundColors.RED}Error: Target file {BackgroundColors.CYAN}{target_path}{BackgroundColors.RED} not found or is not a file!{Style.RESET_ALL}")
+            return  # Exit the main function early due to missing file or invalid file type
+
+        output_path = Path(f"./Scripts/function_size_report-{target_path.stem}.json")  # Build the output path using the target file stem
+        report = analyze_file(target_path)  # Analyze the single target file
+        final_report = {"filename": target_path.name, **report}  # Prepend filename as first entry in the final report
+        save_report(final_report, output_path)  # Save the single-file report to disk
+
+        total = final_report["total_functions"]  # Retrieve the total function count from the report
+        class_count = sum(len(v) for v in final_report["classes"].values())  # Compute the total class method count
+        top_count = len(final_report["top-level functions"])  # Retrieve the top-level function count
+        nested_count = len(final_report["nested functions"])  # Retrieve the nested function count
+
+        print(f"{BackgroundColors.GREEN}Total functions detected: {BackgroundColors.CYAN}{total}{Style.RESET_ALL}")  # Log the total function count
+        print(f"{BackgroundColors.GREEN}Class methods: {BackgroundColors.CYAN}{class_count}{Style.RESET_ALL}")  # Log the class method count
+        print(f"{BackgroundColors.GREEN}Top-level functions: {BackgroundColors.CYAN}{top_count}{Style.RESET_ALL}")  # Log the top-level function count
+        print(f"{BackgroundColors.GREEN}Nested functions: {BackgroundColors.CYAN}{nested_count}{Style.RESET_ALL}")  # Log the nested function count
+
+    else:  # Handle multi-file mode when TARGET_FILE_PATH is None or empty
+        output_path = Path("./Scripts/function_size_report-general.json")  # Build the output path with the general suffix for multi-file mode
+        python_files = discover_python_files()  # Discover all Python files in the current and Scripts directories
+
+        print(f"{BackgroundColors.GREEN}Discovered {BackgroundColors.CYAN}{len(python_files)}{BackgroundColors.GREEN} Python files for analysis.{Style.RESET_ALL}")  # Log the number of discovered files
+
+        files_data = {}  # Initialize empty dictionary to store per-file analysis results
+
+        for filepath in python_files:  # Iterate over each discovered Python file
+            print(f"{BackgroundColors.GREEN}Analyzing file: {BackgroundColors.CYAN}{filepath.name}{Style.RESET_ALL}")  # Log the current file being analyzed
+            file_report = analyze_file(filepath)  # Analyze the current Python file
+            files_data[filepath.name] = file_report  # Store the per-file report under the filename key
+
+        multi_report = {  # Build the multi-file report dictionary
+            "total_files_processed": len(python_files),  # Store the total number of processed files
+            "files": files_data,  # Store the per-file analysis results
+        }
+
+        save_report(multi_report, output_path)  # Save the multi-file report to disk
+
+        print(f"{BackgroundColors.GREEN}Total files processed: {BackgroundColors.CYAN}{len(python_files)}{Style.RESET_ALL}")  # Log the total number of processed files
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
