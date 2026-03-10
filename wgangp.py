@@ -637,6 +637,79 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def preprocess_dataframe(df, label_col, remove_zero_variance=None, config: Optional[Dict] = None):
+    """
+    Preprocess a DataFrame by:
+    1. Selecting only numeric feature columns (excluding label)
+    2. Removing rows with NaN or infinite values
+    3. Optionally dropping zero-variance numeric features
+
+    :param df: pandas DataFrame to preprocess
+    :param label_col: name of the label column to preserve
+    :param remove_zero_variance: whether to drop numeric columns with zero variance (None = use config)
+    :param config: Optional configuration dictionary
+    :return: cleaned DataFrame with only numeric features and the label column
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG or get_default_config()  # Use global or default config
+        
+        if remove_zero_variance is None:  # If not specified
+            remove_zero_variance = config.get("dataset", {}).get("remove_zero_variance", True)  # Get from config
+        
+        verbose_output(
+            f"{BackgroundColors.GREEN}Preprocessing DataFrame: selecting numeric features, removing NaN/inf, handling zero-variance.{Style.RESET_ALL}",
+            config=config
+        )  # Output verbose message
+
+        if df is None:  # If the DataFrame is None
+            return df  # Return None
+
+        df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+
+        labels = df[label_col].copy()  # Save labels
+
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()  # Get numeric column names
+        if label_col in numeric_cols:  # If label is numeric, remove it from features
+            numeric_cols.remove(label_col)  # Remove label from feature list
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Found {len(numeric_cols)} numeric feature columns out of {len(df.columns)-1} total features.{Style.RESET_ALL}"
+        )  # Output count
+
+        df_numeric = df[numeric_cols].copy()  # Select numeric features
+
+        df_numeric = df_numeric.replace([np.inf, -np.inf], np.nan)  # Replace inf with NaN
+        valid_mask = ~df_numeric.isna().any(axis=1)  # Mask for rows without NaN
+
+        df_clean = df_numeric[valid_mask].copy()  # Keep only valid rows
+        labels_clean = labels[valid_mask].copy()  # Keep corresponding labels
+
+        rows_dropped = len(df) - len(df_clean)  # Calculate dropped rows
+        if rows_dropped > 0:  # If rows were dropped
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Dropped {rows_dropped} rows with NaN/inf values ({rows_dropped/len(df)*100:.2f}%).{Style.RESET_ALL}"
+            )  # Output warning
+
+        if remove_zero_variance and len(df_clean) > 0:  # If removal enabled and data remains
+            variances = df_clean.var(axis=0, ddof=0)  # Calculate column variances
+            zero_var_cols = variances[variances == 0].index.tolist()  # Get zero-variance columns
+            if zero_var_cols:  # If zero-variance columns exist
+                verbose_output(
+                    f"{BackgroundColors.YELLOW}Dropping {len(zero_var_cols)} zero-variance columns.{Style.RESET_ALL}"
+                )  # Output warning
+                df_clean = df_clean.drop(columns=zero_var_cols)  # Drop zero-variance columns
+
+        df_clean[label_col] = labels_clean.values  # Restore labels
+
+        return df_clean  # Return cleaned DataFrame
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def verbose_output(true_string="", false_string="", config: Optional[Dict] = None):
     """
     Outputs a message if the verbose flag is enabled in configuration.
