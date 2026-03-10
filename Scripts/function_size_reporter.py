@@ -474,6 +474,7 @@ def main():
     tree = parse_ast_tree(source_text, TARGET_FILE_PATH)  # Parse the source text into an AST tree
     report = build_report(tree)  # Build the complete function size report
 
+    report = {"filename": TARGET_FILE_PATH.name, **report}  # Prepend filename as first entry in the final report
     save_report(report, Path(OUTPUT_FILE))  # Save the report to the output JSON file
 
     total = report["total_functions"]  # Retrieve the total function count from the report
