@@ -162,55 +162,52 @@ def to_seconds(obj):
 
 def calculate_execution_time(start_time, finish_time=None):
     """
-    Calculates the execution time and returns a human-readable string.
+    Calculates the execution time between two time values and returns a human-readable string.
 
-    Accepts either:
-    - Two datetimes/timedeltas: `calculate_execution_time(start, finish)`
-    - A single timedelta or numeric seconds: `calculate_execution_time(delta)`
-    - Two numeric timestamps (seconds): `calculate_execution_time(start_s, finish_s)`
-
-    Returns a string like "1h 2m 3s".
+    :param start_time: The start time value (datetime, timedelta, int, or float).
+    :param finish_time: The finish time value (datetime, timedelta, int, or float), or None for single-argument mode.
+    :return: A human-readable string representation of the elapsed time such as "1h 2m 3s".
     """
 
-    if finish_time is None:  # Single-argument mode: start_time already represents duration or seconds
-        total_seconds = to_seconds(start_time)  # Try to convert provided value to seconds
-        if total_seconds is None:  # Conversion failed
-            try:  # Attempt numeric coercion
-                total_seconds = float(start_time)  # Attempt numeric coercion
-            except Exception:
-                total_seconds = 0.0  # Fallback to zero
-    else:  # Two-argument mode: Compute difference finish_time - start_time
-        st = to_seconds(start_time)  # Convert start to seconds if possible
-        ft = to_seconds(finish_time)  # Convert finish to seconds if possible
-        if st is not None and ft is not None:  # Both converted successfully
-            total_seconds = ft - st  # Direct numeric subtraction
-        else:  # Fallback to other methods
-            try:  # Attempt to subtract (works for datetimes/timedeltas)
-                delta = finish_time - start_time  # Try subtracting (works for datetimes/timedeltas)
-                total_seconds = float(delta.total_seconds())  # Get seconds from the resulting timedelta
-            except Exception:  # Subtraction failed
-                try:  # Final attempt: Numeric coercion
-                    total_seconds = float(finish_time) - float(start_time)  # Final numeric coercion attempt
-                except Exception:  # Numeric coercion failed
-                    total_seconds = 0.0  # Fallback to zero on failure
+    if finish_time is None:  # Verify if operating in single-argument mode
+        total_seconds = to_seconds(start_time)  # Attempt to convert the single value to seconds
+        if total_seconds is None:  # Verify if conversion returned None
+            try:  # Attempt numeric coercion as fallback
+                total_seconds = float(start_time)  # Coerce the value to float seconds
+            except Exception:  # Handle coercion failure
+                total_seconds = 0.0  # Default to zero on coercion failure
+    else:  # Operate in two-argument mode to compute the difference
+        st = to_seconds(start_time)  # Convert start time to seconds
+        ft = to_seconds(finish_time)  # Convert finish time to seconds
+        if st is not None and ft is not None:  # Verify both conversions succeeded
+            total_seconds = ft - st  # Compute elapsed seconds by direct subtraction
+        else:  # Fall back to alternative subtraction methods
+            try:  # Attempt datetime/timedelta subtraction
+                delta = finish_time - start_time  # Subtract the two time values
+                total_seconds = float(delta.total_seconds())  # Extract seconds from the resulting timedelta
+            except Exception:  # Handle subtraction failure
+                try:  # Attempt final numeric coercion
+                    total_seconds = float(finish_time) - float(start_time)  # Coerce both values and subtract
+                except Exception:  # Handle numeric coercion failure
+                    total_seconds = 0.0  # Default to zero on final failure
 
-    if total_seconds is None:  # Ensure a numeric value
-        total_seconds = 0.0  # Default to zero
-    if total_seconds < 0:  # Normalize negative durations
-        total_seconds = abs(total_seconds)  # Use absolute value
+    if total_seconds is None:  # Verify total_seconds is not None before proceeding
+        total_seconds = 0.0  # Default to zero if conversion produced None
+    if total_seconds < 0:  # Verify total_seconds is non-negative
+        total_seconds = abs(total_seconds)  # Use the absolute value for negative durations
 
-    days = int(total_seconds // 86400)  # Compute full days
-    hours = int((total_seconds % 86400) // 3600)  # Compute remaining hours
-    minutes = int((total_seconds % 3600) // 60)  # Compute remaining minutes
-    seconds = int(total_seconds % 60)  # Compute remaining seconds
+    days = int(total_seconds // 86400)  # Compute full days from total seconds
+    hours = int((total_seconds % 86400) // 3600)  # Compute remaining hours after days
+    minutes = int((total_seconds % 3600) // 60)  # Compute remaining minutes after hours
+    seconds = int(total_seconds % 60)  # Compute remaining seconds after minutes
 
-    if days > 0:  # Include days when present
-        return f"{days}d {hours}h {minutes}m {seconds}s"  # Return formatted days+hours+minutes+seconds
-    if hours > 0:  # Include hours when present
-        return f"{hours}h {minutes}m {seconds}s"  # Return formatted hours+minutes+seconds
-    if minutes > 0:  # Include minutes when present
-        return f"{minutes}m {seconds}s"  # Return formatted minutes+seconds
-    return f"{seconds}s"  # Fallback: only seconds
+    if days > 0:  # Verify if the duration includes full days
+        return f"{days}d {hours}h {minutes}m {seconds}s"  # Return formatted days+hours+minutes+seconds string
+    if hours > 0:  # Verify if the duration includes full hours
+        return f"{hours}h {minutes}m {seconds}s"  # Return formatted hours+minutes+seconds string
+    if minutes > 0:  # Verify if the duration includes full minutes
+        return f"{minutes}m {seconds}s"  # Return formatted minutes+seconds string
+    return f"{seconds}s"  # Return formatted seconds-only string
 
 
 def play_sound():
