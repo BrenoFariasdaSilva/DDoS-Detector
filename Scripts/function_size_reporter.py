@@ -114,10 +114,10 @@ def verbose_output(true_string="", false_string=""):
     :return: None
     """
 
-    if VERBOSE and true_string != "":  # If VERBOSE is True and a true_string was provided
-        print(true_string)  # Output the true statement string
-    elif false_string != "":  # If a false_string was provided
-        print(false_string)  # Output the false statement string
+    if VERBOSE and true_string != "":  # Verify if verbose logging is enabled and true_string is not empty
+        print(true_string)  # Log the true_string if verbose logging is enabled
+    elif false_string != "":  # Verify if false_string is not empty
+        print(false_string)  # Log the false_string if verbose logging is not enabled
 
 
 def verify_filepath_exists(filepath):
