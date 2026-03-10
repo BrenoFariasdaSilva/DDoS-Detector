@@ -637,6 +637,25 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def export_dataframe_image(styled_df: pd.io.formats.style.Styler, output_path: Union[str, Path]):
+    """
+    Export a pandas Styler to a PNG image using dataframe_image.
+
+    :param styled_df: pandas Styler object to export
+    :param output_path: Path to output PNG file
+    :raises: Any exception raised by dataframe_image.export will be propagated
+    """
+
+    try:
+        out_p = Path(output_path)  # Ensure Path object for output
+        out_p.parent.mkdir(parents=True, exist_ok=True)  # Ensure parent directory exists before writing
+        dfi.export(cast(Any, styled_df), str(out_p))  # Export styled dataframe to PNG using dataframe_image with cast to satisfy static typing
+    except Exception as e:
+        print(str(e))  # Print export error for visibility
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram
+        raise  # Do not swallow errors; propagate to caller
+
+
 def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str, Path]):
     """
     Generate a zebra-striped table image (.png) from an in-memory DataFrame.
