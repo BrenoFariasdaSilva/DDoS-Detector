@@ -81,7 +81,7 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
-TARGET_FILE_PATH = "./main.py"  # Path to the target Python file to analyze
+TARGET_FILE_PATH = ""  # Path to the target Python file to analyze
 OUTPUT_FILE = None  # Output path computed at runtime from TARGET_FILE_PATH
 
 # Logger Setup:
