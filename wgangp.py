@@ -637,6 +637,24 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def flush_csv_file_safely(file_handle) -> None:
+    """
+    Flush a CSV file handle to disk safely, ignoring any errors.
+
+    :param file_handle: Open file handle to flush (may be None).
+    :return: None
+    """
+
+    try:  # Flush buffer to persist row immediately
+        if file_handle is not None:  # Only call flush when file handle exists
+            try:  # Guard flush call to avoid raising
+                file_handle.flush()  # Flush file buffer to disk
+            except Exception:  # If flush fails
+                pass  # Continue when flush fails
+    except Exception:  # If outer flush logic fails
+        pass  # Ignore outer errors as well
+
+
 def extract_optimizer_learning_rates(opt_G, opt_D, args) -> tuple:
     """
     Safely extract current learning rates from generator and discriminator optimizers.
