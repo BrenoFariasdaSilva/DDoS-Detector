@@ -59,6 +59,7 @@ import platform  # For getting the operating system name
 import sys  # For system-specific parameters and functions
 from colorama import Style  # For coloring the terminal
 from pathlib import Path  # For handling file paths
+from typing import Optional  # For optional type hints in function signatures
 
 
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)  # Project root directory
