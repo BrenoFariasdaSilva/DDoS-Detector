@@ -637,6 +637,31 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def save_training_checkpoint(args, config: Dict, device: torch.device, G, D, opt_G, opt_D, scaler, dataset, epoch: int, metrics_history: Dict) -> None:
+    """
+    Save generator and discriminator checkpoints with metrics at periodic intervals.
+
+    :param args: parsed arguments namespace with save_every, csv_path, out_dir
+    :param config: configuration dictionary with dataset directories for disk space verification
+    :param device: torch device used for training
+    :param G: generator model to checkpoint
+    :param D: discriminator model to checkpoint
+    :param opt_G: generator optimizer to checkpoint
+    :param opt_D: discriminator optimizer to checkpoint
+    :param scaler: AMP gradient scaler to checkpoint (may be None)
+    :param dataset: loaded CSVFlowDataset instance for scaler and label encoder
+    :param epoch: current epoch index (zero-based)
+    :param metrics_history: dictionary of tracked training metrics
+    :return: None
+    """
+
+    checkpoint_dir, checkpoint_prefix, skip_checkpoint = resolve_checkpoint_dir_and_prefix(args, config, epoch)  # Resolve checkpoint directory, prefix, and disk space availability
+    if not skip_checkpoint:  # Only save files when directory creation succeeded and space is available
+        g_checkpoint = build_generator_checkpoint_payload(G, opt_G, scaler, dataset, epoch, metrics_history, args)  # Build generator checkpoint dictionary with all training state
+        save_model_checkpoints_to_disk(g_checkpoint, G, D, opt_D, checkpoint_dir, checkpoint_prefix, epoch, args)  # Save generator and discriminator checkpoint files to disk
+        save_metrics_history_to_json(checkpoint_dir, checkpoint_prefix, metrics_history)  # Save metrics history JSON to checkpoint directory
+
+
 def send_epoch_telegram_notifications(args, telegram_enabled: bool, epoch: int, next_notify: int, progress_pct: int) -> int:
     """
     Send telegram progress notifications when epoch completion crosses percentage thresholds.
