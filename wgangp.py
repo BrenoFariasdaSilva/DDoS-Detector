@@ -4319,6 +4319,27 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def dispatch_single_file_mode(args: Any, config: Dict, mode: str, csv_path_obj: Path, data_aug_dir: Path) -> None:
+    """
+    Dispatch the configured execution mode for a single-file run.
+
+    :param args: Argument namespace with mode-specific settings.
+    :param config: Configuration dictionary passed to train and generate functions.
+    :param mode: Execution mode string (train, gen, or both).
+    :param csv_path_obj: Path object for the input CSV file.
+    :param data_aug_dir: Path object for the data augmentation output directory.
+    :return: None
+    """
+
+    if mode == "train":  # Training-only mode for single-file run
+        train(args, config)  # Execute training without elapsed time capture
+    elif mode == "gen":  # Generation-only mode for single-file run
+        assert args.checkpoint is not None, "Generation requires --checkpoint"  # Verify checkpoint is provided before generation
+        execute_generation_with_verification(args, config)  # Verify necessity and run generation
+    elif mode == "both":  # Combined train-then-generate mode for single-file run
+        run_both_mode_for_csv(args, config, csv_path_obj, data_aug_dir, "Training model...")  # Execute full train-generate pipeline
+
+
 def handle_single_file_mode(args: Any, config: Dict, mode: str, csv_path: str, results_cols: list, results_suffix: str) -> None:
     """
     Orchestrate all processing steps for a single input CSV file.
