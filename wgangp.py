@@ -637,6 +637,45 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def write_epoch_csv_row(args, config: Dict, device: torch.device, dataset, epoch: int, epoch_start_time: float, epoch_milestones, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history: Dict, opt_G, opt_D) -> None:
+    """
+    Compute epoch elapsed time and write a milestone CSV row for the current epoch.
+
+    :param args: parsed arguments namespace with training settings
+    :param config: configuration dictionary with hardware_tracking settings
+    :param device: torch device used for training
+    :param dataset: loaded CSVFlowDataset instance for sample counts
+    :param epoch: current epoch index (zero-based)
+    :param epoch_start_time: timestamp when the current epoch started
+    :param epoch_milestones: set of milestone epoch numbers for CSV writes
+    :param results_csv_writer: CSV writer object (may be None)
+    :param results_csv_file: open CSV file handle (may be None)
+    :param results_cols_cfg: list of configured CSV column names
+    :param metrics_history: dictionary of tracked training metrics
+    :param opt_G: generator optimizer for learning rate extraction
+    :param opt_D: discriminator optimizer for learning rate extraction
+    :return: None
+    """
+
+    try:  # Safely compute and print epoch elapsed time without interrupting training
+        epoch_elapsed = time.time() - epoch_start_time  # Calculate epoch elapsed seconds
+        print(f"{BackgroundColors.GREEN}Epoch {epoch+1} elapsed: {BackgroundColors.CYAN}{epoch_elapsed:.2f}s{Style.RESET_ALL}")  # Print epoch elapsed time
+        args._last_epoch_time = safe_float(epoch_elapsed, 0.0)  # Store last epoch elapsed on args for external use safely
+    except Exception as _te:  # If timing calculation fails
+        print(f"{BackgroundColors.YELLOW}Warning: failed to measure epoch time: {_te}{Style.RESET_ALL}")  # Warn but continue
+
+    try:  # Wrap CSV write to avoid crashing on I/O errors
+        if results_csv_writer and results_cols_cfg:  # Only write if we have a valid writer and columns
+            row_runtime = build_epoch_runtime_row(args, dataset, epoch, metrics_history, opt_G, opt_D)  # Build epoch runtime metrics dict from training state
+            ordered = build_ordered_csv_row_from_runtime(row_runtime, results_cols_cfg, config)  # Build ordered CSV row from runtime values
+            ordered = inject_hardware_into_csv_row(ordered, results_cols_cfg, config, device)  # Inject hardware spec into row if tracking enabled
+            if (epoch + 1) in epoch_milestones:  # Only write per-epoch row when this epoch is a milestone
+                results_csv_writer.writerow(ordered)  # Write ordered row following configured schema for milestone epoch
+                flush_csv_file_safely(results_csv_file)  # Flush CSV file to disk safely after milestone write
+    except Exception as _cw:  # If writing fails, warn and continue training
+        print(f"{BackgroundColors.YELLOW}Warning: failed to write epoch row to results CSV: {_cw}{Style.RESET_ALL}")  # Warn but do not abort
+
+
 def resolve_checkpoint_dir_and_prefix(args, config: Dict, epoch: int) -> tuple:
     """
     Resolve checkpoint directory path, filename prefix, and verify disk space availability.
