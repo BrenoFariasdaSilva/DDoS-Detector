@@ -637,6 +637,58 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def build_config_overrides_from_kwargs(kwargs: Dict) -> Dict:
+    """
+    Convert keyword arguments into a nested configuration overrides dictionary.
+
+    Maps recognized keyword argument names to their corresponding configuration
+    sections (wgangp, paths, training, generator, discriminator, generation,
+    dataloader, dataset, execution, sound). Warns on unrecognized keys.
+
+    :param kwargs: Flat keyword arguments to convert
+    :return: Nested configuration overrides dictionary
+    """
+
+    try:
+        cli_style_overrides = {}  # Build config-style dict from kwargs
+        for key, value in kwargs.items():  # For each kwarg
+            if key in ["csv_path", "mode", "label_col", "feature_cols", "seed", "force_cpu", "from_scratch"]:  # WGAN-GP params
+                cli_style_overrides.setdefault("wgangp", {})[key] = value
+            elif key in ["out_dir", "logs_dir"]:  # Path params
+                cli_style_overrides.setdefault("paths", {})[key] = value
+            elif key in ["epochs", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "save_every", "log_interval", "sample_batch", "use_amp", "compile"]:  # Training params
+                cli_style_overrides.setdefault("training", {})[key] = value
+            elif key in ["latent_dim", "n_resblocks", "leaky_relu_alpha"]:  # Generator params
+                cli_style_overrides.setdefault("generator", {})[key] = value
+                if key == "leaky_relu_alpha":  # Also set discriminator alpha
+                    cli_style_overrides.setdefault("discriminator", {})[key] = value
+            elif key in ["g_hidden"]:  # Generator hidden layers
+                cli_style_overrides.setdefault("generator", {})["hidden_dims"] = value
+            elif key in ["d_hidden"]:  # Discriminator hidden layers
+                cli_style_overrides.setdefault("discriminator", {})["hidden_dims"] = value
+            elif key in ["g_embed_dim"]:  # Generator embedding dim
+                cli_style_overrides.setdefault("generator", {})["embed_dim"] = value
+            elif key in ["d_embed_dim"]:  # Discriminator embedding dim
+                cli_style_overrides.setdefault("discriminator", {})["embed_dim"] = value
+            elif key in ["checkpoint", "n_samples", "label", "out_file", "gen_batch_size", "feature_dim"]:  # Generation params
+                cli_style_overrides.setdefault("generation", {})[key] = value
+            elif key in ["num_workers"]:  # DataLoader params
+                cli_style_overrides.setdefault("dataloader", {})[key] = value
+            elif key in ["remove_zero_variance"]:  # Dataset params
+                cli_style_overrides.setdefault("dataset", {})[key] = value
+            elif key in ["verbose"]:  # Execution params
+                cli_style_overrides.setdefault("execution", {})[key] = value
+            elif key in ["play_sound", "enabled"] and key == "play_sound":  # Sound params
+                cli_style_overrides.setdefault("sound", {})["enabled"] = value
+            else:  # Unknown parameter
+                print(f"{BackgroundColors.YELLOW}Warning: Unknown parameter '{key}' will be ignored{Style.RESET_ALL}")
+        return cli_style_overrides  # Return the assembled overrides dictionary
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def dispatch_wgangp_execution_mode(args, final_config: Dict) -> None:
     """
     Dispatch WGAN-GP execution based on the selected mode (train, gen, or both).
