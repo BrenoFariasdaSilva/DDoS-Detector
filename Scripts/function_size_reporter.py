@@ -135,6 +135,40 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def collect_class_methods(tree: ast.Module, parent_map: dict) -> dict:
+    """
+    Collects all method definitions inside class blocks from the AST.
+
+    :param tree: The root ast.Module node of the abstract syntax tree.
+    :param parent_map: A dictionary mapping id(node) to its direct parent AST node.
+    :return: A dictionary mapping "Class ClassName" keys to sorted lists of method metadata.
+    """
+
+    verbose_output(f"{BackgroundColors.GREEN}Collecting class methods from AST...{Style.RESET_ALL}")  # Log the class method collection operation
+
+    classes = {}  # Initialize empty dictionary to store class method data
+    
+    for node in ast.walk(tree):  # Walk every node in the AST tree
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):  # Verify if the node is a function definition
+            parent_node = parent_map.get(id(node))  # Retrieve the parent node for the current function
+            if isinstance(parent_node, ast.ClassDef):  # Verify if the parent is a class definition
+                end_ln = get_node_end_lineno(node)  # Get best-effort end line for the function node
+                size = end_ln - node.lineno + 1  # Compute function size as the line span using best-effort end
+                entry = {  # Build the method metadata dictionary
+                    "function_name": node.name,  # Store the method name
+                    "function_size": size,  # Store the computed size in lines
+                    "start_line": node.lineno,  # Store the starting line number
+                    "end_line": end_ln,  # Store the computed ending line number
+                }
+                class_key = f"Class {parent_node.name}"  # Build the class key string
+                classes.setdefault(class_key, []).append(entry)  # Append the entry to the class key list
+
+    for class_key in classes:  # Iterate over each class key to sort its methods
+        classes[class_key].sort(key=lambda e: e["function_size"], reverse=True)  # Sort methods by size descending
+
+    return classes  # Return the completed class methods dictionary
+
+
 def collect_top_level_functions(tree: ast.Module, parent_map: dict) -> list:
     """
     Collects all function definitions that are direct children of the module node.
