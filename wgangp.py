@@ -4317,7 +4317,7 @@ class ConfigNamespace:
         self.num_workers = int(cfg.get("dataloader", {}).get("num_workers", 8))  # Cast to int
         self._last_training_time = 0.0  # Placeholder for last training elapsed time (set after train)
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
-                
+
 
 def main():
     """
@@ -4336,224 +4336,24 @@ def main():
             f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}WGAN-GP Data Augmentation{BackgroundColors.GREEN} program!{Style.RESET_ALL}"
         )  # Output the welcome message
 
-        args = parse_args()  # Get CLI arguments
-        cli_overrides = args_to_config_overrides(args)  # Convert to config overrides
-
-        config = load_configuration(config_path=args.config, cli_overrides=cli_overrides)  # Load merged config
-        CONFIG = config  # Store in global
-
-        initialize_logger(config)  # Initialize logging system with configuration
-
-        setup_telegram_bot(config)  # Setup Telegram bot with configuration
-
+        config = initialize_cli_and_config()  # Parse CLI args, load configuration, and set global CONFIG
+        initialize_logger(config)  # Initialize logging system with provided configuration
+        setup_telegram_bot(config)  # Initialize global Telegram bot with provided configuration
         start_time = datetime.datetime.now()  # Get the start time of the program
-        send_telegram_message(TELEGRAM_BOT, [f"Starting WGAN-GP Data Augmentation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Send Telegram notification
-
-        mode = config.get("wgangp", {}).get("mode", "both")  # Get mode
-        csv_path = config.get("wgangp", {}).get("csv_path")  # Get CSV path
-        results_suffix = config.get("wgangp", {}).get("results_suffix", "_data_augmented")  # Get results suffix from wgangp config
-        datasets = config.get("dataset", {}).get("datasets", {})  # Get datasets dictionary
-
-        args = ConfigNamespace(config)  # Create args namespace
-        # Validate results_csv_columns existence and type for CLI runs
-        results_cols = config.get("wgangp", {}).get("results_csv_columns")  # Read configured results columns list
-        if not isinstance(results_cols, list) or len(results_cols) == 0:  # Ensure the value exists, is a list, and is non-empty
-            print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Print clear error message
-            raise ValueError("'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration")  # Stop execution safely with clear error
+        send_telegram_message(TELEGRAM_BOT, [f"Starting WGAN-GP Data Augmentation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Send formatted start notification via Telegram
         
-        if csv_path is not None:  # Single file mode (csv_path provided):
-            csv_path_obj = Path(csv_path)  # Create Path object from csv_path (always available in this branch)
-            # Ensure results CSV header columns configuration is available
-            if args.out_file == "generated.csv" and mode in ["gen", "both"]:  # If using default output file
-                data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get subdir name
-                data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Create Data_Augmentation subdirectory path
-                os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists
-                output_filename = f"{csv_path_obj.stem}{results_suffix}{csv_path_obj.suffix}"  # Use input name with suffix
-                args.out_file = str(data_aug_dir / output_filename)  # Set output file path to Data_Augmentation subdirectory
-            # Ensure per-dataset results CSV exists at dataset directory root
-            data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get subdir name from config
-            data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Build Data_Augmentation directory path for this dataset
-            os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before creating results CSV
-            results_csv_path = data_aug_dir / "data_augmentation_results.csv"  # Path for per-directory results CSV inside Data_Augmentation
-            if not results_csv_path.exists():  # Only write header if file does not exist
-                with open(results_csv_path, "w", newline="", encoding="utf-8") as _f:  # Open file for writing header
-                    writer = csv.writer(_f)  # Create CSV writer
-                    writer.writerow(results_cols)  # Write header exactly in configured order
-            
-            if mode == "train":  # Training mode
-                train(args, config)  # Train the model
-            elif mode == "gen":  # Generation mode
-                assert args.checkpoint is not None, "Generation requires --checkpoint"  # Ensure checkpoint is provided
-                if verify_data_augmentation_file(args, config):  # Verify if generation is necessary according to existing output and configuration
-                    generate(args, config)  # Generate synthetic samples
-                else:
-                    print(f"{BackgroundColors.GREEN}Skipping generation: output file already satisfies configured n_samples.{Style.RESET_ALL}")
-            elif mode == "both":  # Combined mode
-                print(f"{BackgroundColors.GREEN}[1/2] Training model...{Style.RESET_ALL}")
-                training_start_time = time.time()  # Record training start time using time.time()
-                train(args, config)  # Train the model
-                args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
-                
-                csv_path_obj = Path(csv_path)  # Create Path object from csv_path
-                checkpoint_prefix = csv_path_obj.stem  # Use CSV filename as prefix
-                checkpoint_subdir = config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")  # Get checkpoint subdir
-                data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get data aug subdir
-                checkpoint_dir = csv_path_obj.parent / data_aug_subdir / checkpoint_subdir  # Checkpoints in Data_Augmentation/Checkpoints
-                checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{args.epochs}.pt"  # Expected checkpoint path
-                if not checkpoint_path.exists():  # If specific epoch checkpoint not found, find the latest one
-                    checkpoints = sorted(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))  # Find all checkpoints for this dataset
-                    if checkpoints:  # If checkpoints found
-                        checkpoint_path = checkpoints[-1]  # Use the latest checkpoint
-                    else:  # No checkpoints found
-                        raise FileNotFoundError(f"No generator checkpoint found for {csv_path_obj.name} in {checkpoint_dir}")
-                
-                args.checkpoint = str(checkpoint_path)  # Set checkpoint path for generation
-                print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")
-                print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")
-                
-                if verify_data_augmentation_file(args, config):  # Verify if generation is necessary according to existing output and configuration
-                    generate(args, config)  # Generate synthetic samples
-                else:
-                    print(f"{BackgroundColors.GREEN}Skipping generation: output file already satisfies configured n_samples.{Style.RESET_ALL}")
-        
-        else:
-            print(
-                f"{BackgroundColors.GREEN}No CSV path provided. Processing datasets in batch mode...{Style.RESET_ALL}"
-            )  # Notify batch mode
-            
-            for dataset_name, paths in datasets.items():  # For each dataset in the datasets dictionary
-                print(
-                    f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
-                )
-                for input_path in paths:  # For each path in the dataset's paths list
-                    if not verify_filepath_exists(input_path):  # If the input path does not exist
-                        verbose_output(
-                            f"{BackgroundColors.YELLOW}Skipping missing path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}",
-                            config=config
-                        )
-                        continue  # Skip to the next path if the current one doesn't exist
+        mode, csv_path, results_suffix, datasets, args = extract_runtime_parameters(config)  # Extract execution mode, paths, and arg namespace from config
+        results_cols = validate_results_csv_columns(config)  # Validate and retrieve results CSV column configuration
 
-                    data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get data augmentation subdir name from config
-                    data_aug_dir = Path(input_path) / data_aug_subdir  # Construct Data_Augmentation directory path for this input_path
-                    per_dir_results_csv = data_aug_dir / "data_augmentation_results.csv"  # Results CSV path for this dataset inside Data_Augmentation
-                    if not per_dir_results_csv.exists():  # Only write header if file does not exist
-                        os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before header write
-                        with open(per_dir_results_csv, "w", newline="", encoding="utf-8") as _f:  # Open file for header writing
-                            writer = csv.writer(_f)  # Create CSV writer
-                            writer.writerow(results_cols)  # Write header exactly in configured order
-
-                    files_to_process = get_files_to_process(
-                        input_path, file_extension=".csv", config=config
-                    )  # Get list of CSV files to process
-                    generating_order = config.get("wgangp", {}).get("generating_order", "off")  # Read dataset generation order from config
-                    if generating_order not in ("off", "Ascending", "Descending"):  # Validate the generating_order value against allowed values
-                        generating_order = "off"  # Fall back to "off" on invalid value
-                    if generating_order == "Ascending":  # Sort files from smallest to largest by file size
-                        files_to_process = sorted(files_to_process, key=lambda f: os.path.getsize(f))  # Sort ascending by file size
-                        safe_debug("WGANGP dataset generation order: Ascending")  # Log chosen ordering
-                    elif generating_order == "Descending":  # Sort files from largest to smallest by file size
-                        files_to_process = sorted(files_to_process, key=lambda f: os.path.getsize(f), reverse=True)  # Sort descending by file size
-                        safe_debug("WGANGP dataset generation order: Descending")  # Log chosen ordering
-                    else:  # No sorting applied, preserve original discovery order
-                        safe_debug("WGANGP dataset generation order: Off")  # Log chosen ordering
-                    total_files = len(files_to_process)  # Compute total files once per input_path
-                    for index, file in enumerate(files_to_process, start=1):  # Iterate with index and file
-                        try:  # Wrap per-file processing so exceptions are caught by the outer handler
-                            file_progress_prefix = f"{BackgroundColors.CYAN}[{index}/{total_files}]{Style.RESET_ALL}"  # Build colored per-file prefix once per file
-                            args.file_progress_prefix = file_progress_prefix  # Attach colored prefix to args for train/gen functions
-                            try:  # Guard path resolution and membership check
-                                resolved_path = str(Path(file).resolve())  # Resolve to absolute path string
-                            except Exception:
-                                resolved_path = str(Path(file))  # Fallback to given path string on failure
-                            if resolved_path in PROCESSED_FILES:  # If file already processed
-                                print(f"{BackgroundColors.YELLOW}{file_progress_prefix} Skipping already-processed file: {resolved_path}{Style.RESET_ALL}")  # Warn and skip duplicate with prefix
-                                continue  # Skip to next file
-                            print(
-                                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}"
-                            )  # Decorative separator
-                            print(
-                                f"{file_progress_prefix} {BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
-                            )  # High-level processing message with prefix
-                            print(
-                                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}\n"
-                            )  # Decorative separator
-                            
-                            csv_path_obj = Path(file)  # Create Path object from file path
-                            data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get subdir name
-                            data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Create Data_Augmentation subdirectory path
-                            os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists
-                            output_filename = f"{csv_path_obj.stem}{results_suffix}{csv_path_obj.suffix}"  # Use input name with RESULTS_SUFFIX
-                            args.out_file = str(data_aug_dir / output_filename)  # Set output file path to Data_Augmentation subdirectory
-                            args.csv_path = file  # Set CSV path to current file
-                            
-                            try:  # Try to execute the specified mode for the current file
-                                if mode == "train":  # Training mode
-                                    training_start_time = time.time()  # Record training start time using time.time()
-                                    train(args, config)  # Train the model only
-                                    args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
-                                elif mode == "gen":  # Generation mode
-                                    assert args.checkpoint is not None, "Generation requires --checkpoint"
-                                    if verify_data_augmentation_file(args, config):  # Verify whether generation should proceed for this file according to existing output and configuration
-                                        generate(args, config)  # Generate synthetic samples only
-                                    else:
-                                        print(f"{BackgroundColors.GREEN}Skipping generation: output file already satisfies configured n_samples.{Style.RESET_ALL}")
-                                elif mode == "both":  # Combined mode
-                                    print(f"{BackgroundColors.GREEN}[1/2] Training model on {BackgroundColors.CYAN}{csv_path_obj.name}{BackgroundColors.GREEN}...{Style.RESET_ALL}")
-                                    training_start_time = time.time()  # Record training start time using time.time()
-                                    train(args, config)  # Train the model
-                                    args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
-                                    
-                                    checkpoint_prefix = csv_path_obj.stem  # Use CSV filename as prefix
-                                    checkpoint_subdir = config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")  # Get checkpoint subdir
-                                    checkpoint_dir = data_aug_dir / checkpoint_subdir  # Checkpoints in Data_Augmentation/Checkpoints
-                                    checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{args.epochs}.pt"
-                                    if not checkpoint_path.exists():  # If specific epoch checkpoint not found, find the latest one
-                                        checkpoints = sorted(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))  # Find all checkpoints for this dataset
-                                        if checkpoints:  # If checkpoints found
-                                            checkpoint_path = checkpoints[-1]  # Use the latest checkpoint
-                                        else:  # No checkpoints found
-                                            raise FileNotFoundError(f"No generator checkpoint found for {csv_path_obj.name} in {checkpoint_dir}")
-                                    
-                                    args.checkpoint = str(checkpoint_path)  # Set checkpoint path for generation
-                                    print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")
-                                    print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")
-                                    
-                                    if verify_data_augmentation_file(args, config):  # Verify whether generation should proceed for this file according to existing output and configuration
-                                        generate(args, config)  # Generate synthetic samples
-                                    else:
-                                        print(f"{BackgroundColors.GREEN}Skipping generation: output file already satisfies configured n_samples.{Style.RESET_ALL}")
-                            finally:  # Always mark file as processed even if generation/training raised (prevents re-entry)
-                                try:  # Guard adding to registry
-                                    PROCESSED_FILES.add(resolved_path)  # Remember that this file was processed in this run
-                                except Exception:  # Ignore failures when updating registry
-                                    pass  # Continue despite registry update failure
-                                try:  # Attempt to flush the logger to persist recent outputs
-                                    if logger is not None:  # Only flush if logger initialized
-                                        logger.flush()  # Flush log file buffer to disk
-                                except Exception:  # Ignore any logger flush errors to avoid masking primary failures
-                                    pass  # No-op on flush failure
-                        except Exception as e:  #   
-                            print(
-                                f"{BackgroundColors.RED}Error processing {BackgroundColors.CYAN}{file}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
-                            )  # Print error message
-                            traceback.print_exc()  # Print full traceback
-                            continue  # Continue to next file
-            
-            print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Batch processing completed!{Style.RESET_ALL}")
+        if csv_path is not None:  # Single file mode (csv_path provided)
+            handle_single_file_mode(args, config, mode, csv_path, results_cols, results_suffix)  # Execute all single-file output setup and mode dispatch steps
+        else:  # Batch dataset mode (no csv_path provided)
+            run_batch_mode(args, config, datasets, mode, results_suffix, results_cols)  # Iterate and process all configured dataset directory files
 
         finish_time = datetime.datetime.now()  # Get the finish time of the program
-        print(
-            f"\n{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
-        )  # Output the start and finish times
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
-        )  # Output the end of the program message
-
-        send_telegram_message(TELEGRAM_BOT, [f"WGAN-GP Data Augmentation finished. Execution time: {calculate_execution_time(start_time, finish_time)}"])
-
-        if config.get("sound", {}).get("enabled", True):  # If sound enabled
-            atexit.register(lambda: play_sound(config))  # Register the play_sound function to be called when the program finishes
-        atexit.register(close_all_results_csv_handles)  # Ensure handles are closed at program exit
+        print_execution_summary(start_time, finish_time)  # Print start time, finish time, and total elapsed duration
+        send_telegram_message(TELEGRAM_BOT, [f"WGAN-GP Data Augmentation finished. Execution time: {calculate_execution_time(start_time, finish_time)}"])  # Send execution time summary notification via Telegram
+        register_exit_handlers(config)  # Register atexit sound playback and CSV handle cleanup handlers
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
