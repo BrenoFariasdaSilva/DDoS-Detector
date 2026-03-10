@@ -637,6 +637,34 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def send_epoch_telegram_notifications(args, telegram_enabled: bool, epoch: int, next_notify: int, progress_pct: int) -> int:
+    """
+    Send telegram progress notifications when epoch completion crosses percentage thresholds.
+
+    :param args: parsed arguments namespace with epochs count and csv_path
+    :param telegram_enabled: whether telegram notifications are active
+    :param epoch: current epoch index (zero-based)
+    :param next_notify: next percentage threshold to trigger notification
+    :param progress_pct: percentage increment between notifications
+    :return: Updated next_notify threshold
+    """
+
+    try:  # Guard notification logic to avoid interrupting training
+        if telegram_enabled and args.epochs > 0:  # Only notify when enabled and epochs is positive
+            percent = int(((epoch + 1) / float(args.epochs)) * 100)  # Compute percent completed after this epoch
+            while percent >= next_notify and next_notify <= 100:  # Send notifications for each crossed threshold
+                msg = (
+                    f"WGAN-GP training progress: {next_notify}% "  # Short progress message text
+                    f"({epoch+1}/{args.epochs} epochs) on {Path(args.csv_path).name if args.csv_path else 'unknown file'}"  # Include filename and epoch info
+                )  # Compose progress message
+                send_telegram_message(TELEGRAM_BOT, msg)  # Send message via shared helper
+                next_notify += progress_pct  # Advance to next threshold to avoid duplicate sends
+    except Exception as _err:  # Catch any notification errors and continue training
+        pass  # Intentionally ignore notification failures to not interrupt training
+
+    return next_notify  # Return updated notification threshold
+
+
 def compute_and_store_final_timing(args, training_start_time: float, file_start_time: float) -> None:
     """
     Compute total training and file processing elapsed times and store on args.
