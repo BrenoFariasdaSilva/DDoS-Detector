@@ -4319,6 +4319,27 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def setup_per_file_output(args: Any, config: Dict, file: str, results_suffix: str) -> tuple:
+    """
+    Configure the per-file output path attributes on args and return path objects.
+
+    :param args: Argument namespace to update with csv_path and out_file attributes.
+    :param config: Configuration dictionary with paths settings.
+    :param file: String path to the CSV file currently being processed.
+    :param results_suffix: Suffix appended to the input filename for the output file.
+    :return: Tuple of (csv_path_obj, data_aug_dir) Path objects.
+    """
+
+    csv_path_obj = Path(file)  # Create Path object from file string for path operations
+    data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get configured data augmentation subdirectory name
+    data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation directory path relative to input file
+    os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before output file creation
+    output_filename = f"{csv_path_obj.stem}{results_suffix}{csv_path_obj.suffix}"  # Build output filename by appending suffix to input stem
+    args.out_file = str(data_aug_dir / output_filename)  # Assign computed output file path to args
+    args.csv_path = file  # Assign current CSV file path to args for train and generate functions
+    return csv_path_obj, data_aug_dir  # Return Path objects for mode dispatch use
+
+
 def dispatch_mode_for_file(args: Any, config: Dict, mode: str, csv_path_obj: Path, data_aug_dir: Path) -> None:
     """
     Dispatch the configured execution mode for a single batched CSV file.
