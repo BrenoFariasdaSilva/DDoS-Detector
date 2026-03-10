@@ -2081,7 +2081,14 @@ def export_dataframe_image(styled_df, output_path):
                 break  # Exit retry loop on success to preserve original control flow
             except TypeError:  # Handle dataframe_image versions that raise TypeError for unexpected kwargs
                 try:  # Attempt fallback export excluding dynamic kwargs but still using Playwright
-                    dfi.export(styled_df, output_path, table_conversion="playwright", timeout=timeout_ms)  # Retry export using explicit table_conversion and explicit timeout as fallback
+                    try:  # Verify whether dfi.export supports an explicit timeout parameter by inspecting its signature
+                        _params_fallback = set(signature(dfi.export).parameters.keys())  # Get supported parameter names for dfi.export
+                    except Exception:  # If signature inspection fails, assume timeout may not be supported
+                        _params_fallback = set()  # Use empty set as conservative fallback
+                    kwargs_fb: dict[str, Any] = {"table_conversion": "playwright"}  # Prepare fallback kwargs for dfi.export and annotate types to satisfy static checks
+                    if "timeout" in _params_fallback:  # Verify if timeout name is present in the detected parameters
+                        kwargs_fb["timeout"] = timeout_ms  # Attach timeout to kwargs when supported by signature
+                    dfi.export(styled_df, output_path, **kwargs_fb)  # Retry export using constructed kwargs to avoid unsupported kwarg diagnostics
                     print(f"{BackgroundColors.GREEN}[DEBUG] Exported image (fallback): {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log fallback export success for diagnostics with colored output
                     upscale_image_if_needed(output_path, fallback=True)  # Attempt to upscale exported image after fallback export
                     print(f"{BackgroundColors.GREEN}[INFO] Table image successfully saved to: {BackgroundColors.CYAN}{os.path.abspath(output_path)}{Style.RESET_ALL}")  # Log absolute save path after fallback success
