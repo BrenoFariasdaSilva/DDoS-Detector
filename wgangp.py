@@ -637,6 +637,69 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def compose_generation_start_message(
+    n: int,
+    args,
+    generated_file_name: str,
+    original_num: Optional[int] = None,
+) -> str:
+    """
+    Compose the generation start message including the ratio relative to the original dataset.
+
+    :param n: Number of samples that will be generated
+    :param args: Parsed CLI arguments (may contain n_samples and csv_path)
+    :param generated_file_name: Output file name where samples will be saved
+    :param original_num: Optional original dataset size (if already known)
+    :return: Formatted Telegram message string
+    """
+
+    try:
+        orig = original_num  # Start with provided original dataset size
+        
+        if orig is None:  # If original size was not explicitly provided
+            csv_path = getattr(args, "csv_path", None)  # Try to get CSV path from args
+            
+            if csv_path:  # If CSV path exists
+                try:
+                    try:  # Guard CSV reading to avoid crashing if file is large or malformed
+                        df = pd.read_csv(csv_path, low_memory=False)  # Load dataset safely
+                    except Exception:  # If reading with low_memory fails, try again without it (may use more memory but can handle some files)
+                        df = None  # Initialize df to None before second attempt
+                    if df is not None:  # If reading succeeded, determine original number of samples
+                        orig = len(df)  # Determine original number of samples
+                    else:  # If both attempts to read failed, keep orig as None
+                        orig = None
+                except Exception:
+                    orig = None  # If reading fails, keep as None
+        
+        ratio_info = ""  # Initialize ratio info
+        
+        if orig is not None and safe_float(orig, 0.0) > 0.0:  # If original dataset size is known and valid
+            ratio = safe_float(n, 0.0) / safe_float(orig, 1.0)  # Compute generation ratio safely
+            percentage = ratio * 100.0  # Convert ratio to percentage
+            ratio_info = f"{percentage:.2f}% ({int(safe_float(n,0.0))}/{int(safe_float(orig,0.0))})"  # Format ratio info
+        
+        elif getattr(args, "n_samples", None) is not None:  # If n_samples was explicitly provided
+            try:
+                requested = safe_float(getattr(args, "n_samples", None), 0.0)  # Convert to float safely
+                if requested <= 1.0:  # If decimal (percentage mode)
+                    ratio_info = f"{requested * 100:.2f}%"  # Percentage requested
+                else:  # If integer (absolute mode)
+                    ratio_info = f"{int(requested)} samples"  # Absolute requested
+            except Exception:
+                ratio_info = ""  # Fallback if conversion fails
+        
+        if ratio_info != "":  # If ratio information is available
+            return f"Starting generation: Producing {n} samples ({ratio_info}) to {generated_file_name}"  # Final formatted message
+        
+        return f"Starting generation: Producing {n} samples to {generated_file_name}"  # Fallback message
+    
+    except Exception as e:
+        print(str(e))  # Print exception message
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception to Telegram
+        raise
+
+
 def compute_expected_samples_for_percentage(percent: float, args, config: Optional[Dict] = None) -> Optional[int]:
     """
     Compute the expected number of generated samples when n_samples is given as a percentage.
