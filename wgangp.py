@@ -4319,6 +4319,28 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def dispatch_mode_for_file(args: Any, config: Dict, mode: str, csv_path_obj: Path, data_aug_dir: Path) -> None:
+    """
+    Dispatch the configured execution mode for a single batched CSV file.
+
+    :param args: Argument namespace with mode-specific training and generation settings.
+    :param config: Configuration dictionary passed to train and generate functions.
+    :param mode: Execution mode string (train, gen, or both).
+    :param csv_path_obj: Path object for the current CSV file being processed.
+    :param data_aug_dir: Path object for the data augmentation output directory.
+    :return: None
+    """
+
+    if mode == "train":  # Training-only mode for batched file
+        execute_training_with_timing(args, config)  # Train model and capture elapsed time on args
+    elif mode == "gen":  # Generation-only mode for batched file
+        assert args.checkpoint is not None, "Generation requires --checkpoint"  # Verify checkpoint is provided before generation
+        execute_generation_with_verification(args, config)  # Verify necessity and execute generation
+    elif mode == "both":  # Combined train-then-generate mode for batched file
+        training_label = f"Training model on {BackgroundColors.CYAN}{csv_path_obj.name}{BackgroundColors.GREEN}..."  # Build label including filename for progress message
+        run_both_mode_for_csv(args, config, csv_path_obj, data_aug_dir, training_label)  # Execute full train-generate pipeline with filename-specific label
+
+
 def mark_file_as_processed(resolved_path: str) -> None:
     """
     Register the resolved file path in PROCESSED_FILES and flush the logger.
