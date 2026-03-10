@@ -637,6 +637,41 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def evaluate_existing_augmentation_file(out_path: Path, file_prefix: str, existing_count: int, expected_n: int, args) -> bool:
+    """
+    Evaluate whether to regenerate or skip based on existing file count versus expected count.
+
+    :param out_path: Path to the existing augmentation output file.
+    :param file_prefix: Telegram prefix string for progress display.
+    :param existing_count: Number of rows in the existing output file.
+    :param expected_n: Expected number of samples based on configuration.
+    :param args: Parsed arguments namespace with force_new_samples flag.
+    :return: True if generation should proceed, False if it should be skipped.
+    """
+
+    if existing_count == expected_n and not getattr(args, "force_new_samples", False):  # Matching and no force
+        send_telegram_message(
+            TELEGRAM_BOT,
+            f"{file_prefix} Skipping Generation: {out_path.name} already exists with {existing_count} samples (expected {expected_n}).",
+        )  # Notify skip via Telegram
+        return False  # Skip generation
+    if getattr(args, "force_new_samples", False):  # Forced regeneration
+        send_telegram_message(
+            TELEGRAM_BOT,
+            f"{file_prefix} Force Regeneration Requested: Removing existing {out_path.name} ({existing_count} samples) and regenerating to {expected_n}.",
+        )  # Notify forced regeneration via Telegram
+    else:  # Count mismatch requires regeneration
+        send_telegram_message(
+            TELEGRAM_BOT,
+            f"{file_prefix} Existing {out_path.name} has {existing_count} samples but expected {expected_n}; removing and regenerating.",
+        )  # Notify mismatch via Telegram
+    try:  # Attempt to delete existing file before regeneration
+        out_path.unlink()  # Delete existing file
+    except Exception:  # Ignore deletion errors
+        pass  # Continue regardless of deletion failure
+    return True  # Proceed with generation
+
+
 def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
     """
     Verify whether the data-augmentation output file exists and matches the
