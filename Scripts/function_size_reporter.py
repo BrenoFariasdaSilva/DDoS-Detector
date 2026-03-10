@@ -384,6 +384,47 @@ def save_report(report: dict, output_path: Path) -> None:
     print(f"{BackgroundColors.GREEN}Report saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log the successful save confirmation
 
 
+def process_single_file(target_path: Optional[Path], target_file_path: str) -> bool:
+    """
+    Processes a single Python file and saves the analysis report.
+
+    :param target_path: Path object pointing to the target Python source file, or None if path validation failed.
+    :param target_file_path: The original target file path value used for existence validation and logging.
+    :return: True if processing completed successfully, False if an error condition caused early exit.
+    """
+
+    if not verify_filepath_exists(target_file_path):  # Verify if the target file exists
+        print(f"{BackgroundColors.RED}Error: Target file {BackgroundColors.CYAN}{target_file_path}{BackgroundColors.RED} not found!{Style.RESET_ALL}")  # Log the missing file error
+        return False  # Return False to signal early exit due to missing file
+
+    print(f"{BackgroundColors.GREEN}Analyzing file: {BackgroundColors.CYAN}{target_file_path}{Style.RESET_ALL}")  # Log the analysis start message
+
+    if target_path is None:  # Verify if target_path is still None after validation, which indicates an invalid path format
+        print(f"{BackgroundColors.RED}Error: Invalid TARGET_FILE_PATH: {target_file_path}{Style.RESET_ALL}")
+        return False  # Return False to signal early exit due to invalid path format
+
+    if not target_path.exists() or not target_path.is_file():  # Verify if the target_path exists and is a file
+        print(f"{BackgroundColors.RED}Error: Target file {BackgroundColors.CYAN}{target_path}{BackgroundColors.RED} not found or is not a file!{Style.RESET_ALL}")
+        return False  # Return False to signal early exit due to missing file or invalid file type
+
+    output_path = Path(f"./Scripts/function_size_report-{target_path.stem}.json")  # Build the output path using the target file stem
+    report = analyze_file(target_path)  # Analyze the single target file
+    final_report = {"filename": target_path.name, **report}  # Prepend filename as first entry in the final report
+    save_report(final_report, output_path)  # Save the single-file report to disk
+
+    total = final_report["total_functions"]  # Retrieve the total function count from the report
+    class_count = sum(len(v) for v in final_report["classes"].values())  # Compute the total class method count
+    top_count = len(final_report["top-level functions"])  # Retrieve the top-level function count
+    nested_count = len(final_report["nested functions"])  # Retrieve the nested function count
+
+    print(f"{BackgroundColors.GREEN}Total functions detected: {BackgroundColors.CYAN}{total}{Style.RESET_ALL}")  # Log the total function count
+    print(f"{BackgroundColors.GREEN}Class methods: {BackgroundColors.CYAN}{class_count}{Style.RESET_ALL}")  # Log the class method count
+    print(f"{BackgroundColors.GREEN}Top-level functions: {BackgroundColors.CYAN}{top_count}{Style.RESET_ALL}")  # Log the top-level function count
+    print(f"{BackgroundColors.GREEN}Nested functions: {BackgroundColors.CYAN}{nested_count}{Style.RESET_ALL}")  # Log the nested function count
+
+    return True  # Return True to signal successful completion of single-file processing
+
+
 def discover_python_files() -> list:
     """
     Discovers all Python source files in the current directory and the ./Scripts/ directory.
