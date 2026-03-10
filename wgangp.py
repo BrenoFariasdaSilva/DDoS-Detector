@@ -637,6 +637,46 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def notify_generation_finish_via_telegram(args, n: int, file_progress_prefix: str) -> None:
+    """
+    Build and send a Telegram notification about generation completion.
+
+    :param args: Parsed arguments namespace with out_file.
+    :param n: Total number of generated samples.
+    :param file_progress_prefix: Colored prefix string for progress display.
+    :return: None.
+    """
+
+    try:  # Build a safe, human-readable finish message and notify via Telegram
+        gen_path = Path(args.out_file)  # Path object for generated file
+        try:  # Try to determine original dataset size for ratio calculation
+            original_num = None  # Default original count
+            if getattr(args, "csv_path", None):  # If csv_path is available on args
+                original_num = len(pd.read_csv(args.csv_path, low_memory=False))  # Count original CSV rows for ratio
+        except Exception:
+            original_num = None  # Fallback to None on any error
+        try:  # Try to compute ratio string safely
+            ratio_str = (
+                f"{(safe_float(n,0.0)/safe_float(original_num,1.0))*100:.2f}% ({int(safe_float(n,0.0))}/{int(safe_float(original_num,0.0))})"
+                if original_num and safe_float(original_num, 0.0) > 0.0
+                else ""
+            )  # Ratio string if original_num available and >0
+        except Exception:
+            ratio_str = ""  # Fallback empty ratio on error
+        try:  # Try to compute generated file size string safely
+            size_bytes = gen_path.stat().st_size if gen_path.exists() else 0  # File size in bytes when exists
+            if size_bytes >= 1024 ** 3:  # Size in GB
+                size_str = f"{size_bytes / (1024 ** 3):.2f} GB"  # Human-readable GB
+            else:  # Size in MB
+                size_str = f"{size_bytes / (1024 ** 2):.2f} MB"  # Human-readable MB
+        except Exception:
+            size_str = "Unknown size"  # Fallback when unable to determine size
+        msg = f"{file_progress_prefix} Finished WGAN-GP generation: Saved {int(safe_float(n,0.0))} samples{(f' ({ratio_str}, {size_str})' if ratio_str or size_str else '')} to {gen_path.name}"  # Compose final message
+        send_telegram_message(TELEGRAM_BOT, msg)  # Send message via Telegram
+    except Exception:
+        pass  # Ignore notification failures to avoid breaking flow
+
+
 def resolve_generation_results_csv_path(args, config: Dict, args_ck: Dict) -> tuple:
     """
     Resolve the results CSV path for generation from args or checkpoint saved args.
