@@ -4319,6 +4319,32 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def run_batch_mode(args: Any, config: Dict, datasets: Dict, mode: str, results_suffix: str, results_cols: list) -> None:
+    """
+    Iterate over all configured datasets and process each discovered CSV file.
+
+    :param args: Argument namespace updated per-file during batch processing.
+    :param config: Configuration dictionary with paths and execution settings.
+    :param datasets: Dictionary mapping dataset names to lists of directory path strings.
+    :param mode: Execution mode string (train, gen, or both).
+    :param results_suffix: Suffix appended to each input filename for its output file.
+    :param results_cols: List of column names for each per-directory results CSV header.
+    :return: None
+    """
+
+    print(f"{BackgroundColors.GREEN}No CSV path provided. Processing datasets in batch mode...{Style.RESET_ALL}")  # Announce batch mode entry to user
+    
+    for dataset_name, paths in datasets.items():  # Iterate over each named dataset entry in registry
+        print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")  # Announce current dataset name
+        for input_path in paths:  # Iterate over each directory path within the dataset
+            if not verify_filepath_exists(input_path):  # Skip paths that do not exist on disk
+                verbose_output(f"{BackgroundColors.YELLOW}Skipping missing path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}", config=config)  # Log skipped path at verbose level
+                continue  # Advance to next path in dataset
+            process_dataset_path(args, config, mode, input_path, results_cols, results_suffix)  # Process all CSV files in this dataset directory
+    
+    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Batch processing completed!{Style.RESET_ALL}")  # Announce batch processing completion
+
+
 def print_execution_summary(start_time: datetime.datetime, finish_time: datetime.datetime) -> None:
     """
     Print the program start time, finish time, and total execution duration.
