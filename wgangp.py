@@ -637,6 +637,49 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict] = None) -> bool:
+    """
+    Determine whether sufficient disk space exists before saving checkpoints.
+
+    Recursively computes the total size of all dataset directories and compares it
+    against available free disk space. Checkpoint saving is permitted only when
+    available free space is at least twice the total dataset size.
+
+    :param dataset_dirs: List of dataset directory paths to measure total size from.
+    :param config: Optional configuration dictionary.
+    :return: True if available disk space is at least twice the dataset size, False otherwise.
+    """
+
+    try:
+        total_dataset_size = 0  # Initialize total dataset size accumulator in bytes
+        for dir_path in dataset_dirs:  # Iterate all provided dataset directory paths
+            try:  # Guard per-directory size calculation to avoid aborting on individual failures
+                p = Path(dir_path)  # Create Path object for the directory
+                if not p.exists():  # Verify directory exists before recursing
+                    continue  # Skip non-existent directories silently
+                for file_entry in p.rglob("*"):  # Recursively walk all entries in the directory
+                    try:  # Guard per-file stat to avoid crashing on permission errors
+                        if file_entry.is_file():  # Only accumulate size for regular files
+                            total_dataset_size += file_entry.stat().st_size  # Add file size in bytes to accumulator
+                    except Exception:  # If stat fails due to permission error or similar issue
+                        pass  # Continue without accumulating this file's size
+            except Exception:  # If directory traversal fails unexpectedly
+                pass  # Continue with remaining directories
+        free_gb = get_available_disk_space_gb(config)  # Retrieve available disk space in GB via helper
+        free_bytes = int(safe_float(free_gb, 0.0) * (1024.0 ** 3))  # Convert GB back to bytes for threshold comparison
+        required_bytes = total_dataset_size * 2  # Minimum required free space is twice the total dataset size
+        dataset_size_gb = safe_float(total_dataset_size, 0.0) / (1024.0 ** 3)  # Convert dataset size to GB for logging
+        required_gb = safe_float(required_bytes, 0.0) / (1024.0 ** 3)  # Convert required space to GB for logging
+        print(f"{BackgroundColors.GREEN}Disk space verification: dataset_size={BackgroundColors.CYAN}{dataset_size_gb:.2f} GB{BackgroundColors.GREEN}, free={BackgroundColors.CYAN}{free_gb:.2f} GB{BackgroundColors.GREEN}, required={BackgroundColors.CYAN}{required_gb:.2f} GB{Style.RESET_ALL}")  # Print disk space verification summary
+        if free_bytes < required_bytes:  # If free space is below the required threshold
+            print(f"{BackgroundColors.YELLOW}[WARNING] Insufficient disk space for checkpoint saving. Skipping checkpoint creation.{Style.RESET_ALL}")  # Warn about insufficient space
+            return False  # Deny checkpoint saving when space is insufficient
+        return True  # Permit checkpoint saving when sufficient space is available
+    except Exception as e:  # On unexpected errors, warn but allow checkpoint saving
+        print(f"{BackgroundColors.YELLOW}[WARNING] Disk space verification failed: {e}; assuming checkpoint space is available{Style.RESET_ALL}")  # Warn about verification failure
+        return True  # Default to allowing checkpoint saving when verification fails
+
+
 def normalize_args_and_setup_hardware(args, config: Dict) -> tuple:
     """
     Normalize argument types and configure hardware settings for training.
