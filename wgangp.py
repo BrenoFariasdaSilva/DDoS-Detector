@@ -637,6 +637,45 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def apply_core_cli_overrides(args, overrides: Dict) -> None:
+    """
+    Apply core CLI argument overrides for execution, wgangp, and paths sections.
+
+    Mutates the overrides dictionary in-place with values from verbose, no_sound,
+    mode, csv_path, label_col, feature_cols, seed, force_cpu, from_scratch,
+    out_dir, and logs_dir arguments.
+
+    :param args: argparse.Namespace containing CLI arguments
+    :param overrides: Overrides dictionary to mutate in-place
+    :return: None
+    """
+
+    if args.verbose:  # If verbose flag set
+        overrides.setdefault("execution", {})["verbose"] = True  # Enable verbose
+    if args.no_sound:  # If no_sound flag set
+        overrides.setdefault("sound", {})["enabled"] = False  # Disable sound
+
+    if args.mode is not None:  # If mode specified
+        overrides.setdefault("wgangp", {})["mode"] = args.mode  # Set mode
+    if args.csv_path is not None:  # If csv_path specified
+        overrides.setdefault("wgangp", {})["csv_path"] = args.csv_path  # Set csv_path
+    if args.label_col is not None:  # If label_col specified
+        overrides.setdefault("wgangp", {})["label_col"] = args.label_col  # Set label_col
+    if args.feature_cols is not None:  # If feature_cols specified
+        overrides.setdefault("wgangp", {})["feature_cols"] = args.feature_cols  # Set feature_cols
+    if args.seed is not None:  # If seed specified
+        overrides.setdefault("wgangp", {})["seed"] = args.seed  # Set seed
+    if args.force_cpu:  # If force_cpu flag set
+        overrides.setdefault("wgangp", {})["force_cpu"] = True  # Enable force_cpu
+    if args.from_scratch:  # If from_scratch flag set
+        overrides.setdefault("wgangp", {})["from_scratch"] = True  # Enable from_scratch
+
+    if args.out_dir is not None:  # If out_dir specified
+        overrides.setdefault("paths", {})["out_dir"] = args.out_dir  # Set out_dir
+    if args.logs_dir is not None:  # If logs_dir specified
+        overrides.setdefault("paths", {})["logs_dir"] = args.logs_dir  # Set logs_dir
+
+
 def apply_training_and_model_cli_overrides(args, overrides: Dict) -> None:
     """
     Apply training, generator, and discriminator CLI argument overrides.
