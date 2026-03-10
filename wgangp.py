@@ -637,6 +637,37 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visualizable: bool = True):
+    """
+    Save DataFrame to CSV and optionally generate a zebra-striped PNG table image.
+
+    This function centralizes CSV saving and image generation to avoid duplicating
+    CSV writing logic across the codebase.
+
+    :param df: DataFrame to save
+    :param csv_path: Destination CSV file path
+    :param is_visualizable: Flag indicating whether to generate PNG image
+    :raises: Propagates IO and dataframe_image exceptions
+    """
+
+    try:
+        csv_p = Path(csv_path)  # Convert csv_path to Path
+        parent = csv_p.parent  # Parent directory for CSV
+        parent.mkdir(parents=True, exist_ok=True)  # Ensure parent exists
+        if not os.access(str(parent), os.W_OK):  # Verify parent directory is writable before writing CSV
+            raise PermissionError(f"Directory not writable: {parent}")  # Raise permission error
+        df.to_csv(str(csv_p), index=False)  # Save CSV to disk preserving DataFrame content/order
+        
+        if is_visualizable:  # If a visual representation is desired
+            try:  # Guard PNG rendering to prevent aborting the CSV pipeline on image export failures
+                png_path = csv_p.with_suffix(".png")  # Replace CSV extension with PNG
+                generate_table_image_from_dataframe(df, png_path)  # Generate PNG from in-memory DataFrame
+            except Exception as _png_e:  # If PNG generation fails, warn but preserve the already-written CSV
+                print(f"{BackgroundColors.YELLOW}Warning: PNG generation failed for {csv_p.name}: {_png_e}{Style.RESET_ALL}")  # Warn about PNG failure without aborting
+    except Exception:
+        raise  # Propagate CSV write exceptions to caller (do not swallow)
+
+
 def compose_generation_start_message(
     n: int,
     args,
