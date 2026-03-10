@@ -4319,6 +4319,22 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def extract_runtime_parameters(config: Dict) -> tuple:
+    """
+    Extract runtime parameters from configuration and create the argument namespace.
+
+    :param config: Merged configuration dictionary.
+    :return: Tuple of (mode, csv_path, results_suffix, datasets, args).
+    """
+
+    mode = config.get("wgangp", {}).get("mode", "both")  # Read execution mode from wgangp config section
+    csv_path = config.get("wgangp", {}).get("csv_path")  # Read optional single-file CSV path from config
+    results_suffix = config.get("wgangp", {}).get("results_suffix", "_data_augmented")  # Read output filename suffix from config
+    datasets = config.get("dataset", {}).get("datasets", {})  # Read batch dataset path registry from config
+    args = ConfigNamespace(config)  # Build unified argument namespace wrapping the config dict
+    return mode, csv_path, results_suffix, datasets, args  # Return all extracted runtime parameters as a tuple
+
+
 def validate_results_csv_columns(config: Dict) -> list:
     """
     Validate that results_csv_columns is present, non-empty, and is a list.
