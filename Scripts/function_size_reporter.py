@@ -167,33 +167,6 @@ def analyze_file(filepath: Path) -> dict:
     return build_report(tree)  # Build and return the complete function size report for the file
 
 
-def discover_python_files() -> list:
-    """
-    Discovers all Python source files in the current directory and the ./Scripts/ directory.
-
-    :param: None
-    :return: A sorted list of Path objects pointing to all discovered Python source files.
-    """
-
-    discovered = []  # Initialize empty list to store discovered Python file paths
-    current_dir = Path(".")  # Reference the current working directory as a Path object
-
-    for entry in current_dir.iterdir():  # Iterate over all entries in the current directory
-        if entry.is_file() and entry.suffix == ".py":  # Verify the entry is a Python file
-            discovered.append(entry.resolve())  # Append the resolved absolute path to the list
-
-    scripts_dir = Path("./Scripts")  # Reference the Scripts subdirectory as a Path object
-
-    if scripts_dir.is_dir():  # Verify if the Scripts directory exists
-        for entry in scripts_dir.iterdir():  # Iterate over all entries in the Scripts directory
-            if entry.is_file() and entry.suffix == ".py":  # Verify the entry is a Python file
-                discovered.append(entry.resolve())  # Append the resolved absolute path to the list
-
-    discovered.sort(key=lambda p: p.name)  # Sort discovered files alphabetically by their filename
-
-    return discovered  # Return the sorted list of discovered Python file paths
-
-
 def read_source_file(filepath: Path) -> str:
     """
     Reads and returns the full text content of a Python source file.
