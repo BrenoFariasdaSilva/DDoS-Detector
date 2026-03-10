@@ -637,6 +637,37 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def open_results_csv(results_csv_path, results_cols_cfg):
+    """
+    Open results CSV in append mode and return (file_obj, writer); write header if absent.
+
+    This function memoizes file handles in RESULTS_CSV_HANDLES to avoid
+    repeated open/close operations and to ensure header is written once.
+
+    :param results_csv_path: Path object to results CSV
+    :param results_cols_cfg: List of column names in desired order
+    :return: (file_obj, csv.writer)
+    """
+    
+    try:
+        key = str(results_csv_path)  # Use string path as registry key
+        if key in RESULTS_CSV_HANDLES:  # If already opened, reuse handle
+            return RESULTS_CSV_HANDLES[key]  # Return cached (file_obj, writer)
+
+        existed = results_csv_path.exists()  # Verify whether file exists already
+        os.makedirs(results_csv_path.parent, exist_ok=True)  # Ensure parent dir exists
+        f = open(results_csv_path, "a", newline="", encoding="utf-8")  # Open file in append mode once
+        writer = csv.writer(f)  # Create CSV writer for append operations
+        if not existed:  # If file did not exist previously
+            writer.writerow(results_cols_cfg)  # Write header row in configured order
+            f.flush()  # Flush header to disk immediately
+        RESULTS_CSV_HANDLES[key] = (f, writer)  # Cache file handle and writer for reuse
+        return (f, writer)  # Return created handle and writer
+    except Exception as _e:  # On failure, print warning and return None tuple
+        print(f"{BackgroundColors.YELLOW}Warning: could not open results CSV {results_csv_path}: {_e}{Style.RESET_ALL}")  # Warn about inability to open
+        return (None, None)  # Return sentinel values so callers can continue
+
+
 def find_config_value(cfg, key):
     """
     Search `cfg` recursively for `key` and return first found value or None.
