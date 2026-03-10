@@ -135,6 +135,25 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def build_parent_map(tree: ast.Module) -> dict:
+    """
+    Builds a mapping from each AST node's id to its direct parent node.
+
+    :param tree: The root ast.Module node of the abstract syntax tree.
+    :return: A dictionary mapping id(child_node) to its direct parent AST node.
+    """
+
+    verbose_output(f"{BackgroundColors.GREEN}Building AST parent map...{Style.RESET_ALL}")  # Log the parent map construction
+
+    parent_map = {}  # Initialize empty dictionary to store parent relationships
+    
+    for parent_node in ast.walk(tree):  # Walk every node in the AST tree
+        for child_node in ast.iter_child_nodes(parent_node):  # Iterate over immediate children of the current node
+            parent_map[id(child_node)] = parent_node  # Map the child node's id to its parent node
+
+    return parent_map  # Return the completed parent map
+
+
 def get_node_end_lineno(node: ast.AST) -> int:
     """
     Return the best-effort end line number for an AST node.
