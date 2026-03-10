@@ -637,6 +637,21 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def safe_float(value: Any, default: float = 0.0) -> float:
+    """
+    Safely convert a value to float, returning default if conversion fails.
+
+    :param value: Value to convert to float
+    :param default: Value to return if conversion fails
+    :return: float representation or default
+    """
+    
+    try:
+        return float(value)  # Attempt conversion to float
+    except (TypeError, ValueError):
+        return float(default)  # Return fallback default on conversion failure
+
+
 def gradient_penalty(critic, real_samples, fake_samples, labels, device, config: Optional[Dict] = None):
     """
     Compute the WGAN-GP gradient penalty.
