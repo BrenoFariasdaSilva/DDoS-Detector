@@ -637,6 +637,43 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def build_epoch_runtime_row(args, dataset, epoch: int, metrics_history: Dict, opt_G, opt_D) -> Dict:
+    """
+    Build runtime metrics dictionary for a single training epoch CSV row.
+
+    :param args: Parsed arguments namespace with training settings and timing attributes.
+    :param dataset: Loaded CSVFlowDataset instance for original sample count.
+    :param epoch: Current epoch index (zero-based).
+    :param metrics_history: Dictionary of tracked training metrics.
+    :param opt_G: Generator optimizer for learning rate extraction.
+    :param opt_D: Discriminator optimizer for learning rate extraction.
+    :return: Dictionary mapping column names to runtime-computed values.
+    """
+
+    row_runtime = {}  # Collect runtime-derived metrics into a dedicated mapping
+    row_runtime["original_file"] = Path(args.csv_path).name if getattr(args, "csv_path", None) else ""  # Original file name
+    row_runtime["epoch"] = epoch + 1  # Current epoch number (1-based)
+    row_runtime["epochs"] = getattr(args, "epochs", "")  # Total epochs configured
+    row_runtime["epoch_time_s"] = getattr(args, "_last_epoch_time", "")  # Epoch elapsed seconds
+    row_runtime["training_time_s"] = getattr(args, "_last_training_time", "")  # Total training elapsed seconds
+    row_runtime["file_time_s"] = getattr(args, "_last_file_time", "")  # File processing elapsed seconds
+    row_runtime["batch_size"] = getattr(args, "batch_size", "")  # Effective batch size used
+    row_runtime["lambda_gp"] = getattr(args, "lambda_gp", "")  # Gradient penalty coefficient
+    row_runtime["latent_dim"] = getattr(args, "latent_dim", "")  # Latent noise dimensionality
+    row_runtime["critic_loss"] = metrics_history.get("loss_D", [])[-1] if metrics_history.get("loss_D") else ""  # Last discriminator/critic loss
+    row_runtime["generator_loss"] = metrics_history.get("loss_G", [])[-1] if metrics_history.get("loss_G") else ""  # Last generator loss
+    row_runtime["gp"] = metrics_history.get("gp", [])[-1] if metrics_history.get("gp") else ""  # Last gradient penalty value
+    row_runtime["D_real"] = metrics_history.get("D_real", [])[-1] if metrics_history.get("D_real") else ""  # Avg critic score for real samples
+    row_runtime["D_fake"] = metrics_history.get("D_fake", [])[-1] if metrics_history.get("D_fake") else ""  # Avg critic score for fake samples
+    row_runtime["wasserstein"] = metrics_history.get("wasserstein", [])[-1] if metrics_history.get("wasserstein") else ""  # Estimated wasserstein distance
+    row_runtime["original_num_samples"] = getattr(dataset, "original_num_samples", "")  # Original sample count after preprocessing
+    row_runtime["critic_iterations"] = getattr(args, "critic_steps", "")  # Critic iterations per generator update
+    lr_gen, lr_crit = extract_optimizer_learning_rates(opt_G, opt_D, args)  # Extract learning rates safely from both optimizers
+    row_runtime["learning_rate_generator"] = lr_gen  # Generator learning rate
+    row_runtime["learning_rate_critic"] = lr_crit  # Critic learning rate
+    return row_runtime  # Return populated epoch runtime metrics dictionary
+
+
 def write_epoch_csv_row(args, config: Dict, device: torch.device, dataset, epoch: int, epoch_start_time: float, epoch_milestones, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history: Dict, opt_G, opt_D) -> None:
     """
     Compute epoch elapsed time and write a milestone CSV row for the current epoch.
