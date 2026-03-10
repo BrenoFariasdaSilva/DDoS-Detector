@@ -944,6 +944,7 @@ class ConfigNamespace:
         :return: None
         """
         
+        self.config = cfg  # Store the original config dictionary
         self.mode = cfg.get("wgangp", {}).get("mode", "both")
         self.csv_path = cfg.get("wgangp", {}).get("csv_path")
         self.label_col = cfg.get("wgangp", {}).get("label_col", "Label")
@@ -4212,58 +4213,6 @@ def run_wgangp(config: Optional[Union[Dict, str]] = None, **kwargs) -> None:  # 
         initialize_logger(final_config)  # Initialize logger with final configuration
 
         setup_telegram_bot(final_config)  # Setup Telegram bot with final configuration
-
-        class ConfigNamespace:
-            """
-            Namespace object that wraps configuration dictionary.
-            """
-            
-            def __init__(self, config_dict):
-                """
-                Initialize the ConfigNamespace with a configuration dictionary.
-                
-                :param self: The instance of the ConfigNamespace.
-                :param config_dict: The configuration dictionary to wrap.
-                """
-                
-                self.config = config_dict  # Store the original config dictionary
-                self.mode = config_dict.get("wgangp", {}).get("mode", "both")
-                self.csv_path = config_dict.get("wgangp", {}).get("csv_path")
-                self.label_col = config_dict.get("wgangp", {}).get("label_col", "Label")
-                self.feature_cols = config_dict.get("wgangp", {}).get("feature_cols")
-                self.seed = int(config_dict.get("wgangp", {}).get("seed", 42))  # Cast to int
-                self.force_cpu = config_dict.get("wgangp", {}).get("force_cpu", False)
-                self.from_scratch = config_dict.get("wgangp", {}).get("from_scratch", False)
-                self.out_dir = config_dict.get("paths", {}).get("out_dir", "outputs")
-                self.epochs = int(config_dict.get("training", {}).get("epochs", 60))  # Cast to int
-                self.batch_size = int(config_dict.get("training", {}).get("batch_size", 64))  # Cast to int
-                self.critic_steps = int(config_dict.get("training", {}).get("critic_steps", 5))  # Cast to int
-                self.lr = float(config_dict.get("training", {}).get("lr", 1e-4))  # Cast to float
-                self.beta1 = float(config_dict.get("training", {}).get("beta1", 0.5))  # Cast to float
-                self.beta2 = float(config_dict.get("training", {}).get("beta2", 0.9))  # Cast to float
-                self.lambda_gp = float(config_dict.get("training", {}).get("lambda_gp", 10.0))  # Cast to float
-                self.save_every = int(config_dict.get("training", {}).get("save_every", 5))  # Cast to int
-                self.log_interval = int(config_dict.get("training", {}).get("log_interval", 50))  # Cast to int
-                self.sample_batch = int(config_dict.get("training", {}).get("sample_batch", 16))  # Cast to int
-                self.use_amp = config_dict.get("training", {}).get("use_amp", False)
-                self.compile = config_dict.get("training", {}).get("compile", False)
-                self.latent_dim = int(config_dict.get("generator", {}).get("latent_dim", 100))  # Cast to int
-                self.g_hidden = config_dict.get("generator", {}).get("hidden_dims", [256, 512])
-                self.embed_dim = int(config_dict.get("generator", {}).get("embed_dim", 32))  # Cast to int
-                self.n_resblocks = int(config_dict.get("generator", {}).get("n_resblocks", 3))  # Cast to int
-                self.d_hidden = config_dict.get("discriminator", {}).get("hidden_dims", [512, 256, 128])
-                self.checkpoint = config_dict.get("generation", {}).get("checkpoint")
-                self.n_samples = float(config_dict.get("generation", {}).get("n_samples", 1.0))  # Cast to float
-                self.label = config_dict.get("generation", {}).get("label")
-                if self.label is not None:  # If label is not None
-                    self.label = int(self.label)  # Cast to int
-                self.out_file = config_dict.get("generation", {}).get("out_file", "generated.csv")
-                self.gen_batch_size = int(config_dict.get("generation", {}).get("gen_batch_size", 256))  # Cast to int
-                self.feature_dim = config_dict.get("generation", {}).get("feature_dim")
-                if self.feature_dim is not None:  # If feature_dim is not None
-                    self.feature_dim = int(self.feature_dim)  # Cast to int
-                self.num_workers = int(config_dict.get("dataloader", {}).get("num_workers", 8))  # Cast to int
-                self._last_training_time = 0.0  # Placeholder for last training elapsed time (set after train)
 
         args = ConfigNamespace(final_config)  # Create namespace from config
 
