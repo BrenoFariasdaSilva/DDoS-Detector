@@ -637,6 +637,37 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def prepare_and_write_results_csv_row(args, config: Dict, args_ck: Dict, ckpt: Dict, n: int, device: torch.device) -> None:
+    """
+    Prepare and write a results CSV row with generation metrics and hyperparameters.
+
+    :param args: Parsed arguments namespace with csv_path and out_file.
+    :param config: Configuration dictionary with wgangp and paths settings.
+    :param args_ck: Saved arguments dictionary from checkpoint.
+    :param ckpt: Loaded checkpoint dictionary containing metrics_history.
+    :param n: Total number of generated samples.
+    :param device: Torch device used for hardware specification lookup.
+    :return: None.
+    """
+
+    results_cols_cfg = config.get("wgangp", {}).get("results_csv_columns", [])  # Read configured results columns list
+    if not isinstance(results_cols_cfg, list) or len(results_cols_cfg) == 0:  # Validate list exists and is non-empty
+        print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Clear error message
+        raise ValueError("'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration")  # Stop safely
+    results_csv_path, ck_csv_path = resolve_generation_results_csv_path(args, config, args_ck)  # Resolve results CSV path from args or checkpoint
+    if results_csv_path is not None:  # If we have a place to record results
+        metadata = collect_generation_file_metadata(args, ckpt, n, ck_csv_path)  # Collect file metadata for generation results
+        row_runtime = build_generation_runtime_row(args, config, n, device, metadata)  # Build runtime metrics dictionary for CSV row
+        try:  # Wrap open/write in try/except to avoid crashing on I/O issues
+            f_handle, writer = open_results_csv(results_csv_path, results_cols_cfg)  # Get persistent handle and writer
+            if f_handle and writer:  # If we successfully opened or reused a writer
+                ordered = build_ordered_csv_row_from_runtime(row_runtime, results_cols_cfg, config)  # Build ordered CSV row from runtime values using shared helper
+                writer.writerow(ordered)  # Write the ordered row to CSV
+                flush_csv_file_safely(f_handle)  # Flush CSV file to disk safely
+        except Exception as _we:  # On any write/open failure, warn and continue
+            print(f"{BackgroundColors.YELLOW}Warning: failed to persist generation row: {_we}{Style.RESET_ALL}")  # Warn but do not abort
+
+
 def warn_on_results_csv_failure(e: Exception) -> None:
     """
     Print a warning when results CSV preparation fails.
