@@ -2914,7 +2914,7 @@ def generate_convergence_plots(
                     plt.plot(generations[: len(best_f1_history)], best_f1_history, marker="o", linestyle="-", color="#1f77b4", linewidth=2, markersize=4)  # Plot best F1 with blue line
                     plt.xlabel("Generation", fontsize=12)  # Set X-axis label
                     plt.ylabel("Best F1-Score", fontsize=12)  # Set Y-axis label
-                    plt.title(f"Best F1-Score Convergence\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                    plt.title(f"Best F1-Score Convergence\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
                     plt.grid(True, linestyle="--", alpha=0.5)  # Add grid with 50% transparency
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "01_best_f1_convergence.png")  # Define plot path
@@ -2930,7 +2930,7 @@ def generate_convergence_plots(
                     plt.plot(generations[: len(best_features_history)], best_features_history, marker="s", linestyle="-", color="#ff7f0e", linewidth=2, markersize=4)  # Plot feature count with orange line
                     plt.xlabel("Generation", fontsize=12)  # Set X-axis label
                     plt.ylabel("Number of Selected Features", fontsize=12)  # Set Y-axis label
-                    plt.title(f"Feature Count Evolution\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                    plt.title(f"Feature Count Evolution\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
                     plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "02_feature_count_evolution.png")  # Define plot path
@@ -2946,7 +2946,7 @@ def generate_convergence_plots(
                     plt.plot(generations[: len(pareto_size_history)], pareto_size_history, marker="^", linestyle="-", color="#2ca02c", linewidth=2, markersize=4)  # Plot Pareto size with green line
                     plt.xlabel("Generation", fontsize=12)  # Set X-axis label
                     plt.ylabel("Pareto Front Size", fontsize=12)  # Set Y-axis label
-                    plt.title(f"Pareto Front Size Evolution\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                    plt.title(f"Pareto Front Size Evolution\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
                     plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "03_pareto_front_size.png")  # Define plot path
@@ -2962,7 +2962,7 @@ def generate_convergence_plots(
                     plt.plot(generations[: len(avg_f1_history)], avg_f1_history, marker="d", linestyle="-", color="#d62728", linewidth=2, markersize=4)  # Plot average F1 with red line
                     plt.xlabel("Generation", fontsize=12)  # Set X-axis label
                     plt.ylabel("Population Average F1-Score", fontsize=12)  # Set Y-axis label
-                    plt.title(f"Population Average F1-Score\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                    plt.title(f"Population Average F1-Score\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
                     plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "04_avg_f1_evolution.png")  # Define plot path
@@ -2978,7 +2978,7 @@ def generate_convergence_plots(
                     plt.plot(generations[: len(avg_features_history)], avg_features_history, marker="v", linestyle="-", color="#9467bd", linewidth=2, markersize=4)  # Plot average features with purple line
                     plt.xlabel("Generation", fontsize=12)  # Set X-axis label
                     plt.ylabel("Population Average Feature Count", fontsize=12)  # Set Y-axis label
-                    plt.title(f"Population Average Feature Count\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                    plt.title(f"Population Average Feature Count\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
                     plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "05_avg_feature_count_evolution.png")  # Define plot path
@@ -2994,7 +2994,7 @@ def generate_convergence_plots(
                     plt.plot(generations[: len(hypervolume_history)], hypervolume_history, marker="*", linestyle="-", color="#8c564b", linewidth=2, markersize=6)  # Plot hypervolume with brown line
                     plt.xlabel("Generation", fontsize=12)  # Set X-axis label
                     plt.ylabel("Hypervolume", fontsize=12)  # Set Y-axis label
-                    plt.title(f"Hypervolume Evolution (Pareto Quality)\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                    plt.title(f"Hypervolume Evolution (Pareto Quality)\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
                     plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "06_hypervolume_evolution.png")  # Define plot path
@@ -3010,7 +3010,7 @@ def generate_convergence_plots(
                     plt.plot(generations[: len(diversity_history)], diversity_history, marker="p", linestyle="-", color="#e377c2", linewidth=2, markersize=4)  # Plot diversity with pink line
                     plt.xlabel("Generation", fontsize=12)  # Set X-axis label
                     plt.ylabel("Population Diversity (Avg Hamming Distance)", fontsize=12)  # Set Y-axis label
-                    plt.title(f"Population Diversity Evolution\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                    plt.title(f"Population Diversity Evolution\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
                     plt.grid(True, linestyle="--", alpha=0.5)  # Add grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "07_diversity_evolution.png")  # Define plot path
@@ -3038,7 +3038,7 @@ def generate_convergence_plots(
                     labels = [str(l.get_label()) for l in lines]  # Extract labels as strings
                     ax1.legend(lines, labels, loc="best")  # Add legend
 
-                    plt.title(f"Multi-Objective Convergence\\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
+                    plt.title(f"Multi-Objective Convergence\n{base_dataset_name} (run={run}, pop={pop_size})", fontsize=14)  # Set plot title
                     ax1.grid(True, linestyle="--", alpha=0.5)  # Add grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(plot_output_dir, "08_multi_objective_convergence.png")  # Define plot path
