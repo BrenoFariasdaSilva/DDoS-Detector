@@ -637,6 +637,82 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def adjust_num_workers_for_file(csv_path: str, suggested_workers: int, config: Optional[Dict] = None) -> int:
+    """
+    Adjust DataLoader `num_workers` based on CSV file size and total FREE system RAM.
+
+    New rule:
+        num_workers = (file_size_gb * 3) / free_ram_gb
+
+    :param csv_path: Path to the CSV file to inspect
+    :param suggested_workers: Initial suggested num_workers value from config
+    :param config: Optional configuration dictionary
+    :return: Adjusted num_workers integer
+    """
+
+    try:  # Guard helper with try/except to follow project style
+        if config is None: config = CONFIG or get_default_config()  # Use provided config or fallback to global/default
+
+        file_size_bytes = Path(csv_path).stat().st_size  # Get file size in bytes from filesystem
+        file_size_gb = safe_float(file_size_bytes, 0.0) / (1024.0 ** 3)  # Convert bytes to gigabytes (GB) safely
+
+        if psutil is None:  # If psutil is unavailable
+            print(f"{BackgroundColors.YELLOW}Warning: psutil not available, cannot detect free RAM; using suggested num_workers: {suggested_workers}{Style.RESET_ALL}")  # Warn about fallback to suggested_workers
+            final = max(0, int(suggested_workers))  # Fallback to suggested
+            try:
+                send_telegram_message(TELEGRAM_BOT, f"[INFO] num_workers for {Path(csv_path).name}: {final} (psutil unavailable)")  # Notify via Telegram
+            except Exception:
+                pass  # Do not break execution if Telegram fails
+            return final  # Return suggested_workers when RAM detection is impossible
+
+        vm = psutil.virtual_memory()  # Capture virtual memory snapshot
+        free_ram_gb = safe_float(vm.available, 0.0) / (1024.0 ** 3)  # Use AVAILABLE RAM (not total) in GB
+
+        print(f"{BackgroundColors.GREEN}Detected file size: {BackgroundColors.CYAN}{file_size_gb:.4f} GB{Style.RESET_ALL}")  # Log detected file size
+        print(f"{BackgroundColors.GREEN}Detected free RAM: {BackgroundColors.CYAN}{free_ram_gb:.4f} GB{Style.RESET_ALL}")  # Log detected available RAM
+        print(f"{BackgroundColors.GREEN}Original suggested num_workers: {BackgroundColors.CYAN}{suggested_workers}{Style.RESET_ALL}")  # Log original suggestion
+
+        computed = None
+        if file_size_gb <= 0.0:  # If file size cannot be determined or is zero
+            print("[WARNING] File size detected as 0 GB; keeping suggested num_workers")
+            final = max(0, int(suggested_workers))
+        else:  # Otherwise, compute num_workers based on file size and free RAM
+            computed = (free_ram_gb * 3.0) / file_size_gb  # Updated formula: free_ram numerator
+            try:  # Attempt to convert computed value to float for proper scaling
+                computed_val = float(computed)
+            except Exception:
+                computed_val = float(int(suggested_workers))
+            computed = computed_val
+            final = int(max(0, computed_val))  # Ensure non-negative integer
+
+        cpu_count = os.cpu_count() or 1  # Detect CPU count safely
+        final = min(final, cpu_count)  # Do not exceed logical CPUs
+
+        print(f"{BackgroundColors.GREEN}Computed num_workers based on formula: {BackgroundColors.CYAN}{computed:.4f}{Style.RESET_ALL}")  # Log computed value before final adjustment
+
+        available_disk_gb = get_available_disk_space_gb()  # Retrieve available disk space in GB for Telegram notification
+        total_disk_gb = get_total_disk_space_gb()  # Retrieve total disk space in GB for Telegram notification
+        used_disk_percent = get_used_disk_percentage()  # Retrieve used disk percentage for Telegram notification
+        total_cores = os.cpu_count() or 1  # Detect total logical CPU cores with safe fallback for reporting
+        try:  # Notify via Telegram (non-blocking)
+            send_telegram_message(
+                TELEGRAM_BOT,
+                f"[INFO] num_workers adjusted for {Path(csv_path).name} | "
+                f"file={file_size_gb:.2f}GB | free_ram={free_ram_gb:.2f}GB | "
+                f"storage={available_disk_gb:.2f}/{total_disk_gb:.2f}GB ({used_disk_percent:.2f}%) | "
+                f"final_workers={final} (total cores: {total_cores})",
+            )
+        except Exception:
+            pass  # Never allow Telegram failure to affect training
+
+        return final  # Return computed value
+
+    except Exception as e:  # On error, report and re-raise following project conventions
+        print(str(e))  # Print exception for visibility
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception via Telegram
+        raise  # Re-raise to allow outer handler to manage it
+
+
 def compute_epoch_milestones(total_epochs: int) -> List[int]:
     """
     Compute milestone epoch indices for progress-based CSV writes.
