@@ -4319,6 +4319,28 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def apply_dataset_ordering(files: list, generating_order: str) -> list:
+    """
+    Sort the list of files according to the configured dataset ordering strategy.
+
+    :param files: List of file path strings to sort.
+    :param generating_order: Ordering strategy string (off, Ascending, or Descending).
+    :return: Ordered list of file path strings.
+    """
+
+    if generating_order not in ("off", "Ascending", "Descending"):  # Validate ordering value against allowed set
+        generating_order = "off"  # Fall back to off when value is unrecognized
+    if generating_order == "Ascending":  # Sort files from smallest to largest by file size
+        files = sorted(files, key=lambda f: os.path.getsize(f))  # Apply ascending size sort to file list
+        safe_debug("WGANGP dataset generation order: Ascending")  # Log chosen ascending ordering strategy
+    elif generating_order == "Descending":  # Sort files from largest to smallest by file size
+        files = sorted(files, key=lambda f: os.path.getsize(f), reverse=True)  # Apply descending size sort to file list
+        safe_debug("WGANGP dataset generation order: Descending")  # Log chosen descending ordering strategy
+    else:  # Preserve original discovery order when ordering is disabled
+        safe_debug("WGANGP dataset generation order: Off")  # Log that no ordering is applied to the file list
+    return files  # Return ordered file list for iteration
+
+
 def build_file_progress_prefix(index: int, total: int) -> str:
     """
     Build a colored [index/total] progress prefix string for file processing messages.
