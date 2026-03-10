@@ -1322,7 +1322,7 @@ def get_files_to_process(directory_path, file_extension=".csv", config: Optional
         )  # Verbose: starting file collection
         verify_filepath_exists(directory_path)  # Validate directory path exists
 
-        if not os.path.isdir(directory_path):  # Check if path is a valid directory
+        if not os.path.isdir(directory_path):  # Verify path is a valid directory
             verbose_output(
                 f"{BackgroundColors.RED}Not a directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}",
                 config=config
@@ -1347,7 +1347,7 @@ def get_files_to_process(directory_path, file_extension=".csv", config: Optional
             item_path = os.path.join(directory_path, item)  # Absolute path
             filename = os.path.basename(item_path)  # Extract just the filename
 
-            if any(ignore == filename or ignore == item_path for ignore in ignore_files):  # Check if file is in ignore list
+            if any(ignore == filename or ignore == item_path for ignore in ignore_files):  # Verify if file is in ignore list
                 verbose_output(
                     f"{BackgroundColors.YELLOW}Ignoring {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} (listed in ignore_files){Style.RESET_ALL}",
                     config=config
@@ -1448,7 +1448,7 @@ def ensure_figure_min_4k_and_save(fig=None, path=None, dpi=None, **kwargs):
     effective_dpi = dpi if dpi is not None else fig.get_dpi()  # Determine effective DPI for size calculations
     width_inch, height_inch = fig.get_size_inches()  # Get current figure size in inches
 
-    if width_inch * effective_dpi < 3840 or height_inch * effective_dpi < 2160:  # Check if current size is below 4k dimensions
+    if width_inch * effective_dpi < 3840 or height_inch * effective_dpi < 2160:  # Verify if current size is below 4k dimensions
         new_w = max(width_inch, 3840.0 / effective_dpi)  # Calculate new width in inches to meet 4k width requirement
         new_h = max(height_inch, 2160.0 / effective_dpi)  # Calculate new height in inches to meet 4k height requirement
         fig.set_size_inches(new_w, new_h)  # Update figure size to ensure minimum 4k dimensions
@@ -1609,7 +1609,7 @@ def open_results_csv(results_csv_path, results_cols_cfg):
         if key in RESULTS_CSV_HANDLES:  # If already opened, reuse handle
             return RESULTS_CSV_HANDLES[key]  # Return cached (file_obj, writer)
 
-        existed = results_csv_path.exists()  # Check whether file exists already
+        existed = results_csv_path.exists()  # Verify whether file exists already
         os.makedirs(results_csv_path.parent, exist_ok=True)  # Ensure parent dir exists
         f = open(results_csv_path, "a", newline="", encoding="utf-8")  # Open file in append mode once
         writer = csv.writer(f)  # Create CSV writer for append operations
@@ -1677,7 +1677,7 @@ def compose_training_start_message(args, file_progress_prefix) -> str:
             num_samples = "?"  # Use "?" to indicate unknown sample count when reading fails
         file_size_bytes = Path(args.csv_path).stat().st_size  # Get file size in bytes from filesystem
         file_size_gb = safe_float(file_size_bytes, 0.0) / (1024.0 ** 3)  # Convert bytes to gigabytes (GB) safely
-        return f"{file_progress_prefix} Startining on {file_name} ({num_samples} samples, {file_size_gb:.2f} GB) for {args.epochs} epochs"  # Single formatted f-string as requested
+        return f"{file_progress_prefix} Starting on {file_name} ({num_samples} samples, {file_size_gb:.2f} GB) for {args.epochs} epochs"  # Single formatted f-string as requested
     except Exception as e:
         print(str(e))  # Print exception for visibility
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception information via Telegram
@@ -2988,10 +2988,8 @@ def export_dataframe_image(styled_df: pd.io.formats.style.Styler, output_path: U
 
     try:
         out_p = Path(output_path)  # Ensure Path object for output
-        # Ensure parent directory exists before writing
-        out_p.parent.mkdir(parents=True, exist_ok=True)  # Create directories as needed
-        # Use dataframe_image to export the styled dataframe to PNG
-        dfi.export(cast(Any, styled_df), str(out_p))  # Export to PNG using dataframe_image with cast to satisfy static typing
+        out_p.parent.mkdir(parents=True, exist_ok=True)  # Ensure parent directory exists before writing
+        dfi.export(cast(Any, styled_df), str(out_p))  # Export styled dataframe to PNG using dataframe_image with cast to satisfy static typing
     except Exception as e:
         print(str(e))  # Print export error for visibility
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram
@@ -3012,8 +3010,7 @@ def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str
         parent = out_p.parent  # Parent directory
         if not parent.exists():  # If parent directory does not exist
             parent.mkdir(parents=True, exist_ok=True)  # Try to create it
-        # Verify directory is writable
-        if not os.access(str(parent), os.W_OK):  # Check write permission
+        if not os.access(str(parent), os.W_OK):  # Verify directory is writable before proceeding
             raise PermissionError(f"Directory not writable: {parent}")  # Raise on non-writable
         styled = apply_zebra_style(df)  # Create a zebra-styled Styler from df
         export_dataframe_image(styled, out_p)  # Export styled DataFrame to PNG
@@ -3038,8 +3035,7 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
         csv_p = Path(csv_path)  # Convert csv_path to Path
         parent = csv_p.parent  # Parent directory for CSV
         parent.mkdir(parents=True, exist_ok=True)  # Ensure parent exists
-        # Verify parent directory is writable before attempting to write CSV
-        if not os.access(str(parent), os.W_OK):  # If not writable
+        if not os.access(str(parent), os.W_OK):  # Verify parent directory is writable before writing CSV
             raise PermissionError(f"Directory not writable: {parent}")  # Raise permission error
         df.to_csv(str(csv_p), index=False)  # Save CSV to disk preserving DataFrame content/order
         
@@ -3604,8 +3600,10 @@ def notify_generation_finish_via_telegram(args, n: int, file_progress_prefix: st
 
     try:  # Build a safe, human-readable finish message and notify via Telegram
         gen_path = Path(args.out_file)  # Path object for generated file
-        try:  # Try to get original_num if available safely
-            original_num = locals().get('original_num', None)  # Try to get original_num from local variables (set in compose_generation_start_message)
+        try:  # Try to determine original dataset size for ratio calculation
+            original_num = None  # Default original count
+            if getattr(args, "csv_path", None):  # If csv_path is available on args
+                original_num = len(pd.read_csv(args.csv_path, low_memory=False))  # Count original CSV rows for ratio
         except Exception:
             original_num = None  # Fallback to None on any error
         try:  # Try to compute ratio string safely
@@ -3989,8 +3987,7 @@ def get_hardware_specifications(device_used=None):
         ram_gb = round(psutil.virtual_memory().total / (1024**3), 1) if psutil else None  # Total RAM in GB
         os_name = f"{platform.system()} {platform.release()}"  # OS name + version
 
-        # GPU detection and summary
-        try:
+        try:  # Detect GPU availability and build GPU summary
             cuda_available = torch.cuda.is_available() if hasattr(torch, "cuda") else False  # Whether CUDA is available
         except Exception:
             cuda_available = False  # Fallback
@@ -4059,8 +4056,7 @@ def populate_hardware_column(df, column_name="hardware", device_used=None):
     try:
         try:  # Try to fetch hardware specifications
             hardware_specs = get_hardware_specifications(device_used=device_used)  # Get system specs with device info
-            # Build readable hardware string including GPU, CUDA and device used
-            gpu_part = hardware_specs.get('gpu', 'None') if hardware_specs.get('gpu', None) is not None else 'None'  # GPU part
+            gpu_part = hardware_specs.get('gpu', 'None') if hardware_specs.get('gpu', None) is not None else 'None'  # GPU part for readable hardware string
             hardware_str = (  # Build readable hardware string
                 f"{hardware_specs.get('cpu_model','Unknown')} | Cores: {hardware_specs.get('cores', 'N/A')}"
                 f" | RAM: {hardware_specs.get('ram_gb', 'N/A')} GB | OS: {hardware_specs.get('os','Unknown')}"
@@ -4202,8 +4198,7 @@ def run_wgangp(config: Optional[Union[Dict, str]] = None, **kwargs) -> None:  # 
 
         CONFIG = final_config  # Update global config
 
-        # Validate results_csv_columns existence and type in config for wgangp module
-        results_cols_chk = final_config.get("wgangp", {}).get("results_csv_columns")  # Read configured results columns list
+        results_cols_chk = final_config.get("wgangp", {}).get("results_csv_columns")  # Validate and read configured results columns list from wgangp section
         if not isinstance(results_cols_chk, list) or len(results_cols_chk) == 0:  # Ensure the value exists, is a list, and is non-empty
             print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Print clear error message
             raise ValueError("'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration")  # Stop execution safely with clear error
