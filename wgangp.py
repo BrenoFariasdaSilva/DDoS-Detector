@@ -637,6 +637,32 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def get_default_config():
+    """
+    Return the default configuration dictionary for WGAN-GP.
+
+    This defines all configurable parameters with their default values.
+    These defaults match config.yaml.example structure and can be overridden
+    by config.yaml file or CLI arguments.
+
+    :return: Dictionary containing default configuration values
+    """
+
+    try:
+        runtime = build_default_runtime_config()  # Build execution, wgangp, and dataset defaults
+        training_model = build_default_training_and_model_config()  # Build training and model architecture defaults
+        output_notif = build_default_output_and_notification_config()  # Build output and notification defaults
+        merged = {}  # Initialize merged configuration dictionary
+        merged.update(runtime)  # Merge runtime section into final config
+        merged.update(training_model)  # Merge training and model section into final config
+        merged.update(output_notif)  # Merge output and notification section into final config
+        return merged  # Return complete default configuration dictionary
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def load_configuration(config_path: Optional[str] = None, cli_overrides: Optional[Dict] = None):
     """
     Load configuration from config.yaml with fallback to defaults.
