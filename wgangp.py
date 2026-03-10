@@ -637,6 +637,25 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+    """
+    Apply zebra-striping style to a DataFrame using pandas Styler.
+
+    :param df: Input DataFrame to style
+    :return: pandas Styler with zebra row background colors applied
+    """
+    
+    try:
+        styled = df.style.apply(row_style_for_zebra, axis=1)  # Apply zebra function row-wise using top-level helper
+        styled = styled.set_table_attributes('style="border-collapse:collapse; width:100%;"')  # Tight table style
+        styled = cast(pd.io.formats.style.Styler, cast(Any, styled).set_properties(**{"border": "1px solid #ddd", "padding": "6px"}))  # Cell padding/border (cast to Any to satisfy typing)
+        return styled  # Return the styled object
+    except Exception as e:
+        print(str(e))  # Print error for visibility
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram
+        raise  # Propagate error to caller
+
+
 def export_dataframe_image(styled_df: pd.io.formats.style.Styler, output_path: Union[str, Path]):
     """
     Export a pandas Styler to a PNG image using dataframe_image.
