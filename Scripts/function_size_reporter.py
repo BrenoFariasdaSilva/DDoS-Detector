@@ -67,7 +67,6 @@ if PROJECT_ROOT not in sys.path:  # Ensure project root is in sys.path
 from Logger import Logger  # For logging output to both terminal and file
 
 
-
 # Macros:
 class BackgroundColors:  # Colors for the terminal
     CYAN = "\033[96m"  # Cyan
