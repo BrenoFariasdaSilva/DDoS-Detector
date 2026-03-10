@@ -4319,6 +4319,21 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def execute_generation_with_verification(args: Any, config: Dict) -> None:
+    """
+    Verify whether generation is needed and execute it if so.
+
+    :param args: Argument namespace containing generation settings and output path.
+    :param config: Configuration dictionary passed to the generate function.
+    :return: None
+    """
+
+    if verify_data_augmentation_file(args, config):  # Verify if generation is necessary according to existing output and configuration
+        generate(args, config)  # Execute synthetic sample generation when output is absent or insufficient
+    else:  # Skip generation when configured n_samples already satisfied by existing output
+        print(f"{BackgroundColors.GREEN}Skipping generation: output file already satisfies configured n_samples.{Style.RESET_ALL}")  # Inform user that generation is skipped
+
+
 def resolve_checkpoint_after_training(args: Any, config: Dict, csv_path_obj: Path, data_aug_dir: Path) -> Path:
     """
     Resolve the generator checkpoint path produced after training and assign it to args.
