@@ -637,6 +637,28 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def args_to_config_overrides(args):
+    """
+    Convert parsed CLI arguments to configuration overrides dictionary.
+
+    :param args: argparse.Namespace containing CLI arguments
+    :return: Dictionary with configuration overrides
+    """
+
+    try:
+        overrides = {}  # Initialize overrides dictionary
+    
+        apply_core_cli_overrides(args, overrides)  # Apply execution, wgangp, and paths overrides
+        apply_training_and_model_cli_overrides(args, overrides)  # Apply training, generator, and discriminator overrides
+        apply_generation_and_data_cli_overrides(args, overrides)  # Apply generation, dataloader, and dataset overrides
+        
+        return overrides  # Return overrides dictionary
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def set_seed(seed: int):
     """
     Sets random seeds for reproducibility across all libraries.
