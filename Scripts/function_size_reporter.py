@@ -135,6 +135,34 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def build_report(tree: ast.Module) -> dict:
+    """
+    Builds the complete JSON report structure from the parsed AST.
+
+    :param tree: The root ast.Module node of the abstract syntax tree.
+    :return: A dictionary representing the complete function size report.
+    """
+
+    verbose_output(f"{BackgroundColors.GREEN}Building function size report...{Style.RESET_ALL}")  # Log the report build operation
+
+    parent_map = build_parent_map(tree)  # Build the parent map for the entire AST tree
+    classes = collect_class_methods(tree, parent_map)  # Collect all class method metadata
+    top_level = collect_top_level_functions(tree, parent_map)  # Collect all top-level function metadata
+    nested = collect_nested_functions(tree, parent_map)  # Collect all nested function metadata
+
+    total_methods = sum(len(methods) for methods in classes.values())  # Compute the total method count across all classes
+    total_functions = total_methods + len(top_level) + len(nested)  # Compute the grand total across all categories
+
+    report = {  # Build the complete report dictionary
+        "total_functions": total_functions,  # Store the total function count
+        "classes": classes,  # Store the class methods data
+        "top-level functions": top_level,  # Store the top-level functions data
+        "nested functions": nested,  # Store the nested functions data
+    }
+
+    return report  # Return the completed report dictionary
+
+
 def save_report(report: dict, output_path: Path) -> None:
     """
     Serializes and saves the function size report to a JSON file on disk.
