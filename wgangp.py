@@ -4319,6 +4319,39 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def process_dataset_path(args: Any, config: Dict, mode: str, input_path: str, results_cols: list, results_suffix: str) -> None:
+    """
+    Process all CSV files discovered within a single dataset directory path.
+
+    :param args: Argument namespace updated per-file during batch processing.
+    :param config: Configuration dictionary with paths and execution settings.
+    :param mode: Execution mode string (train, gen, or both).
+    :param input_path: String path to the dataset directory to scan for CSV files.
+    :param results_cols: List of column names for the per-directory results CSV header.
+    :param results_suffix: Suffix appended to each input filename for its output file.
+    :return: None
+    """
+
+    data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read configured data augmentation subdirectory name
+    data_aug_dir = Path(input_path) / data_aug_subdir  # Construct Data_Augmentation directory path inside dataset root
+    per_dir_results_csv = data_aug_dir / "data_augmentation_results.csv"  # Build path for per-directory results CSV
+    
+    create_results_csv_if_absent(per_dir_results_csv, results_cols)  # Write header to results CSV when file does not yet exist
+    
+    files_to_process = get_files_to_process(input_path, file_extension=".csv", config=config)  # Collect all CSV files in dataset directory
+    generating_order = config.get("wgangp", {}).get("generating_order", "off")  # Read configured generation ordering strategy
+    files_to_process = apply_dataset_ordering(files_to_process, generating_order)  # Apply ordering strategy to collected file list
+    total_files = len(files_to_process)  # Count total files for progress display
+    
+    for index, file in enumerate(files_to_process, start=1):  # Iterate files with 1-based index for progress tracking
+        try:  # Catch per-file errors to allow batch to continue after individual failures
+            process_single_dataset_file(args, config, mode, file, index, total_files, results_suffix)  # Process file with progress tracking
+        except Exception as e:  # Handle any unrecovered error from file processing
+            print(f"{BackgroundColors.RED}Error processing {BackgroundColors.CYAN}{file}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")  # Print descriptive error with file path
+            traceback.print_exc()  # Print full exception traceback for debugging investigation
+            continue  # Advance to next file despite error in current file
+
+
 def run_batch_mode(args: Any, config: Dict, datasets: Dict, mode: str, results_suffix: str, results_cols: list) -> None:
     """
     Iterate over all configured datasets and process each discovered CSV file.
