@@ -637,6 +637,48 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, device: torch.device, args, config: Dict, n_classes: int) -> tuple:
+    """
+    Execute multiple discriminator training steps with gradient penalty.
+
+    :param G: Generator model for producing fake samples.
+    :param D: Discriminator model to train.
+    :param opt_D: Discriminator optimizer.
+    :param scaler: AMP gradient scaler (may be None).
+    :param real_x: Tensor of real features on device.
+    :param labels: Tensor of integer labels on device.
+    :param device: Torch device for tensor allocation.
+    :param args: Parsed arguments namespace with critic_steps, batch_size, latent_dim, lambda_gp.
+    :param config: Configuration dictionary for gradient penalty computation.
+    :param n_classes: Number of label classes for conditional generation.
+    :return: Tuple of (loss_D, gp, d_real_score, d_fake_score) as tensors.
+    """
+
+    loss_D = torch.tensor(0.0, device=device)  # Initialize discriminator loss
+    gp = torch.tensor(0.0, device=device)  # Initialize gradient penalty
+    d_real_score = torch.tensor(0.0, device=device)  # Initialize real score tracker
+    d_fake_score = torch.tensor(0.0, device=device)  # Initialize fake score tracker
+    for _ in range(args.critic_steps):  # Train discriminator multiple steps
+        with autocast(device.type, enabled=(scaler is not None)):  # Enable AMP if available
+            z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for discriminator step
+            fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
+            d_real = D(real_x, labels)  # Get discriminator score for real samples
+            d_fake = D(fake_x, labels)  # Get discriminator score for fake samples
+            gp = gradient_penalty(D, real_x, fake_x, labels, device, config)  # Compute gradient penalty with config
+            loss_D = d_fake.mean() - d_real.mean() + args.lambda_gp * gp  # Calculate WGAN-GP discriminator loss
+        opt_D.zero_grad(set_to_none=True)  # Reset discriminator gradients to None for reduced memory overhead
+        if scaler is not None:  # If using mixed precision
+            scaler.scale(loss_D).backward()  # Scale loss and backpropagate
+            scaler.step(opt_D)  # Update discriminator parameters with scaled gradients
+            scaler.update()  # Update scaler for next iteration
+        else:  # Standard precision
+            loss_D.backward()  # Backpropagate discriminator loss
+            opt_D.step()  # Update discriminator parameters
+        d_real_score = d_real.mean()  # Store average real score
+        d_fake_score = d_fake.mean()  # Store average fake score
+    return loss_D, gp, d_real_score, d_fake_score  # Return discriminator training results
+
+
 def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, args, n_classes: int):
     """
     Execute a single generator training step.
