@@ -637,6 +637,36 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def generate(args, config: Optional[Dict] = None):
+    """
+    Generate synthetic samples from a saved generator checkpoint.
+
+    :param args: parsed arguments namespace containing generation options
+    :param config: Optional configuration dictionary (will use global CONFIG if not provided)
+    :return: None
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG or get_default_config()  # Use global or default config
+        ckpt, args_ck, scaler, label_encoder, feature_cols, class_distribution, device, file_progress_prefix = normalize_args_and_load_checkpoint(args, config)  # Normalize args, select device, and load checkpoint
+        scaler, label_encoder, feature_cols, class_distribution = reconstruct_missing_preprocessing_objects(args, scaler, label_encoder, feature_cols, class_distribution)  # Reconstruct missing preprocessing objects from CSV if needed
+        feature_dim, n_classes = determine_feature_dim_and_n_classes(args, scaler, label_encoder)  # Determine feature dimensionality and class count
+        G = build_and_load_generator(args, config, ckpt, device, feature_dim, n_classes)  # Build and load generator model from checkpoint
+        n_per_class, labels, n = compute_generation_counts_and_labels(args, config, class_distribution, label_encoder, n_classes)  # Compute per-class counts and label array
+        notify_start_of_generation(args, n)  # Send Telegram notification about generation start
+        all_fake, all_labels, sample_generation_start_time = generate_batches_and_collect_results(args, G, device, labels, n)  # Generate synthetic samples in batches
+        df = postprocess_generated_arrays_to_dataframe(args, config, all_fake, all_labels, scaler, label_encoder, feature_cols, device, n, file_progress_prefix)  # Postprocess arrays into DataFrame and save
+        record_sample_generation_timing(args, sample_generation_start_time)  # Record sample generation elapsed time
+        notify_generation_finish_via_telegram(args, n, file_progress_prefix)  # Send Telegram finish notification
+        try:  # Wrap result writing in try/except to avoid breaking generation on failures
+            prepare_and_write_results_csv_row(args, config, args_ck, ckpt, n, device)  # Prepare and write results CSV row
+        except Exception as e:
+            warn_on_results_csv_failure(e)  # Warn on results CSV preparation failure
+    except Exception as e:
+        handle_generate_top_level_exception(e)  # Handle top-level exception by logging and re-raising
+
+
 def to_seconds(obj):
     """
     Converts various time-like objects to seconds.
