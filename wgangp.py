@@ -637,6 +637,66 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def collect_generation_file_metadata(args, ckpt: Dict, n: int, ck_csv_path) -> Dict:
+    """
+    Collect file metadata for generation results including filenames, counts, and timing.
+
+    :param args: Parsed arguments namespace with csv_path, out_file, and timing attributes.
+    :param ckpt: Loaded checkpoint dictionary containing metrics_history.
+    :param n: Total number of generated samples.
+    :param ck_csv_path: Checkpoint-recovered csv Path object (may be None).
+    :return: Dictionary with generation metadata values.
+    """
+
+    metadata = {}  # Initialize metadata dictionary
+    if getattr(args, "csv_path", None):  # Verify args.csv_path exists and is not None
+        metadata["original_file_name"] = Path(args.csv_path).name  # Use basename from args.csv_path when available
+    else:  # Fallback to checkpoint saved path when args.csv_path missing
+        if ck_csv_path:  # Use guarded Path object from checkpoint when available
+            try:  # Attempt to get name from checkpoint path
+                metadata["original_file_name"] = ck_csv_path.name  # Use basename from guarded checkpoint Path
+            except Exception:  # If name extraction fails
+                metadata["original_file_name"] = ""  # Use empty string on any failure
+        else:  # No path available
+            metadata["original_file_name"] = ""  # Default to empty when no path available
+    metadata["generated_file_name"] = Path(args.out_file).name if getattr(args, "out_file", None) else ""  # Generated file name
+    try:  # Attempt to count original CSV rows
+        metadata["original_num"] = None  # Default original count
+        if getattr(args, "csv_path", None):  # If csv_path provided, try reading length
+            metadata["original_num"] = len(pd.read_csv(args.csv_path, low_memory=False))  # Count original CSV rows
+    except Exception:  # Reading failed
+        metadata["original_num"] = None  # Leave as None if reading fails
+    metadata["total_generated"] = int(n) if n is not None else ""  # Total generated samples
+    metadata["generated_ratio"] = ""  # Default generated ratio
+    try:  # Attempt to compute generated ratio
+        if metadata["original_num"] and metadata["original_num"] > 0:  # If original count available
+            metadata["generated_ratio"] = float(metadata["total_generated"]) / float(metadata["original_num"])  # Compute ratio
+    except Exception:  # Computation failed
+        metadata["generated_ratio"] = ""  # Leave blank on failure
+    metadata["timing_values"] = {  # Map common column names to stored timing attributes
+        "training_time_s": getattr(args, "_last_training_time", ""),  # Total training elapsed seconds
+        "file_time_s": getattr(args, "_last_file_time", ""),  # Per-file processing elapsed seconds
+        "epoch_time_s": getattr(args, "_last_epoch_time", ""),  # Last epoch elapsed seconds
+        "sample_generation_time_s": getattr(args, "_last_sample_generation_time", ""),  # Sample generation elapsed seconds
+        "model_save_time_s": getattr(args, "_last_model_save_time", ""),  # Model save phase elapsed seconds
+    }  # End timing values map
+    metadata["critic_loss"] = ""  # Default critic loss
+    metadata["generator_loss"] = ""  # Default generator loss
+    try:  # Attempt to extract losses from checkpoint metrics
+        metrics_history = ckpt.get("metrics_history")  # Try to get metrics history from checkpoint (may be None)
+        if isinstance(metrics_history, dict):  # If metrics_history is a dict
+            ld = metrics_history.get("loss_D") or []  # Safe list for discriminator losses
+            lg = metrics_history.get("loss_G") or []  # Safe list for generator losses
+            if isinstance(ld, (list, tuple)) and len(ld) > 0:  # If list-like and non-empty
+                metadata["critic_loss"] = ld[-1]  # Use last recorded discriminator loss
+            if isinstance(lg, (list, tuple)) and len(lg) > 0:  # If list-like and non-empty
+                metadata["generator_loss"] = lg[-1]  # Use last recorded generator loss
+    except Exception:  # Extraction failed
+        metadata["critic_loss"] = ""  # Ignore failures and leave blank
+        metadata["generator_loss"] = ""  # Ignore failures and leave blank
+    return metadata  # Return populated metadata dictionary
+
+
 def build_generation_runtime_row(args, config: Dict, n: int, device: torch.device, metadata: Dict) -> Dict:
     """
     Build runtime metrics dictionary for generation results CSV row.
