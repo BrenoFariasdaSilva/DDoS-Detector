@@ -138,26 +138,26 @@ def verify_filepath_exists(filepath):
 def to_seconds(obj):
     """
     Converts various time-like objects to seconds.
-    
-    :param obj: The object to convert (can be int, float, timedelta, datetime, etc.)
-    :return: The equivalent time in seconds as a float, or None if conversion fails
+
+    :param obj: The object to convert (can be int, float, timedelta, datetime, etc.).
+    :return: The equivalent time in seconds as a float, or None if conversion fails.
     """
-    
-    if obj is None:  # None can't be converted
-        return None  # Signal failure to convert
-    if isinstance(obj, (int, float)):  # Already numeric (seconds or timestamp)
-        return float(obj)  # Return as float seconds
-    if hasattr(obj, "total_seconds"):  # Timedelta-like objects
-        try:  # Attempt to call total_seconds()
-            return float(obj.total_seconds())  # Use the total_seconds() method
-        except Exception:
-            pass  # Fallthrough on error
-    if hasattr(obj, "timestamp"):  # Datetime-like objects
-        try:  # Attempt to call timestamp()
-            return float(obj.timestamp())  # Use timestamp() to get seconds since epoch
-        except Exception:
-            pass  # Fallthrough on error
-    return None  # Couldn't convert
+
+    if obj is None:  # Verify if the object is None before attempting conversion
+        return None  # Return None to signal failure to convert
+    if isinstance(obj, (int, float)):  # Verify if the object is already numeric
+        return float(obj)  # Return as float seconds directly
+    if hasattr(obj, "total_seconds"):  # Verify if the object is a timedelta-like type
+        try:  # Attempt to call total_seconds on the object
+            return float(obj.total_seconds())  # Return total seconds from the timedelta
+        except Exception:  # Handle conversion error and fall through
+            pass  # Fall through on conversion error
+    if hasattr(obj, "timestamp"):  # Verify if the object is a datetime-like type
+        try:  # Attempt to call timestamp on the object
+            return float(obj.timestamp())  # Return seconds since epoch from the datetime
+        except Exception:  # Handle conversion error and fall through
+            pass  # Fall through on conversion error
+    return None  # Return None if no conversion was successful
 
 
 def calculate_execution_time(start_time, finish_time=None):
