@@ -637,6 +637,57 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def resolve_checkpoint_dir_and_prefix(args, config: Dict, epoch: int) -> tuple:
+    """
+    Resolve checkpoint directory path, filename prefix, and verify disk space availability.
+
+    :param args: Parsed arguments namespace with csv_path, out_dir, and save_every.
+    :param config: Configuration dictionary with dataset directories for disk space verification.
+    :param epoch: Current epoch index (zero-based) for periodic save check.
+    :return: Tuple of (checkpoint_dir, checkpoint_prefix, skip_checkpoint).
+    """
+
+    checkpoint_dir = Path(args.out_dir) / "Checkpoints"  # Default checkpoint directory
+    checkpoint_prefix = "model"  # Default prefix for checkpoint files
+    skip_checkpoint = False  # Initialize skip flag to False
+    if (epoch + 1) % args.save_every == 0 or epoch == args.epochs - 1:  # Save checkpoints periodically
+        dataset_dir_entries = config.get("dataset", {}).get("datasets", {}) if isinstance(config, dict) else {}  # Get dataset section from config
+        dataset_dirs_list = []  # Accumulate all dataset directory paths for disk space verification
+        for ck_v in dataset_dir_entries.values():  # Iterate dataset group values from config
+            if isinstance(ck_v, list):  # If value is a list of directory paths
+                dataset_dirs_list.extend(ck_v)  # Add all paths from this group to accumulator
+        if not dataset_dirs_list and getattr(args, "csv_path", None):  # If no dirs from config, fallback to csv_path parent
+            dataset_dirs_list.append(str(Path(args.csv_path).parent))  # Use CSV file's parent directory as fallback
+        skip_checkpoint = not is_checkpoint_space_available(dataset_dirs_list, config)  # Verify sufficient disk space before creating checkpoint directories
+        if not skip_checkpoint:  # Only proceed when disk space is sufficient for checkpoint saving
+            if args.csv_path:  # If CSV path is provided
+                csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
+                checkpoint_dir = csv_path_obj.parent / "Data_Augmentation" / "Checkpoints"  # Create Checkpoints subdirectory
+                try:  # Guard directory creation against disk-full and other I/O errors
+                    os.makedirs(checkpoint_dir, exist_ok=True)  # Ensure directory exists
+                except OSError as _ose_dir:  # Catch filesystem errors including disk full during makedirs
+                    if _ose_dir.errno == 28:  # If error is errno 28 (ENOSPC - no space left on device)
+                        print(f"{BackgroundColors.YELLOW}[WARNING] Checkpoint could not be saved due to disk space exhaustion.{Style.RESET_ALL}")  # Warn about disk exhaustion
+                    else:  # If error is unrelated to disk space
+                        print(f"{BackgroundColors.YELLOW}Warning: Failed to create checkpoint directory: {_ose_dir}{Style.RESET_ALL}")  # Warn about directory creation failure
+                    skip_checkpoint = True  # Mark checkpoint as skipped due to directory creation failure
+                checkpoint_prefix = csv_path_obj.stem  # Use input filename as prefix
+            else:  # No CSV path, use default out_dir
+                checkpoint_dir = Path(args.out_dir) / "Checkpoints"  # Create Checkpoints subdirectory in out_dir
+                try:  # Guard directory creation against disk-full and other I/O errors
+                    os.makedirs(checkpoint_dir, exist_ok=True)  # Ensure directory exists
+                except OSError as _ose_dir:  # Catch filesystem errors including disk full during makedirs
+                    if _ose_dir.errno == 28:  # If error is errno 28 (ENOSPC - no space left on device)
+                        print(f"{BackgroundColors.YELLOW}[WARNING] Checkpoint could not be saved due to disk space exhaustion.{Style.RESET_ALL}")  # Warn about disk exhaustion
+                    else:  # If error is unrelated to disk space
+                        print(f"{BackgroundColors.YELLOW}Warning: Failed to create checkpoint directory: {_ose_dir}{Style.RESET_ALL}")  # Warn about directory creation failure
+                    skip_checkpoint = True  # Mark checkpoint as skipped due to directory creation failure
+                checkpoint_prefix = "model"  # Default prefix
+    else:  # Not a checkpoint epoch
+        skip_checkpoint = True  # Mark as skipped because this is not a save epoch
+    return checkpoint_dir, checkpoint_prefix, skip_checkpoint  # Return resolved directory, prefix, and skip flag
+
+
 def build_generator_checkpoint_payload(G, opt_G, scaler, dataset, epoch: int, metrics_history: Dict, args) -> Dict:
     """
     Build the generator checkpoint dictionary with all training state for serialization.
