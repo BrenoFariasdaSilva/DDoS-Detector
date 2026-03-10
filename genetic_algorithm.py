@@ -3363,9 +3363,9 @@ def compute_convergence_generation(history_f1, threshold_pct=0.95):
             threshold = best_f1 * threshold_pct  # Compute threshold value
             for gen, f1 in enumerate(history_f1, start=1):  # Iterate through history with 1-based generation numbers
                 if f1 >= threshold:  # If this generation reached the threshold
-                        return gen  # Return the generation number
+                    return gen  # Return the generation number
 
-                return len(history_f1)  # Return total generations if threshold never reached
+            return len(history_f1)  # Return total generations if threshold never reached
         except Exception:  # If calculation fails
             return len(history_f1) if history_f1 else 0  # Return length or 0
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
