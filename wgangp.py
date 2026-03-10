@@ -4319,6 +4319,19 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def print_execution_summary(start_time: datetime.datetime, finish_time: datetime.datetime) -> None:
+    """
+    Print the program start time, finish time, and total execution duration.
+
+    :param start_time: Datetime representing when the program started.
+    :param finish_time: Datetime representing when the program finished.
+    :return: None
+    """
+
+    print(f"\n{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}")  # Print formatted timing summary with start, finish, and elapsed duration
+    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}")  # Print program completion message
+
+
 def register_exit_handlers(config: Dict) -> None:
     """
     Register atexit cleanup handlers for sound playback and results CSV flushing.
