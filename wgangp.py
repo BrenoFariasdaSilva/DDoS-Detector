@@ -637,6 +637,29 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def create_epoch_progress_bar(dataloader, args, epoch: int) -> tuple:
+    """
+    Create a tqdm progress bar for the current training epoch.
+
+    :param dataloader: training data loader to iterate over
+    :param args: parsed arguments namespace with epochs count
+    :param epoch: current epoch index (zero-based)
+    :return: Tuple of (pbar, total_steps)
+    """
+
+    pbar = tqdm(
+        dataloader,
+        desc=f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL}",
+        unit="batch",
+        file=sys.stdout,  # Use stdout before Logger redirection
+        ncols=None,  # Auto-detect terminal width
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"  # Custom format
+    )  # Create tqdm progress bar for epoch batches
+    total_steps = len(dataloader)  # Number of batches per epoch (explicit total for logging)
+
+    return pbar, total_steps  # Return progress bar and batch count
+
+
 def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, device: torch.device, args, config: Dict, n_classes: int) -> tuple:
     """
     Execute multiple discriminator training steps with gradient penalty.
