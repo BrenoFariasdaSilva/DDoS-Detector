@@ -637,6 +637,51 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> tuple:
+    """
+    Create the CSV flow dataset and configure the training data loader.
+
+    :param args: parsed arguments namespace with csv_path, feature_cols, label_col, and batch_size
+    :param config: configuration dictionary with dataloader settings
+    :param device: torch device for pin_memory optimization
+    :return: Tuple of (dataset, dataloader)
+    """
+
+    dataset = CSVFlowDataset(
+        args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols
+    )  # Load dataset from CSV
+
+    num_workers = int(config.get("dataloader", {}).get("num_workers", 8))  # Get base num_workers from config and cast to int
+    num_workers = adjust_num_workers_for_file(args.csv_path, num_workers, config)  # Adjust num_workers based on file size and system RAM
+    
+    if device.type == "cuda" and num_workers == 0:  # If CUDA available but adjusted workers is 0
+        try:  # Attempt to fetch total RAM to decide whether to raise workers for CUDA
+            total_ram_gb = (safe_float(psutil.virtual_memory().total, 0.0) / (1024.0 ** 3)) if psutil is not None else None  # Detect total RAM if psutil available safely
+        except Exception:  # If detection fails
+            total_ram_gb = None  # Unknown RAM when detection fails
+        if total_ram_gb is None or total_ram_gb >= 8.0:  # If RAM unknown or sufficient
+            num_workers = max(1, (os.cpu_count() or 1))  # Ensure at least one worker for CUDA when RAM allows
+        else:  # Low RAM and CUDA present: keep zero workers to avoid memory pressure
+            print(f"{BackgroundColors.YELLOW}Warning: num_workers set to 0 due to low RAM and CUDA presence{Style.RESET_ALL}")  # Warn about zero workers for CUDA
+    
+    pin_memory = True if device.type == "cuda" else False  # Always enable pin_memory on CUDA for faster host->device transfers
+    persistent_workers = config.get("dataloader", {}).get("persistent_workers", True) if num_workers > 0 else False  # Get persistent_workers from config
+    prefetch_factor = int(config.get("dataloader", {}).get("prefetch_factor", 2)) if num_workers > 0 else None  # Get prefetch_factor from config and cast to int
+
+    dataloader = DataLoader(
+        dataset,  # Dataset object to load data from
+        batch_size=args.batch_size,  # Batch size for training
+        shuffle=True,  # Shuffle data each epoch for better training
+        drop_last=True,  # Drop last incomplete batch for consistent batch sizes
+        num_workers=num_workers,  # Number of subprocesses for data loading
+        pin_memory=pin_memory,  # Faster CPU->GPU transfer
+        persistent_workers=persistent_workers,  # Keep workers alive between epochs
+        prefetch_factor=prefetch_factor,  # Prefetch batches for better GPU utilization
+    )  # Create dataloader for batching
+
+    return dataset, dataloader  # Return dataset and configured dataloader
+
+
 def init_results_csv_and_feature_dims(args, config: Dict, dataset) -> tuple:
     """
     Initialize the results CSV writer and extract feature dimensions from the dataset.
