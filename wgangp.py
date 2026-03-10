@@ -4319,6 +4319,21 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def initialize_cli_and_config() -> Dict:
+    """
+    Parse CLI arguments, load configuration, and set the global CONFIG variable.
+
+    :return: Merged configuration dictionary.
+    """
+
+    global CONFIG  # Declare global CONFIG for mutation
+    args = parse_args()  # Parse command-line arguments from CLI
+    cli_overrides = args_to_config_overrides(args)  # Convert parsed CLI args to configuration overrides dict
+    config = load_configuration(config_path=args.config, cli_overrides=cli_overrides)  # Load and merge configuration from file and CLI
+    CONFIG = config  # Persist loaded configuration in global registry
+    return config  # Return merged configuration dictionary to caller
+
+
 def extract_runtime_parameters(config: Dict) -> tuple:
     """
     Extract runtime parameters from configuration and create the argument namespace.
