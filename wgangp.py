@@ -637,6 +637,63 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, args, config: Dict, n_classes: int, pbar, step: int, metrics_history: Dict, total_steps: int, epoch: int, file_progress_prefix: str) -> int:
+    """
+    Execute one full epoch of batch training steps for generator and discriminator.
+
+    :param G: generator model
+    :param D: discriminator model
+    :param opt_G: generator optimizer
+    :param opt_D: discriminator optimizer
+    :param scaler: AMP gradient scaler (may be None)
+    :param device: torch device for tensor allocation
+    :param args: parsed arguments namespace with training hyperparameters
+    :param config: configuration dictionary for gradient penalty computation
+    :param n_classes: number of label classes for conditional generation
+    :param pbar: tqdm progress bar wrapping the dataloader
+    :param step: current global step counter
+    :param metrics_history: metrics dictionary to append to in-place
+    :param total_steps: number of batches per epoch for display
+    :param epoch: current epoch index (zero-based)
+    :param file_progress_prefix: colored prefix string for progress display
+    :return: Updated global step counter
+    """
+
+    _cached_loss_D = 0.0  # Cached discriminator loss scalar for progress display without CUDA sync
+    _cached_g_loss = 0.0  # Cached generator loss scalar for progress display without CUDA sync
+    _cached_gp = 0.0  # Cached gradient penalty scalar for progress display without CUDA sync
+    _cached_d_real = 0.0  # Cached real score scalar for progress display without CUDA sync
+    _cached_d_fake = 0.0  # Cached fake score scalar for progress display without CUDA sync
+
+    for batch_idx, (real_x_batch, labels_batch) in enumerate(pbar):  # Enumerate batches to obtain current batch index
+        real_x = real_x_batch.to(device, non_blocking=True)  # Move real features to device with non_blocking when pinned
+        labels = labels_batch.to(device, dtype=torch.long, non_blocking=True)  # Move labels to device with non_blocking when pinned
+
+        loss_D, gp, d_real_score, d_fake_score = execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, device, args, config, n_classes)  # Execute discriminator training steps with gradient penalty
+        g_loss = execute_generator_training_step(G, D, opt_G, scaler, device, args, n_classes)  # Execute single generator training step
+
+        if step % args.log_interval == 0:  # Extract scalar metrics only at log interval to avoid per-batch CUDA synchronization
+            _cached_loss_D, _cached_g_loss, _cached_gp, _cached_d_real, _cached_d_fake = record_training_step_metrics(step, args, metrics_history, loss_D, g_loss, gp, d_real_score, d_fake_score)  # Record metrics and cache scalar values
+
+        pbar.set_description(  # Update tqdm description using cached scalars to avoid CUDA synchronization
+            (
+                f"{getattr(args, 'file_progress_prefix', '')} "  # File progress prefix (may include colored index)
+                f"{BackgroundColors.CYAN}{(Path(getattr(args, 'csv_path', '')).name if getattr(args, 'csv_path', None) else '')}{Style.RESET_ALL} | "  # Current filename
+            )
+            + f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL} | "  # Current epoch and total epochs
+            + f"{BackgroundColors.YELLOW}step {batch_idx+1}/{total_steps}{Style.RESET_ALL} | "  # Current batch index and total batches per epoch
+            + f"{BackgroundColors.RED}loss_D: {_cached_loss_D:.4f}{Style.RESET_ALL} | "  # Discriminator loss from cached value
+            + f"{BackgroundColors.GREEN}loss_G: {_cached_g_loss:.4f}{Style.RESET_ALL} | "  # Generator loss from cached value
+            + f"gp: {_cached_gp:.4f} | "  # Gradient penalty from cached value
+            + f"D(real): {_cached_d_real:.4f} | "  # Average critic score on real from cached value
+            + f"D(fake): {_cached_d_fake:.4f}"  # Average critic score on fake from cached value
+        )
+
+        step += 1  # Increment global step counter
+
+    return step  # Return updated step counter
+
+
 def build_ordered_csv_row_from_runtime(row_runtime: Dict, results_cols_cfg: list, config: Dict) -> list:
     """
     Build an ordered CSV row list from runtime metrics dictionary following configured column schema.
