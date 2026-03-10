@@ -637,6 +637,36 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, args, n_classes: int):
+    """
+    Execute a single generator training step.
+
+    :param G: Generator model to train.
+    :param D: Discriminator model for scoring fake samples.
+    :param opt_G: Generator optimizer.
+    :param scaler: AMP gradient scaler (may be None).
+    :param device: Torch device for tensor allocation.
+    :param args: Parsed arguments namespace with batch_size and latent_dim.
+    :param n_classes: Number of label classes for conditional generation.
+    :return: Generator loss tensor.
+    """
+
+    with autocast(device.type, enabled=(scaler is not None)):  # Enable AMP if available
+        z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for generator step
+        gen_labels = torch.randint(0, n_classes, (args.batch_size,), device=device)  # Sample labels for generator
+        fake_x = G(z, gen_labels)  # Generate fake samples with generator
+        g_loss = -D(fake_x, gen_labels).mean()  # Calculate generator loss
+    opt_G.zero_grad(set_to_none=True)  # Reset generator gradients to None for reduced memory overhead
+    if scaler is not None:  # If using mixed precision
+        scaler.scale(g_loss).backward()  # Scale loss and backpropagate
+        scaler.step(opt_G)  # Update generator parameters with scaled gradients
+        scaler.update()  # Update scaler for next iteration
+    else:  # Standard precision
+        g_loss.backward()  # Backpropagate generator loss
+        opt_G.step()  # Update generator parameters
+    return g_loss  # Return generator loss tensor
+
+
 def record_training_step_metrics(step: int, args, metrics_history: Dict, loss_D, g_loss, gp, d_real_score, d_fake_score) -> tuple:
     """
     Extract scalar metrics at log intervals and append to metrics history.
