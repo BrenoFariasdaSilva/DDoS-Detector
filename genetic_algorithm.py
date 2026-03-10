@@ -2578,12 +2578,12 @@ def adjust_progress_for_early_stop(progress_state, n_generations, pop_size, gens
         except Exception:  # Silently ignore failures during adjustment
             pass  # Do nothing on error
 
-            try:  # Update current_it by the single re-evaluation performed after GA (folds classifiers)
-                progress_state["current_it"] = (
-                    int(progress_state.get("current_it", 0)) + folds
-                )  # Increment current_it for final re-eval
-            except Exception:  # Silently ignore failures when updating current_it
-                pass  # Do nothing on error
+        try:  # Update current_it by the single re-evaluation performed after GA (folds classifiers)
+            progress_state["current_it"] = (
+                int(progress_state.get("current_it", 0)) + folds
+            )  # Increment current_it for final re-eval
+        except Exception:  # Silently ignore failures when updating current_it
+            pass  # Do nothing on error
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
