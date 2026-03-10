@@ -637,6 +637,28 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str, Path]):
+    """
+    Generate a zebra-striped table image (.png) from an in-memory DataFrame.
+
+    :param df: DataFrame in memory (must not be re-read from disk)
+    :param output_path: Target PNG path (will be overwritten if exists)
+    :raises: PermissionError if directory not writable, or any dataframe_image error
+    """
+
+    try:
+        out_p = Path(output_path)  # Convert to Path for manipulation
+        parent = out_p.parent  # Parent directory
+        if not parent.exists():  # If parent directory does not exist
+            parent.mkdir(parents=True, exist_ok=True)  # Try to create it
+        if not os.access(str(parent), os.W_OK):  # Verify directory is writable before proceeding
+            raise PermissionError(f"Directory not writable: {parent}")  # Raise on non-writable
+        styled = apply_zebra_style(df)  # Create a zebra-styled Styler from df
+        export_dataframe_image(styled, out_p)  # Export styled DataFrame to PNG
+    except Exception:
+        raise  # Propagate all exceptions to caller (no silent failures)
+
+
 def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visualizable: bool = True):
     """
     Save DataFrame to CSV and optionally generate a zebra-striped PNG table image.
