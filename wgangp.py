@@ -637,6 +637,38 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def restore_metrics_from_checkpoint_or_json(g_checkpoint: Dict, checkpoint_dir: Path, checkpoint_prefix: str, metrics_history: Dict, step: int) -> tuple:
+    """
+    Restore metrics history from checkpoint dict or fallback JSON file.
+
+    :param g_checkpoint: Loaded generator checkpoint dictionary potentially containing metrics_history.
+    :param checkpoint_dir: Directory containing checkpoint and metrics files.
+    :param checkpoint_prefix: Filename prefix used for the metrics JSON file.
+    :param metrics_history: Current metrics_history dict to potentially replace.
+    :param step: Current global step counter to potentially update.
+    :return: Tuple of (metrics_history, step, metrics_loaded).
+    """
+
+    metrics_loaded = False  # Flag to track if metrics were loaded
+    if "metrics_history" in g_checkpoint:  # If metrics history saved in checkpoint
+        metrics_history = g_checkpoint["metrics_history"]  # Restore metrics from checkpoint
+        step = metrics_history["steps"][-1] if metrics_history["steps"] else 0  # Restore step counter
+        metrics_loaded = True  # Mark as loaded
+        print(f"{BackgroundColors.GREEN}✓ Restored metrics history from checkpoint ({len(metrics_history['steps'])} steps){Style.RESET_ALL}")  # Confirm metrics restoration
+    else:  # Try loading from separate JSON file
+        metrics_json_path = checkpoint_dir / f"{checkpoint_prefix}_metrics_history.json"  # Path to metrics JSON
+        if metrics_json_path.exists():  # If JSON file exists
+            try:  # Try to load metrics
+                with open(metrics_json_path, "r") as f:  # Open file for reading
+                    metrics_history = json.load(f)  # Load metrics from JSON
+                step = metrics_history["steps"][-1] if metrics_history["steps"] else 0  # Restore step counter
+                metrics_loaded = True  # Mark as loaded
+                print(f"{BackgroundColors.GREEN}✓ Restored metrics history from JSON file ({len(metrics_history['steps'])} steps){Style.RESET_ALL}")  # Confirm JSON metrics restoration
+            except Exception as e:  # If loading fails
+                print(f"{BackgroundColors.YELLOW}⚠ Warning: Failed to load metrics from JSON: {e}{Style.RESET_ALL}")  # Warn about JSON load failure
+    return metrics_history, step, metrics_loaded  # Return updated metrics history, step counter, and loaded flag
+
+
 def load_and_restore_discriminator_state(d_checkpoint_path: Path, device: torch.device, D, opt_D) -> None:
     """
     Load discriminator checkpoint and restore model weights and optimizer state.
