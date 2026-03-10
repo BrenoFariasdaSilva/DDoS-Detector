@@ -637,6 +637,36 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def init_telegram_progress(args, config: Dict, start_epoch: int) -> tuple:
+    """
+    Initialize telegram notification progress tracking for epoch-based notifications.
+
+    :param args: parsed arguments namespace with epochs count
+    :param config: configuration dictionary with telegram settings
+    :param start_epoch: starting epoch for progress calculation when resuming
+    :return: Tuple of (telegram_enabled, next_notify, progress_pct)
+    """
+
+    telegram_cfg = config.get("telegram", {}) if isinstance(config, dict) else {}  # Retrieve telegram config dict from merged config
+    telegram_enabled = bool(telegram_cfg.get("enabled", True))  # Whether telegram notifications are enabled
+    try:  # Parse progress_pct from config, ensuring valid integer percentage between 1 and 100
+        progress_pct = int(telegram_cfg.get("progress_pct", 10) or 10)  # Percentage step for notifications (default 10)
+    except Exception:  # Catch any exception during parsing
+        progress_pct = 10  # Fallback to 10% on parse error
+    if progress_pct <= 0 or progress_pct > 100:  # If percentage is invalid
+        progress_pct = 10  # Sanitize invalid percentage values
+
+    next_notify = progress_pct  # Initialize next notification threshold
+    try:  # Calculate percent complete at resume point
+        percent_done = int((start_epoch / float(max(1, args.epochs))) * 100)  # Percent complete at resume point
+    except Exception:  # If calculation fails
+        percent_done = 0  # Assume 0% done on failure
+    while percent_done >= next_notify and next_notify <= 100:  # Advance next_notify past already-completed thresholds
+        next_notify += progress_pct  # Skip thresholds already passed when resuming
+
+    return telegram_enabled, next_notify, progress_pct  # Return telegram progress state
+
+
 def create_epoch_progress_bar(dataloader, args, epoch: int) -> tuple:
     """
     Create a tqdm progress bar for the current training epoch.
