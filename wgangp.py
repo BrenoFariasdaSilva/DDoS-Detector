@@ -637,6 +637,41 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def init_results_csv_and_feature_dims(args, config: Dict, dataset) -> tuple:
+    """
+    Initialize the results CSV writer and extract feature dimensions from the dataset.
+
+    :param args: parsed arguments namespace with csv_path
+    :param config: configuration dictionary with wgangp results_csv_columns and paths
+    :param dataset: loaded CSVFlowDataset instance
+    :return: Tuple of (results_csv_file, results_csv_writer, results_cols_cfg, feature_dim, n_classes)
+    """
+
+    results_csv_file = None  # Placeholder for per-dataset open results CSV file object
+    results_csv_writer = None  # Placeholder for per-dataset CSV writer
+    results_cols_cfg = config.get("wgangp", {}).get("results_csv_columns", [])  # Read configured results columns list
+    
+    if not isinstance(results_cols_cfg, list) or len(results_cols_cfg) == 0:  # Validate list exists and is non-empty
+        print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Clear error message
+        raise ValueError("'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration")  # Stop safely
+    
+    if getattr(args, "csv_path", None):  # If csv_path provided, prepare persistent results CSV handle
+        try:  # Attempt to open results CSV once with header written if needed
+            csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
+            data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read Data_Augmentation subdir from config
+            data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation directory under dataset folder
+            os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before writing
+            results_csv_path = data_aug_dir / "data_augmentation_results.csv"  # Place results CSV inside Data_Augmentation dir
+            results_csv_file, results_csv_writer = open_results_csv(results_csv_path, results_cols_cfg)  # Open and cache writer
+        except Exception as _rw:  # On failure, warn and continue without persistent csv
+            print(f"{BackgroundColors.YELLOW}Warning: could not initialize results CSV writer: {_rw}{Style.RESET_ALL}")  # Warn and continue
+
+    feature_dim = dataset.feature_dim  # Get feature dimensionality from dataset
+    n_classes = dataset.n_classes  # Get number of label classes from dataset
+
+    return results_csv_file, results_csv_writer, results_cols_cfg, feature_dim, n_classes  # Return CSV handles and feature dimensions
+
+
 def create_models_and_optimizers(args, config: Dict, device: torch.device, feature_dim: int, n_classes: int) -> tuple:
     """
     Create generator and discriminator models, optimizers, and initialize training state.
