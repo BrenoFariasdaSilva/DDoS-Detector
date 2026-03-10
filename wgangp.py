@@ -637,6 +637,27 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def extract_optimizer_learning_rates(opt_G, opt_D, args) -> tuple:
+    """
+    Safely extract current learning rates from generator and discriminator optimizers.
+
+    :param opt_G: Generator optimizer with param_groups attribute.
+    :param opt_D: Discriminator optimizer with param_groups attribute.
+    :param args: Parsed arguments namespace with lr fallback attribute.
+    :return: Tuple of (learning_rate_generator, learning_rate_critic).
+    """
+
+    try:  # Attempt to read current generator optimizer learning rate
+        lr_gen = safe_float(opt_G.param_groups[0].get("lr", None), getattr(args, "lr", 0.0))  # Generator LR safely
+    except Exception:  # If reading fails
+        lr_gen = getattr(args, "lr", "")  # Fallback to args.lr
+    try:  # Attempt to read current discriminator optimizer learning rate
+        lr_crit = safe_float(opt_D.param_groups[0].get("lr", None), getattr(args, "lr", 0.0))  # Critic LR safely
+    except Exception:  # If reading fails
+        lr_crit = getattr(args, "lr", "")  # Fallback to args.lr
+    return lr_gen, lr_crit  # Return both learning rates as a tuple
+
+
 def build_epoch_runtime_row(args, dataset, epoch: int, metrics_history: Dict, opt_G, opt_D) -> Dict:
     """
     Build runtime metrics dictionary for a single training epoch CSV row.
