@@ -4319,6 +4319,18 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def build_file_progress_prefix(index: int, total: int) -> str:
+    """
+    Build a colored [index/total] progress prefix string for file processing messages.
+
+    :param index: Current file index (1-based).
+    :param total: Total number of files to process.
+    :return: Colored progress prefix string enclosed in cyan brackets.
+    """
+
+    return f"{BackgroundColors.CYAN}[{index}/{total}]{Style.RESET_ALL}"  # Return formatted cyan-colored progress prefix
+
+
 def setup_per_file_output(args: Any, config: Dict, file: str, results_suffix: str) -> tuple:
     """
     Configure the per-file output path attributes on args and return path objects.
