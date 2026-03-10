@@ -637,6 +637,56 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def build_default_runtime_config() -> Dict:
+    """
+    Build the default runtime configuration sections.
+
+    Returns a dictionary containing the execution, wgangp, and dataset sections
+    with their default values.
+
+    :return: Dictionary with execution, wgangp, and dataset defaults
+    """
+
+    return {  # Begin runtime configuration dictionary
+        "execution": {  # Execution control parameters
+            "verbose": False,  # Enable verbose output messages
+            "play_sound": True,  # Play sound notification when complete
+            "results_suffix": "result",  # Suffix to add to generated filenames
+            "match_filenames_to_process": [""],  # List of specific filenames to search for a match
+            "ignore_files": ["_data_augmented"],  # List of filename substrings to ignore
+            "ignore_dirs": [  # List of directory names to ignore when searching for datasets
+                "Classifiers",
+                "Classifiers_Hyperparameters",
+                "Dataset_Description",
+                "Data_Separability",
+                "Feature_Analysis",
+            ],
+        },
+        "wgangp": {  # WGAN-GP core configuration
+            "mode": "both",  # Mode: train, gen, or both
+            "csv_path": None,  # Path to CSV training data
+            "label_col": "Label",  # Column name for class label
+            "feature_cols": None,  # List of feature column names (None = use all)
+            "seed": 42,  # Random seed for reproducibility
+            "force_cpu": False,  # Force CPU usage even if CUDA available
+            "from_scratch": False,  # Force training from scratch, ignore checkpoints
+            "generating_order": "off",  # Dataset file processing order by file size: "off", "Ascending", or "Descending"
+            "execution_mode": "both",  # Execution mode: train, gen, or both for WGANGP
+            "results_suffix": "_data_augmented",  # Suffix to add to generated filenames for WGANGP
+        },
+        "dataset": {  # Dataset configuration
+            "remove_zero_variance": True,  # Remove zero-variance features during preprocessing
+            "label_candidates": ["label", "class", "target"],  # Common label column names for auto-detection
+            "datasets": {  # Dictionary containing dataset paths
+                "CICDDoS2019-Dataset": [  # List of paths to the CICDDoS2019 dataset
+                    "./Datasets/CICDDoS2019/01-12/",
+                    "./Datasets/CICDDoS2019/03-11/",
+                ],
+            },
+        },
+    }  # End runtime configuration dictionary
+
+
 def build_default_training_and_model_config() -> Dict:
     """
     Build the default training and model architecture configuration sections.
