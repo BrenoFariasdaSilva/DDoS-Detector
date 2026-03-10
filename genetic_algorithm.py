@@ -3482,7 +3482,7 @@ def generate_run_comparison_table(results_dict, csv_path, dataset_name, min_pop,
                         "dataset": dataset_name,  # Dataset name
                         "pop_size": pop_size,  # Population size
                         "run_id": run_idx,  # Run identifier (1-based)
-                        "n_generations": n_generations,  # Configured generations
+                        "n_generations": aggregated["gens_executed"],  # Actual generations executed
                         "cxpb": cxpb,  # Crossover probability
                         "mutpb": mutpb,  # Mutation probability
                         "best_f1_final": aggregated["best_f1_final"],  # Final best F1 score
