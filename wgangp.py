@@ -637,6 +637,56 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def build_default_output_and_notification_config() -> Dict:
+    """
+    Build the default output and notification configuration sections.
+
+    Returns a dictionary containing the plotting, paths, logging, telegram,
+    and sound sections with their default values.
+
+    :return: Dictionary with output and notification defaults
+    """
+
+    return {  # Begin output and notification configuration dictionary
+        "plotting": {  # Visualization configuration
+            "enabled": True,  # Enable plot generation
+            "filename": "training_metrics.png",  # Plot filename
+            "subdir": "plots",  # Subdirectory under data augmentation outputs for plots
+            "figsize": [18, 10],  # Figure size [width, height]
+            "dpi": 300,  # Image resolution
+            "subplot_rows": 2,  # Number of subplot rows
+            "subplot_cols": 3,  # Number of subplot columns
+            "linewidth": 1.5,  # Line width for plots
+            "alpha": 0.7,  # Transparency for plot lines
+            "grid_alpha": 0.3,  # Grid transparency
+        },
+        "paths": {  # File paths configuration
+            "out_dir": "outputs",  # Output directory for models/logs
+            "logs_dir": "./Logs",  # Directory for log files
+            "checkpoint_subdir": "Checkpoints",  # Checkpoints subdirectory name
+            "data_augmentation_subdir": "Data_Augmentation",  # Data augmentation subdirectory name
+        },
+        "logging": {  # Logging configuration
+            "enabled": True,  # Enable file logging
+            "clean": True,  # Clear log file on start
+            "tqdm_bar_format": "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",  # Progress bar format
+        },
+        "telegram": {  # Telegram bot configuration
+            "enabled": True,  # Enable Telegram notifications
+            "verify_env": True,  # Verify .env file existence
+        },
+        "sound": {  # Sound notification configuration
+            "enabled": True,  # Enable sound notifications
+            "commands": {  # Commands to play sound for each operating system
+                "Darwin": "afplay",
+                "Linux": "aplay",
+                "Windows": "start",
+            },
+            "file": "./.assets/Sounds/NotificationSound.wav",  # Path to the sound file
+        },
+    }  # End output and notification configuration dictionary
+
+
 def get_default_config():
     """
     Return the default configuration dictionary for WGAN-GP.
