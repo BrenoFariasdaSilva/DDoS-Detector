@@ -121,6 +121,23 @@ def verbose_output(true_string="", false_string=""):
         print(false_string)  # Log the false_string if verbose logging is not enabled
 
 
+def resolve_target_path(target_file_path: Optional[str]) -> Optional[Path]:
+    """
+    Converts and validates the configured target file path.
+
+    :param target_file_path: The configured target file path value to convert and validate.
+    :return: A resolved Path object if conversion succeeds, or None if the input is invalid or empty.
+    """
+
+    if target_file_path is not None and str(target_file_path).strip():  # Verify if target_file_path is not None and not empty before attempting to create a Path object
+        try:  # Attempt to create a Path object from target_file_path for further validation
+            return Path(str(target_file_path))  # Return the Path object created from the target_file_path string
+        except Exception:  # Handle any exceptions that occur during Path object creation
+            return None  # Return None if an error occurs during Path creation
+    
+    return None  # Return None if target_file_path is None or empty
+
+
 def verify_filepath_exists(filepath):
     """
     Verify if a file or folder exists at the specified path.
