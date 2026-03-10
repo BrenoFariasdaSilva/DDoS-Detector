@@ -637,6 +637,38 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def write_final_timing_and_csv_row(args, config: Dict, device: torch.device, dataset, training_start_time: float, file_start_time: float, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history: Dict, opt_G, opt_D) -> None:
+    """
+    Compute final training elapsed times and write the summary CSV row.
+
+    :param args: parsed arguments namespace with training settings
+    :param config: configuration dictionary with hardware_tracking and paths settings
+    :param device: torch device used for training
+    :param dataset: loaded CSVFlowDataset instance for sample counts
+    :param training_start_time: timestamp when training session started
+    :param file_start_time: timestamp when file processing started
+    :param results_csv_writer: CSV writer object (may be None)
+    :param results_csv_file: open CSV file handle (may be None)
+    :param results_cols_cfg: list of configured CSV column names
+    :param metrics_history: dictionary of tracked training metrics
+    :param opt_G: generator optimizer for learning rate extraction
+    :param opt_D: discriminator optimizer for learning rate extraction
+    :return: None
+    """
+
+    compute_and_store_final_timing(args, training_start_time, file_start_time)  # Compute and store final timing on args
+
+    try:  # Wrap writes to avoid crashing on I/O errors
+        if results_csv_writer and results_cols_cfg:  # Only write if writer and schema are available
+            final_runtime = build_final_training_runtime_row(args, config, dataset, metrics_history, opt_G, opt_D)  # Build final training runtime metrics dict
+            ordered_final = build_ordered_csv_row_from_runtime(final_runtime, results_cols_cfg, config)  # Build ordered CSV row from runtime values
+            ordered_final = inject_hardware_into_csv_row(ordered_final, results_cols_cfg, config, device)  # Inject hardware spec into final row if tracking enabled
+            results_csv_writer.writerow(ordered_final)  # Write final per-file ordered row to CSV
+            flush_csv_file_safely(results_csv_file)  # Flush CSV file to disk safely after final row
+    except Exception as _fw:  # If writing fails, warn and continue
+        print(f"{BackgroundColors.YELLOW}Warning: failed to write final file row to results CSV: {_fw}{Style.RESET_ALL}")  # Warn about failure
+
+
 def generate_training_plots(args, config: Dict, metrics_history: Dict, file_progress_prefix: str) -> None:
     """
     Generate and save training metrics plots when metrics data is available.
