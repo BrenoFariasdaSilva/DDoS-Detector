@@ -3058,8 +3058,6 @@ def compose_generation_start_message(
     args,
     generated_file_name: str,
     original_num: Optional[int] = None,
-    class_distribution: Optional[Dict] = None,
-    args_ck: Optional[Dict] = None,
 ) -> str:
     """
     Compose the generation start message including the ratio relative to the original dataset.
@@ -3469,20 +3467,17 @@ def compute_generation_counts_and_labels(args, config: Dict, class_distribution:
     return (n_per_class, labels, n)  # Return per-class counts, label array, and total count
 
 
-def notify_start_of_generation(args, args_ck: Dict, n: int, class_distribution: Optional[Dict]) -> None:
+def notify_start_of_generation(args, n: int) -> None:
     """
     Send Telegram notification about the start of sample generation.
 
     :param args: Parsed arguments namespace with out_file.
-    :param args_ck: Saved arguments dictionary from checkpoint.
     :param n: Total number of samples to generate.
-    :param class_distribution: Dictionary mapping label indices to counts.
     :return: None.
     """
 
-    batch_size = args.gen_batch_size  # Set generation batch size
     try:
-        start_msg = compose_generation_start_message(n, args, Path(args.out_file).name, original_num=None, class_distribution=class_distribution, args_ck=args_ck)
+        start_msg = compose_generation_start_message(n, args, Path(args.out_file).name, original_num=None)
         send_telegram_message(TELEGRAM_BOT, start_msg)  # Notify start of generation
     except Exception as e:  # Failed to notify start of generation
         print(str(e))  # Print send error to terminal for visibility
@@ -3827,7 +3822,7 @@ def generate(args, config: Optional[Dict] = None):
         feature_dim, n_classes = determine_feature_dim_and_n_classes(args, scaler, label_encoder)  # Determine feature dimensionality and class count
         G = build_and_load_generator(args, config, ckpt, device, feature_dim, n_classes)  # Build and load generator model from checkpoint
         n_per_class, labels, n = compute_generation_counts_and_labels(args, config, class_distribution, label_encoder, n_classes)  # Compute per-class counts and label array
-        notify_start_of_generation(args, args_ck, n, class_distribution)  # Send Telegram notification about generation start
+        notify_start_of_generation(args, n)  # Send Telegram notification about generation start
         all_fake, all_labels, sample_generation_start_time = generate_batches_and_collect_results(args, G, device, labels, n)  # Generate synthetic samples in batches
         df = postprocess_generated_arrays_to_dataframe(args, config, all_fake, all_labels, scaler, label_encoder, feature_cols, device, n, file_progress_prefix)  # Postprocess arrays into DataFrame and save
         record_sample_generation_timing(args, sample_generation_start_time)  # Record sample generation elapsed time
