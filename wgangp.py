@@ -4319,6 +4319,34 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def resolve_checkpoint_after_training(args: Any, config: Dict, csv_path_obj: Path, data_aug_dir: Path) -> Path:
+    """
+    Resolve the generator checkpoint path produced after training and assign it to args.
+
+    :param args: Argument namespace containing epochs count and checkpoint attribute.
+    :param config: Configuration dictionary with paths settings.
+    :param csv_path_obj: Path object for the trained CSV source file.
+    :param data_aug_dir: Path object for the data augmentation output directory.
+    :return: Resolved checkpoint Path object pointing to the latest available checkpoint.
+    """
+
+    checkpoint_prefix = csv_path_obj.stem  # Derive checkpoint filename prefix from input CSV stem
+    checkpoint_subdir = config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")  # Read configured checkpoint subdirectory name
+    checkpoint_dir = data_aug_dir / checkpoint_subdir  # Build checkpoint directory path under Data_Augmentation
+    checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{args.epochs}.pt"  # Construct expected final-epoch checkpoint filename
+    
+    if not checkpoint_path.exists():  # Fall back to latest checkpoint when specific epoch file is absent
+        checkpoints = sorted(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))  # Discover all matching checkpoints in directory
+        if checkpoints:  # Assign latest checkpoint when at least one file exists
+            checkpoint_path = checkpoints[-1]  # Select the last entry by sorted order as the latest checkpoint
+        else:  # Raise a descriptive error when no checkpoints exist at all
+            raise FileNotFoundError(f"No generator checkpoint found for {csv_path_obj.name} in {checkpoint_dir}")  # Abort with informative message
+        
+    args.checkpoint = str(checkpoint_path)  # Assign resolved checkpoint path string to args for generation
+    
+    return checkpoint_path  # Return resolved Path object for caller printing use
+
+
 def run_both_mode_for_csv(args: Any, config: Dict, csv_path_obj: Path, data_aug_dir: Path, training_label: str) -> None:
     """
     Execute combined train-then-generate workflow for a single CSV file.
