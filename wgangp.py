@@ -637,6 +637,39 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def record_training_step_metrics(step: int, args, metrics_history: Dict, loss_D, g_loss, gp, d_real_score, d_fake_score) -> tuple:
+    """
+    Extract scalar metrics at log intervals and append to metrics history.
+
+    :param step: Current global step counter.
+    :param args: Parsed arguments namespace with log_interval setting.
+    :param metrics_history: Dictionary of tracked training metrics to append to in-place.
+    :param loss_D: Discriminator loss tensor.
+    :param g_loss: Generator loss tensor.
+    :param gp: Gradient penalty tensor.
+    :param d_real_score: Average real score tensor.
+    :param d_fake_score: Average fake score tensor.
+    :return: Tuple of cached scalar values (cached_loss_D, cached_g_loss, cached_gp, cached_d_real, cached_d_fake).
+    """
+
+    cached_loss_D = loss_D.item()  # Cache discriminator loss as Python float
+    cached_g_loss = g_loss.item()  # Cache generator loss as Python float
+    cached_gp = gp.item()  # Cache gradient penalty as Python float
+    cached_d_real = d_real_score.item()  # Cache average real score as Python float
+    cached_d_fake = d_fake_score.item()  # Cache average fake score as Python float
+    wasserstein_dist = cached_d_real - cached_d_fake  # Compute Wasserstein distance from cached values
+    
+    metrics_history["steps"].append(step)  # Record step number
+    metrics_history["loss_D"].append(cached_loss_D)  # Record discriminator loss
+    metrics_history["loss_G"].append(cached_g_loss)  # Record generator loss
+    metrics_history["gp"].append(cached_gp)  # Record gradient penalty
+    metrics_history["D_real"].append(cached_d_real)  # Record real score
+    metrics_history["D_fake"].append(cached_d_fake)  # Record fake score
+    metrics_history["wasserstein"].append(wasserstein_dist)  # Record Wasserstein distance
+    
+    return cached_loss_D, cached_g_loss, cached_gp, cached_d_real, cached_d_fake  # Return cached scalar values
+
+
 def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, args, config: Dict, n_classes: int, pbar, step: int, metrics_history: Dict, total_steps: int, epoch: int, file_progress_prefix: str) -> int:
     """
     Execute one full epoch of batch training steps for generator and discriminator.
