@@ -637,6 +637,44 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def compute_epoch_milestones(total_epochs: int) -> List[int]:
+    """
+    Compute milestone epoch indices for progress-based CSV writes.
+
+    Always includes epoch 1 and epoch `total_epochs`.  Additionally includes
+    the 25%, 50% and 75% epochs computed with ceiling rounding and deduped.
+
+    :param total_epochs: Total number of training epochs
+    :return: Sorted list of unique integer epoch indices (1-based)
+    """
+
+    try:  # Preserve repository try/except pattern for robustness
+        total = int(total_epochs)  # Cast provided total to integer type
+        if total < 1:  # If no positive epochs requested
+            return []  # Return empty list when there are no valid epochs
+        
+        milestones = set()  # Create a set to deduplicate milestone indices efficiently
+        milestones.add(1)  # Ensure the first epoch is always present
+        milestones.add(total)  # Ensure the final epoch is always present
+        m25 = (total + 3) // 4  # Compute ceil(total * 1/4) using integer arithmetic
+        m50 = (total + 1) // 2  # Compute ceil(total * 1/2) using integer arithmetic
+        m75 = (3 * total + 3) // 4  # Compute ceil(total * 3/4) using integer arithmetic
+        
+        for m in (m25, m50, m75):  # Iterate candidate fractional milestones
+            if 1 <= m <= total:  # Only add candidates within valid epoch bounds
+                milestones.add(int(m))  # Add integer milestone to set to dedupe
+        
+        return sorted(milestones)  # Return a sorted list for predictable ordering
+    except Exception as e:  # Follow repo convention: report then re-raise
+        print(str(e))  # Print exception for visibility
+        
+        try:  # Attempt to notify via Telegram when available
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception via Telegram
+        except Exception:
+            pass  # Ignore notification errors to avoid cascading failures
+        raise  # Re-raise exception to be handled by outer logic
+
+
 def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict] = None) -> bool:
     """
     Determine whether sufficient disk space exists before saving checkpoints.
