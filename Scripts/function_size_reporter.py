@@ -135,6 +135,20 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def analyze_file(filepath: Path) -> dict:
+    """
+    Reads, parses, and analyzes a single Python source file.
+
+    :param filepath: Path object pointing to the Python source file to analyze.
+    :return: A dictionary containing total_functions, classes, top-level functions, and nested functions.
+    """
+
+    source_text = read_source_file(filepath)  # Read the source file content with UTF-8 encoding
+    tree = parse_ast_tree(source_text, filepath)  # Parse the source text into an abstract syntax tree
+
+    return build_report(tree)  # Build and return the complete function size report for the file
+
+
 def read_source_file(filepath: Path) -> str:
     """
     Reads and returns the full text content of a Python source file.
