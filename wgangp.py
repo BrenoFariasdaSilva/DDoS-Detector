@@ -637,6 +637,104 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def get_hardware_specifications(device_used=None):
+    """
+    Returns system specs: real CPU model (Windows/Linux/macOS), physical cores,
+    RAM in GB, OS name/version, GPU summary, CUDA availability and device used.
+
+    :param device_used: Optional `torch.device` indicating which device the program is using
+    :return: Dictionary with keys: cpu_model, cores, ram_gb, os, gpu, cuda, device_used
+    """
+
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Fetching system specifications...{Style.RESET_ALL}"
+        )  # Output the verbose message
+
+        system = platform.system()  # Identify OS type
+
+        try:  # Try to fetch real CPU model using OS-specific methods
+            if system == "Windows":  # Windows: use WMIC
+                out = subprocess.check_output("wmic cpu get Name", shell=True).decode(errors="ignore")  # Run WMIC
+                cpu_model = out.strip().split("\n")[1].strip()  # Extract model line
+
+            elif system == "Linux":  # Linux: read from /proc/cpuinfo
+                cpu_model = "Unknown"  # Default
+                with open("/proc/cpuinfo") as f:  # Open cpuinfo
+                    for line in f:  # Iterate lines
+                        if "model name" in line:  # Model name entry
+                            cpu_model = line.split(":", 1)[1].strip()  # Extract name
+                            break  # Stop after first match
+
+            elif system == "Darwin":  # MacOS: use sysctl
+                out = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"])  # Run sysctl
+                cpu_model = out.decode().strip()  # Extract model string
+
+            else:  # Unsupported OS
+                cpu_model = "Unknown"  # Fallback
+
+        except Exception:  # If any method fails
+            cpu_model = "Unknown"  # Fallback on failure
+
+        cores = psutil.cpu_count(logical=False) if psutil else None  # Physical core count
+        ram_gb = round(psutil.virtual_memory().total / (1024**3), 1) if psutil else None  # Total RAM in GB
+        os_name = f"{platform.system()} {platform.release()}"  # OS name + version
+
+        try:  # Detect GPU availability and build GPU summary
+            cuda_available = torch.cuda.is_available() if hasattr(torch, "cuda") else False  # Whether CUDA is available
+        except Exception:
+            cuda_available = False  # Fallback
+
+        gpu_summary = None  # Default GPU summary
+        gpu_count = 0  # Default GPU count
+        try:  # Try to collect GPU information when CUDA is present
+            if cuda_available:  # If CUDA available
+                gpu_count = torch.cuda.device_count()  # Number of CUDA devices
+                gpu_info_map = {}  # Map of (name, mem_gb) -> count
+                for i in range(gpu_count):  # Iterate devices
+                    try:  # Query device name and memory
+                        name = torch.cuda.get_device_name(i)  # Device name
+                        props = torch.cuda.get_device_properties(i)  # Device properties
+                        mem_gb = int(round(props.total_memory / (1024**3)))  # Memory in GB
+                        key = (name, mem_gb)  # Grouping key
+                        gpu_info_map[key] = gpu_info_map.get(key, 0) + 1  # Increment count for this GPU spec
+                    except Exception:
+                        continue  # Skip device on failure
+                parts = []  # Parts for GPU summary
+                for (name, mem_gb), cnt in gpu_info_map.items():  # Build human-readable parts
+                    if cnt > 1:  # Multiple identical devices
+                        parts.append(f"{name} ({mem_gb}GB) x{cnt}")  # Include multiplicity
+                    else:
+                        parts.append(f"{name} ({mem_gb}GB)")  # Single device
+                gpu_summary = ", ".join(parts) if parts else None  # Join parts if present
+        except Exception:
+            gpu_summary = None  # On any failure, set to None
+
+        device_used_str = "CPU"  # Default device used label
+        try:
+            if isinstance(device_used, torch.device):  # If a torch.device was provided
+                device_used_str = "CUDA" if device_used.type == "cuda" else "CPU"  # Map to human label
+            else:  # If not a torch.device, try string representation
+                device_used_str = str(device_used)  # Use provided value as string
+        except Exception:
+            device_used_str = "Unknown"  # Fallback on failure
+
+        return {  # Build final dictionary including GPU and CUDA info
+            "cpu_model": cpu_model,  # CPU model string
+            "cores": cores,  # Physical cores
+            "ram_gb": ram_gb,  # RAM in gigabytes
+            "os": os_name,  # Operating system
+            "gpu": gpu_summary if gpu_summary else None,  # GPU summary string or None
+            "cuda": "Yes" if cuda_available else "No",  # CUDA availability
+            "device_used": device_used_str,  # Device used label
+            "gpu_count": gpu_count,  # Number of GPUs detected
+        }
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def populate_hardware_column(df, column_name="hardware", device_used=None):
     """
     Populate "df[column_name]" with a readable hardware description built from
