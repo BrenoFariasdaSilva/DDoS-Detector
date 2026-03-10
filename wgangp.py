@@ -4317,7 +4317,7 @@ class ConfigNamespace:
         self.num_workers = int(cfg.get("dataloader", {}).get("num_workers", 8))  # Cast to int
         self._last_training_time = 0.0  # Placeholder for last training elapsed time (set after train)
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
-            
+
 
 def initialize_cli_and_config() -> Dict:
     """
