@@ -135,6 +135,39 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def collect_nested_functions(tree: ast.Module, parent_map: dict) -> list:
+    """
+    Collects all function definitions that are direct children of another function definition.
+
+    :param tree: The root ast.Module node of the abstract syntax tree.
+    :param parent_map: A dictionary mapping id(node) to its direct parent AST node.
+    :return: A list of nested function metadata dictionaries sorted by size descending.
+    """
+
+    verbose_output(f"{BackgroundColors.GREEN}Collecting nested functions from AST...{Style.RESET_ALL}")  # Log the nested function collection operation
+
+    nested = []  # Initialize empty list to store nested function data
+    
+    for node in ast.walk(tree):  # Walk every node in the AST tree
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):  # Verify if the node is a function definition
+            parent_node = parent_map.get(id(node))  # Retrieve the parent node for the current function
+            if isinstance(parent_node, (ast.FunctionDef, ast.AsyncFunctionDef)):  # Verify if the parent is also a function definition
+                end_ln = get_node_end_lineno(node)  # Get best-effort end line for the nested function node
+                size = end_ln - node.lineno + 1  # Compute function size as the line span using best-effort end
+                entry = {  # Build the nested function metadata dictionary
+                    "nested_function_name": node.name,  # Store the nested function name
+                    "parent_function_name": parent_node.name,  # Store the parent function name
+                    "function_size": size,  # Store the computed size in lines
+                    "start_line": node.lineno,  # Store the starting line number
+                    "end_line": end_ln,  # Store the computed ending line number
+                }
+                nested.append(entry)  # Append the entry to the nested list
+
+    nested.sort(key=lambda e: e["function_size"], reverse=True)  # Sort nested functions by size descending
+
+    return nested  # Return the sorted list of nested functions
+
+
 def build_report(tree: ast.Module) -> dict:
     """
     Builds the complete JSON report structure from the parsed AST.
