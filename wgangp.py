@@ -637,6 +637,49 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def train(args, config: Optional[Dict] = None):
+    """
+    Train the WGAN-GP model using the provided arguments and configuration.
+
+    :param args: parsed arguments namespace containing training configuration
+    :param config: Optional configuration dictionary (will use global CONFIG if not provided)
+    :return: None
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG or get_default_config()  # Use global or default config
+    
+        device, training_start_time, file_start_time, epoch_milestones, file_progress_prefix = normalize_args_and_setup_hardware(args, config)  # Normalize arguments and setup hardware
+
+        dataset, dataloader = create_dataset_and_dataloader(args, config, device)  # Create dataset and dataloader
+
+        results_csv_file, results_csv_writer, results_cols_cfg, feature_dim, n_classes = init_results_csv_and_feature_dims(args, config, dataset)  # Initialize results CSV and feature dimensions
+
+        G, D, opt_D, opt_G, scaler, fixed_noise, fixed_labels, step, start_epoch, metrics_history = create_models_and_optimizers(args, config, device, feature_dim, n_classes)  # Create models and optimizers
+
+        metrics_history, start_epoch, step = resume_from_checkpoint(args, config, device, G, D, opt_G, opt_D, scaler, metrics_history, start_epoch, step)  # Resume from checkpoint if available
+        telegram_enabled, next_notify, progress_pct = init_telegram_progress(args, config, start_epoch)  # Initialize telegram progress tracking
+
+        for epoch in range(start_epoch, args.epochs):  # Loop over epochs starting from resume point
+            epoch_start_time = time.time()  # Record epoch start timestamp
+            pbar, total_steps = create_epoch_progress_bar(dataloader, args, epoch)  # Create progress bar for epoch
+            
+            step = run_batch_training_loop(G, D, opt_G, opt_D, scaler, device, args, config, n_classes, pbar, step, metrics_history, total_steps, epoch, file_progress_prefix)  # Execute batch training loop
+
+            write_epoch_csv_row(args, config, device, dataset, epoch, epoch_start_time, epoch_milestones, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history, opt_G, opt_D)  # Write epoch CSV row
+            save_training_checkpoint(args, config, device, G, D, opt_G, opt_D, scaler, dataset, epoch, metrics_history)  # Save checkpoint if due
+            next_notify = send_epoch_telegram_notifications(args, telegram_enabled, epoch, next_notify, progress_pct)  # Send epoch telegram notifications
+        
+        write_final_timing_and_csv_row(args, config, device, dataset, training_start_time, file_start_time, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history, opt_G, opt_D)  # Write final timing and CSV row
+        generate_training_plots(args, config, metrics_history, file_progress_prefix)  # Generate training plots
+        send_final_telegram_messages(args, config, file_progress_prefix)  # Send final telegram messages
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """
     Apply zebra-striping style to a DataFrame using pandas Styler.
