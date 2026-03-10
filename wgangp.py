@@ -4319,6 +4319,22 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def create_results_csv_if_absent(results_csv_path: Path, results_cols: list) -> None:
+    """
+    Create the results CSV file with a header row if it does not already exist.
+
+    :param results_csv_path: Path object pointing to the desired results CSV location.
+    :param results_cols: List of column names to write as the CSV header.
+    :return: None
+    """
+
+    if not results_csv_path.exists():  # Only write header when file does not already exist
+        os.makedirs(results_csv_path.parent, exist_ok=True)  # Ensure parent directory exists before writing
+        with open(results_csv_path, "w", newline="", encoding="utf-8") as _f:  # Open results CSV for header writing
+            writer = csv.writer(_f)  # Instantiate CSV writer for the new file
+            writer.writerow(results_cols)  # Write header row in configured column order
+
+
 def setup_single_file_output_path(args: Any, config: Dict, csv_path_obj: Path, mode: str, results_suffix: str) -> Path:
     """
     Configure the output file path for single-file mode and return the data augmentation directory.
