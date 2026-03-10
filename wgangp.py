@@ -637,6 +637,37 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def populate_hardware_column(df, column_name="hardware", device_used=None):
+    """
+    Populate "df[column_name]" with a readable hardware description built from
+    "get_hardware_specifications()". On failure the column will be set to None.
+
+    :param df: pandas.DataFrame to modify in-place
+    :param column_name: Name of the column to set (default: "hardware")
+    :param device_used: Optional `torch.device` indicating which device the program is using
+    :return: The modified DataFrame
+    """
+
+    try:
+        try:  # Try to fetch hardware specifications
+            hardware_specs = get_hardware_specifications(device_used=device_used)  # Get system specs with device info
+            gpu_part = hardware_specs.get('gpu', 'None') if hardware_specs.get('gpu', None) is not None else 'None'  # GPU part for readable hardware string
+            hardware_str = (  # Build readable hardware string
+                f"{hardware_specs.get('cpu_model','Unknown')} | Cores: {hardware_specs.get('cores', 'N/A')}"
+                f" | RAM: {hardware_specs.get('ram_gb', 'N/A')} GB | OS: {hardware_specs.get('os','Unknown')}"
+                f" | GPU: {gpu_part} | CUDA: {hardware_specs.get('cuda','No')} | Device Used: {hardware_specs.get('device_used','Unknown')}"
+            )
+            df[column_name] = hardware_str  # Set the hardware column
+        except Exception:  # On any failure
+            df[column_name] = None  # Set hardware column to None
+
+        return df  # Return the modified DataFrame
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def row_style_for_zebra(row):
     """
     Top-level helper to produce zebra row styles for pandas Styler.
