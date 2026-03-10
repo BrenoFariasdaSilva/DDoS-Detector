@@ -637,6 +637,20 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def send_final_telegram_messages(args, config: Dict, file_progress_prefix: str) -> None:
+    """
+    Send final training completion messages via telegram and saved-file helper.
+
+    :param args: parsed arguments namespace with csv_path and epochs
+    :param config: configuration dictionary passed to send_file_saved_and_timing_messages
+    :param file_progress_prefix: colored prefix string for telegram message
+    :return: None
+    """
+
+    send_file_saved_and_timing_messages(args, config)  # Send saved-file, size and timing messages via helper
+    send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Finished WGAN-GP training on {Path(args.csv_path).name} after {args.epochs} epochs")  # Telegram finish with prefix
+
+
 def train(args, config: Optional[Dict] = None):
     """
     Train the WGAN-GP model using the provided arguments and configuration.
