@@ -1,49 +1,52 @@
 """
 ================================================================================
-<PROJECT OR SCRIPT TITLE>
+Function Size Reporter - function_size_reporter.py
 ================================================================================
 Author      : Breno Farias da Silva
-Created     : <YYYY-MM-DD>
+Created     : 2026-02-07
 Description :
-    <Provide a concise and complete overview of what this script does.>
-    <Mention its purpose, scope, and relevance to the larger project.>
+    Parses a Python source file using the AST module to detect all function
+    definitions, compute their sizes, and generate a structured JSON report.
 
     Key features include:
-        - <Feature 1 — e.g., automatic data loading and preprocessing>
-        - <Feature 2 — e.g., model training and evaluation>
-        - <Feature 3 — e.g., visualization or report generation>
-        - <Feature 4 — e.g., logging or notification system>
-        - <Feature 5 — e.g., integration with other modules or datasets>
+        - Reads and parses Python files using the built-in ast module
+        - Detects all class blocks and their methods
+        - Detects all top-level functions
+        - Detects all nested functions (functions defined inside another function)
+        - Computes start line, end line, and size for each function block
+        - Generates a structured JSON report sorted by function size (biggest first)
 
 Usage:
-    1. <Explain any configuration steps before running, such as editing variables or paths.>
-    2. <Describe how to execute the script — typically via Makefile or Python.>
-        $ make <target>   or   $ python <script_name>.py
-    3. <List what outputs are expected or where results are saved.>
+    1. Configure FILE_PATH in the Execution Constants section to target a Python file.
+    2. Execute the script:
+        $ python function_size_reporter.py
+    3. The script generates function_size_report.json in the current directory.
 
 Outputs:
-    - <Output file or directory 1 — e.g., results.csv>
-    - <Output file or directory 2 — e.g., Feature_Analysis/plots/>
-    - <Output file or directory 3 — e.g., logs/output.txt>
+    - function_size_report.json containing the full function size analysis
+    - Execution log in ./Logs/function_size_reporter.log
 
 TODOs:
-    - <Add a task or improvement — e.g., implement CLI argument parsing.>
-    - <Add another improvement — e.g., extend support to Parquet files.>
-    - <Add optimization — e.g., parallelize evaluation loop.>
-    - <Add robustness — e.g., error handling or data validation.>
+    - Add CLI argument parsing for dynamic configuration
+    - Add support for batch processing of multiple files
+    - Add threshold filtering to report only functions above a given size
 
 Dependencies:
-    - Python >= <version>
-    - <Library 1 — e.g., pandas>
-    - <Library 2 — e.g., numpy>
-    - <Library 3 — e.g., scikit-learn>
-    - <Library 4 — e.g., matplotlib, seaborn, tqdm, colorama>
+    - Python >= 3.8
+    - ast (built-in)
+    - json (built-in)
+    - atexit (built-in)
+    - datetime (built-in)
+    - os (built-in)
+    - platform (built-in)
+    - sys (built-in)
+    - colorama
+    - pathlib (built-in)
 
 Assumptions & Notes:
-    - <List any key assumptions — e.g., last column is the target variable.>
-    - <Mention data format — e.g., CSV files only.>
-    - <Mention platform or OS-specific notes — e.g., sound disabled on Windows.>
-    - <Note on output structure or reusability.>
+    - Requires Python >= 3.8 for ast.end_lineno attribute support
+    - Function size is defined as end_lineno - lineno + 1
+    - Sound notification disabled on Windows platform
 """
 
 import atexit  # For playing a sound when the program finishes
