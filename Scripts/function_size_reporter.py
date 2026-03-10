@@ -67,6 +67,7 @@ if PROJECT_ROOT not in sys.path:  # Ensure project root is in sys.path
 from Logger import Logger  # For logging output to both terminal and file
 
 
+
 # Macros:
 class BackgroundColors:  # Colors for the terminal
     CYAN = "\033[96m"  # Cyan
@@ -80,6 +81,8 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
+FILE_PATH = Path("./main.py")  # Path to the target Python file to analyze
+OUTPUT_FILE = Path("./function_size_report.json")  # Path to the output JSON report file
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
@@ -98,6 +101,7 @@ SOUND_FILE = "./.assets/Sounds/NotificationSound.wav"  # The path to the sound f
 RUN_FUNCTIONS = {
     "Play Sound": True,  # Set to True to play a sound when the program finishes
 }
+
 
 # Functions Definitions:
 
