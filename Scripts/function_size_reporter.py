@@ -135,6 +135,23 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def save_report(report: dict, output_path: Path) -> None:
+    """
+    Serializes and saves the function size report to a JSON file on disk.
+
+    :param report: The complete function size report dictionary to serialize.
+    :param output_path: Path object pointing to the output JSON file location.
+    :return: None
+    """
+
+    verbose_output(f"{BackgroundColors.GREEN}Saving report to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log the report save operation
+
+    with open(output_path, "w", encoding="utf-8") as report_file:  # Open the output file for writing with UTF-8 encoding
+        json.dump(report, report_file, indent=2, ensure_ascii=False)  # Serialize the report dictionary with indentation
+
+    print(f"{BackgroundColors.GREEN}Report saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log the successful save confirmation
+
+
 def to_seconds(obj):
     """
     Converts various time-like objects to seconds.
