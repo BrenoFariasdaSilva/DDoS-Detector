@@ -637,6 +637,44 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def initialize_logger(config: Dict):
+    """
+    Initialize the logger for output redirection.
+
+    :param config: Configuration dictionary containing logging settings
+    :return: None
+    """
+
+    try:
+        global logger  # Declare global logger variable
+        
+        if not config.get("logging", {}).get("enabled", True):  # If logging disabled
+            logger = None  # Don't initialize logger
+            return  # Exit early
+        
+        logs_dir = config.get("paths", {}).get("logs_dir", "./Logs")  # Get logs directory
+        log_file = f"{logs_dir}/{Path(__file__).stem}.log"  # Construct log file path
+        clean = config.get("logging", {}).get("clean", True)  # Get clean flag
+        
+        logger = Logger(log_file, clean=clean)  # Create a Logger instance
+        sys.stdout = logger  # Redirect stdout to the logger
+        sys.stderr = logger  # Redirect stderr to the logger
+        
+        globals()["safe_debug"] = safe_debug  # Make available globally
+        globals()["safe_warning"] = safe_warning  # Make available globally
+        globals()["safe_critical"] = safe_critical  # Make available globally
+
+        global RESOURCE_MONITOR_STOP_EVENT, RESOURCE_MONITOR_THREAD  # Access globals for monitor
+        if RESOURCE_MONITOR_THREAD is None or not (RESOURCE_MONITOR_THREAD and RESOURCE_MONITOR_THREAD.is_alive()):  # If monitor not running
+            RESOURCE_MONITOR_STOP_EVENT, RESOURCE_MONITOR_THREAD = start_resource_monitor(config)  # Start monitor with current config
+        else:  # Monitor already running
+            safe_debug("Resource monitor already active; skipping start")  # Debug message
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def detect_label_column(columns, config: Optional[Dict] = None):
     """
     Try to guess the label column based on common naming conventions.
