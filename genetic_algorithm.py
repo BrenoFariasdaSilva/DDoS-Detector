@@ -2642,7 +2642,7 @@ def extract_pareto_front(population):
                         is_dominated = True  # Set dominated flag
                         break  # Stop checking
                 if not is_dominated:  # If candidate is not dominated
-                        pareto_front.append(candidate)  # Add to Pareto front
+                    pareto_front.append(candidate)  # Add to Pareto front
         except Exception:  # If any error occurs
             return []  # Return empty list
 
@@ -2686,7 +2686,7 @@ def calculate_hypervolume(pareto_front, reference_point=(0.0, -100.0)):
                     hypervolume += width * height  # Add slice area to total hypervolume
                 prev_f1 = f1  # Update previous F1 for next slice
 
-                return hypervolume  # Return calculated hypervolume
+            return hypervolume  # Return calculated hypervolume
         except Exception:  # If any error occurs
             return 0.0  # Return zero hypervolume
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
