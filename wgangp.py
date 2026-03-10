@@ -4319,6 +4319,21 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def validate_results_csv_columns(config: Dict) -> list:
+    """
+    Validate that results_csv_columns is present, non-empty, and is a list.
+
+    :param config: Configuration dictionary containing wgangp settings.
+    :return: Validated list of results CSV column names.
+    """
+
+    results_cols = config.get("wgangp", {}).get("results_csv_columns")  # Read configured results columns list from wgangp section
+    if not isinstance(results_cols, list) or len(results_cols) == 0:  # Verify value exists, is a list, and is non-empty
+        print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Print descriptive configuration error
+        raise ValueError("'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration")  # Halt execution with descriptive error
+    return results_cols  # Return validated column list to caller
+
+
 def create_results_csv_if_absent(results_csv_path: Path, results_cols: list) -> None:
     """
     Create the results CSV file with a header row if it does not already exist.
