@@ -637,6 +637,43 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def find_config_value(cfg, key):
+    """
+    Search `cfg` recursively for `key` and return first found value or None.
+    
+    :param cfg: Configuration dictionary or list to search through
+    :param key: The key to search for in the configuration
+    :return: The value associated with the key if found, otherwise None
+    """
+    
+    try:
+        if cfg is None:  # If no configuration provided
+            return None  # Nothing to search
+        if isinstance(cfg, dict):  # If current node is a mapping
+            if key in cfg:  # If key directly exists here
+                return cfg[key]  # Return direct match
+            for v in cfg.values():  # Iterate values to search deeper
+                try:  # Guard recursive call
+                    found = find_config_value(v, key)  # Recurse into nested value
+                except Exception:
+                    found = None  # Ignore recursion errors
+                if found is not None:  # If found in nested value
+                    return found  # Return the first match
+            return None  # Not found in this mapping
+        if isinstance(cfg, (list, tuple)):  # If current node is a sequence
+            for item in cfg:  # Iterate sequence items
+                try:  # Guard recursive call
+                    found = find_config_value(item, key)  # Recurse into item
+                except Exception:
+                    found = None  # Ignore recursion errors
+                if found is not None:  # If a match is found
+                    return found  # Return it
+            return None  # Not found in sequence
+        return None  # Base case: not a container type
+    except Exception:
+        return None  # On unexpected errors return None
+
+
 def compose_training_start_message(args, file_progress_prefix) -> str:
     """
     Compose the training start Telegram message including CSV file statistics.
