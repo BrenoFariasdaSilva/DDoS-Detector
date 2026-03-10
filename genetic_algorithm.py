@@ -3627,7 +3627,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
 
                 plt.xlabel("Generation", fontsize=12)  # Set X-axis label
                 plt.ylabel("Best F1-Score", fontsize=12)  # Set Y-axis label
-                plt.title(f"Multi-Run Best F1-Score Overlay\\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+                plt.title(f"Multi-Run Best F1-Score Overlay\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
                 plt.grid(True, linestyle="--", alpha=0.3)  # Add grid with reduced alpha
                 if total_runs <= 15:  # If 15 runs or fewer
                     plt.legend(loc="best", fontsize=8, ncol=2)  # Add legend with 2 columns
@@ -3648,7 +3648,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                 plt.axvline(float(np.median(final_f1_scores)), color="blue", linestyle="--", linewidth=2, label=f"Median: {np.median(final_f1_scores):.4f}")  # Add median line
                 plt.xlabel("Final Best F1-Score", fontsize=12)  # Set X-axis label
                 plt.ylabel("Frequency", fontsize=12)  # Set Y-axis label
-                plt.title(f"Distribution of Final Best F1-Scores\\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+                plt.title(f"Distribution of Final Best F1-Scores\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
                 plt.legend(loc="best")  # Add legend
                 plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
                 plt.tight_layout()  # Adjust layout
@@ -3668,7 +3668,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                 plt.axvline(float(np.median(final_features)), color="blue", linestyle="--", linewidth=2, label=f"Median: {np.median(final_features):.0f}")  # Add median line
                 plt.xlabel("Final Feature Count", fontsize=12)  # Set X-axis label
                 plt.ylabel("Frequency", fontsize=12)  # Set Y-axis label
-                plt.title(f"Distribution of Final Feature Counts\\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+                plt.title(f"Distribution of Final Feature Counts\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
                 plt.legend(loc="best")  # Add legend
                 plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
                 plt.tight_layout()  # Adjust layout
@@ -3693,7 +3693,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                     plt.axvline(float(np.median(final_hypervolumes)), color="blue", linestyle="--", linewidth=2, label=f"Median: {np.median(final_hypervolumes):.4f}")  # Add median line
                     plt.xlabel("Final Hypervolume", fontsize=12)  # Set X-axis label
                     plt.ylabel("Frequency", fontsize=12)  # Set Y-axis label
-                    plt.title(f"Distribution of Final Hypervolume\\n{dataset_name} ({len(final_hypervolumes)} runs)", fontsize=14)  # Set plot title
+                    plt.title(f"Distribution of Final Hypervolume\n{dataset_name} ({len(final_hypervolumes)} runs)", fontsize=14)  # Set plot title
                     plt.legend(loc="best")  # Add legend
                     plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
                     plt.tight_layout()  # Adjust layout
@@ -3723,7 +3723,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
 
                 plt.xlabel("Run ID", fontsize=12)  # Set X-axis label
                 plt.ylabel("Final Best F1-Score", fontsize=12)  # Set Y-axis label
-                plt.title(f"Final Best F1-Score per Run\\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+                plt.title(f"Final Best F1-Score per Run\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
                 plt.xticks(range(len(run_labels)), run_labels, rotation=45, ha="right", fontsize=8)  # Set X-axis ticks with rotation
                 plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
                 plt.tight_layout()  # Adjust layout
@@ -3742,7 +3742,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                 plt.bar(range(len(run_labels)), final_features, color="#ff7f0e", alpha=0.7, edgecolor="black")  # Create bar chart
                 plt.xlabel("Run ID", fontsize=12)  # Set X-axis label
                 plt.ylabel("Final Feature Count", fontsize=12)  # Set Y-axis label
-                plt.title(f"Final Feature Count per Run\\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+                plt.title(f"Final Feature Count per Run\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
                 plt.xticks(range(len(run_labels)), run_labels, rotation=45, ha="right", fontsize=8)  # Set X-axis ticks with rotation
                 plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
                 plt.tight_layout()  # Adjust layout
@@ -3771,7 +3771,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                     plt.bar(range(len(run_labels_hv)), hypervolumes, color="#8c564b", alpha=0.7, edgecolor="black")  # Create bar chart
                     plt.xlabel("Run ID", fontsize=12)  # Set X-axis label
                     plt.ylabel("Final Hypervolume", fontsize=12)  # Set Y-axis label
-                    plt.title(f"Final Hypervolume per Run\\n{dataset_name} ({len(run_labels_hv)} runs)", fontsize=14)  # Set plot title
+                    plt.title(f"Final Hypervolume per Run\n{dataset_name} ({len(run_labels_hv)} runs)", fontsize=14)  # Set plot title
                     plt.xticks(range(len(run_labels_hv)), run_labels_hv, rotation=45, ha="right", fontsize=8)  # Set X-axis ticks
                     plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
                     plt.tight_layout()  # Adjust layout
@@ -3811,7 +3811,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                     plt.fill_between(generations, mean_f1 - std_f1, mean_f1 + std_f1, color="#1f77b4", alpha=0.2, label="± 1 Std Dev")  # Fill std dev region
                     plt.xlabel("Generation", fontsize=12)  # Set X-axis label
                     plt.ylabel("Best F1-Score", fontsize=12)  # Set Y-axis label
-                    plt.title(f"Aggregated Best F1-Score Convergence (Mean ± Std Dev)\\n{dataset_name} ({len(all_f1_histories)} runs)", fontsize=14)  # Set plot title
+                    plt.title(f"Aggregated Best F1-Score Convergence (Mean ± Std Dev)\n{dataset_name} ({len(all_f1_histories)} runs)", fontsize=14)  # Set plot title
                     plt.legend(loc="best", fontsize=10)  # Add legend
                     plt.grid(True, linestyle="--", alpha=0.3)  # Add grid
                     plt.tight_layout()  # Adjust layout
@@ -3832,7 +3832,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                 plt.colorbar(scatter, label="Population Size")  # Add colorbar
                 plt.xlabel("Final Feature Count", fontsize=12)  # Set X-axis label
                 plt.ylabel("Final Best F1-Score", fontsize=12)  # Set Y-axis label
-                plt.title(f"Best F1-Score vs Feature Count\\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+                plt.title(f"Best F1-Score vs Feature Count\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
                 plt.grid(True, linestyle="--", alpha=0.3)  # Add grid
                 plt.tight_layout()  # Adjust layout
                 plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_scatter_f1_vs_features.png")  # Define plot path
@@ -3865,7 +3865,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                     
                     plt.figure(figsize=(8, 6))  # Create figure
                     sns.heatmap(correlation_matrix, annot=True, cmap="coolwarm", center=0, vmin=-1, vmax=1, square=True, linewidths=1, cbar_kws={"shrink": 0.8})  # Create heatmap
-                    plt.title(f"Metric Correlation Heatmap\\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+                    plt.title(f"Metric Correlation Heatmap\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_correlation_heatmap.png")  # Define plot path
                     ensure_figure_min_4k_and_save(fig=plt.gcf(), path=plot_path, dpi=300)  # Save figure
@@ -3888,7 +3888,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
                     plt.xticks(box_positions, [f"Pop {p}" for p in f1_by_pop.keys()], fontsize=10)  # Set X-axis tick labels
                     plt.xlabel("Population Size", fontsize=12)  # Set X-axis label
                     plt.ylabel("Final Best F1-Score", fontsize=12)  # Set Y-axis label
-                    plt.title(f"F1-Score Distribution by Population Size\\n{dataset_name}", fontsize=14)  # Set plot title
+                    plt.title(f"F1-Score Distribution by Population Size\n{dataset_name}", fontsize=14)  # Set plot title
                     plt.grid(True, linestyle="--", alpha=0.3, axis="y")  # Add Y-axis grid
                     plt.tight_layout()  # Adjust layout
                     plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_boxplot_f1_by_pop.png")  # Define plot path
