@@ -247,21 +247,39 @@ def main():
     :return: None
     """
 
-    print(
-        f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Main Template Python{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
-        end="\n\n",
-    )  # Output the welcome message
+    print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Function Size Reporter{BackgroundColors.GREEN} program!{Style.RESET_ALL}", end="\n\n")  # Output the welcome message
+
     start_time = datetime.datetime.now()  # Get the start time of the program
-    
-    # Implement logic here
+
+    if not verify_filepath_exists(FILE_PATH):  # Verify if the target file exists
+        print(f"{BackgroundColors.RED}Error: Target file {BackgroundColors.CYAN}{FILE_PATH}{BackgroundColors.RED} not found!{Style.RESET_ALL}")  # Log the missing file error
+        return  # Exit the main function early
+
+    print(f"{BackgroundColors.GREEN}Analyzing file: {BackgroundColors.CYAN}{FILE_PATH}{Style.RESET_ALL}")  # Log the analysis start message
+
+    source_text = read_source_file(FILE_PATH)  # Read the source file content
+    tree = parse_ast_tree(source_text, FILE_PATH)  # Parse the source text into an AST tree
+    report = build_report(tree)  # Build the complete function size report
+
+    save_report(report, OUTPUT_FILE)  # Save the report to the output JSON file
+
+    total = report["total_functions"]  # Retrieve the total function count from the report
+    class_count = sum(len(v) for v in report["classes"].values())  # Compute the total class method count
+    top_count = len(report["top-level functions"])  # Retrieve the top-level function count
+    nested_count = len(report["nested functions"])  # Retrieve the nested function count
+
+    print(f"{BackgroundColors.GREEN}Total functions detected: {BackgroundColors.CYAN}{total}{Style.RESET_ALL}")  # Log the total function count
+    print(f"{BackgroundColors.GREEN}Class methods: {BackgroundColors.CYAN}{class_count}{Style.RESET_ALL}")  # Log the class method count
+    print(f"{BackgroundColors.GREEN}Top-level functions: {BackgroundColors.CYAN}{top_count}{Style.RESET_ALL}")  # Log the top-level function count
+    print(f"{BackgroundColors.GREEN}Nested functions: {BackgroundColors.CYAN}{nested_count}{Style.RESET_ALL}")  # Log the nested function count
 
     finish_time = datetime.datetime.now()  # Get the finish time of the program
     print(
         f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
-    )  # Output the start and finish times
+    )  # Log the execution timing information
     print(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
-    )  # Output the end of the program message
+    )  # Log the program completion message
     (
         atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
     )  # Register the play_sound function to be called when the program finishes
