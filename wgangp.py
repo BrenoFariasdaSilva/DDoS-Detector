@@ -637,6 +637,64 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def apply_training_and_model_cli_overrides(args, overrides: Dict) -> None:
+    """
+    Apply training, generator, and discriminator CLI argument overrides.
+
+    Mutates the overrides dictionary in-place with values for epochs, batch_size,
+    critic_steps, lr, beta1, beta2, lambda_gp, save_every, log_interval,
+    sample_batch, use_amp, compile, latent_dim, hidden_dims, embed_dim,
+    n_resblocks, and leaky_relu_alpha arguments.
+
+    :param args: argparse.Namespace containing CLI arguments
+    :param overrides: Overrides dictionary to mutate in-place
+    :return: None
+    """
+
+    if args.epochs is not None:  # If epochs specified
+        overrides.setdefault("training", {})["epochs"] = args.epochs  # Set epochs
+    if args.batch_size is not None:  # If batch_size specified
+        overrides.setdefault("training", {})["batch_size"] = args.batch_size  # Set batch_size
+    if args.critic_steps is not None:  # If critic_steps specified
+        overrides.setdefault("training", {})["critic_steps"] = args.critic_steps  # Set critic_steps
+    if args.lr is not None:  # If lr specified
+        overrides.setdefault("training", {})["lr"] = args.lr  # Set lr
+    if args.beta1 is not None:  # If beta1 specified
+        overrides.setdefault("training", {})["beta1"] = args.beta1  # Set beta1
+    if args.beta2 is not None:  # If beta2 specified
+        overrides.setdefault("training", {})["beta2"] = args.beta2  # Set beta2
+    if args.lambda_gp is not None:  # If lambda_gp specified
+        overrides.setdefault("training", {})["lambda_gp"] = args.lambda_gp  # Set lambda_gp
+    if args.save_every is not None:  # If save_every specified
+        overrides.setdefault("training", {})["save_every"] = args.save_every  # Set save_every
+    if args.log_interval is not None:  # If log_interval specified
+        overrides.setdefault("training", {})["log_interval"] = args.log_interval  # Set log_interval
+    if args.sample_batch is not None:  # If sample_batch specified
+        overrides.setdefault("training", {})["sample_batch"] = args.sample_batch  # Set sample_batch
+    if args.use_amp:  # If use_amp flag set
+        overrides.setdefault("training", {})["use_amp"] = True  # Enable use_amp
+    if args.compile:  # If compile flag set
+        overrides.setdefault("training", {})["compile"] = True  # Enable compile
+
+    if args.latent_dim is not None:  # If latent_dim specified
+        overrides.setdefault("generator", {})["latent_dim"] = args.latent_dim  # Set latent_dim
+    if args.g_hidden is not None:  # If g_hidden specified
+        overrides.setdefault("generator", {})["hidden_dims"] = args.g_hidden  # Set hidden_dims
+    if args.g_embed_dim is not None:  # If g_embed_dim specified
+        overrides.setdefault("generator", {})["embed_dim"] = args.g_embed_dim  # Set embed_dim
+    if args.n_resblocks is not None:  # If n_resblocks specified
+        overrides.setdefault("generator", {})["n_resblocks"] = args.n_resblocks  # Set n_resblocks
+    if args.g_leaky_relu_alpha is not None:  # If g_leaky_relu_alpha specified
+        overrides.setdefault("generator", {})["leaky_relu_alpha"] = args.g_leaky_relu_alpha  # Set leaky_relu_alpha
+
+    if args.d_hidden is not None:  # If d_hidden specified
+        overrides.setdefault("discriminator", {})["hidden_dims"] = args.d_hidden  # Set hidden_dims
+    if args.d_embed_dim is not None:  # If d_embed_dim specified
+        overrides.setdefault("discriminator", {})["embed_dim"] = args.d_embed_dim  # Set embed_dim
+    if args.d_leaky_relu_alpha is not None:  # If d_leaky_relu_alpha specified
+        overrides.setdefault("discriminator", {})["leaky_relu_alpha"] = args.d_leaky_relu_alpha  # Set leaky_relu_alpha
+
+
 def apply_generation_and_data_cli_overrides(args, overrides: Dict) -> None:
     """
     Apply generation, dataloader, and dataset CLI argument overrides.
