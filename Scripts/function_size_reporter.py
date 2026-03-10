@@ -135,6 +135,38 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def collect_top_level_functions(tree: ast.Module, parent_map: dict) -> list:
+    """
+    Collects all function definitions that are direct children of the module node.
+
+    :param tree: The root ast.Module node of the abstract syntax tree.
+    :param parent_map: A dictionary mapping id(node) to its direct parent AST node.
+    :return: A list of top-level function metadata dictionaries sorted by size descending.
+    """
+
+    verbose_output(f"{BackgroundColors.GREEN}Collecting top-level functions from AST...{Style.RESET_ALL}")  # Log the top-level function collection operation
+
+    top_level = []  # Initialize empty list to store top-level function data
+    
+    for node in ast.walk(tree):  # Walk every node in the AST tree
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):  # Verify if the node is a function definition
+            parent_node = parent_map.get(id(node))  # Retrieve the parent node for the current function
+            if isinstance(parent_node, ast.Module):  # Verify if the parent is the module root
+                end_ln = get_node_end_lineno(node)  # Get best-effort end line for the function node
+                size = end_ln - node.lineno + 1  # Compute function size as the line span using best-effort end
+                entry = {  # Build the function metadata dictionary
+                    "function_name": node.name,  # Store the function name
+                    "function_size": size,  # Store the computed size in lines
+                    "start_line": node.lineno,  # Store the starting line number
+                    "end_line": end_ln,  # Store the computed ending line number
+                }
+                top_level.append(entry)  # Append the entry to the top-level list
+
+    top_level.sort(key=lambda e: e["function_size"], reverse=True)  # Sort top-level functions by size descending
+
+    return top_level  # Return the sorted list of top-level functions
+
+
 def collect_nested_functions(tree: ast.Module, parent_map: dict) -> list:
     """
     Collects all function definitions that are direct children of another function definition.
