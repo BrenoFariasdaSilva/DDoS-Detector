@@ -637,6 +637,74 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
+    """
+    Verify whether the data-augmentation output file exists and matches the
+    configured number of samples. Returns True when generation should proceed
+    (file missing, mismatched, or forced), or False when generation can be
+    skipped because an existing file already matches the requested size.
+
+    Behavior:
+      - If output file does not exist: return True (proceed)
+      - If output file exists and equals expected sample count: return False
+        unless `force_new_samples` is True (in that case delete and return True)
+      - If output file exists but count mismatches: delete file and return True
+
+    :param args: Runtime args (must include `out_file`, `n_samples`, `checkpoint`, `csv_path`)
+    :param config: Optional configuration dictionary
+    :return: bool, True => proceed with generation, False => skip generation
+    """
+
+    try:
+        if config is None:  # Use global if not provided
+            config = CONFIG or get_default_config()  # Load default config when needed
+
+        out_path = Path(getattr(args, "out_file", ""))  # Resolve output path
+        file_prefix = getattr(args, "file_progress_prefix", "")  # Telegram prefix
+
+        if not out_path.exists():  # If file does not exist
+            return True  # Proceed with generation
+
+        expected_n = resolve_expected_sample_count(args, config)  # Resolve expected sample count from configuration
+
+        if expected_n is None:  # If expected size cannot be determined
+            send_telegram_message(
+                TELEGRAM_BOT,
+                f"{file_prefix} Unable to verify existing augmented file {out_path.name}: expected count undeterminable — regenerating.",
+            )
+            try:
+                out_path.unlink()  # Attempt to remove problematic file
+            except Exception:
+                pass
+            return True  # Proceed safely
+
+        try:
+            existing_count = len(pd.read_csv(out_path, low_memory=False))  # Count rows safely
+        except Exception:
+            existing_count = None  # Fallback if unreadable
+
+        if existing_count is None:  # If file unreadable
+            send_telegram_message(
+                TELEGRAM_BOT,
+                f"{file_prefix} Existing augmented file {out_path.name} unreadable — regenerating.",
+            )
+            try:
+                out_path.unlink()  # Attempt deletion
+            except Exception:
+                pass
+            return True  # Proceed
+
+        return evaluate_existing_augmentation_file(out_path, file_prefix, existing_count, expected_n, args)  # Evaluate whether to regenerate or skip based on count comparison
+
+    except Exception as e:
+        print(str(e))
+        try:
+            send_exception_via_telegram(type(e), e, e.__traceback__)
+        except Exception:
+            pass
+        return True
+
+
 def normalize_args_and_load_checkpoint(args, config: Dict) -> tuple:
     """
     Normalize argument types, select device, and load generator checkpoint.
