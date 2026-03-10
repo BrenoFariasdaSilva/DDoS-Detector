@@ -637,6 +637,38 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def build_generator_checkpoint_payload(G, opt_G, scaler, dataset, epoch: int, metrics_history: Dict, args) -> Dict:
+    """
+    Build the generator checkpoint dictionary with all training state for serialization.
+
+    :param G: Generator model to extract state_dict from.
+    :param opt_G: Generator optimizer to extract state_dict from.
+    :param scaler: AMP gradient scaler (may be None).
+    :param dataset: Loaded CSVFlowDataset instance for scaler, label_encoder, and feature_cols.
+    :param epoch: Current epoch index (zero-based).
+    :param metrics_history: Dictionary of tracked training metrics.
+    :param args: Parsed arguments namespace to serialize with checkpoint.
+    :return: Dictionary containing all generator checkpoint data.
+    """
+
+    unique_labels, label_counts = np.unique(dataset.labels, return_counts=True)  # Get class distribution
+    class_distribution = dict(zip(unique_labels.tolist(), label_counts.tolist()))  # Create label:count mapping
+    g_checkpoint = {
+        "epoch": epoch + 1,  # Save current epoch number
+        "state_dict": (cast(Any, G).module.state_dict() if isinstance(cast(Any, G), torch.nn.DataParallel) else cast(Any, G).state_dict()),  # Save generator state dict (unwrap DataParallel.module if present)
+        "opt_G_state": cast(Any, opt_G).state_dict(),  # Save generator optimizer state
+        "scaler": dataset.scaler,  # Save scaler for inverse transform
+        "label_encoder": dataset.label_encoder,  # Save label encoder for mapping
+        "feature_cols": dataset.feature_cols,  # Save feature column names for generation
+        "class_distribution": class_distribution,  # Save class distribution for percentage-based generation
+        "metrics_history": metrics_history,  # Save metrics history for resume
+        "args": vars(args),  # Save training arguments
+    }  # End generator checkpoint dictionary
+    if scaler is not None:  # If using AMP
+        g_checkpoint["scaler_state"] = scaler.state_dict()  # Save scaler state
+    return g_checkpoint  # Return assembled generator checkpoint payload
+
+
 def save_model_checkpoints_to_disk(g_checkpoint: Dict, G, D, opt_D, checkpoint_dir: Path, checkpoint_prefix: str, epoch: int, args) -> None:
     """
     Save generator and discriminator checkpoint files and latest generator weights to disk.
