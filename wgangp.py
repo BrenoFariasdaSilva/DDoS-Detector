@@ -637,6 +637,65 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def build_default_training_and_model_config() -> Dict:
+    """
+    Build the default training and model architecture configuration sections.
+
+    Returns a dictionary containing the training, generator, discriminator,
+    gradient_penalty, generation, and dataloader sections with their default values.
+
+    :return: Dictionary with training and model architecture defaults
+    """
+
+    return {  # Begin training and model configuration dictionary
+        "training": {  # Training hyperparameters
+            "epochs": 60,  # Number of training epochs
+            "batch_size": 64,  # Training batch size
+            "critic_steps": 5,  # Number of discriminator updates per generator update
+            "lr": 1e-4,  # Learning rate for both networks
+            "beta1": 0.5,  # Adam optimizer beta1 parameter
+            "beta2": 0.9,  # Adam optimizer beta2 parameter
+            "lambda_gp": 10.0,  # Gradient penalty coefficient
+            "save_every": 5,  # Save checkpoints every N epochs
+            "log_interval": 50,  # Log metrics every N steps
+            "sample_batch": 16,  # Number of samples for fixed noise generation
+            "use_amp": False,  # Use automatic mixed precision
+            "compile": False,  # Use torch.compile() for faster execution
+        },
+        "generator": {  # Generator architecture
+            "latent_dim": 100,  # Dimensionality of noise vector
+            "hidden_dims": [256, 512],  # Hidden layer sizes
+            "embed_dim": 32,  # Label embedding dimension
+            "n_resblocks": 3,  # Number of residual blocks
+            "leaky_relu_alpha": 0.2,  # LeakyReLU negative slope
+        },
+        "discriminator": {  # Discriminator architecture
+            "hidden_dims": [512, 256, 128],  # Hidden layer sizes
+            "embed_dim": 32,  # Label embedding dimension
+            "leaky_relu_alpha": 0.2,  # LeakyReLU negative slope
+        },
+        "gradient_penalty": {  # Gradient penalty configuration
+            "epsilon": 1e-12,  # Small constant for numerical stability
+        },
+        "generation": {  # Sample generation parameters
+            "checkpoint": None,  # Path to generator checkpoint
+            "n_samples": 1.0,  # Number/percentage of samples to generate
+            "label": None,  # Specific class ID to generate (None = all classes)
+            "out_file": "generated.csv",  # Output CSV filename
+            "gen_batch_size": 256,  # Generation batch size
+            "feature_dim": None,  # Feature dimensionality (None = auto-detect)
+            "small_class_threshold": 100,  # Threshold for small class detection
+            "small_class_min_samples": 10,  # Minimum samples for small classes
+        },
+        "dataloader": {  # DataLoader configuration
+            "num_workers": 8,  # Number of workers for data loading
+            "pin_memory": True,  # Use pinned memory for faster GPU transfer
+            "persistent_workers": True,  # Keep workers alive between epochs
+            "prefetch_factor": 2,  # Number of batches to prefetch
+        },
+    }  # End training and model configuration dictionary
+
+
 def build_default_output_and_notification_config() -> Dict:
     """
     Build the default output and notification configuration sections.
