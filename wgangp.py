@@ -637,6 +637,33 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def build_ordered_csv_row_from_runtime(row_runtime: Dict, results_cols_cfg: list, config: Dict) -> list:
+    """
+    Build an ordered CSV row list from runtime metrics dictionary following configured column schema.
+
+    :param row_runtime: Dictionary mapping column names to runtime-computed values.
+    :param results_cols_cfg: List of configured column names defining output order.
+    :param config: Configuration dictionary for recursive value lookup on missing columns.
+    :return: Ordered list of values aligned to results_cols_cfg schema.
+    """
+
+    ordered = []  # Prepare ordered list following config column order
+    for c in results_cols_cfg:  # For each configured column name
+        if c in row_runtime:  # If runtime metric provides this column
+            ordered.append(row_runtime.get(c))  # Use runtime value
+        else:  # Otherwise attempt to find value in configuration
+            cfg_val = None  # Default when not found
+            try:  # Guard config lookup
+                cfg_val = find_config_value(config, c)  # Search config recursively for key
+            except Exception:  # If lookup fails
+                cfg_val = None  # Treat as missing on failure
+            if cfg_val is not None:  # If config provided a value
+                ordered.append(cfg_val)  # Use configured hyperparameter value
+            else:  # Neither runtime nor config provided the column value
+                ordered.append(None)  # Use None to indicate missing value explicitly
+    return ordered  # Return ordered row list aligned to configured schema
+
+
 def inject_hardware_into_csv_row(ordered: list, results_cols_cfg: list, config: Dict, device: torch.device) -> list:
     """
     Insert hardware specification string into a CSV row when hardware_tracking is enabled.
