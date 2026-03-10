@@ -637,6 +637,35 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def resolve_expected_sample_count(args, config: Dict) -> Optional[int]:
+    """
+    Resolve the expected number of generated samples from configuration and args.
+
+    :param args: Parsed arguments namespace with n_samples attribute.
+    :param config: Configuration dictionary with generation settings.
+    :return: Expected sample count as integer, or None if undeterminable.
+    """
+
+    try:  # Safely resolve requested n_samples
+        requested = safe_float(
+            getattr(args, "n_samples", None)
+            if getattr(args, "n_samples", None) is not None
+            else config.get("generation", {}).get("n_samples", 1.0),
+            config.get("generation", {}).get("n_samples", 1.0),
+        )  # Resolve requested n_samples safely
+    except Exception:  # Fallback on resolution failure
+        requested = config.get("generation", {}).get("n_samples", 1.0)  # Fallback
+    expected_n: Optional[int] = None  # Initialize expected sample count
+    if requested <= 1.0:  # Percentage mode
+        expected_n = compute_expected_samples_for_percentage(requested, args, config)  # Compute expected
+    else:  # Absolute mode
+        try:  # Attempt integer conversion
+            expected_n = int(requested)  # Absolute mode
+        except Exception:  # Fallback if conversion fails
+            expected_n = None  # Fallback if conversion fails
+    return expected_n  # Return resolved expected sample count
+
+
 def evaluate_existing_augmentation_file(out_path: Path, file_prefix: str, existing_count: int, expected_n: int, args) -> bool:
     """
     Evaluate whether to regenerate or skip based on existing file count versus expected count.
