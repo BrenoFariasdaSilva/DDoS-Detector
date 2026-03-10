@@ -4319,6 +4319,26 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def run_both_mode_for_csv(args: Any, config: Dict, csv_path_obj: Path, data_aug_dir: Path, training_label: str) -> None:
+    """
+    Execute combined train-then-generate workflow for a single CSV file.
+
+    :param args: Argument namespace with training and generation settings.
+    :param config: Configuration dictionary with paths and model settings.
+    :param csv_path_obj: Path object for the input CSV file being processed.
+    :param data_aug_dir: Path object for the data augmentation output directory.
+    :param training_label: Label suffix string inserted into the [1/2] training progress message.
+    :return: None
+    """
+
+    print(f"{BackgroundColors.GREEN}[1/2] {training_label}{Style.RESET_ALL}")  # Print training phase progress header with label
+    execute_training_with_timing(args, config)  # Train model and record elapsed time on args
+    checkpoint_path = resolve_checkpoint_after_training(args, config, csv_path_obj, data_aug_dir)  # Resolve generator checkpoint produced by training
+    print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")  # Print generation phase progress header with checkpoint filename
+    print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print resolved output file destination path
+    execute_generation_with_verification(args, config)  # Verify necessity and execute synthetic sample generation
+
+
 def dispatch_single_file_mode(args: Any, config: Dict, mode: str, csv_path_obj: Path, data_aug_dir: Path) -> None:
     """
     Dispatch the configured execution mode for a single-file run.
