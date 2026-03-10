@@ -4319,6 +4319,30 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def setup_single_file_output_path(args: Any, config: Dict, csv_path_obj: Path, mode: str, results_suffix: str) -> Path:
+    """
+    Configure the output file path for single-file mode and return the data augmentation directory.
+
+    :param args: Argument namespace containing out_file attribute to update.
+    :param config: Configuration dictionary with paths settings.
+    :param csv_path_obj: Path object for the input CSV file.
+    :param mode: Execution mode string (train, gen, or both).
+    :param results_suffix: Suffix string appended to the input filename for the output file.
+    :return: Path object for the canonical data augmentation output directory.
+    """
+
+    if args.out_file == "generated.csv" and mode in ["gen", "both"]:  # Update default output path when in generation or combined mode
+        data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get configured subdir name for this branch
+        data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation subdirectory path alongside input file
+        os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before output path assignment
+        output_filename = f"{csv_path_obj.stem}{results_suffix}{csv_path_obj.suffix}"  # Build output filename by appending suffix to input stem
+        args.out_file = str(data_aug_dir / output_filename)  # Assign resolved output file path to args for downstream use
+    data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Re-read subdir name for authoritative path computation
+    data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Build canonical Data_Augmentation directory path for results CSV
+    os.makedirs(data_aug_dir, exist_ok=True)  # Ensure canonical Data_Augmentation directory exists before results CSV creation
+    return data_aug_dir  # Return canonical data augmentation directory path for downstream use
+
+
 def execute_training_with_timing(args: Any, config: Dict) -> None:
     """
     Execute model training and store elapsed time on args.
