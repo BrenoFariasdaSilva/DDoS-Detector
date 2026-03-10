@@ -637,6 +637,44 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def to_seconds(obj):
+    """
+    Converts various time-like objects to seconds.
+    
+    :param obj: The object to convert (can be int, float, timedelta, datetime, etc.)
+    :return: The equivalent time in seconds as a float, or None if conversion fails
+    """
+    
+    try:
+        if obj is None:  # None can't be converted
+            return None  # Signal failure to convert
+        if isinstance(obj, (int, float)):  # Already numeric (seconds or timestamp)
+            return float(obj)  # Return as float seconds
+        if hasattr(obj, "total_seconds"):  # Timedelta-like objects
+            try:  # Attempt to call total_seconds()
+                return float(obj.total_seconds())  # Use the total_seconds() method
+            except Exception as e:  # total_seconds() failed
+                print(str(e))  # Print error to terminal for visibility
+                try:  # Attempt to notify about total_seconds failure via Telegram
+                    send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full error via Telegram
+                except Exception:  # If notification fails, ignore to avoid recursion
+                    pass  # Ignore Telegram send errors and fall through
+        if hasattr(obj, "timestamp"):  # Datetime-like objects
+            try:  # Attempt to call timestamp()
+                return float(obj.timestamp())  # Use timestamp() to get seconds since epoch
+            except Exception as e:  # timestamp() failed
+                print(str(e))  # Print error to terminal for visibility
+                try:  # Attempt to notify about timestamp failure via Telegram
+                    send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full error via Telegram
+                except Exception:  # If notification fails, ignore to avoid recursion
+                    pass  # Ignore Telegram send errors and fall through
+        return None  # Couldn't convert
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def calculate_execution_time(start_time, finish_time=None):
     """
     Calculates the execution time and returns a human-readable string.
