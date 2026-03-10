@@ -637,6 +637,17 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def row_style_for_zebra(row):
+    """
+    Top-level helper to produce zebra row styles for pandas Styler.
+
+    :param row: pandas Series representing a row
+    :return: List[str] of CSS style strings for each cell
+    """
+    bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # white for even rows, light gray for odd rows
+    return [f"background-color: {bg};" for _ in row.index]  # Return style for every column in the row
+
+
 def play_sound(config: Optional[Dict] = None):
     """
     Plays a sound when the program finishes and skips if the operating system is Windows.
