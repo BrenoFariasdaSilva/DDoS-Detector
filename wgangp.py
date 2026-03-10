@@ -637,6 +637,38 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def generate_batches_and_collect_results(args, G: nn.Module, device: torch.device, labels: np.ndarray, n: int) -> tuple:
+    """
+    Generate synthetic samples in batches and collect all results.
+
+    :param args: Parsed arguments namespace with gen_batch_size and latent_dim.
+    :param G: Generator model in evaluation mode.
+    :param device: Torch device for tensor allocation.
+    :param labels: Numpy array of integer labels for generation.
+    :param n: Total number of samples to generate.
+    :return: Tuple of (all_fake, all_labels, sample_generation_start_time).
+    """
+
+    batch_size = args.gen_batch_size  # Set generation batch size
+    _gen_model = getattr(G, "module", G)  # Unwrap DataParallel if present to access feature_dim attribute
+    feat_dim = cast(Any, _gen_model.feature_dim)  # Get output feature dimensionality cast to Any to suppress type-checker attribute errors
+    feat_dim_int = int(feat_dim)  # Convert feature dimension to plain int for numpy shape allocation
+    all_fake = np.empty((int(n), feat_dim_int), dtype=np.float32)  # Pre-allocate contiguous output array to avoid list-append-then-vstack overhead
+    offset = 0  # Track write position in pre-allocated array
+    sample_generation_start_time = time.time()  # Record sample generation start timestamp
+    
+    with torch.no_grad():  # Disable gradient computation for generation
+        for i in range(0, n, batch_size):  # Loop over batches for generation
+            b = min(batch_size, n - i)  # Calculate current batch size
+            z = torch.randn(b, args.latent_dim, device=device)  # Sample noise for batch
+            y = torch.from_numpy(labels[i : i + b]).to(device, dtype=torch.long)  # Convert labels to tensor
+            fake = G(z, y).cpu().numpy()  # Generate fake samples and move to CPU
+            all_fake[offset : offset + b] = fake  # Write batch directly into pre-allocated array slice
+            offset += b  # Advance write offset by current batch size
+    
+    return (all_fake, labels, sample_generation_start_time)  # Return pre-allocated array and original labels array
+
+
 def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List, all_labels: List, scaler: Any, label_encoder: Any, feature_cols: List[str], device: torch.device, n: int, file_progress_prefix: str) -> pd.DataFrame:
     """
     Stack generated arrays, inverse-transform, and build output DataFrame.
