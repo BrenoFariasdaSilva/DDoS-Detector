@@ -637,6 +637,30 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def save_metrics_history_to_json(checkpoint_dir: Path, checkpoint_prefix: str, metrics_history: Dict) -> None:
+    """
+    Save training metrics history to a JSON file in the checkpoint directory.
+
+    :param checkpoint_dir: Directory path for saving the metrics JSON file.
+    :param checkpoint_prefix: Filename prefix for the metrics JSON file.
+    :param metrics_history: Dictionary of tracked training metrics to serialize.
+    :return: None
+    """
+
+    try:  # Guard metrics JSON write against disk-full and other I/O errors
+        metrics_path = checkpoint_dir / f"{checkpoint_prefix}_metrics_history.json"  # Path for metrics JSON
+        with open(metrics_path, "w") as f:  # Open file for writing
+            json.dump(metrics_history, f, indent=2)  # Save metrics as JSON
+        print(f"{BackgroundColors.GREEN}Saved metrics history to {BackgroundColors.CYAN}{metrics_path}{Style.RESET_ALL}")  # Print metrics save message
+    except OSError as _ose_mj:  # Catch filesystem errors during metrics JSON write
+        if _ose_mj.errno == 28:  # If error is errno 28 (ENOSPC - no space left on device)
+            print(f"{BackgroundColors.YELLOW}[WARNING] Checkpoint could not be saved due to disk space exhaustion.{Style.RESET_ALL}")  # Warn about disk exhaustion
+        else:  # If error is unrelated to disk space
+            print(f"{BackgroundColors.YELLOW}Warning: failed to write metrics history: {_ose_mj}{Style.RESET_ALL}")  # Warn about metrics write failure
+    except Exception as _mj:  # If metrics write failed for any other reason
+        print(f"{BackgroundColors.YELLOW}Warning: failed to write metrics history: {_mj}{Style.RESET_ALL}")  # Warn about failure
+
+
 def save_training_checkpoint(args, config: Dict, device: torch.device, G, D, opt_G, opt_D, scaler, dataset, epoch: int, metrics_history: Dict) -> None:
     """
     Save generator and discriminator checkpoints with metrics at periodic intervals.
