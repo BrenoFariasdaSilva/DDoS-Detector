@@ -637,6 +637,57 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def build_generation_runtime_row(args, config: Dict, n: int, device: torch.device, metadata: Dict) -> Dict:
+    """
+    Build runtime metrics dictionary for generation results CSV row.
+
+    :param args: Parsed arguments namespace with generation settings and timing.
+    :param config: Configuration dictionary for hyperparameter lookup.
+    :param n: Total number of generated samples.
+    :param device: Torch device used for hardware specification lookup.
+    :param metadata: Dictionary with generation file metadata from collect_generation_file_metadata.
+    :return: Dictionary mapping column names to runtime-computed values for CSV row.
+    """
+
+    row_runtime_defaults = {  # Default values for common runtime columns
+        "critic_iterations": getattr(args, "critic_steps", ""),  # Critic iterations default
+        "learning_rate_generator": getattr(args, "lr", ""),  # Generator LR default
+        "learning_rate_critic": getattr(args, "lr", ""),  # Critic LR default
+        "testing_time_s": "",  # No testing time available by default
+        "hardware": None,  # Hardware placeholder
+    }  # End runtime defaults
+    row_runtime = {}  # Dictionary to hold runtime values for configured columns
+    row_runtime["original_file"] = metadata["original_file_name"]  # Original CSV filename
+    row_runtime["generated_file"] = metadata["generated_file_name"]  # Generated output filename
+    row_runtime["original_num_samples"] = metadata["original_num"] if metadata["original_num"] is not None else ""  # Original sample count
+    row_runtime["total_generated_samples"] = metadata["total_generated"]  # Total generated count
+    row_runtime["generated_ratio"] = metadata["generated_ratio"]  # Generated/original ratio
+    row_runtime["critic_loss"] = metadata["critic_loss"]  # Last critic loss from checkpoint metrics
+    row_runtime["generator_loss"] = metadata["generator_loss"]  # Last generator loss from checkpoint metrics
+    for k, v in metadata["timing_values"].items():  # For each timing key known
+        row_runtime[k] = v  # Store timing value under the timing key
+    try:  # Apply runtime defaults for missing columns
+        for kk, vv in row_runtime_defaults.items():  # For each default key
+            if kk not in row_runtime or row_runtime.get(kk) in (None, ""):  # If column missing or empty
+                row_runtime[kk] = vv  # Apply default value
+    except Exception:  # Ignore default application errors
+        pass  # Continue despite errors
+    try:  # Attempt to inject hardware specification string
+        if (row_runtime.get("hardware") is None) or row_runtime.get("hardware") == "":  # If hardware not yet set
+            hw_specs = get_hardware_specifications(device_used=device) if 'get_hardware_specifications' in globals() else None  # Query hardware specs
+            if isinstance(hw_specs, dict):  # If specs returned a valid dict
+                hw_part = hw_specs.get("gpu", "None") if hw_specs.get("gpu", None) is not None else "None"  # GPU part
+                hardware_str = (  # Build human-readable hardware string
+                    f"{hw_specs.get('cpu_model','Unknown')} | Cores: {hw_specs.get('cores','N/A')}"
+                    f" | RAM: {hw_specs.get('ram_gb','N/A')} GB | OS: {hw_specs.get('os','Unknown')}"
+                    f" | GPU: {hw_part} | CUDA: {hw_specs.get('cuda','No')} | Device Used: {hw_specs.get('device_used','Unknown')}"
+                )  # End hardware string
+                row_runtime["hardware"] = hardware_str  # Store hardware specification in runtime dict
+    except Exception:  # Ignore hardware detection errors
+        pass  # Continue despite hardware detection failure
+    return row_runtime  # Return populated generation runtime dictionary
+
+
 def prepare_and_write_results_csv_row(args, config: Dict, args_ck: Dict, ckpt: Dict, n: int, device: torch.device) -> None:
     """
     Prepare and write a results CSV row with generation metrics and hyperparameters.
