@@ -637,6 +637,32 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def get_available_disk_space_gb(config: Optional[Dict] = None) -> float:
+    """
+    Return the available disk space in GB for the current working directory.
+
+    Uses psutil.disk_usage when available and falls back to shutil.disk_usage
+    when psutil is not installed. Returns a safe fallback of 0.0 on failure.
+
+    :param config: Optional configuration dictionary.
+    :return: Available disk space in GB as a float.
+    """
+
+    try:
+        cwd_str = str(Path(".").resolve())  # Resolve current working directory for disk usage query
+        if psutil is not None:  # Prefer psutil for disk usage query when available
+            disk_stat = psutil.disk_usage(cwd_str)  # Query disk usage via psutil
+            free_bytes = disk_stat.free  # Available disk space in bytes from psutil
+        else:  # Fall back to stdlib shutil.disk_usage when psutil is unavailable
+            print(f"{BackgroundColors.YELLOW}[WARNING] psutil not available; falling back to shutil.disk_usage for available disk space query{Style.RESET_ALL}")  # Warn about psutil unavailability and fallback
+            shutil_stat = shutil.disk_usage(cwd_str)  # Query disk usage via shutil stdlib fallback
+            free_bytes = shutil_stat.free  # Available disk space in bytes from shutil
+        return safe_float(free_bytes, 0.0) / (1024.0 ** 3)  # Convert bytes to GB and return safely
+    except Exception as e:  # On unexpected errors, warn and return safe fallback
+        print(f"{BackgroundColors.YELLOW}[WARNING] Failed to query available disk space: {e}; returning 0.0 GB{Style.RESET_ALL}")  # Warn about query failure
+        return 0.0  # Return safe fallback of zero GB on failure
+
+
 def get_used_disk_percentage(config: Optional[Dict] = None) -> float:
     """
     Return the percentage of disk space currently used for the current working directory.
