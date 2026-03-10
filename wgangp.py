@@ -4317,6 +4317,19 @@ class ConfigNamespace:
         self.num_workers = int(cfg.get("dataloader", {}).get("num_workers", 8))  # Cast to int
         self._last_training_time = 0.0  # Placeholder for last training elapsed time (set after train)
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
+            
+
+def register_exit_handlers(config: Dict) -> None:
+    """
+    Register atexit cleanup handlers for sound playback and results CSV flushing.
+
+    :param config: Configuration dictionary containing sound settings.
+    :return: None
+    """
+
+    if config.get("sound", {}).get("enabled", True):  # Register sound playback only when sound is enabled in config
+        atexit.register(lambda: play_sound(config))  # Schedule sound playback callback at program exit
+    atexit.register(close_all_results_csv_handles)  # Schedule results CSV handle closure at program exit
 
 
 def main():
