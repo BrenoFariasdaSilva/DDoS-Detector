@@ -4319,6 +4319,43 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def process_single_dataset_file(args: Any, config: Dict, mode: str, file: str, index: int, total_files: int, results_suffix: str) -> None:
+    """
+    Process a single CSV file within a batch dataset loop.
+
+    :param args: Argument namespace updated in-place with per-file output paths.
+    :param config: Configuration dictionary with paths and execution settings.
+    :param mode: Execution mode string (train, gen, or both).
+    :param file: String path to the CSV file to process.
+    :param index: 1-based index of this file among all files in the current dataset path.
+    :param total_files: Total number of files being processed in this dataset path.
+    :param results_suffix: Suffix appended to each input filename for its output file.
+    :return: None
+    """
+
+    file_progress_prefix = build_file_progress_prefix(index, total_files)  # Build colored [index/total] progress prefix once per file
+    args.file_progress_prefix = file_progress_prefix  # Attach colored prefix to args for use in train and generate functions
+    
+    try:  # Guard path resolution against OS-level failures
+        resolved_path = str(Path(file).resolve())  # Resolve file to absolute canonical path string
+    except Exception:  # Handle path resolution failure gracefully
+        resolved_path = str(Path(file))  # Fall back to non-resolved path string on resolution failure
+    
+    if resolved_path in PROCESSED_FILES:  # Skip files already processed in this run
+        print(f"{BackgroundColors.YELLOW}{file_progress_prefix} Skipping already-processed file: {resolved_path}{Style.RESET_ALL}")  # Warn user about duplicate detection with prefix
+        return  # Exit early to prevent duplicate processing
+    
+    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}")  # Print decorative separator before file processing header
+    print(f"{file_progress_prefix} {BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}")  # Announce current file with progress prefix
+    print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}\n")  # Print decorative separator after file processing header
+    csv_path_obj, data_aug_dir = setup_per_file_output(args, config, file, results_suffix)  # Configure output paths and retrieve Path objects for dispatch
+    
+    try:  # Execute configured mode with guaranteed cleanup in finally block
+        dispatch_mode_for_file(args, config, mode, csv_path_obj, data_aug_dir)  # Dispatch train, gen, or both to handler
+    finally:  # Always mark file as processed even when mode execution raises an error
+        mark_file_as_processed(resolved_path)  # Register path in PROCESSED_FILES and flush logger
+
+
 def process_dataset_path(args: Any, config: Dict, mode: str, input_path: str, results_cols: list, results_suffix: str) -> None:
     """
     Process all CSV files discovered within a single dataset directory path.
