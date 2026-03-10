@@ -637,6 +637,79 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def calculate_execution_time(start_time, finish_time=None):
+    """
+    Calculates the execution time and returns a human-readable string.
+
+    Accepts either:
+    - Two datetimes/timedeltas: `calculate_execution_time(start, finish)`
+    - A single timedelta or numeric seconds: `calculate_execution_time(delta)`
+    - Two numeric timestamps (seconds): `calculate_execution_time(start_s, finish_s)`
+
+    Returns a string like "1h 2m 3s".
+    """
+
+    try:
+        if finish_time is None:  # Single-argument mode: start_time already represents duration or seconds
+            total_seconds = to_seconds(start_time)  # Try to convert provided value to seconds
+            if total_seconds is None:  # Conversion failed
+                try:  # Attempt numeric coercion
+                    total_seconds = float(start_time)  # Attempt numeric coercion
+                except Exception as e:  # Coercion failed
+                    print(str(e))  # Print coercion error to terminal for visibility
+                    try:  # Attempt to notify about coercion failure via Telegram
+                        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full coercion error via Telegram
+                    except Exception:  # If notification fails, ignore to avoid cascading errors
+                        pass  # Ignore Telegram send errors and fallback
+                    total_seconds = 0.0  # Fallback to zero
+        else:  # Two-argument mode: Compute difference finish_time - start_time
+            st = to_seconds(start_time)  # Convert start to seconds if possible
+            ft = to_seconds(finish_time)  # Convert finish to seconds if possible
+            if st is not None and ft is not None:  # Both converted successfully
+                total_seconds = ft - st  # Direct numeric subtraction
+            else:  # Fallback to other methods
+                try:  # Attempt to subtract (works for datetimes/timedeltas)
+                    delta = finish_time - start_time  # Try subtracting (works for datetimes/timedeltas)
+                    total_seconds = float(delta.total_seconds())  # Get seconds from the resulting timedelta
+                except Exception as e:  # Subtraction failed
+                    print(str(e))  # Print subtraction error to terminal for visibility
+                    try:  # Attempt to notify about subtraction failure via Telegram
+                        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full subtraction error via Telegram
+                    except Exception:  # If notification fails, ignore to avoid cascading errors
+                        pass  # Ignore Telegram send errors and continue to numeric coercion
+                    try:  # Final attempt: Numeric coercion
+                        total_seconds = float(finish_time) - float(start_time)  # Final numeric coercion attempt
+                    except Exception as e:  # Numeric coercion failed
+                        print(str(e))  # Print numeric coercion error to terminal for visibility
+                        try:  # Attempt to notify about numeric coercion failure via Telegram
+                            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full coercion error via Telegram
+                        except Exception:  # If notification fails, ignore to avoid cascading errors
+                            pass  # Ignore Telegram send errors and fallback
+                        total_seconds = 0.0  # Fallback to zero on failure
+
+        if total_seconds is None:  # Ensure a numeric value
+            total_seconds = 0.0  # Default to zero
+        if total_seconds < 0:  # Normalize negative durations
+            total_seconds = abs(total_seconds)  # Use absolute value
+
+        days = int(total_seconds // 86400)  # Compute full days
+        hours = int((total_seconds % 86400) // 3600)  # Compute remaining hours
+        minutes = int((total_seconds % 3600) // 60)  # Compute remaining minutes
+        seconds = int(total_seconds % 60)  # Compute remaining seconds
+
+        if days > 0:  # Include days when present
+            return f"{days}d {hours}h {minutes}m {seconds}s"  # Return formatted days+hours+minutes+seconds
+        if hours > 0:  # Include hours when present
+            return f"{hours}h {minutes}m {seconds}s"  # Return formatted hours+minutes+seconds
+        if minutes > 0:  # Include minutes when present
+            return f"{minutes}m {seconds}s"  # Return formatted minutes+seconds
+        return f"{seconds}s"  # Fallback: only seconds
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def get_hardware_specifications(device_used=None):
     """
     Returns system specs: real CPU model (Windows/Linux/macOS), physical cores,
