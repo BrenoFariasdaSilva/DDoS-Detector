@@ -637,6 +637,26 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def notify_start_of_generation(args, n: int) -> None:
+    """
+    Send Telegram notification about the start of sample generation.
+
+    :param args: Parsed arguments namespace with out_file.
+    :param n: Total number of samples to generate.
+    :return: None.
+    """
+
+    try:
+        start_msg = compose_generation_start_message(n, args, Path(args.out_file).name, original_num=None)
+        send_telegram_message(TELEGRAM_BOT, start_msg)  # Notify start of generation
+    except Exception as e:  # Failed to notify start of generation
+        print(str(e))  # Print send error to terminal for visibility
+        try:  # Attempt to send full error via Telegram using exception sender
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full send error via Telegram
+        except Exception:  # If notification fails, continue without raising to allow generation
+            pass  # Ignore Telegram send errors and continue generation
+
+
 def generate_batches_and_collect_results(args, G: nn.Module, device: torch.device, labels: np.ndarray, n: int) -> tuple:
     """
     Generate synthetic samples in batches and collect all results.
