@@ -458,16 +458,16 @@ def merge_configs(defaults, file_config, cli_args):
         if cli_args.monitor_interval is not None:  # If monitor interval specified
             config["resource_monitor"]["interval_seconds"] = cli_args.monitor_interval  # Override monitor interval
 
-        if hasattr(cli_args, "telegram_progress_pct") and cli_args.telegram_progress_pct is not None:
-            try:
-                config["telegram"]["progress_pct"] = int(cli_args.telegram_progress_pct)
-            except Exception:
-                pass
+        if hasattr(cli_args, "telegram_progress_pct") and cli_args.telegram_progress_pct is not None:  # If Telegram progress percent override provided
+            try:  # Try to parse Telegram progress percentage
+                config["telegram"]["progress_pct"] = int(cli_args.telegram_progress_pct)  # Override Telegram notification threshold
+            except Exception:  # If parsing fails
+                pass  # Keep existing value
 
-        if hasattr(cli_args, "results_dir") and cli_args.results_dir is not None:
-            config.setdefault("genetic_algorithm", {}).setdefault("export", {})["results_dir"] = cli_args.results_dir
-        if hasattr(cli_args, "results_filename") and cli_args.results_filename is not None:
-            config.setdefault("genetic_algorithm", {}).setdefault("export", {})["results_filename"] = cli_args.results_filename
+        if hasattr(cli_args, "results_dir") and cli_args.results_dir is not None:  # If results directory override provided
+            config.setdefault("genetic_algorithm", {}).setdefault("export", {})["results_dir"] = cli_args.results_dir  # Override GA export results directory
+        if hasattr(cli_args, "results_filename") and cli_args.results_filename is not None:  # If results filename override provided
+            config.setdefault("genetic_algorithm", {}).setdefault("export", {})["results_filename"] = cli_args.results_filename  # Override GA export results filename
 
         return config  # Return merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -965,7 +965,7 @@ def start_resource_monitor(
     daemon=True,
 ):
     """
-Start the resource monitoring thread with the specified configuration.
+    Start the resource monitoring thread with the specified configuration.
 
     :param interval_seconds: Interval between monitoring cycles in seconds.
     :param reserve_cpu_frac: Fraction of CPU reserved from worker allocation.
@@ -2350,13 +2350,12 @@ def run_genetic_algorithm_loop(
             else range(start_gen, n_generations + 1)
         )  # Create generation range with progress bar if show_progress is enabled, otherwise use plain range
         gens_ran = 0  # Track how many generations were actually executed
-        # Telegram progress notification settings (percent-based milestones)
-        telegram_cfg = CONFIG.get("telegram", {}) if isinstance(CONFIG, dict) else {}
-        telegram_enabled = bool(telegram_cfg.get("enabled", True))
-        try:
-            telegram_progress_pct = int(telegram_cfg.get("progress_pct", 10))
-        except Exception:
-            telegram_progress_pct = 10
+        telegram_cfg = CONFIG.get("telegram", {}) if isinstance(CONFIG, dict) else {}  # Read Telegram progress notification settings from config
+        telegram_enabled = bool(telegram_cfg.get("enabled", True))  # Read Telegram enabled flag from config
+        try:  # Try to parse Telegram progress percentage threshold
+            telegram_progress_pct = int(telegram_cfg.get("progress_pct", 10))  # Integer percent between notifications
+        except Exception:  # If parsing fails
+            telegram_progress_pct = 10  # Fallback to 10% intervals
         last_telegram_block = -1  # Track last percentage block notified so we don't repeat
 
         for gen in gen_range:  # Loop for the specified number of generations
@@ -2488,18 +2487,16 @@ def run_genetic_algorithm_loop(
                         GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
                     break  # Stop the loop early
 
-            # Decide whether to send a Telegram update based on percent milestones
-            should_send = False
-            if telegram_enabled and show_progress and telegram_progress_pct > 0:
-                try:
-                    # Compute current percent (0-100)
-                    current_pct = (gen * 100) // max(1, int(n_generations))
-                    current_block = current_pct // telegram_progress_pct
-                    if current_block > last_telegram_block:
-                        should_send = True
-                        last_telegram_block = current_block
-                except Exception:
-                    should_send = False
+            should_send = False  # Initialize flag for Telegram progress notification
+            if telegram_enabled and show_progress and telegram_progress_pct > 0:  # Only evaluate if Telegram notifications are active and percent threshold is set
+                try:  # Try to determine if a percent milestone was reached
+                    current_pct = (gen * 100) // max(1, int(n_generations))  # Compute current generation progress percentage (0-100)
+                    current_block = current_pct // telegram_progress_pct  # Map progress to discrete notification block
+                    if current_block > last_telegram_block:  # Verify if a new notification block was entered
+                        should_send = True  # Trigger Telegram notification for this milestone
+                        last_telegram_block = current_block  # Advance the last-notified block tracker
+                except Exception:  # On any error
+                    should_send = False  # Suppress notification on error
 
             send_telegram_message(
                 TELEGRAM_BOT,
@@ -2723,7 +2720,7 @@ def calculate_population_diversity(population):
             if comparisons > 0:  # If valid comparisons made
                 return total_distance / comparisons  # Return average Hamming distance
             else:  # If no valid comparisons
-                    return 0.0  # Return zero diversity
+                return 0.0  # Return zero diversity
         except Exception:  # If any error occurs
             return 0.0  # Return zero diversity
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -3060,10 +3057,10 @@ def generate_convergence_plots(
                 plt.close("all")  # Close all plots
             except Exception:  # Ignore errors during cleanup
                 pass  # Do nothing
-                verbose_output(
-                    f"{BackgroundColors.YELLOW}Failed to generate convergence plots: {e}{Style.RESET_ALL}"
-                )  # Log warning
-                return []  # Return empty list
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Failed to generate convergence plots: {e}{Style.RESET_ALL}"
+            )  # Log warning
+            return []  # Return empty list
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -4135,6 +4132,9 @@ def build_base_row(
     :param n_test: Number of testing samples.
     :param test_frac: Train/test fraction.
     :param rfe_ranking: Dictionary with RFE rankings (will be JSON-encoded).
+    :param elapsed_time_s: Elapsed seconds for best-model training (optional).
+    :param cxpb: Crossover probability used in the GA (optional).
+    :param mutpb: Mutation probability used in the GA (optional).
     :return: Dictionary representing the base row for CSV output.
     """
 
@@ -4602,13 +4602,13 @@ def prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generat
             mutpb=mutpb,
         )
 
-        ga_export = CONFIG.get("genetic_algorithm", {}).get("export", {})
-        ga_results_dir = ga_export.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")
-        if os.path.isabs(ga_results_dir):
-            ga_results_resolved = os.path.abspath(os.path.expanduser(ga_results_dir))
-        else:
-            ga_results_resolved = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir)))
-        models_dir_local = os.path.join(ga_results_resolved, "Models")
+        ga_export = CONFIG.get("genetic_algorithm", {}).get("export", {})  # Read GA export configuration
+        ga_results_dir = ga_export.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")  # Resolve GA results directory from config or use default
+        if os.path.isabs(ga_results_dir):  # If results dir is absolute, use it directly
+            ga_results_resolved = os.path.abspath(os.path.expanduser(ga_results_dir))  # Normalize absolute path
+        else:  # If results dir is relative, resolve it relative to csv_path
+            ga_results_resolved = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir)))  # Resolve to absolute path relative to dataset
+        models_dir_local = os.path.join(ga_results_resolved, "Models")  # Build models subdirectory path
         os.makedirs(models_dir_local, exist_ok=True)  # Create models directory if it doesn't exist
         ts = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")  # Generate timestamp string for filenames
         base_name_local = re.sub(r"[^A-Za-z0-9_.-]+", "_", os.path.splitext(os.path.basename(csv_path))[0])  # Sanitize dataset name for use in filename
@@ -4617,7 +4617,7 @@ def prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generat
         features_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-features.json")  # Construct full path for features file
         params_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-params.json")  # Construct full path for params file
 
-        return (
+        return (  # Return all computed paths and metadata as a tuple
             n_train_local,
             n_test_local,
             test_frac_local,
@@ -4657,9 +4657,9 @@ def train_and_save_final_model(best_feats_local, X, y, feature_names, X_test, mo
     try:
         df_features_local = prepare_feature_dataframe(X, feature_names)  # Convert feature matrix to DataFrame with column names
         scaler_local = StandardScaler()  # Initialize standard scaler for feature normalization
-        start_scale_local = time.perf_counter()
+        start_scale_local = time.perf_counter()  # Record scaling start time
         X_scaled_local = scaler_local.fit_transform(df_features_local.values)  # Fit scaler on features and transform to normalized values
-        scaling_time_local = time.perf_counter() - start_scale_local
+        scaling_time_local = time.perf_counter() - start_scale_local  # Calculate feature scaling duration
         try:  # Attach scaling time to scaler_local using setattr to avoid Pylance attribute warning
             setattr(scaler_local, "_scaling_time", round(float(scaling_time_local), 6))  # Store scaling time on scaler
         except Exception:  # If setting attribute fails, continue without raising
@@ -4680,11 +4680,11 @@ def train_and_save_final_model(best_feats_local, X, y, feature_names, X_test, mo
         with open(params_path_local, "w", encoding="utf-8") as ph:  # Open params file for writing
             json.dump(model_params_local, ph, default=str)  # Write model parameters as JSON with string fallback
 
-        print(f"{BackgroundColors.GREEN}Saved final model to {BackgroundColors.CYAN}{model_path_local}{Style.RESET_ALL}")
-        print(f"{BackgroundColors.GREEN}Saved scaler to {BackgroundColors.CYAN}{scaler_path_local}{Style.RESET_ALL}")
-        print(f"{BackgroundColors.GREEN}Saved params to {BackgroundColors.CYAN}{params_path_local}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Saved final model to {BackgroundColors.CYAN}{model_path_local}{Style.RESET_ALL}")  # Notify user of saved model path
+        print(f"{BackgroundColors.GREEN}Saved scaler to {BackgroundColors.CYAN}{scaler_path_local}{Style.RESET_ALL}")  # Notify user of saved scaler path
+        print(f"{BackgroundColors.GREEN}Saved params to {BackgroundColors.CYAN}{params_path_local}{Style.RESET_ALL}")  # Notify user of saved params path
 
-        return model_local, model_params_local, training_time_local, X_test_selected_local, round(float(scaling_time_local), 6)
+        return model_local, model_params_local, training_time_local, X_test_selected_local, round(float(scaling_time_local), 6)  # Return trained model, params, timing and selected test features
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -4790,6 +4790,8 @@ def build_and_write_run_results(
     :param rfe_ranking: RFE ranking dictionary.
     :param output_dir: Directory where consolidated CSV is stored.
     :param csv_path: Original dataset CSV path (used for dataset name/path metadata).
+    :param feature_extraction_time_s: Time spent on feature extraction/scaling in seconds (optional).
+    :param union_features_across_runs: Union of features selected across all GA runs (optional).
     :return: None
     """
 
@@ -4802,33 +4804,33 @@ def build_and_write_run_results(
             "run_index": "best",  # Run index indicating best result
             "model": model_local.__class__.__name__,  # Model class name
             "dataset": os.path.relpath(csv_path),  # Relative path to dataset
-            "hyperparameters": json.dumps(model_params_local, default=str) if model_params_local is not None else None,
-            "cv_method": cv_method_local,
-            "train_test_split": f"{1-test_frac_local:.0%}/{test_frac_local:.0%}" if test_frac_local is not None else "80/20",
-            "scaling": "StandardScaler",
-            "cv_accuracy": truncate_value(rf_metrics_local[0]) if rf_metrics_local and len(rf_metrics_local) > 0 else None,
-            "cv_precision": truncate_value(rf_metrics_local[1]) if rf_metrics_local and len(rf_metrics_local) > 1 else None,
-            "cv_recall": truncate_value(rf_metrics_local[2]) if rf_metrics_local and len(rf_metrics_local) > 2 else None,
-            "cv_f1_score": truncate_value(rf_metrics_local[3]) if rf_metrics_local and len(rf_metrics_local) > 3 else None,
-            "cv_fpr": truncate_value(rf_metrics_local[4]) if rf_metrics_local and len(rf_metrics_local) > 4 else None,
-            "cv_fnr": truncate_value(rf_metrics_local[5]) if rf_metrics_local and len(rf_metrics_local) > 5 else None,
-            "test_accuracy": truncate_value(rf_metrics_local[6]) if rf_metrics_local and len(rf_metrics_local) > 6 else None,
-            "test_precision": truncate_value(rf_metrics_local[7]) if rf_metrics_local and len(rf_metrics_local) > 7 else None,
-            "test_recall": truncate_value(rf_metrics_local[8]) if rf_metrics_local and len(rf_metrics_local) > 8 else None,
-            "test_f1_score": truncate_value(rf_metrics_local[9]) if rf_metrics_local and len(rf_metrics_local) > 9 else None,
-            "test_fpr": truncate_value(rf_metrics_local[10]) if rf_metrics_local and len(rf_metrics_local) > 10 else None,
-            "test_fnr": truncate_value(rf_metrics_local[11]) if rf_metrics_local and len(rf_metrics_local) > 11 else None,
-            "feature_extraction_time_s": round(float(feature_extraction_time_s), 6) if feature_extraction_time_s is not None else None,
-            "training_time_s": round(float(training_time_local), 6) if training_time_local is not None else None,
-            "testing_time_s": round(float(testing_time_local), 6) if testing_time_local is not None else None,
-            "elapsed_run_time": round(float(elapsed_run_time), 6) if elapsed_run_time is not None else None,
-            "hardware": json.dumps(get_hardware_specifications()),
-            "best_features": json.dumps(best_features),
-            "union_features_across_runs": json.dumps(union_features_across_runs) if union_features_across_runs is not None else None,
-            "rfe_ranking": json.dumps(rfe_ranking),
+            "hyperparameters": json.dumps(model_params_local, default=str) if model_params_local is not None else None,  # JSON-encoded model hyperparameters
+            "cv_method": cv_method_local,  # Cross-validation method used
+            "train_test_split": f"{1-test_frac_local:.0%}/{test_frac_local:.0%}" if test_frac_local is not None else "80/20",  # Train/test ratio as percentage string
+            "scaling": "StandardScaler",  # Scaler applied to training features
+            "cv_accuracy": truncate_value(rf_metrics_local[0]) if rf_metrics_local and len(rf_metrics_local) > 0 else None,  # Cross-validation accuracy score
+            "cv_precision": truncate_value(rf_metrics_local[1]) if rf_metrics_local and len(rf_metrics_local) > 1 else None,  # Cross-validation precision score
+            "cv_recall": truncate_value(rf_metrics_local[2]) if rf_metrics_local and len(rf_metrics_local) > 2 else None,  # Cross-validation recall score
+            "cv_f1_score": truncate_value(rf_metrics_local[3]) if rf_metrics_local and len(rf_metrics_local) > 3 else None,  # Cross-validation F1 score
+            "cv_fpr": truncate_value(rf_metrics_local[4]) if rf_metrics_local and len(rf_metrics_local) > 4 else None,  # Cross-validation false positive rate
+            "cv_fnr": truncate_value(rf_metrics_local[5]) if rf_metrics_local and len(rf_metrics_local) > 5 else None,  # Cross-validation false negative rate
+            "test_accuracy": truncate_value(rf_metrics_local[6]) if rf_metrics_local and len(rf_metrics_local) > 6 else None,  # Test set accuracy score
+            "test_precision": truncate_value(rf_metrics_local[7]) if rf_metrics_local and len(rf_metrics_local) > 7 else None,  # Test set precision score
+            "test_recall": truncate_value(rf_metrics_local[8]) if rf_metrics_local and len(rf_metrics_local) > 8 else None,  # Test set recall score
+            "test_f1_score": truncate_value(rf_metrics_local[9]) if rf_metrics_local and len(rf_metrics_local) > 9 else None,  # Test set F1 score
+            "test_fpr": truncate_value(rf_metrics_local[10]) if rf_metrics_local and len(rf_metrics_local) > 10 else None,  # Test set false positive rate
+            "test_fnr": truncate_value(rf_metrics_local[11]) if rf_metrics_local and len(rf_metrics_local) > 11 else None,  # Test set false negative rate
+            "feature_extraction_time_s": round(float(feature_extraction_time_s), 6) if feature_extraction_time_s is not None else None,  # Time spent on feature scaling in seconds
+            "training_time_s": round(float(training_time_local), 6) if training_time_local is not None else None,  # Model training duration in seconds
+            "testing_time_s": round(float(testing_time_local), 6) if testing_time_local is not None else None,  # Model testing duration in seconds
+            "elapsed_run_time": round(float(elapsed_run_time), 6) if elapsed_run_time is not None else None,  # Total GA run elapsed time in seconds
+            "hardware": json.dumps(get_hardware_specifications()),  # JSON-encoded hardware specification string
+            "best_features": json.dumps(best_features),  # JSON-encoded list of selected feature names
+            "union_features_across_runs": json.dumps(union_features_across_runs) if union_features_across_runs is not None else None,  # JSON-encoded union of features across all runs
+            "rfe_ranking": json.dumps(rfe_ranking),  # JSON-encoded RFE ranking dictionary
         }
-        
-        write_consolidated_csv([run_row], output_dir)
+
+        write_consolidated_csv([run_row], output_dir)  # Persist run row to consolidated GA results CSV
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -4870,9 +4872,10 @@ def save_results(
     :param n_generations: Number of GA generations used (for metadata only).
     :param best_pop_size: Population size that yielded the best result (for metadata only).
     :param runs_list: Optional list of per-run results (each a dict with keys "metrics","best_features" or "best_ind").
+    :param union_features_across_runs: Optional precomputed union of features selected across all runs.
     :param cxpb: Crossover probability used in the GA (for metadata only).
     :param mutpb: Mutation probability used in the GA (for metadata only).
-    :param elapsed_run_time: Optional total elapsed time for the GA run (for metadata only
+    :param elapsed_run_time: Optional total elapsed time for the GA run (for metadata only).
     :return: Dictionary with saved metadata: {
                 "best_features": list,
                 "rf_metrics": tuple or None,
@@ -4888,9 +4891,9 @@ def save_results(
     """
 
     try:
-        best_features, rfe_ranking = determine_best_features_and_ranking(best_ind, feature_names, csv_path)
-        rf_metrics = determine_rf_metrics(metrics)
-        rf_metrics = maybe_evaluate_on_test(rf_metrics, best_ind, X, y, X_test, y_test)
+        best_features, rfe_ranking = determine_best_features_and_ranking(best_ind, feature_names, csv_path)  # Extract selected feature names and RFE ranking
+        rf_metrics = determine_rf_metrics(metrics)  # Normalize metrics to expected 12-element slice
+        rf_metrics = maybe_evaluate_on_test(rf_metrics, best_ind, X, y, X_test, y_test)  # Optionally evaluate best individual on test set if metrics are missing
         (
             n_train,
             n_test,
@@ -4904,26 +4907,26 @@ def save_results(
             scaler_path,
             features_path,
             params_path,
-        ) = prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generations, rfe_ranking, y, y_test, cxpb, mutpb)
+        ) = prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generations, rfe_ranking, y, y_test, cxpb, mutpb)  # Prepare all output paths and base row metadata
 
         model_local, model_params, training_time_s, X_test_selected, final_scaling_time = train_and_save_final_model(
             best_features, X, y, feature_names, X_test, model_path, scaler_path, features_path, params_path
-        )
-        
-        eval_metrics, testing_time_s = evaluate_final_on_test(model_local, X_test_selected, y_test)
-        
-        ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})
-        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")
-        if os.path.isabs(ga_results_dir_raw):
-            output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))
-        else:
-            output_dir = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir_raw)))
+        )  # Train final Random Forest on selected features and persist artifacts
+
+        eval_metrics, testing_time_s = evaluate_final_on_test(model_local, X_test_selected, y_test)  # Evaluate trained model on held-out test set
+
+        ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})  # Read GA export configuration
+        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")  # Resolve GA results directory from config or use default
+        if os.path.isabs(ga_results_dir_raw):  # If results dir is absolute, use it directly
+            output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))  # Normalize absolute output directory path
+        else:  # If results dir is relative, resolve it relative to csv_path
+            output_dir = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir_raw)))  # Resolve to absolute path relative to dataset
         os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
 
-        try:
-            feature_extraction_time_s = round(float(final_scaling_time), 6) if final_scaling_time is not None else None
-        except Exception:
-            feature_extraction_time_s = None
+        try:  # Try to round the feature extraction time
+            feature_extraction_time_s = round(float(final_scaling_time), 6) if final_scaling_time is not None else None  # Round scaling time to 6 decimal places
+        except Exception:  # On conversion failure
+            feature_extraction_time_s = None  # Default to None
 
         build_and_write_run_results(
             ts,
@@ -4942,24 +4945,24 @@ def save_results(
             csv_path,
             feature_extraction_time_s,
             union_features_across_runs,
-        )
+        )  # Build and persist the consolidated run row to the GA results CSV
 
-        return {
-            "best_features": best_features,
-            "rf_metrics": rf_metrics,
-            "output_dir": output_dir,
-            "rfe_ranking": rfe_ranking,
-            "n_train": n_train,
-            "n_test": n_test,
-            "test_frac": test_frac,
-            "n_generations": n_generations,
-            "best_pop_size": best_pop_size,
-            "runs_list": runs_list,
-            "elapsed_time_s": int(round(elapsed_for_base)) if elapsed_for_base is not None else None,
-            "model_path": model_path,
-            "scaler_path": scaler_path,
-            "features_path": features_path,
-            "params_path": params_path,
+        return {  # Return metadata dictionary for downstream analysis
+            "best_features": best_features,  # List of selected feature names
+            "rf_metrics": rf_metrics,  # RF metrics tuple (cv + test)
+            "output_dir": output_dir,  # Output directory path
+            "rfe_ranking": rfe_ranking,  # RFE ranking dictionary
+            "n_train": n_train,  # Number of training samples
+            "n_test": n_test,  # Number of testing samples
+            "test_frac": test_frac,  # Test fraction used
+            "n_generations": n_generations,  # Number of GA generations
+            "best_pop_size": best_pop_size,  # Best population size
+            "runs_list": runs_list,  # Per-run results list
+            "elapsed_time_s": int(round(elapsed_for_base)) if elapsed_for_base is not None else None,  # Elapsed time in integer seconds
+            "model_path": model_path,  # Path to saved model artifact
+            "scaler_path": scaler_path,  # Path to saved scaler artifact
+            "features_path": features_path,  # Path to saved features JSON
+            "params_path": params_path,  # Path to saved params JSON
         }
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -5011,14 +5014,14 @@ def analyze_top_features(df, y, top_features, csv_path="."):
         )  # Add the target variable to the DataFrame
 
         base_dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Base name of the dataset
-        
-        ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})
-        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm", "Classes_Distribution", base_dataset_name)
-        
-        if os.path.isabs(ga_results_dir_raw):
-            output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))
-        else:
-            output_dir = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir_raw)))
+
+        ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})  # Read GA export configuration
+        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm", "Classes_Distribution", base_dataset_name)  # Resolve output dir from config or use default
+
+        if os.path.isabs(ga_results_dir_raw):  # If results dir is absolute, use it directly
+            output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))  # Normalize absolute output directory path
+        else:  # If results dir is relative, resolve it relative to csv_path
+            output_dir = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir_raw)))  # Resolve to absolute path relative to dataset
         os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
 
         summary = df_analysis.groupby("Target")[top_features].agg(
