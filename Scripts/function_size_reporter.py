@@ -384,6 +384,33 @@ def save_report(report: dict, output_path: Path) -> None:
     print(f"{BackgroundColors.GREEN}Report saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log the successful save confirmation
 
 
+def discover_python_files() -> list:
+    """
+    Discovers all Python source files in the current directory and the ./Scripts/ directory.
+
+    :param: None
+    :return: A sorted list of Path objects pointing to all discovered Python source files.
+    """
+
+    discovered = []  # Initialize empty list to store discovered Python file paths
+    current_dir = Path(".")  # Reference the current working directory as a Path object
+
+    for entry in current_dir.iterdir():  # Iterate over all entries in the current directory
+        if entry.is_file() and entry.suffix == ".py":  # Verify the entry is a Python file
+            discovered.append(entry.resolve())  # Append the resolved absolute path to the list
+
+    scripts_dir = Path("./Scripts")  # Reference the Scripts subdirectory as a Path object
+
+    if scripts_dir.is_dir():  # Verify if the Scripts directory exists
+        for entry in scripts_dir.iterdir():  # Iterate over all entries in the Scripts directory
+            if entry.is_file() and entry.suffix == ".py":  # Verify the entry is a Python file
+                discovered.append(entry.resolve())  # Append the resolved absolute path to the list
+
+    discovered.sort(key=lambda p: p.name)  # Sort discovered files alphabetically by their filename
+
+    return discovered  # Return the sorted list of discovered Python file paths
+
+
 def process_multiple_files() -> None:
     """
     Discovers and processes all Python files in the project directories.
