@@ -637,6 +637,42 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def resolve_generation_results_csv_path(args, config: Dict, args_ck: Dict) -> tuple:
+    """
+    Resolve the results CSV path for generation from args or checkpoint saved args.
+
+    :param args: Parsed arguments namespace with csv_path attribute.
+    :param config: Configuration dictionary with paths settings.
+    :param args_ck: Saved arguments dictionary from checkpoint.
+    :return: Tuple of (results_csv_path, ck_csv_path) where either may be None.
+    """
+
+    results_csv_path = None  # Initialize results CSV path variable
+    ck_csv_path = None  # Initialize checkpoint csv Path placeholder to satisfy static analysis
+    if getattr(args, "csv_path", None):  # If csv_path available on args
+        csv_path_obj = Path(args.csv_path)  # Create Path object from args.csv_path
+        data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read configured subdir name
+        data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation directory under dataset folder
+        os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before writing
+        results_csv_path = data_aug_dir / "data_augmentation_results.csv"  # Use results CSV inside Data_Augmentation dir
+    else:  # Try to recover original csv_path from checkpoint args saved in checkpoint
+        ck_csv_path = None  # Reset checkpoint csv path
+        try:  # Attempt recovery from checkpoint args
+            if args_ck and args_ck.get("csv_path"):  # Use saved args from checkpoint (args_ck defined earlier)
+                ck_csv_value = args_ck.get("csv_path")  # Get csv_path value from checkpoint args
+                if ck_csv_value:  # If value is non-empty
+                    ck_csv_path = Path(ck_csv_value)  # Path object for saved csv_path from checkpoint
+                    ck_data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read subdir name from config
+                    ck_data_aug_dir = ck_csv_path.parent / ck_data_aug_subdir  # Construct Data_Augmentation directory for checkpoint csv_path
+                    os.makedirs(ck_data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists for checkpoint recover
+                    results_csv_path = ck_data_aug_dir / "data_augmentation_results.csv"  # Use results CSV inside Data_Augmentation dir for checkpoint
+                else:  # Empty csv_path value in checkpoint
+                    ck_csv_path = None  # Keep as None when value is empty
+        except Exception:  # Recovery failed
+            results_csv_path = None  # Leave as None if recovery fails
+    return results_csv_path, ck_csv_path  # Return resolved results CSV path and checkpoint csv path
+
+
 def collect_generation_file_metadata(args, ckpt: Dict, n: int, ck_csv_path) -> Dict:
     """
     Collect file metadata for generation results including filenames, counts, and timing.
