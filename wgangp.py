@@ -4319,6 +4319,26 @@ class ConfigNamespace:
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
             
 
+def mark_file_as_processed(resolved_path: str) -> None:
+    """
+    Register the resolved file path in PROCESSED_FILES and flush the logger.
+
+    :param resolved_path: Absolute string path to register as processed in this run.
+    :return: None
+    """
+
+    global PROCESSED_FILES  # Access global processed-files registry for mutation
+    try:  # Guard registry update against unexpected errors
+        PROCESSED_FILES.add(resolved_path)  # Register resolved path to prevent duplicate processing
+    except Exception:  # Silently ignore registry update failures
+        pass  # Continue despite registry update failure
+    try:  # Attempt logger flush to persist buffered output to disk
+        if logger is not None:  # Only flush when logger is initialized
+            logger.flush()  # Flush log file buffer to disk
+    except Exception:  # Silently ignore logger flush failures
+        pass  # No-op on flush failure
+
+
 def process_single_dataset_file(args: Any, config: Dict, mode: str, file: str, index: int, total_files: int, results_suffix: str) -> None:
     """
     Process a single CSV file within a batch dataset loop.
