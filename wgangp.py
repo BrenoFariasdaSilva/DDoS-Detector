@@ -637,6 +637,71 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def normalize_args_and_setup_hardware(args, config: Dict) -> tuple:
+    """
+    Normalize argument types and configure hardware settings for training.
+
+    :param args: parsed arguments namespace to normalize in-place
+    :param config: configuration dictionary with training settings
+    :return: Tuple of (device, training_start_time, file_start_time, epoch_milestones, file_progress_prefix)
+    """
+
+    args.lr = safe_float(getattr(args, "lr", None), config.get("training", {}).get("lr", 1e-4))  # Ensure learning rate is float safely
+    args.beta1 = safe_float(getattr(args, "beta1", None), config.get("training", {}).get("beta1", 0.5))  # Ensure beta1 is float safely
+    args.beta2 = safe_float(getattr(args, "beta2", None), config.get("training", {}).get("beta2", 0.9))  # Ensure beta2 is float safely
+    args.lambda_gp = safe_float(getattr(args, "lambda_gp", None), config.get("training", {}).get("lambda_gp", 10.0))  # Ensure lambda_gp is float safely
+    args.n_samples = safe_float(getattr(args, "n_samples", None), config.get("generation", {}).get("n_samples", 1.0))  # Ensure n_samples is float safely
+    args.seed = int(args.seed)  # Ensure seed is int
+    args.epochs = int(args.epochs)  # Ensure epochs is int
+    epoch_milestones = compute_epoch_milestones(int(args.epochs))  # Precompute milestone epochs after epochs finalized
+    args.batch_size = int(args.batch_size)  # Ensure batch_size is int
+    args.critic_steps = int(args.critic_steps)  # Ensure critic_steps is int
+    args.save_every = int(args.save_every)  # Ensure save_every is int
+    args.log_interval = int(args.log_interval)  # Ensure log_interval is int
+    args.sample_batch = int(args.sample_batch)  # Ensure sample_batch is int
+    args.latent_dim = int(args.latent_dim)  # Ensure latent_dim is int
+    args.embed_dim = int(args.embed_dim)  # Ensure embed_dim is int
+    args.n_resblocks = int(args.n_resblocks)  # Ensure n_resblocks is int
+    args.gen_batch_size = int(args.gen_batch_size)  # Ensure gen_batch_size is int
+    args.num_workers = int(args.num_workers)  # Ensure num_workers is int
+
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
+    )  # Select device for training
+    training_start_time = time.time()  # Record training session start timestamp
+    file_start_time = training_start_time  # Record this file processing start timestamp
+    set_seed(args.seed)  # Set random seed for reproducibility
+
+    gpu_count = torch.cuda.device_count() if (torch.cuda.is_available() and not args.force_cpu) else 0  # Detect number of CUDA devices available
+    use_dataparallel = gpu_count > 1  # Whether to use DataParallel when multiple GPUs present
+    
+    if gpu_count > 0:  # If at least one GPU is available
+        torch.backends.cudnn.benchmark = True  # Enable cuDNN autotuner for potential speedups
+        
+    batch_multiplier = min(8, max(1, 2 * gpu_count)) if gpu_count > 0 else 1  # Scale by 2x per GPU but cap to 8x to avoid OOM
+    scaled_batch = int(args.batch_size) * batch_multiplier  # Compute scaled batch size
+    args.batch_size = int(scaled_batch)  # Apply scaled batch size to args
+    args.use_amp = bool(args.use_amp or (gpu_count > 0 and _torch_autocast is not None))  # Enable AMP when CUDA and autocast available
+    suggested_workers = min(max(1, (os.cpu_count() or 1) // 2), 32)  # Suggest a conservative default for num_workers
+    file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Build colored prefix (default single-file)
+    
+    print(f"{BackgroundColors.GREEN}Detected {gpu_count} GPUs.{Style.RESET_ALL}")  # Print GPU count
+    print(f"{BackgroundColors.GREEN}Using DataParallel: {use_dataparallel}{Style.RESET_ALL}")  # Print whether DataParallel will be used
+    print(f"{BackgroundColors.GREEN}Batch size: {BackgroundColors.CYAN}{args.batch_size}{Style.RESET_ALL}")  # Print effective batch size after scaling
+    print(f"{BackgroundColors.GREEN}Suggested num_workers: {BackgroundColors.CYAN}{suggested_workers}{Style.RESET_ALL}")  # Print suggested workers value
+    print(f"{BackgroundColors.GREEN}AMP enabled: {BackgroundColors.CYAN}{args.use_amp}{Style.RESET_ALL}")  # Print AMP usage
+    print(f"{BackgroundColors.GREEN}cuDNN benchmark: {BackgroundColors.CYAN}{torch.backends.cudnn.benchmark}{Style.RESET_ALL}")  # Print cuDNN benchmark status
+    send_telegram_message(TELEGRAM_BOT, compose_training_start_message(args, file_progress_prefix))  # Telegram start with colored prefix and file statistics
+
+    print(f"{BackgroundColors.GREEN}Device: {BackgroundColors.CYAN}{device.type.upper()}{Style.RESET_ALL}")  # Print device type
+    if args.use_amp and device.type == "cuda":  # If AMP enabled and using CUDA
+        print(f"{BackgroundColors.GREEN}Using Automatic Mixed Precision (AMP) for faster training{Style.RESET_ALL}")  # Print AMP detail
+    if args.compile:  # If torch.compile requested
+        print(f"{BackgroundColors.GREEN}Using torch.compile() for optimized execution{Style.RESET_ALL}")  # Print compile detail
+
+    return device, training_start_time, file_start_time, epoch_milestones, file_progress_prefix  # Return hardware setup results
+
+
 def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> tuple:
     """
     Create the CSV flow dataset and configure the training data loader.
