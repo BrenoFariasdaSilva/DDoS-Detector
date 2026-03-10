@@ -637,6 +637,30 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def compose_training_start_message(args, file_progress_prefix) -> str:
+    """
+    Compose the training start Telegram message including CSV file statistics.
+
+    :param args: Parsed CLI arguments; must contain `csv_path` and `epochs` attributes.
+    :param file_progress_prefix: Progress prefix string to include at message start.
+    :return: Single formatted f-string message including file name, sample count, file size in GB and epochs.
+    """
+
+    try:
+        file_name = Path(args.csv_path).name  # Extract file name from provided CSV path
+        try:  # Attempt to read CSV and count rows for total samples, but catch exceptions to avoid crashing on problematic files
+            num_samples = len(pd.read_csv(args.csv_path, low_memory=False))  # Read CSV and count rows for total samples
+        except Exception:  # On failure (e.g., file too large, malformed CSV, etc.), fallback to unknown sample count
+            num_samples = "?"  # Use "?" to indicate unknown sample count when reading fails
+        file_size_bytes = Path(args.csv_path).stat().st_size  # Get file size in bytes from filesystem
+        file_size_gb = safe_float(file_size_bytes, 0.0) / (1024.0 ** 3)  # Convert bytes to gigabytes (GB) safely
+        return f"{file_progress_prefix} Starting on {file_name} ({num_samples} samples, {file_size_gb:.2f} GB) for {args.epochs} epochs"  # Single formatted f-string as requested
+    except Exception as e:
+        print(str(e))  # Print exception for visibility
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception information via Telegram
+        raise  # Re-raise exception to allow outer handler to manage it
+
+
 def send_file_saved_and_timing_messages(args: Any, config: Dict) -> None:  # Create helper to send saved-file and timing messages
     """
     Compose and send messages about saved files, sizes, and timing.
