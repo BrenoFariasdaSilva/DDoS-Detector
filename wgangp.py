@@ -637,6 +637,62 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def build_final_training_runtime_row(args, config: Dict, dataset, metrics_history: Dict, opt_G, opt_D) -> Dict:
+    """
+    Build runtime metrics dictionary for the final per-file training summary CSV row.
+
+    :param args: Parsed arguments namespace with training settings and timing attributes.
+    :param config: Configuration dictionary with wgangp and paths settings.
+    :param dataset: Loaded CSVFlowDataset instance for original sample count.
+    :param metrics_history: Dictionary of tracked training metrics.
+    :param opt_G: Generator optimizer for learning rate extraction.
+    :param opt_D: Discriminator optimizer for learning rate extraction.
+    :return: Dictionary mapping column names to runtime-computed values for final row.
+    """
+
+    final_runtime: Dict[str, Any] = {}  # Build runtime-only values for final per-file row with explicit typing
+    final_runtime["original_file"] = Path(args.csv_path).name if getattr(args, "csv_path", None) else ""  # Original filename
+    final_runtime["original_num_samples"] = getattr(dataset, "original_num_samples", "")  # Original sample count after preprocessing
+    gen_file = getattr(args, "out_file", None) or ""  # Prefer explicit out_file if set
+    if not gen_file and getattr(args, "csv_path", None):  # Derive augmented filename when not explicitly set
+        try:  # Attempt to construct derived augmented file path
+            csv_obj = Path(args.csv_path)  # Path object for csv
+            suffix = config.get("wgangp", {}).get("results_suffix", "_data_augmented")  # Suffix from wgangp config
+            derived = csv_obj.parent / config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / f"{csv_obj.stem}{suffix}.csv"  # Construct path
+            gen_file = str(derived)  # Use derived path string
+        except Exception:  # If derivation fails
+            gen_file = ""  # Leave blank on failure
+    final_runtime["generated_file"] = gen_file  # Store generated file path (may be empty)
+    final_runtime["total_generated_samples"] = ""  # Placeholder, generation may fill this later
+    final_runtime["generated_ratio"] = ""  # Placeholder ratio
+    final_runtime["training_time_s"] = getattr(args, "_last_training_time", "")  # Total training elapsed
+    final_runtime["file_time_s"] = getattr(args, "_last_file_time", "")  # Per-file processing elapsed
+    final_runtime["testing_time_s"] = 0.0  # Default testing/generation time is zero unless generation runs
+    final_runtime["epoch"] = ""  # Final summary must not include a per-epoch value
+    final_runtime["epoch_time_s"] = ""  # Final summary must not include last epoch duration
+    final_runtime["epochs"] = getattr(args, "epochs", "")  # Total epochs configured
+    final_runtime["batch_size"] = getattr(args, "batch_size", "")  # Effective batch size used
+    final_runtime["lambda_gp"] = getattr(args, "lambda_gp", "")  # Gradient penalty coefficient
+    final_runtime["latent_dim"] = getattr(args, "latent_dim", "")  # Latent noise dimensionality
+    final_runtime["critic_iterations"] = getattr(args, "critic_steps", "")  # Critic iterations per generator update
+    lr_gen, lr_crit = extract_optimizer_learning_rates(opt_G, opt_D, args)  # Extract learning rates safely from both optimizers
+    final_runtime["learning_rate_generator"] = lr_gen  # Generator learning rate
+    final_runtime["learning_rate_critic"] = lr_crit  # Critic learning rate
+    final_runtime["critic_loss"] = metrics_history.get("loss_D", [])[-1] if metrics_history.get("loss_D") else ""  # Final critic loss
+    final_runtime["generator_loss"] = metrics_history.get("loss_G", [])[-1] if metrics_history.get("loss_G") else ""  # Final generator loss
+    final_runtime["gp"] = metrics_history.get("gp", [])[-1] if metrics_history.get("gp") else ""  # Final gradient penalty
+    final_runtime["D_real"] = metrics_history.get("D_real", [])[-1] if metrics_history.get("D_real") else ""  # Final avg real score
+    final_runtime["D_fake"] = metrics_history.get("D_fake", [])[-1] if metrics_history.get("D_fake") else ""  # Final avg fake score
+    final_runtime["wasserstein"] = metrics_history.get("wasserstein", [])[-1] if metrics_history.get("wasserstein") else ""  # Final wasserstein estimate
+    try:  # Safely compute generated_ratio using safe conversions
+        total_generated = safe_float(final_runtime.get("total_generated_samples"), 0.0)  # Total generated safely
+        original_samples = safe_float(final_runtime.get("original_num_samples"), 0.0)  # Original samples safely
+        final_runtime["generated_ratio"] = (total_generated / original_samples) if original_samples > 0.0 else 0.0  # Guard division and avoid ZeroDivisionError
+    except Exception:  # If computation fails
+        final_runtime["generated_ratio"] = ""  # Leave blank on failure
+    return final_runtime  # Return populated final runtime metrics dictionary
+
+
 def write_final_timing_and_csv_row(args, config: Dict, device: torch.device, dataset, training_start_time: float, file_start_time: float, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history: Dict, opt_G, opt_D) -> None:
     """
     Compute final training elapsed times and write the summary CSV row.
