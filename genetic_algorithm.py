@@ -2531,17 +2531,17 @@ def run_genetic_algorithm_loop(
             except Exception:  # If saving fails
                 pass  # Do nothing
 
-            history_data = {
-                "best_f1": fitness_history,  # Best F1 score per generation (backward compatible)
-                "best_features": best_features_history,  # Best feature count per generation
-                "avg_f1": avg_f1_history,  # Population average F1 per generation
-                "avg_features": avg_features_history,  # Population average feature count per generation
-                "pareto_size": pareto_size_history,  # Pareto front size per generation
-                "hypervolume": hypervolume_history,  # Hypervolume metric per generation
-                "diversity": diversity_history,  # Population diversity per generation
-            }  # Consolidated history dictionary for plotting
+        history_data = {
+            "best_f1": fitness_history,  # Best F1 score per generation (backward compatible)
+            "best_features": best_features_history,  # Best feature count per generation
+            "avg_f1": avg_f1_history,  # Population average F1 per generation
+            "avg_features": avg_features_history,  # Population average feature count per generation
+            "pareto_size": pareto_size_history,  # Pareto front size per generation
+            "hypervolume": hypervolume_history,  # Hypervolume metric per generation
+            "diversity": diversity_history,  # Population diversity per generation
+        }  # Consolidated history dictionary for plotting
 
-            return hof[0], gens_ran, history_data  # Return the best individual, gens ran and comprehensive history data
+        return hof[0], gens_ran, history_data  # Return the best individual, gens ran and comprehensive history data
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
