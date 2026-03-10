@@ -637,6 +637,59 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def compute_generation_counts_and_labels(args, config: Dict, class_distribution: Optional[Dict], label_encoder: Any, n_classes: int) -> tuple:
+    """
+    Compute per-class counts and build the label array for generation.
+
+    :param args: Parsed arguments namespace with n_samples and label.
+    :param config: Configuration dictionary with generation thresholds.
+    :param class_distribution: Dictionary mapping label indices to counts.
+    :param label_encoder: Fitted LabelEncoder for inverse transforms.
+    :param n_classes: Number of label classes for uniform sampling.
+    :return: Tuple of (n_per_class, labels, n).
+    """
+
+    small_class_threshold = int(config.get("generation", {}).get("small_class_threshold", 100))  # Get small class threshold and cast to int
+    small_class_min_samples = int(config.get("generation", {}).get("small_class_min_samples", 10))  # Get min samples for small classes and cast to int
+    n_per_class = None  # Initialize per-class count dictionary
+    if args.n_samples <= 1.0:  # Percentage mode: generate percentage of training data per class (1.0 == 100%)
+        if class_distribution is None:  # If class distribution not available
+            raise RuntimeError(
+                "Percentage-based generation requires class_distribution in checkpoint or --csv_path to calculate it."
+            )  # Raise error
+        print(f"{BackgroundColors.CYAN}Generating {args.n_samples*100:.1f}% of training data per class (min {small_class_min_samples} samples for small classes){Style.RESET_ALL}")
+        if args.label is not None:  # If specific label requested
+            if args.label not in class_distribution:  # Verify label exists
+                raise ValueError(f"Label {args.label} not found in training data class distribution")  # Raise error
+            original_count = class_distribution[args.label]  # Get original class count
+            calculated = int(original_count * args.n_samples)  # Calculate percentage-based count
+            final_count = max(small_class_min_samples if original_count < small_class_threshold else 1, calculated)  # Apply minimum threshold
+            n_per_class = {args.label: final_count}  # Store final count
+        else:  # Generate for all classes
+            n_per_class = {}  # Initialize dictionary
+            for label, original_count in class_distribution.items():  # For each class
+                calculated = int(original_count * args.n_samples)  # Calculate percentage-based count
+                final_count = max(small_class_min_samples if original_count < small_class_threshold else 1, calculated)  # Apply minimum threshold
+                n_per_class[label] = final_count  # Store final count
+        labels = []  # List to build label array
+        for label, count in n_per_class.items():  # For each class
+            labels.extend([label] * count)  # Repeat label by count
+        labels = np.array(labels, dtype=np.int64)  # Convert to array
+        n = len(labels)  # Total number of samples
+        print(f"{BackgroundColors.GREEN}Total samples to generate: {BackgroundColors.CYAN}{n}{Style.RESET_ALL}")
+        for label, count in n_per_class.items():  # Print per-class breakdown
+            class_name = label_encoder.inverse_transform([label])[0]  # Get class name
+            print(f"{BackgroundColors.GREEN}  - Class '{class_name}': {BackgroundColors.CYAN}{count}{BackgroundColors.GREEN} samples{Style.RESET_ALL}")
+    else:  # Absolute count mode: generate exact number of samples
+        n = int(args.n_samples)  # Convert to integer
+        print(f"{BackgroundColors.CYAN}Generating {n} samples (absolute count){Style.RESET_ALL}")
+        if args.label is not None:  # If a specific label is requested
+            labels = np.array([args.label] * n, dtype=np.int64)  # Create array of repeated label
+        else:  # No specific label, sample uniformly across all classes
+            labels = np.random.randint(0, n_classes, size=(n,), dtype=np.int64)  # Sample labels uniformly
+    return (n_per_class, labels, n)  # Return per-class counts, label array, and total count
+
+
 def notify_start_of_generation(args, n: int) -> None:
     """
     Send Telegram notification about the start of sample generation.
