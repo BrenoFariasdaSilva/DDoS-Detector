@@ -637,6 +637,39 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def ensure_figure_min_4k_and_save(fig=None, path=None, dpi=None, **kwargs):
+    """
+    Ensure a Matplotlib figure meets 4k minimum pixel dimensions and save it.
+
+    :param fig: Matplotlib Figure instance or None to use current figure.
+    :param path: Path where the image will be saved.
+    :param dpi: DPI to use for saving; preserved if provided.
+    :return: None
+    """
+
+    fig = fig or plt.gcf()  # Use provided figure or get current figure if None
+    effective_dpi = dpi if dpi is not None else fig.get_dpi()  # Determine effective DPI for size calculations
+    width_inch, height_inch = fig.get_size_inches()  # Get current figure size in inches
+
+    if width_inch * effective_dpi < 3840 or height_inch * effective_dpi < 2160:  # Verify if current size is below 4k dimensions
+        new_w = max(width_inch, 3840.0 / effective_dpi)  # Calculate new width in inches to meet 4k width requirement
+        new_h = max(height_inch, 2160.0 / effective_dpi)  # Calculate new height in inches to meet 4k height requirement
+        fig.set_size_inches(new_w, new_h)  # Update figure size to ensure minimum 4k dimensions
+
+    save_kwargs = dict(kwargs)  # Copy additional save parameters
+
+    if dpi is not None:  # If a specific DPI was provided, ensure it is included in save parameters
+        save_kwargs["dpi"] = dpi  # Set DPI for saving
+
+    resolved_fig = fig  # Ensure we close the exact figure used for saving
+    if path is None:  # Verify that a valid path argument was provided
+        raise ValueError("path must be provided to save the figure")  # Raise explicit error when path is missing to avoid passing None to savefig
+    try:  # Save the figure to the specified path with the given parameters
+        resolved_fig.savefig(path, **save_kwargs)  # Save the figure to the specified path with the given parameters
+    finally:  # Ensure the figure is closed to free resources
+        plt.close(resolved_fig)  # Close the figure to free memory
+
+
 def resolve_plot_save_directory(out_dir: str, config: Dict) -> Path:
     """
     Resolve the save directory for training metrics plots based on configuration.
