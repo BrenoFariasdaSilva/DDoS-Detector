@@ -637,6 +637,83 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def create_models_and_optimizers(args, config: Dict, device: torch.device, feature_dim: int, n_classes: int) -> tuple:
+    """
+    Create generator and discriminator models, optimizers, and initialize training state.
+
+    :param args: parsed arguments namespace with model architecture and optimizer settings
+    :param config: configuration dictionary with generator and discriminator settings
+    :param device: torch device for model placement
+    :param feature_dim: dimensionality of the output features
+    :param n_classes: number of label classes for conditional generation
+    :return: Tuple of (G, D, opt_D, opt_G, scaler, fixed_noise, fixed_labels, step, start_epoch, metrics_history)
+    """
+
+    g_leaky_relu_alpha = safe_float(config.get("generator", {}).get("leaky_relu_alpha", 0.2), 0.2)  # Get generator LeakyReLU alpha safely from config
+    d_leaky_relu_alpha = safe_float(config.get("discriminator", {}).get("leaky_relu_alpha", 0.2), 0.2)  # Get discriminator LeakyReLU alpha safely from config
+
+    G = Generator(
+        latent_dim=args.latent_dim,  # Noise vector dimensionality for generator input
+        feature_dim=feature_dim,  # Dimensionality of the output features (matches dataset)
+        n_classes=n_classes,  # Number of classes for conditional generation (matches dataset)
+        hidden_dims=args.g_hidden,  # List of hidden layer sizes for generator MLP
+        embed_dim=args.embed_dim,  # Dimensionality of label embedding in generator
+        n_resblocks=args.n_resblocks,  # Number of residual blocks in generator architecture
+        leaky_relu_alpha=g_leaky_relu_alpha,  # Use config value
+    ).to(
+        device
+    )  # Initialize generator model
+    D = Discriminator(
+        feature_dim=feature_dim, n_classes=n_classes, hidden_dims=args.d_hidden, embed_dim=args.embed_dim,
+        leaky_relu_alpha=d_leaky_relu_alpha,  # Use config value
+    ).to(
+        device
+    )  # Initialize discriminator model
+
+    if torch.cuda.is_available() and not args.force_cpu and torch.cuda.device_count() > 1:  # If multi-GPU condition met
+        G = torch.nn.DataParallel(G)  # Wrap generator in DataParallel to utilize multiple GPUs
+        D = torch.nn.DataParallel(D)  # Wrap discriminator in DataParallel to utilize multiple GPUs
+        print(f"{BackgroundColors.GREEN}Wrapped models using DataParallel across {torch.cuda.device_count()} GPUs{Style.RESET_ALL}")  # Notify wrapping
+
+    if args.compile and not isinstance(G, torch.nn.DataParallel):  # Only compile when not using DataParallel
+        try:  # Try compiling models, but catch exceptions if torch.compile() is not available or fails
+            G = torch.compile(G, mode="reduce-overhead")  # Compile generator for performance
+            D = torch.compile(D, mode="reduce-overhead")  # Compile discriminator for performance
+            print(f"{BackgroundColors.GREEN}Models compiled successfully{Style.RESET_ALL}")  # Notify successful compilation
+        except Exception as e:  # Catch any exception during compilation
+            print(f"{BackgroundColors.YELLOW}torch.compile() not available or failed: {e}{Style.RESET_ALL}")  # Warn but continue
+
+    scaler = torch.cuda.amp.GradScaler() if args.use_amp and device.type == "cuda" else None  # Initialize gradient scaler for AMP if enabled and on CUDA
+
+    opt_D = torch.optim.Adam(
+        cast(Any, D).parameters(), lr=args.lr, betas=(args.beta1, args.beta2)
+    )  # Create optimizer for discriminator
+    opt_G = torch.optim.Adam(
+        cast(Any, G).parameters(), lr=args.lr, betas=(args.beta1, args.beta2)
+    )  # Create optimizer for generator
+
+    fixed_noise = torch.randn(args.sample_batch, args.latent_dim, device=device)  # Generate fixed noise for inspection
+    fixed_labels = torch.randint(
+        0, n_classes, (args.sample_batch,), device=device
+    )  # Generate fixed labels for inspection
+
+    os.makedirs(args.out_dir, exist_ok=True)  # Ensure output directory exists
+    step = 0  # Initialize global step counter
+    start_epoch = 0  # Initialize starting epoch
+
+    metrics_history = {
+        "steps": [],  # Training step numbers
+        "loss_D": [],  # Discriminator loss values
+        "loss_G": [],  # Generator loss values
+        "gp": [],  # Gradient penalty values
+        "D_real": [],  # Average critic score for real samples
+        "D_fake": [],  # Average critic score for fake samples
+        "wasserstein": [],  # Estimated Wasserstein distance (D_real - D_fake)
+    }  # Dictionary to store training metrics
+
+    return G, D, opt_D, opt_G, scaler, fixed_noise, fixed_labels, step, start_epoch, metrics_history  # Return models and training state
+
+
 def load_and_restore_generator_state(g_checkpoint_path: Path, device: torch.device, G, opt_G, scaler) -> tuple:
     """
     Load generator checkpoint and restore model weights, optimizer, and scaler state.
