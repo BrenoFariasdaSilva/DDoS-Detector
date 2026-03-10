@@ -218,21 +218,21 @@ def play_sound():
     :return: None
     """
 
-    current_os = platform.system()  # Get the current operating system
-    if current_os == "Windows":  # If the current operating system is Windows
-        return  # Do nothing
+    current_os = platform.system()  # Retrieve the current operating system name
+    if current_os == "Windows":  # Verify if the OS is Windows
+        return  # Skip sound playback on Windows
 
-    if verify_filepath_exists(SOUND_FILE):  # If the sound file exists
-        if current_os in SOUND_COMMANDS:  # If the platform.system() is in the SOUND_COMMANDS dictionary
-            os.system(f"{SOUND_COMMANDS[current_os]} {SOUND_FILE}")  # Play the sound
-        else:  # If the platform.system() is not in the SOUND_COMMANDS dictionary
+    if verify_filepath_exists(SOUND_FILE):  # Verify if the sound file exists
+        if current_os in SOUND_COMMANDS:  # Verify if the OS has a mapped sound command
+            os.system(f"{SOUND_COMMANDS[current_os]} {SOUND_FILE}")  # Execute the OS-specific sound command
+        else:  # Handle unsupported operating system for sound playback
             print(
                 f"{BackgroundColors.RED}The {BackgroundColors.CYAN}{current_os}{BackgroundColors.RED} is not in the {BackgroundColors.CYAN}SOUND_COMMANDS dictionary{BackgroundColors.RED}. Please add it!{Style.RESET_ALL}"
-            )
-    else:  # If the sound file does not exist
+            )  # Log the unsupported OS error message
+    else:  # Handle missing sound file
         print(
             f"{BackgroundColors.RED}Sound file {BackgroundColors.CYAN}{SOUND_FILE}{BackgroundColors.RED} not found. Make sure the file exists.{Style.RESET_ALL}"
-        )
+        )  # Log the missing sound file error message
 
 
 def main():
