@@ -17,7 +17,7 @@ Description :
         - Generates a structured JSON report sorted by function size (biggest first)
 
 Usage:
-    1. Configure FILE_PATH in the Execution Constants section to target a Python file.
+    1. Configure TARGET_FILE_PATH in the Execution Constants section to target a Python file.
     2. Execute the script:
         $ python function_size_reporter.py
     3. The script generates function_size_report.json in the current directory.
@@ -80,7 +80,7 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
-FILE_PATH = Path("./main.py")  # Path to the target Python file to analyze
+TARGET_FILE_PATH = Path("./main.py")  # Path to the target Python file to analyze
 OUTPUT_FILE = Path("./Scripts/function_size_report.json")  # Path to the output JSON report file
 
 # Logger Setup:
@@ -464,14 +464,14 @@ def main():
 
     start_time = datetime.datetime.now()  # Get the start time of the program
 
-    if not verify_filepath_exists(FILE_PATH):  # Verify if the target file exists
-        print(f"{BackgroundColors.RED}Error: Target file {BackgroundColors.CYAN}{FILE_PATH}{BackgroundColors.RED} not found!{Style.RESET_ALL}")  # Log the missing file error
+    if not verify_filepath_exists(TARGET_FILE_PATH):  # Verify if the target file exists
+        print(f"{BackgroundColors.RED}Error: Target file {BackgroundColors.CYAN}{TARGET_FILE_PATH}{BackgroundColors.RED} not found!{Style.RESET_ALL}")  # Log the missing file error
         return  # Exit the main function early
 
-    print(f"{BackgroundColors.GREEN}Analyzing file: {BackgroundColors.CYAN}{FILE_PATH}{Style.RESET_ALL}")  # Log the analysis start message
+    print(f"{BackgroundColors.GREEN}Analyzing file: {BackgroundColors.CYAN}{TARGET_FILE_PATH}{Style.RESET_ALL}")  # Log the analysis start message
 
-    source_text = read_source_file(FILE_PATH)  # Read the source file content
-    tree = parse_ast_tree(source_text, FILE_PATH)  # Parse the source text into an AST tree
+    source_text = read_source_file(TARGET_FILE_PATH)  # Read the source file content
+    tree = parse_ast_tree(source_text, TARGET_FILE_PATH)  # Parse the source text into an AST tree
     report = build_report(tree)  # Build the complete function size report
 
     save_report(report, OUTPUT_FILE)  # Save the report to the output JSON file
