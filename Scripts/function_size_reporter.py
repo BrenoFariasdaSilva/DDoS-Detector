@@ -135,6 +135,33 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def get_node_end_lineno(node: ast.AST) -> int:
+    """
+    Return the best-effort end line number for an AST node.
+
+    :param node: The AST node to inspect.
+    :return: The estimated end line number for the node.
+    """
+
+    max_lineno = getattr(node, "end_lineno", None)  # Try direct end_lineno attribute first
+   
+    if max_lineno is None:  # Verify if end_lineno was not provided by the parser
+        max_lineno = getattr(node, "lineno", 0)  # Fallback to the node.lineno or zero when missing
+    
+    for child in ast.walk(node):  # Iterate all descendant nodes to find the largest line number
+        child_end = getattr(child, "end_lineno", None)  # Attempt to read child's end_lineno attribute
+        
+        if child_end is not None:  # Verify the child provides an explicit end_lineno
+            if child_end > max_lineno:  # Compare child's end with current maximum
+                max_lineno = child_end  # Update maximum when child's end is larger
+        else:  # Handle children that only expose lineno
+            child_ln = getattr(child, "lineno", None)  # Attempt to read child's lineno attribute
+            if child_ln is not None and child_ln > max_lineno:  # Verify and compare child's lineno
+                max_lineno = child_ln  # Update maximum when child's lineno is larger
+
+    return int(max_lineno)  # Return the computed maximum as an integer
+
+
 def collect_class_methods(tree: ast.Module, parent_map: dict) -> dict:
     """
     Collects all method definitions inside class blocks from the AST.
