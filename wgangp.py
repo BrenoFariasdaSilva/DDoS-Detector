@@ -637,6 +637,38 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def inject_hardware_into_csv_row(ordered: list, results_cols_cfg: list, config: Dict, device: torch.device) -> list:
+    """
+    Insert hardware specification string into a CSV row when hardware_tracking is enabled.
+
+    :param ordered: Ordered list of CSV row values to potentially modify in-place.
+    :param results_cols_cfg: List of configured column names for index lookup.
+    :param config: Configuration dictionary with hardware_tracking flag.
+    :param device: Torch device used for hardware specification lookup.
+    :return: The same ordered list with hardware string potentially injected.
+    """
+
+    if config.get("hardware_tracking", False):  # If hardware tracking requested in config
+        try:  # Guard hardware detection to avoid breaking flow
+            hw_specs = get_hardware_specifications(device_used=device)  # Query hardware specs dict
+            hw_part = hw_specs.get("gpu", "None") if hw_specs.get("gpu", None) is not None else "None"  # GPU part
+            hardware_str = (  # Build human-readable hardware string
+                f"{hw_specs.get('cpu_model','Unknown')} | Cores: {hw_specs.get('cores','N/A')}"
+                f" | RAM: {hw_specs.get('ram_gb','N/A')} GB | OS: {hw_specs.get('os','Unknown')}"
+                f" | GPU: {hw_part} | CUDA: {hw_specs.get('cuda','No')} | Device Used: {hw_specs.get('device_used','Unknown')}"
+            )  # End hardware string
+            if "hardware" in results_cols_cfg:  # If a hardware column exists in configured schema
+                try:  # Protect index operations
+                    idx_hw = results_cols_cfg.index("hardware")  # Find hardware column index
+                    if idx_hw < len(ordered):  # Ensure index is within the ordered list
+                        ordered[idx_hw] = hardware_str  # Place hardware string in row
+                except Exception:  # If index operation fails
+                    pass  # Ignore hardware insertion errors
+        except Exception:  # If hardware detection fails
+            pass  # Ignore any hardware detection errors to keep flow
+    return ordered  # Return ordered list with hardware potentially injected
+
+
 def flush_csv_file_safely(file_handle) -> None:
     """
     Flush a CSV file handle to disk safely, ignoring any errors.
