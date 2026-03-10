@@ -930,6 +930,61 @@ class Discriminator(nn.Module):
         return self.net(inp).squeeze(1)  # Produce scalar score
 
 
+class ConfigNamespace:
+    """
+    Namespace wrapper for config dict.
+    """
+    
+    def __init__(self, cfg):
+        """
+        Initialize the ConfigNamespace with a configuration dictionary.
+        
+        :param self: The instance of the ConfigNamespace.
+        :param cfg: The configuration dictionary to wrap.
+        :return: None
+        """
+        
+        self.mode = cfg.get("wgangp", {}).get("mode", "both")
+        self.csv_path = cfg.get("wgangp", {}).get("csv_path")
+        self.label_col = cfg.get("wgangp", {}).get("label_col", "Label")
+        self.feature_cols = cfg.get("wgangp", {}).get("feature_cols")
+        self.seed = int(cfg.get("wgangp", {}).get("seed", 42))  # Cast to int
+        self.force_cpu = cfg.get("wgangp", {}).get("force_cpu", False)
+        self.from_scratch = cfg.get("wgangp", {}).get("from_scratch", False)
+        self.out_dir = cfg.get("paths", {}).get("out_dir", "outputs")
+        self.epochs = int(cfg.get("training", {}).get("epochs", 60))  # Cast to int
+        self.batch_size = int(cfg.get("training", {}).get("batch_size", 64))  # Cast to int
+        self.critic_steps = int(cfg.get("training", {}).get("critic_steps", 5))  # Cast to int
+        self.lr = float(cfg.get("training", {}).get("lr", 1e-4))  # Cast to float
+        self.beta1 = float(cfg.get("training", {}).get("beta1", 0.5))  # Cast to float
+        self.beta2 = float(cfg.get("training", {}).get("beta2", 0.9))  # Cast to float
+        self.lambda_gp = float(cfg.get("training", {}).get("lambda_gp", 10.0))  # Cast to float
+        self.save_every = int(cfg.get("training", {}).get("save_every", 5))  # Cast to int
+        self.log_interval = int(cfg.get("training", {}).get("log_interval", 50))  # Cast to int
+        self.sample_batch = int(cfg.get("training", {}).get("sample_batch", 16))  # Cast to int
+        self.use_amp = cfg.get("training", {}).get("use_amp", False)
+        self.compile = cfg.get("training", {}).get("compile", False)
+        self.latent_dim = int(cfg.get("generator", {}).get("latent_dim", 100))  # Cast to int
+        self.g_hidden = cfg.get("generator", {}).get("hidden_dims", [256, 512])
+        self.embed_dim = int(cfg.get("generator", {}).get("embed_dim", 32))  # Cast to int
+        self.n_resblocks = int(cfg.get("generator", {}).get("n_resblocks", 3))  # Cast to int
+        self.d_hidden = cfg.get("discriminator", {}).get("hidden_dims", [512, 256, 128])
+        self.checkpoint = cfg.get("generation", {}).get("checkpoint")
+        self.n_samples = float(cfg.get("generation", {}).get("n_samples", 1.0))  # Cast to float
+        self.label = cfg.get("generation", {}).get("label")
+        if self.label is not None:  # If label is not None
+            self.label = int(self.label)  # Cast to int
+        self.out_file = cfg.get("generation", {}).get("out_file", "generated.csv")
+        self.gen_batch_size = int(cfg.get("generation", {}).get("gen_batch_size", 256))  # Cast to int
+        self.feature_dim = cfg.get("generation", {}).get("feature_dim")
+        if self.feature_dim is not None:  # If feature_dim is not None
+            self.feature_dim = int(self.feature_dim)  # Cast to int
+        self.force_new_samples = cfg.get("generation", {}).get("force_new_samples", False)
+        self.num_workers = int(cfg.get("dataloader", {}).get("num_workers", 8))  # Cast to int
+        self._last_training_time = 0.0  # Placeholder for last training elapsed time (set after train)
+        self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
+
+
 # Functions Definitions:
 
 
@@ -4263,60 +4318,6 @@ def close_all_results_csv_handles():
                 f.close()  # Close the file
         except Exception:
             pass  # Ignore close errors
-
-class ConfigNamespace:
-    """
-    Namespace wrapper for config dict.
-    """
-    
-    def __init__(self, cfg):
-        """
-        Initialize the ConfigNamespace with a configuration dictionary.
-        
-        :param self: The instance of the ConfigNamespace.
-        :param cfg: The configuration dictionary to wrap.
-        :return: None
-        """
-        
-        self.mode = cfg.get("wgangp", {}).get("mode", "both")
-        self.csv_path = cfg.get("wgangp", {}).get("csv_path")
-        self.label_col = cfg.get("wgangp", {}).get("label_col", "Label")
-        self.feature_cols = cfg.get("wgangp", {}).get("feature_cols")
-        self.seed = int(cfg.get("wgangp", {}).get("seed", 42))  # Cast to int
-        self.force_cpu = cfg.get("wgangp", {}).get("force_cpu", False)
-        self.from_scratch = cfg.get("wgangp", {}).get("from_scratch", False)
-        self.out_dir = cfg.get("paths", {}).get("out_dir", "outputs")
-        self.epochs = int(cfg.get("training", {}).get("epochs", 60))  # Cast to int
-        self.batch_size = int(cfg.get("training", {}).get("batch_size", 64))  # Cast to int
-        self.critic_steps = int(cfg.get("training", {}).get("critic_steps", 5))  # Cast to int
-        self.lr = float(cfg.get("training", {}).get("lr", 1e-4))  # Cast to float
-        self.beta1 = float(cfg.get("training", {}).get("beta1", 0.5))  # Cast to float
-        self.beta2 = float(cfg.get("training", {}).get("beta2", 0.9))  # Cast to float
-        self.lambda_gp = float(cfg.get("training", {}).get("lambda_gp", 10.0))  # Cast to float
-        self.save_every = int(cfg.get("training", {}).get("save_every", 5))  # Cast to int
-        self.log_interval = int(cfg.get("training", {}).get("log_interval", 50))  # Cast to int
-        self.sample_batch = int(cfg.get("training", {}).get("sample_batch", 16))  # Cast to int
-        self.use_amp = cfg.get("training", {}).get("use_amp", False)
-        self.compile = cfg.get("training", {}).get("compile", False)
-        self.latent_dim = int(cfg.get("generator", {}).get("latent_dim", 100))  # Cast to int
-        self.g_hidden = cfg.get("generator", {}).get("hidden_dims", [256, 512])
-        self.embed_dim = int(cfg.get("generator", {}).get("embed_dim", 32))  # Cast to int
-        self.n_resblocks = int(cfg.get("generator", {}).get("n_resblocks", 3))  # Cast to int
-        self.d_hidden = cfg.get("discriminator", {}).get("hidden_dims", [512, 256, 128])
-        self.checkpoint = cfg.get("generation", {}).get("checkpoint")
-        self.n_samples = float(cfg.get("generation", {}).get("n_samples", 1.0))  # Cast to float
-        self.label = cfg.get("generation", {}).get("label")
-        if self.label is not None:  # If label is not None
-            self.label = int(self.label)  # Cast to int
-        self.out_file = cfg.get("generation", {}).get("out_file", "generated.csv")
-        self.gen_batch_size = int(cfg.get("generation", {}).get("gen_batch_size", 256))  # Cast to int
-        self.feature_dim = cfg.get("generation", {}).get("feature_dim")
-        if self.feature_dim is not None:  # If feature_dim is not None
-            self.feature_dim = int(self.feature_dim)  # Cast to int
-        self.force_new_samples = cfg.get("generation", {}).get("force_new_samples", False)
-        self.num_workers = int(cfg.get("dataloader", {}).get("num_workers", 8))  # Cast to int
-        self._last_training_time = 0.0  # Placeholder for last training elapsed time (set after train)
-        self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
 
 
 def initialize_cli_and_config() -> Dict:
