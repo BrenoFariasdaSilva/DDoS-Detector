@@ -637,6 +637,31 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def load_and_restore_discriminator_state(d_checkpoint_path: Path, device: torch.device, D, opt_D) -> None:
+    """
+    Load discriminator checkpoint and restore model weights and optimizer state.
+
+    :param d_checkpoint_path: Path to the discriminator checkpoint file.
+    :param device: Torch device for checkpoint loading via map_location.
+    :param D: Discriminator model to restore weights into.
+    :param opt_D: Discriminator optimizer to restore state into.
+    :return: None
+    """
+
+    if d_checkpoint_path.exists():  # If discriminator checkpoint exists
+        print(f"{BackgroundColors.GREEN}Loading discriminator checkpoint: {d_checkpoint_path.name}{Style.RESET_ALL}")  # Print loading message
+        d_checkpoint = torch.load(d_checkpoint_path, map_location=device, weights_only=False)  # Load discriminator checkpoint
+        if isinstance(cast(Any, D), torch.nn.DataParallel):  # If discriminator wrapped by DataParallel
+            cast(Any, D).module.load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights into module
+        else:  # Not DataParallel
+            cast(Any, D).load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights
+        if "opt_D_state" in d_checkpoint:  # If optimizer state saved
+            opt_D.load_state_dict(d_checkpoint["opt_D_state"])  # Restore discriminator optimizer
+            print(f"{BackgroundColors.GREEN}✓ Restored discriminator optimizer state{Style.RESET_ALL}")  # Confirm optimizer restoration
+    else:  # Discriminator checkpoint not found
+        print(f"{BackgroundColors.YELLOW}⚠ Warning: Discriminator checkpoint not found{Style.RESET_ALL}")  # Warn about missing discriminator
+
+
 def regenerate_missing_training_plot(csv_path_obj: Path, metrics_loaded: bool, metrics_history: Dict) -> None:
     """
     Regenerate training metrics plot from metrics history when the plot file is missing.
