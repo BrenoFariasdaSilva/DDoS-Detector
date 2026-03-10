@@ -81,7 +81,7 @@ class BackgroundColors:  # Colors for the terminal
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
 TARGET_FILE_PATH = Path("./main.py")  # Path to the target Python file to analyze
-OUTPUT_FILE = Path("./Scripts/function_size_report.json")  # Path to the output JSON report file
+OUTPUT_FILE = f"function_size_report_{TARGET_FILE_PATH.name}.json"  # Placeholder for output JSON path, computed at runtime
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
@@ -474,7 +474,7 @@ def main():
     tree = parse_ast_tree(source_text, TARGET_FILE_PATH)  # Parse the source text into an AST tree
     report = build_report(tree)  # Build the complete function size report
 
-    save_report(report, OUTPUT_FILE)  # Save the report to the output JSON file
+    save_report(report, Path(OUTPUT_FILE))  # Save the report to the output JSON file
 
     total = report["total_functions"]  # Retrieve the total function count from the report
     class_count = sum(len(v) for v in report["classes"].values())  # Compute the total class method count
