@@ -81,7 +81,7 @@ class BackgroundColors:  # Colors for the terminal
 # Execution Constants:
 VERBOSE = False  # Set to True to output verbose messages
 FILE_PATH = Path("./main.py")  # Path to the target Python file to analyze
-OUTPUT_FILE = Path("./function_size_report.json")  # Path to the output JSON report file
+OUTPUT_FILE = Path("./Scripts/function_size_report.json")  # Path to the output JSON report file
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
