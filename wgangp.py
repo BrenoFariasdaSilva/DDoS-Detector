@@ -637,6 +637,17 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def warn_on_results_csv_failure(e: Exception) -> None:
+    """
+    Print a warning when results CSV preparation fails.
+
+    :param e: Exception that caused the failure.
+    :return: None.
+    """
+
+    print(f"{BackgroundColors.YELLOW}Warning: could not prepare results CSV entry: {e}{Style.RESET_ALL}")  # Warn on top-level failures
+
+
 def handle_generate_top_level_exception(e: Exception) -> None:
     """
     Handle top-level exceptions in the generate function by logging and re-raising.
