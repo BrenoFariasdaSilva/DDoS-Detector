@@ -384,6 +384,36 @@ def save_report(report: dict, output_path: Path) -> None:
     print(f"{BackgroundColors.GREEN}Report saved to: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log the successful save confirmation
 
 
+def process_multiple_files() -> None:
+    """
+    Discovers and processes all Python files in the project directories.
+
+    :param: None
+    :return: None
+    """
+
+    output_path = Path("./Scripts/function_size_report-general.json")  # Build the output path with the general suffix for multi-file mode
+    python_files = discover_python_files()  # Discover all Python files in the current and Scripts directories
+
+    print(f"{BackgroundColors.GREEN}Discovered {BackgroundColors.CYAN}{len(python_files)}{BackgroundColors.GREEN} Python files for analysis.{Style.RESET_ALL}")  # Log the number of discovered files
+
+    files_data = {}  # Initialize empty dictionary to store per-file analysis results
+
+    for filepath in python_files:  # Iterate over each discovered Python file
+        print(f"{BackgroundColors.GREEN}Analyzing file: {BackgroundColors.CYAN}{filepath.name}{Style.RESET_ALL}")  # Log the current file being analyzed
+        file_report = analyze_file(filepath)  # Analyze the current Python file
+        files_data[filepath.name] = file_report  # Store the per-file report under the filename key
+
+    multi_report = {  # Build the multi-file report dictionary
+        "total_files_processed": len(python_files),  # Store the total number of processed files
+        "files": files_data,  # Store the per-file analysis results
+    }
+
+    save_report(multi_report, output_path)  # Save the multi-file report to disk
+
+    print(f"{BackgroundColors.GREEN}Total files processed: {BackgroundColors.CYAN}{len(python_files)}{Style.RESET_ALL}")  # Log the total number of processed files
+
+
 def to_seconds(obj):
     """
     Converts various time-like objects to seconds.
