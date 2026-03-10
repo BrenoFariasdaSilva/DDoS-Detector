@@ -135,6 +135,20 @@ def verify_filepath_exists(filepath):
     return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
 
 
+def parse_ast_tree(source_text: str, filepath: Path) -> ast.Module:
+    """
+    Parses Python source text into an AST module node.
+
+    :param source_text: The full text content of the Python source file.
+    :param filepath: Path object used for reporting the filename during parsing.
+    :return: The root ast.Module node of the parsed abstract syntax tree.
+    """
+
+    verbose_output(f"{BackgroundColors.GREEN}Parsing AST for: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Log the AST parsing operation
+
+    return ast.parse(source_text, filename=str(filepath))  # Parse the source text and return the module node
+
+
 def build_parent_map(tree: ast.Module) -> dict:
     """
     Builds a mapping from each AST node's id to its direct parent node.
