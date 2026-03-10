@@ -637,6 +637,34 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def load_and_restore_generator_state(g_checkpoint_path: Path, device: torch.device, G, opt_G, scaler) -> tuple:
+    """
+    Load generator checkpoint and restore model weights, optimizer, and scaler state.
+
+    :param g_checkpoint_path: Path to the generator checkpoint file.
+    :param device: Torch device for checkpoint loading via map_location.
+    :param G: Generator model to restore weights into.
+    :param opt_G: Generator optimizer to restore state into.
+    :param scaler: AMP gradient scaler to restore state into (may be None).
+    :return: Tuple of (g_checkpoint_dict, start_epoch).
+    """
+
+    print(f"{BackgroundColors.GREEN}Loading generator checkpoint: {g_checkpoint_path.name}{Style.RESET_ALL}")  # Print loading message
+    g_checkpoint = torch.load(g_checkpoint_path, map_location=device, weights_only=False)  # Load generator checkpoint with sklearn objects
+    if isinstance(cast(Any, G), torch.nn.DataParallel):  # If model wrapped by DataParallel
+        cast(Any, G).module.load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights into module
+    else:  # Not DataParallel
+        cast(Any, G).load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights
+    start_epoch = g_checkpoint["epoch"]  # Set starting epoch
+    if "opt_G_state" in g_checkpoint:  # If optimizer state saved
+        opt_G.load_state_dict(g_checkpoint["opt_G_state"])  # Restore generator optimizer
+        print(f"{BackgroundColors.GREEN}✓ Restored generator optimizer state{Style.RESET_ALL}")  # Confirm optimizer restoration
+    if scaler is not None and "scaler_state" in g_checkpoint:  # If using AMP and scaler state saved
+        scaler.load_state_dict(g_checkpoint["scaler_state"])  # Restore scaler state
+        print(f"{BackgroundColors.GREEN}✓ Restored AMP scaler state{Style.RESET_ALL}")  # Confirm scaler restoration
+    return g_checkpoint, start_epoch  # Return loaded checkpoint dict and starting epoch
+
+
 def restore_metrics_from_checkpoint_or_json(g_checkpoint: Dict, checkpoint_dir: Path, checkpoint_prefix: str, metrics_history: Dict, step: int) -> tuple:
     """
     Restore metrics history from checkpoint dict or fallback JSON file.
