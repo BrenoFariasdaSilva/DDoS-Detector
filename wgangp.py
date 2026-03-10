@@ -637,6 +637,34 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def resolve_plot_save_directory(out_dir: str, config: Dict) -> Path:
+    """
+    Resolve the save directory for training metrics plots based on configuration.
+
+    :param out_dir: Base output directory string.
+    :param config: Configuration dictionary with paths and plotting settings.
+    :return: Path object for the resolved plot save directory.
+    """
+
+    data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get data augmentation subdir from config
+    plotting_subdir = config.get("plotting", {}).get("subdir", "plots")  # Get plotting subdir from config
+    out_path = Path(out_dir)  # Convert provided out_dir to a Path object for safe operations
+    if out_path.name == data_aug_subdir:  # If out_dir already ends with the data_augmentation subdir
+        save_dir = out_path / plotting_subdir  # Use out_dir plus plotting subdir (avoid duplicating Data_Augmentation)
+    else:  # Otherwise, out_dir does not include data_augmentation yet
+        save_dir = out_path / data_aug_subdir / plotting_subdir  # Append Data_Augmentation then plotting subdir
+    try:  # Try to create the save directory, but catch exceptions
+        save_dir.mkdir(parents=True, exist_ok=True)  # Create save directory with parents if it doesn't exist
+    except Exception as e:  # Catch any exception during directory creation
+        print(str(e))  # Print directory creation error to terminal for visibility
+        try:  # Attempt to notify about directory creation error via Telegram
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full directory creation error via Telegram
+        except Exception:  # If notification fails, ignore to avoid cascading errors
+            pass  # Ignore Telegram send errors during directory creation fallback
+        save_dir = out_path  # Fallback to out_dir if subdirectories cannot be created
+    return save_dir  # Return resolved plot save directory path
+
+
 def plot_training_metrics(metrics_history, out_dir, filename=None, config: Optional[Dict] = None):
     """
     Plot training metrics and save to output directory.
