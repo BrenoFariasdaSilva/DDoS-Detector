@@ -637,6 +637,29 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def compute_and_store_final_timing(args, training_start_time: float, file_start_time: float) -> None:
+    """
+    Compute total training and file processing elapsed times and store on args.
+
+    :param args: Parsed arguments namespace to store timing attributes on.
+    :param training_start_time: Timestamp when training session started.
+    :param file_start_time: Timestamp when file processing started.
+    :return: None
+    """
+
+    try:  # Safely compute total training and file elapsed times
+        training_elapsed = time.time() - training_start_time  # Calculate total training elapsed seconds
+        args._last_training_time = safe_float(training_elapsed, 0.0)  # Store total training elapsed on args for downstream use safely
+        file_elapsed = time.time() - file_start_time  # Calculate file processing elapsed seconds
+        args._last_file_time = safe_float(file_elapsed, 0.0)  # Store file elapsed on args for downstream use safely
+        print(f"{BackgroundColors.GREEN}Training finished! Total training elapsed: {BackgroundColors.CYAN}{training_elapsed:.2f}s{Style.RESET_ALL}")  # Print total training elapsed message
+        print(f"{BackgroundColors.GREEN}File processing elapsed: {BackgroundColors.CYAN}{file_elapsed:.2f}s{Style.RESET_ALL}")  # Print per-file elapsed message
+    except Exception as _tt:  # If timing calculation fails, warn but do not interrupt
+        print(f"{BackgroundColors.YELLOW}Warning: failed to compute final training/file elapsed times: {_tt}{Style.RESET_ALL}")  # Warn on failure
+        args._last_training_time = ""  # Ensure attribute exists even on failure
+        args._last_file_time = ""  # Ensure attribute exists even on failure
+
+
 def build_final_training_runtime_row(args, config: Dict, dataset, metrics_history: Dict, opt_G, opt_D) -> Dict:
     """
     Build runtime metrics dictionary for the final per-file training summary CSV row.
