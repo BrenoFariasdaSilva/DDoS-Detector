@@ -637,6 +637,50 @@ def stop_resource_monitor():
         pass  # Ignore errors during shutdown
 
 
+def save_model_checkpoints_to_disk(g_checkpoint: Dict, G, D, opt_D, checkpoint_dir: Path, checkpoint_prefix: str, epoch: int, args) -> None:
+    """
+    Save generator and discriminator checkpoint files and latest generator weights to disk.
+
+    :param g_checkpoint: Assembled generator checkpoint dictionary to save.
+    :param G: Generator model for extracting latest state_dict.
+    :param D: Discriminator model to checkpoint.
+    :param opt_D: Discriminator optimizer to checkpoint.
+    :param checkpoint_dir: Directory path for saving checkpoint files.
+    :param checkpoint_prefix: Filename prefix for checkpoint files.
+    :param epoch: Current epoch index (zero-based).
+    :param args: Parsed arguments namespace to serialize with discriminator checkpoint.
+    :return: None
+    """
+
+    g_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{epoch+1}.pt"  # Path for generator checkpoint
+    d_path = checkpoint_dir / f"{checkpoint_prefix}_discriminator_epoch{epoch+1}.pt"  # Path for discriminator checkpoint
+    try:  # Time model saving to measure save phase duration
+        model_save_start_time = time.time()  # Record model save start timestamp
+        torch.save(g_checkpoint, str(g_path))  # Save generator checkpoint to disk
+        d_checkpoint = {
+            "epoch": epoch + 1,  # Save current epoch number
+            "state_dict": (cast(Any, D).module.state_dict() if isinstance(cast(Any, D), torch.nn.DataParallel) else cast(Any, D).state_dict()),  # Save discriminator state dict (unwrap DataParallel.module if present)
+            "opt_D_state": cast(Any, opt_D).state_dict(),  # Save discriminator optimizer state
+            "args": vars(args),  # Save training arguments
+        }  # End discriminator checkpoint dictionary
+        torch.save(d_checkpoint, str(d_path))  # Save discriminator checkpoint to disk
+        latest_path = checkpoint_dir / f"{checkpoint_prefix}_generator_latest.pt"  # Path for latest generator
+        torch.save((cast(Any, G).module.state_dict() if isinstance(cast(Any, G), torch.nn.DataParallel) else cast(Any, G).state_dict()), str(latest_path))  # Save latest generator weights safely handling DataParallel
+        model_save_elapsed = time.time() - model_save_start_time  # Compute model save elapsed seconds
+        args._last_model_save_time = safe_float(model_save_elapsed, 0.0)  # Store last model save elapsed on args safely
+        print(f"{BackgroundColors.GREEN}Model save elapsed: {BackgroundColors.CYAN}{model_save_elapsed:.2f}s{Style.RESET_ALL}")  # Print model save elapsed
+    except OSError as _ose_ms:  # Catch filesystem errors during model checkpoint save
+        if _ose_ms.errno == 28:  # If error is errno 28 (ENOSPC - no space left on device)
+            print(f"{BackgroundColors.YELLOW}[WARNING] Checkpoint could not be saved due to disk space exhaustion.{Style.RESET_ALL}")  # Warn about disk exhaustion
+        else:  # If error is unrelated to disk space
+            print(f"{BackgroundColors.YELLOW}Warning: model save failed: {_ose_ms}{Style.RESET_ALL}")  # Warn about save failure
+        args._last_model_save_time = ""  # Ensure attribute exists even on failure
+    except Exception as _ms:  # If saving failed for any other reason, warn but continue
+        print(f"{BackgroundColors.YELLOW}Warning: model save failed: {_ms}{Style.RESET_ALL}")  # Warn about save failure
+        args._last_model_save_time = ""  # Ensure attribute exists even on failure
+    print(f"{BackgroundColors.GREEN}Saved generator to {BackgroundColors.CYAN}{g_path}{Style.RESET_ALL}")  # Print checkpoint save message
+
+
 def save_metrics_history_to_json(checkpoint_dir: Path, checkpoint_prefix: str, metrics_history: Dict) -> None:
     """
     Save training metrics history to a JSON file in the checkpoint directory.
