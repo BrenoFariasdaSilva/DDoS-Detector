@@ -3326,6 +3326,72 @@ def cleanup_state_for_id(output_dir, state_id):
         raise  # Re-raise to preserve original failure semantics
 
 
+def dispatch_convergence_plots(history_data, csv_path, pop_size, run, dataset_name, n_generations, cxpb, mutpb):
+    """
+    Dispatch comprehensive and simple convergence plot generation for a single GA run.
+
+    Calls "generate_convergence_plots" for all tracked metrics and
+    "plot_ga_convergence" for the simple best-F1 curve. Both calls
+    are wrapped in a try/except so plotting failures never abort the run.
+
+    :param history_data: History dictionary with keys "best_f1", "best_features", etc.
+    :param csv_path: Dataset CSV path used to resolve the output directory.
+    :param pop_size: Population size for the current run.
+    :param run: Run index (1-based).
+    :param dataset_name: Name of the dataset for titles and filenames.
+    :param n_generations: Configured number of generations.
+    :param cxpb: Crossover probability.
+    :param mutpb: Mutation probability.
+    :return: None
+    """
+
+    try:
+        try:  # Try to generate comprehensive convergence plots (if function is available)
+            if 'generate_convergence_plots' in globals():  # Verify plotting function is available in module scope
+                generate_convergence_plots(
+                    history_data, csv_path, pop_size, run, dataset_name, n_generations=n_generations, cxpb=cxpb, mutpb=mutpb
+                )  # Generate all convergence and progress plots for this run
+            best_f1_history = history_data.get("best_f1", []) if isinstance(history_data, dict) else []  # Extract best F1 per generation for simple convergence curve
+            if best_f1_history:  # Verify fitness history is non-empty before plotting
+                plot_ga_convergence(
+                    csv_path, pop_size, run, best_f1_history, dataset_name=dataset_name, n_generations=n_generations, cxpb=cxpb, mutpb=mutpb
+                )  # Generate and save the simple best-F1 convergence plot for this run
+        except Exception as e:  # On any plotting error
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Failed to generate convergence plots: {e}{Style.RESET_ALL}"
+            )  # Log warning without aborting the run
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def build_ga_run_result_dict(best_ind, metrics_with_iteration_time, best_features, history_data, gens_ran):
+    """
+    Build the result dictionary for a completed single GA iteration.
+
+    :param best_ind: Best individual returned by the GA loop.
+    :param metrics_with_iteration_time: Metrics tuple extended with total iteration time as the last element.
+    :param best_features: List of selected feature names corresponding to active bits in "best_ind".
+    :param history_data: Per-generation history dictionary produced by "run_genetic_algorithm_loop".
+    :param gens_ran: Number of generations actually executed (may be less than n_generations on early stop).
+    :return: Dictionary with keys "best_ind", "metrics", "best_features", "history_data", "gens_ran".
+    """
+
+    try:
+        return {  # Build result dict with extended tracking data
+            "best_ind": best_ind,  # Best individual from the GA run
+            "metrics": metrics_with_iteration_time,  # Metrics tuple including total iteration time
+            "best_features": best_features,  # List of selected feature names
+            "history_data": history_data,  # Comprehensive history data for multi-run aggregation
+            "gens_ran": gens_ran,  # Generations actually executed (for early stopping tracking)
+        }
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def run_single_ga_iteration(
     X_train,
     y_train,
@@ -3390,13 +3456,7 @@ def run_single_ga_iteration(
             else None
         )  # Update progress bar if provided
 
-        ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})
-        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")
-        if os.path.isabs(ga_results_dir_raw):
-            output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))
-        else:
-            base_dir = os.path.dirname(csv_path) if csv_path else "."
-            output_dir = os.path.abspath(os.path.expanduser(os.path.join(base_dir, ga_results_dir_raw)))
+        output_dir = resolve_ga_output_dir(csv_path)  # Resolve canonical GA output directory from configuration
         cached, state_id = load_cached_run_if_any(
             output_dir, csv_path, pop_size, n_generations, cxpb, mutpb, run, folds, y_train, y_test
         )  # Try to load cached run result and state id
@@ -3455,28 +3515,9 @@ def run_single_ga_iteration(
         iteration_elapsed_time = time.perf_counter() - iteration_start_time  # Calculate total iteration time
         metrics_with_iteration_time = metrics + (iteration_elapsed_time,)  # Add total iteration time as 7th element
 
-        try:  # Try to generate comprehensive convergence plots (if function exists)
-            if 'generate_convergence_plots' in globals():  # Verify plotting function is available
-                generate_convergence_plots(
-                    history_data, csv_path, pop_size, run, dataset_name, n_generations=n_generations, cxpb=cxpb, mutpb=mutpb
-                )  # Generate all convergence and progress plots
-            best_f1_history = history_data.get("best_f1", []) if isinstance(history_data, dict) else []  # Extract best F1 per generation for simple convergence curve
-            if best_f1_history:  # Verify fitness history is non-empty before plotting
-                plot_ga_convergence(
-                    csv_path, pop_size, run, best_f1_history, dataset_name=dataset_name, n_generations=n_generations, cxpb=cxpb, mutpb=mutpb
-                )  # Generate and save the simple best-F1 convergence plot for this run
-        except Exception as e:  # On any plotting error
-            verbose_output(
-                f"{BackgroundColors.YELLOW}Failed to generate convergence plots: {e}{Style.RESET_ALL}"
-            )  # Log warning
+        dispatch_convergence_plots(history_data, csv_path, pop_size, run, dataset_name, n_generations, cxpb, mutpb)  # Generate comprehensive and simple convergence plots for this run
 
-        result = {
-            "best_ind": best_ind,
-            "metrics": metrics_with_iteration_time,
-            "best_features": best_features,
-            "history_data": history_data,  # Include comprehensive history data for multi-run aggregation
-            "gens_ran": gens_ran,  # Include generations actually executed (for early stopping tracking)
-        }  # Build result dict with extended tracking data
+        result = build_ga_run_result_dict(best_ind, metrics_with_iteration_time, best_features, history_data, gens_ran)  # Build standardised result dictionary for this GA iteration
 
         try:  # Try to save run result
             if CONFIG["execution"]["resume_progress"] and state_id is not None:  # If resume is enabled and state_id exists
@@ -3643,6 +3684,84 @@ def aggregate_run_metrics(run_result):
         raise  # Re-raise to preserve original failure semantics
 
 
+def build_comparison_rows(results_dict, min_pop, max_pop, dataset_name, cxpb, mutpb):
+    """
+    Build a list of row dicts for the multi-run comparison table.
+
+    Iterates over all population sizes in [min_pop, max_pop] and all runs
+    within each population size, aggregating metrics per run.
+
+    :param results_dict: Dict mapping pop_size to {"runs": [...], ...}.
+    :param min_pop: Minimum population size to include.
+    :param max_pop: Maximum population size to include.
+    :param dataset_name: Dataset name to record in each row.
+    :param cxpb: Crossover probability to record in each row.
+    :param mutpb: Mutation probability to record in each row.
+    :return: List of row dicts ready for DataFrame construction.
+    """
+
+    try:
+        comparison_rows = []  # Initialize list to collect comparison row dicts
+        for pop_size in range(min_pop, max_pop + 1):  # Iterate over all population sizes
+            if pop_size not in results_dict:  # Skip population sizes with no results
+                continue  # Skip to next population size
+            runs_list = results_dict[pop_size].get("runs", [])  # Extract runs list for this population size
+            for run_idx, run_result in enumerate(runs_list, start=1):  # Iterate runs with 1-based index
+                aggregated = aggregate_run_metrics(run_result)  # Aggregate metrics from this run
+                if aggregated is None:  # Skip runs with failed aggregation
+                    continue  # Skip this run
+                row = {
+                    "dataset": dataset_name,  # Dataset name
+                    "pop_size": pop_size,  # Population size
+                    "run_id": run_idx,  # Run identifier (1-based)
+                    "n_generations": aggregated["gens_executed"],  # Actual generations executed
+                    "cxpb": cxpb,  # Crossover probability
+                    "mutpb": mutpb,  # Mutation probability
+                    "best_f1_final": aggregated["best_f1_final"],  # Final best F1 score
+                    "features_final": aggregated["features_final"],  # Final feature count
+                    "avg_population_f1": aggregated["avg_population_f1"],  # Average population F1
+                    "avg_feature_count": aggregated["avg_feature_count"],  # Average feature count
+                    "pareto_size_final": aggregated["pareto_size_final"],  # Final Pareto size
+                    "hypervolume_final": aggregated["hypervolume_final"],  # Final hypervolume
+                    "convergence_gen": aggregated["convergence_gen"],  # Convergence generation
+                    "gens_executed": aggregated["gens_executed"],  # Generations executed
+                }  # Build row dict
+                comparison_rows.append(row)  # Add row to list
+        return comparison_rows  # Return collected comparison rows
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def print_comparison_table_summary(df_comparison, dataset_name, min_pop, max_pop):
+    """
+    Print a formatted summary of a multi-run comparison DataFrame to stdout.
+
+    :param df_comparison: DataFrame produced by the comparison table pipeline.
+    :param dataset_name: Name of the dataset being summarized.
+    :param min_pop: Minimum population size tested.
+    :param max_pop: Maximum population size tested.
+    :return: None
+    """
+
+    try:
+        print(f"\n{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Multi-Run Comparison Summary for {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Total Runs Analyzed: {BackgroundColors.CYAN}{len(df_comparison)}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Population Sizes: {BackgroundColors.CYAN}{min_pop} - {max_pop}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Mean Best F1: {BackgroundColors.CYAN}{df_comparison['best_f1_final'].mean():.4f}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Std Best F1: {BackgroundColors.CYAN}{df_comparison['best_f1_final'].std():.4f}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Mean Final Features: {BackgroundColors.CYAN}{df_comparison['features_final'].mean():.2f}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Mean Convergence Gen: {BackgroundColors.CYAN}{df_comparison['convergence_gen'].mean():.1f}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}\n")
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def generate_run_comparison_table(results_dict, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb):
     """
     Generate a CSV comparison table aggregating metrics across all runs and population sizes.
@@ -3673,34 +3792,7 @@ def generate_run_comparison_table(results_dict, csv_path, dataset_name, min_pop,
             comparison_dir = os.path.join(output_dir, "ga_run_comparisons")  # Subdirectory for comparison tables
             os.makedirs(comparison_dir, exist_ok=True)  # Ensure directory exists
 
-            comparison_rows = []  # List to store comparison data rows
-            for pop_size in range(min_pop, max_pop + 1):  # For each population size
-                if pop_size not in results_dict:  # If no results for this population size
-                    continue  # Skip to next
-
-                runs_list = results_dict[pop_size].get("runs", [])  # Get runs list
-                for run_idx, run_result in enumerate(runs_list, start=1):  # For each run (1-based indexing)
-                    aggregated = aggregate_run_metrics(run_result)  # Aggregate metrics from this run
-                    if aggregated is None:  # If aggregation failed
-                        continue  # Skip this run
-
-                    row = {
-                        "dataset": dataset_name,  # Dataset name
-                        "pop_size": pop_size,  # Population size
-                        "run_id": run_idx,  # Run identifier (1-based)
-                        "n_generations": aggregated["gens_executed"],  # Actual generations executed
-                        "cxpb": cxpb,  # Crossover probability
-                        "mutpb": mutpb,  # Mutation probability
-                        "best_f1_final": aggregated["best_f1_final"],  # Final best F1 score
-                        "features_final": aggregated["features_final"],  # Final feature count
-                        "avg_population_f1": aggregated["avg_population_f1"],  # Average population F1
-                        "avg_feature_count": aggregated["avg_feature_count"],  # Average feature count
-                        "pareto_size_final": aggregated["pareto_size_final"],  # Final Pareto size
-                        "hypervolume_final": aggregated["hypervolume_final"],  # Final hypervolume
-                        "convergence_gen": aggregated["convergence_gen"],  # Convergence generation
-                        "gens_executed": aggregated["gens_executed"],  # Generations executed
-                    }  # Build row dict
-                    comparison_rows.append(row)  # Add row to list
+            comparison_rows = build_comparison_rows(results_dict, min_pop, max_pop, dataset_name, cxpb, mutpb)  # Build comparison data rows for all population sizes and runs
 
             if not comparison_rows:  # If no rows generated
                 verbose_output(
@@ -3722,16 +3814,7 @@ def generate_run_comparison_table(results_dict, csv_path, dataset_name, min_pop,
                 f"{BackgroundColors.GREEN}Saved multi-run comparison table to {BackgroundColors.CYAN}{comparison_path}{Style.RESET_ALL}"
             )  # Log success
 
-            print(f"\n{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}")
-            print(f"{BackgroundColors.GREEN}Multi-Run Comparison Summary for {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")
-            print(f"{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}")
-            print(f"{BackgroundColors.GREEN}Total Runs Analyzed: {BackgroundColors.CYAN}{len(comparison_rows)}{Style.RESET_ALL}")
-            print(f"{BackgroundColors.GREEN}Population Sizes: {BackgroundColors.CYAN}{min_pop} - {max_pop}{Style.RESET_ALL}")
-            print(f"{BackgroundColors.GREEN}Mean Best F1: {BackgroundColors.CYAN}{df_comparison['best_f1_final'].mean():.4f}{Style.RESET_ALL}")
-            print(f"{BackgroundColors.GREEN}Std Best F1: {BackgroundColors.CYAN}{df_comparison['best_f1_final'].std():.4f}{Style.RESET_ALL}")
-            print(f"{BackgroundColors.GREEN}Mean Final Features: {BackgroundColors.CYAN}{df_comparison['features_final'].mean():.2f}{Style.RESET_ALL}")
-            print(f"{BackgroundColors.GREEN}Mean Convergence Gen: {BackgroundColors.CYAN}{df_comparison['convergence_gen'].mean():.1f}{Style.RESET_ALL}")
-            print(f"{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}\n")
+            print_comparison_table_summary(df_comparison, dataset_name, min_pop, max_pop)  # Print formatted summary statistics for the comparison table
 
             return comparison_path  # Return path to saved file
 
@@ -3740,6 +3823,46 @@ def generate_run_comparison_table(results_dict, csv_path, dataset_name, min_pop,
                 f"{BackgroundColors.YELLOW}Failed to generate comparison table: {e}{Style.RESET_ALL}"
             )  # Log error
             return None  # Return None
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def collect_all_runs_data(results_dict, min_pop, max_pop):
+    """
+    Collect per-run history and final metrics from a population sweep results dict.
+
+    Iterates over all population sizes in [min_pop, max_pop] and all runs within
+    each size, returning only runs that contain a valid history_data dict.
+
+    :param results_dict: Dict mapping pop_size to {"runs": [...], ...}.
+    :param min_pop: Minimum population size to include.
+    :param max_pop: Maximum population size to include.
+    :return: List of dicts, each with keys "pop_size", "run_id", "history_data",
+             "final_f1", "final_features".
+    """
+
+    try:
+        all_runs_data = []  # Initialize list to collect run records
+        for pop_size in range(min_pop, max_pop + 1):  # Iterate over all population sizes
+            if pop_size not in results_dict:  # Skip population sizes with no results
+                continue  # Skip to next population size
+            runs_list = results_dict[pop_size].get("runs", [])  # Extract runs list for this population size
+            for run_idx, run_result in enumerate(runs_list, start=1):  # Iterate runs with 1-based index
+                history_data = run_result.get("history_data", {})  # Get history data
+                metrics = run_result.get("metrics", [])  # Get final metrics
+                if not isinstance(history_data, dict):  # Skip runs with missing or invalid history
+                    continue  # Skip this run
+                run_info = {
+                    "pop_size": pop_size,  # Population size used for this run
+                    "run_id": run_idx,  # Run identifier (1-based)
+                    "history_data": history_data,  # Full history data dict for this run
+                    "final_f1": metrics[3] if len(metrics) > 3 else 0.0,  # Final best F1-score
+                    "final_features": len(run_result.get("best_features", [])),  # Final selected feature count
+                }  # Build run info record
+                all_runs_data.append(run_info)  # Append to collection
+        return all_runs_data  # Return collected run records
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -3782,27 +3905,7 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
             base_dataset_name = safe_filename(os.path.splitext(os.path.basename(csv_path))[0])  # Sanitized dataset name
             saved_plots = []  # List to track all saved plot paths
 
-            all_runs_data = []  # List to store all runs data for comparison
-            for pop_size in range(min_pop, max_pop + 1):  # For each population size
-                if pop_size not in results_dict:  # If no results for this population size
-                    continue  # Skip to next
-
-                runs_list = results_dict[pop_size].get("runs", [])  # Get runs list
-                for run_idx, run_result in enumerate(runs_list, start=1):  # For each run (1-based indexing)
-                    history_data = run_result.get("history_data", {})  # Get history data
-                    metrics = run_result.get("metrics", [])  # Get final metrics
-                    
-                    if not isinstance(history_data, dict):  # If history data not available
-                        continue  # Skip this run
-
-                    run_info = {
-                        "pop_size": pop_size,  # Population size
-                        "run_id": run_idx,  # Run identifier
-                        "history_data": history_data,  # History data dict
-                        "final_f1": metrics[3] if len(metrics) > 3 else 0.0,  # Final F1 score
-                        "final_features": len(run_result.get("best_features", [])),  # Final feature count
-                    }  # Build run info dict
-                    all_runs_data.append(run_info)  # Add to list
+            all_runs_data = collect_all_runs_data(results_dict, min_pop, max_pop)  # Collect per-run history and metrics from sweep results
 
             if not all_runs_data:  # If no run data available
                 verbose_output(
