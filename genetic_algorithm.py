@@ -5299,6 +5299,32 @@ def maybe_evaluate_on_test(rf_m, best_ind_local, X, y, X_test, y_test):
         raise  # Re-raise to preserve original failure semantics
 
 
+def construct_model_artifact_paths(csv_path):
+    """
+    Create a timestamped Models directory and build file paths for model artifacts.
+
+    :param csv_path: Path to the dataset CSV file (used to derive filenames and resolve output dir).
+    :return: Tuple of (models_dir, timestamp_str, base_name, model_path, scaler_path, features_path, params_path).
+    """
+
+    try:
+        ga_results_resolved = resolve_ga_output_dir(csv_path)  # Resolve canonical GA output directory from configuration
+        models_dir_local = os.path.join(ga_results_resolved, "Models")  # Build models subdirectory path
+        os.makedirs(models_dir_local, exist_ok=True)  # Create models directory if it doesn't exist
+        ts = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")  # Generate timestamp string for filenames
+        base_name_local = re.sub(r"[^A-Za-z0-9_.-]+", "_", os.path.splitext(os.path.basename(csv_path))[0])  # Sanitize dataset name for use in filename
+        model_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-model.joblib")  # Construct full path for model file
+        scaler_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-scaler.joblib")  # Construct full path for scaler file
+        features_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-features.json")  # Construct full path for features file
+        params_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-params.json")  # Construct full path for params file
+
+        return models_dir_local, ts, base_name_local, model_path_local, scaler_path_local, features_path_local, params_path_local  # Return all artifact paths
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generations, rfe_ranking, y, y_test, cxpb, mutpb):
     """
     Prepare filesystem paths and base CSV row metadata for the GA run.
@@ -5344,20 +5370,8 @@ def prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generat
             mutpb=mutpb,
         )
 
-        ga_export = CONFIG.get("genetic_algorithm", {}).get("export", {})  # Read GA export configuration
-        ga_results_dir = ga_export.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")  # Resolve GA results directory from config or use default
-        if os.path.isabs(ga_results_dir):  # If results dir is absolute, use it directly
-            ga_results_resolved = os.path.abspath(os.path.expanduser(ga_results_dir))  # Normalize absolute path
-        else:  # If results dir is relative, resolve it relative to csv_path
-            ga_results_resolved = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir)))  # Resolve to absolute path relative to dataset
-        models_dir_local = os.path.join(ga_results_resolved, "Models")  # Build models subdirectory path
-        os.makedirs(models_dir_local, exist_ok=True)  # Create models directory if it doesn't exist
-        ts = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")  # Generate timestamp string for filenames
-        base_name_local = re.sub(r"[^A-Za-z0-9_.-]+", "_", os.path.splitext(os.path.basename(csv_path))[0])  # Sanitize dataset name for use in filename
-        model_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-model.joblib")  # Construct full path for model file
-        scaler_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-scaler.joblib")  # Construct full path for scaler file
-        features_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-features.json")  # Construct full path for features file
-        params_path_local = os.path.join(models_dir_local, f"GA-{base_name_local}-{ts}-params.json")  # Construct full path for params file
+        ga_export = CONFIG.get("genetic_algorithm", {}).get("export", {})  # Read GA export configuration (kept for reference/logging)
+        models_dir_local, ts, base_name_local, model_path_local, scaler_path_local, features_path_local, params_path_local = construct_model_artifact_paths(csv_path)  # Create timestamped models directory and build all artifact file paths
 
         return (  # Return all computed paths and metadata as a tuple
             n_train_local,
