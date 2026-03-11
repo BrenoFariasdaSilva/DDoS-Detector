@@ -3851,7 +3851,8 @@ def aggregate_run_metrics(run_result):
             gens_ran = run_result.get("gens_ran", 0)  # Get generations executed
 
             best_f1_final = metrics[3] if len(metrics) > 3 else 0.0  # Final F1 score from test evaluation
-            features_final = len(run_result.get("best_features", []))  # Final feature count
+            n_features = len(run_result.get("best_features", []))  # Number of selected features in best individual
+            best_features_list = list(run_result.get("best_features", []))  # Extract selected feature names list from best individual
 
             if isinstance(history_data, dict):  # If history data is available as dict
                 best_f1_history = history_data.get("best_f1", [])  # Best F1 per generation
@@ -3879,7 +3880,8 @@ def aggregate_run_metrics(run_result):
 
             return {
                 "best_f1_final": float(best_f1_final),  # Final best F1 score
-                "features_final": int(features_final),  # Final feature count
+                "n_features": int(n_features),  # Number of features in the best individual
+                "best_features_list": best_features_list,  # List of selected feature names from best individual
                 "avg_population_f1": float(avg_population_f1),  # Average population F1 across generations
                 "avg_feature_count": float(avg_feature_count),  # Average feature count across generations
                 "pareto_size_final": int(pareto_size_final),  # Final Pareto front size
@@ -3896,7 +3898,7 @@ def aggregate_run_metrics(run_result):
         raise  # Re-raise to preserve original failure semantics
 
 
-def build_comparison_rows(results_dict, min_pop, max_pop, dataset_name, cxpb, mutpb):
+def build_comparison_rows(results_dict, min_pop, max_pop, dataset_name, cxpb, mutpb, n_generations):
     """
     Build a list of row dicts for the multi-run comparison table.
 
@@ -3909,6 +3911,7 @@ def build_comparison_rows(results_dict, min_pop, max_pop, dataset_name, cxpb, mu
     :param dataset_name: Dataset name to record in each row.
     :param cxpb: Crossover probability to record in each row.
     :param mutpb: Mutation probability to record in each row.
+    :param n_generations: Configured maximum number of generations.
     :return: List of row dicts ready for DataFrame construction.
     """
 
@@ -3922,22 +3925,24 @@ def build_comparison_rows(results_dict, min_pop, max_pop, dataset_name, cxpb, mu
                 aggregated = aggregate_run_metrics(run_result)  # Aggregate metrics from this run
                 if aggregated is None:  # Skip runs with failed aggregation
                     continue  # Skip this run
+                features_list_str = "[" + ",".join(aggregated["best_features_list"]) + "]"  # Format selected features as CSV-safe bracketed string
                 row = {
                     "dataset": dataset_name,  # Dataset name
-                    "pop_size": pop_size,  # Population size
                     "run_id": run_idx,  # Run identifier (1-based)
-                    "n_generations": aggregated["gens_executed"],  # Actual generations executed
+                    "pop_size": pop_size,  # Population size
+                    "n_generations": int(n_generations),  # Configured maximum number of generations
+                    "gens_executed": aggregated["gens_executed"],  # Actual generations executed before stopping
                     "cxpb": cxpb,  # Crossover probability
                     "mutpb": mutpb,  # Mutation probability
                     "best_f1_final": aggregated["best_f1_final"],  # Final best F1 score
-                    "features_final": aggregated["features_final"],  # Final feature count
                     "avg_population_f1": aggregated["avg_population_f1"],  # Average population F1
+                    "n_features": aggregated["n_features"],  # Number of features in best individual
                     "avg_feature_count": aggregated["avg_feature_count"],  # Average feature count
+                    "features_list": features_list_str,  # List of selected feature names from best individual
                     "pareto_size_final": aggregated["pareto_size_final"],  # Final Pareto size
                     "hypervolume_final": aggregated["hypervolume_final"],  # Final hypervolume
                     "convergence_gen": aggregated["convergence_gen"],  # Convergence generation
-                    "gens_executed": aggregated["gens_executed"],  # Generations executed
-                }  # Build row dict
+                }  # Build row dict with new schema column order
                 comparison_rows.append(row)  # Add row to list
         return comparison_rows  # Return collected comparison rows
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -3965,7 +3970,7 @@ def print_comparison_table_summary(df_comparison, dataset_name, min_pop, max_pop
         print(f"{BackgroundColors.GREEN}Population Sizes: {BackgroundColors.CYAN}{min_pop} - {max_pop}{Style.RESET_ALL}")
         print(f"{BackgroundColors.GREEN}Mean Best F1: {BackgroundColors.CYAN}{df_comparison['best_f1_final'].mean():.4f}{Style.RESET_ALL}")
         print(f"{BackgroundColors.GREEN}Std Best F1: {BackgroundColors.CYAN}{df_comparison['best_f1_final'].std():.4f}{Style.RESET_ALL}")
-        print(f"{BackgroundColors.GREEN}Mean Final Features: {BackgroundColors.CYAN}{df_comparison['features_final'].mean():.2f}{Style.RESET_ALL}")
+        print(f"{BackgroundColors.GREEN}Mean Final Features: {BackgroundColors.CYAN}{df_comparison['n_features'].mean():.2f}{Style.RESET_ALL}")
         print(f"{BackgroundColors.GREEN}Mean Convergence Gen: {BackgroundColors.CYAN}{df_comparison['convergence_gen'].mean():.1f}{Style.RESET_ALL}")
         print(f"{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}\n")
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -4004,7 +4009,7 @@ def generate_run_comparison_table(results_dict, csv_path, dataset_name, min_pop,
             comparison_dir = os.path.join(output_dir, "ga_run_comparisons")  # Subdirectory for comparison tables
             os.makedirs(comparison_dir, exist_ok=True)  # Ensure directory exists
 
-            comparison_rows = build_comparison_rows(results_dict, min_pop, max_pop, dataset_name, cxpb, mutpb)  # Build comparison data rows for all population sizes and runs
+            comparison_rows = build_comparison_rows(results_dict, min_pop, max_pop, dataset_name, cxpb, mutpb, n_generations)  # Build comparison data rows for all population sizes and runs
 
             if not comparison_rows:  # If no rows generated
                 verbose_output(
@@ -4013,6 +4018,9 @@ def generate_run_comparison_table(results_dict, csv_path, dataset_name, min_pop,
                 return None  # Return None
 
             df_comparison = pd.DataFrame(comparison_rows)  # Create DataFrame from rows
+
+            csv_column_order = ["dataset", "run_id", "pop_size", "n_generations", "gens_executed", "cxpb", "mutpb", "best_f1_final", "avg_population_f1", "n_features", "avg_feature_count", "features_list", "pareto_size_final", "hypervolume_final", "convergence_gen"]  # Define required CSV column order
+            df_comparison = df_comparison.reindex(columns=csv_column_order)  # Enforce exact column order for output schema
 
             df_comparison = df_comparison.sort_values(["pop_size", "run_id"]).reset_index(drop=True)  # Sort and reset index
 
