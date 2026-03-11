@@ -415,20 +415,18 @@ def deep_merge_dicts(base, override):
         raise  # Re-raise to preserve original failure semantics
 
 
-def merge_configs(defaults, file_config, cli_args):
+def apply_cli_execution_overrides(config, cli_args):
     """
-    Merge configuration from defaults, config file, and CLI arguments.
-    Priority: CLI args > config file > defaults.
+    Apply CLI execution-related overrides to the merged configuration.
 
-    :param defaults: Default configuration dictionary
-    :param file_config: Configuration loaded from file
-    :param cli_args: Parsed command-line arguments
-    :return: Merged configuration dictionary
+    Handles: verbose, runs, skip_train, no_resume, no_sound.
+
+    :param config: Configuration dictionary to modify in-place.
+    :param cli_args: Parsed CLI arguments namespace.
+    :return: None
     """
 
-    try:  # Wrap full function logic to ensure production-safe monitoring
-        config = deep_merge_dicts(defaults, file_config)  # Start with defaults, merge file config
-
+    try:
         if cli_args.verbose:  # If verbose flag set
             config["execution"]["verbose"] = True  # Enable verbose mode
 
@@ -443,7 +441,24 @@ def merge_configs(defaults, file_config, cli_args):
 
         if cli_args.no_sound:  # If no sound flag set
             config["execution"]["play_sound"] = False  # Disable sound
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
+
+def apply_cli_ga_and_dataset_overrides(config, cli_args):
+    """
+    Apply CLI genetic algorithm and dataset overrides to the merged configuration.
+
+    Handles: files_to_ignore, test_size, n_generations, min_pop, max_pop, cxpb, mutpb, cv_folds.
+
+    :param config: Configuration dictionary to modify in-place.
+    :param cli_args: Parsed CLI arguments namespace.
+    :return: None
+    """
+
+    try:
         if cli_args.files_to_ignore is not None:  # If files to ignore specified
             config["dataset"]["files_to_ignore"] = cli_args.files_to_ignore  # Override files to ignore
 
@@ -467,7 +482,26 @@ def merge_configs(defaults, file_config, cli_args):
 
         if cli_args.cv_folds is not None:  # If CV folds specified
             config["cross_validation"]["n_folds"] = cli_args.cv_folds  # Override CV folds
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
+
+def apply_cli_infrastructure_overrides(config, cli_args):
+    """
+    Apply CLI infrastructure-related overrides to the merged configuration.
+
+    Handles: early_stop_acc, early_stop_folds, early_stop_gens, n_jobs,
+    cpu_processes, no_monitor, monitor_interval, telegram_progress_pct,
+    results_dir, results_filename.
+
+    :param config: Configuration dictionary to modify in-place.
+    :param cli_args: Parsed CLI arguments namespace.
+    :return: None
+    """
+
+    try:
         if cli_args.early_stop_acc is not None:  # If early stop accuracy specified
             config["early_stop"]["acc_threshold"] = cli_args.early_stop_acc  # Override early stop threshold
 
@@ -499,6 +533,29 @@ def merge_configs(defaults, file_config, cli_args):
             config.setdefault("genetic_algorithm", {}).setdefault("export", {})["results_dir"] = cli_args.results_dir  # Override GA export results directory
         if hasattr(cli_args, "results_filename") and cli_args.results_filename is not None:  # If results filename override provided
             config.setdefault("genetic_algorithm", {}).setdefault("export", {})["results_filename"] = cli_args.results_filename  # Override GA export results filename
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def merge_configs(defaults, file_config, cli_args):
+    """
+    Merge configuration from defaults, config file, and CLI arguments.
+    Priority: CLI args > config file > defaults.
+
+    :param defaults: Default configuration dictionary
+    :param file_config: Configuration loaded from file
+    :param cli_args: Parsed command-line arguments
+    :return: Merged configuration dictionary
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        config = deep_merge_dicts(defaults, file_config)  # Start with defaults, merge file config
+
+        apply_cli_execution_overrides(config, cli_args)  # Apply verbose, runs, skip_train, no_resume, no_sound overrides
+        apply_cli_ga_and_dataset_overrides(config, cli_args)  # Apply files_to_ignore, test_size, GA params, cv_folds overrides
+        apply_cli_infrastructure_overrides(config, cli_args)  # Apply early_stop, multiprocessing, monitor, telegram, results overrides
 
         return config  # Return merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
