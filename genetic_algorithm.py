@@ -1944,6 +1944,112 @@ def instantiate_estimator(estimator_cls=None):
         raise  # Re-raise to preserve original failure semantics
 
 
+def compute_fold_metrics(y_true, y_pred):
+    """
+    Compute standard binary/multiclass classification metrics for one fold.
+
+    :param y_true: True labels (array-like).
+    :param y_pred: Predicted labels (array-like).
+    :return: Tuple (acc, prec, rec, f1, fpr, fnr) of float values.
+    """
+
+    try:
+        acc = accuracy_score(y_true, y_pred)  # Calculate accuracy metric
+        prec = precision_score(y_true, y_pred, average="weighted", zero_division=0)  # Calculate weighted precision
+        rec = recall_score(y_true, y_pred, average="weighted", zero_division=0)  # Calculate weighted recall
+        f1 = f1_score(y_true, y_pred, average="weighted", zero_division=0)  # Calculate weighted F1-score
+        cm = confusion_matrix(y_true, y_pred, labels=np.unique(y_true))  # Compute confusion matrix
+        tn = cm[0, 0] if cm.shape == (2, 2) else 0  # True negatives
+        fp = cm[0, 1] if cm.shape == (2, 2) else 0  # False positives
+        fn = cm[1, 0] if cm.shape == (2, 2) else 0  # False negatives
+        tp = cm[1, 1] if cm.shape == (2, 2) else 0  # True positives
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # False positive rate
+        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # False negative rate
+        return acc, prec, rec, f1, fpr, fnr  # Return all six metrics as a tuple
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def run_cv_fold_loop(X_train_sel, y_train_np, splits, estimator_cls, n_cv_folds):
+    """
+    Execute the cross-validation fold loop for individual fitness evaluation.
+
+    Iterates over the provided StratifiedKFold splits, fitting an estimator on each
+    training fold, predicting on the validation fold, and recording six classification
+    metrics. Applies early stopping based on the configured accuracy threshold.
+
+    :param X_train_sel: Feature-selected training array (rows x selected features).
+    :param y_train_np: Training labels as a numpy array.
+    :param splits: List of (train_idx, val_idx) tuples from StratifiedKFold.
+    :param estimator_cls: Classifier class passed to "instantiate_estimator".
+    :param n_cv_folds: Total number of CV folds (used to allocate the metrics array).
+    :return: Tuple "(metrics, fold_count, early_stop_triggered)" where "metrics" is a
+             pre-allocated (n_cv_folds x 6) float array, "fold_count" is the number of
+             folds that completed, and "early_stop_triggered" is a bool.
+    """
+
+    try:
+        metrics = np.empty((n_cv_folds, 6), dtype=float)  # Pre-allocate metrics array for each fold: [acc, prec, rec, f1, fpr, fnr]
+        fold_count = 0  # Track how many folds actually ran
+        early_stop_triggered = False  # Flag for early stopping
+        for fold_idx, (train_idx, val_idx) in enumerate(splits):  # For each fold
+            model = instantiate_estimator(estimator_cls)  # Instantiate the model
+            y_train_fold = y_train_np[train_idx]  # Get training fold labels
+            y_val_fold = y_train_np[val_idx]  # Get validation fold labels
+            model.fit(X_train_sel[train_idx], y_train_fold)  # Fit the model on the training fold
+            y_pred = model.predict(X_train_sel[val_idx])  # Predict on the validation fold
+            acc, prec, rec, f1, fpr, fnr = compute_fold_metrics(y_val_fold, y_pred)  # Compute all six classification metrics for this CV fold
+            metrics[fold_count] = [acc, prec, rec, f1, fpr, fnr]  # Write metrics directly to pre-allocated array
+            fold_count += 1  # Increment fold counter
+            if (
+                fold_idx < CONFIG["early_stop"]["folds"] and acc < CONFIG["early_stop"]["acc_threshold"]
+            ):  # Early stopping: If accuracy is below threshold in first few folds, break
+                early_stop_triggered = True  # Set flag
+                break  # Stop evaluating further folds for this individual
+        return metrics, fold_count, early_stop_triggered  # Return metrics array, completed fold count, and early-stop flag
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def evaluate_individual_holdout(X_train_sel, y_train, estimator_cls, mask_tuple, num_features_selected):
+    """
+    Evaluate a GA individual using a simple holdout split when StratifiedKFold fails.
+
+    Falls back to a single 80/20 train-validation split on the training data only,
+    avoiding any data leakage from the held-out test set. The result is cached
+    before returning.
+
+    :param X_train_sel: Feature-selected training array (selected by the individual binary mask).
+    :param y_train: Full training labels.
+    :param estimator_cls: Classifier class passed to "instantiate_estimator".
+    :param mask_tuple: Hashable tuple form of the individual (used as cache key).
+    :param num_features_selected: Number of active features (included in result tuple).
+    :return: Result tuple (cv_acc, cv_prec, cv_rec, cv_f1, cv_fpr, cv_fnr,
+             test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr, num_features).
+    """
+
+    try:
+        X_train_fold, X_val_fold, y_train_fold, y_val_fold = train_test_split(
+            X_train_sel, y_train, test_size=0.2, random_state=42, stratify=y_train
+        )  # Split training data into train/validation folds avoiding test-set leakage
+        model = instantiate_estimator(estimator_cls)  # Instantiate the model for holdout evaluation
+        model.fit(X_train_fold, y_train_fold)  # Fit on train fold
+        y_pred = model.predict(X_val_fold)  # Predict on validation fold (NOT test set)
+        acc, prec, rec, f1, fpr, fnr = compute_fold_metrics(y_val_fold, y_pred)  # Compute all six classification metrics for holdout validation
+        result = acc, prec, rec, f1, fpr, fnr, 0, 0, 0, 0, 0, 0, num_features_selected  # Validation metrics as CV, placeholder test values, with feature count
+        with fitness_cache_lock:  # Thread-safe cache write
+            fitness_cache[mask_tuple] = result  # Cache the result for this mask
+        return result  # Return the holdout evaluation result
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def evaluate_individual(
     individual,
     X_train,
@@ -1981,8 +2087,6 @@ def evaluate_individual(
         X_train_sel = X_train[:, mask]  # Select features based on the mask
 
         n_cv_folds = CONFIG.get("cross_validation", {}).get("n_folds", 10)  # Use configurable constant
-        metrics = np.empty((n_cv_folds, 6), dtype=float)  # Pre-allocate metrics array for each fold: [acc, prec, rec, f1, fpr, fnr]
-        fold_count = 0  # Track how many folds actually ran
 
         try:  # Try to create StratifiedKFold splits
             skf = StratifiedKFold(n_splits=n_cv_folds, shuffle=True, random_state=42)  # n_cv_folds-fold Stratified CV
@@ -1991,65 +2095,11 @@ def evaluate_individual(
             print(
                 f"{BackgroundColors.YELLOW}Warning: StratifiedKFold failed ({type(e).__name__}: {str(e)}), using simple holdout validation on training data only.{Style.RESET_ALL}"
             )  # Output warning message
-            
-            X_train_fold, X_val_fold, y_train_fold, y_val_fold = train_test_split(
-                X_train_sel, y_train, test_size=0.2, random_state=42, stratify=y_train
-            )  # Split training data into train/validation
-            model = instantiate_estimator(estimator_cls)  # Instantiate the model
-            model.fit(X_train_fold, y_train_fold)  # Fit on train fold
-            y_pred = model.predict(X_val_fold)  # Predict on validation fold (NOT test set)
-
-            acc = accuracy_score(y_val_fold, y_pred)  # Calculate accuracy on validation fold
-            prec = precision_score(y_val_fold, y_pred, average="weighted", zero_division=0)  # Calculate precision
-            rec = recall_score(y_val_fold, y_pred, average="weighted", zero_division=0)  # Calculate recall
-            f1 = f1_score(y_val_fold, y_pred, average="weighted", zero_division=0)  # Calculate F1-score
-
-            cm = confusion_matrix(y_val_fold, y_pred, labels=np.unique(y_val_fold))  # Confusion matrix on validation
-            tn = cm[0, 0] if cm.shape == (2, 2) else 0  # True negatives
-            fp = cm[0, 1] if cm.shape == (2, 2) else 0  # False positives
-            fn = cm[1, 0] if cm.shape == (2, 2) else 0  # False negatives
-            tp = cm[1, 1] if cm.shape == (2, 2) else 0  # True positives
-
-            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # False positive rate
-            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # False negative rate
-
-            result = acc, prec, rec, f1, fpr, fnr, 0, 0, 0, 0, 0, 0, num_features_selected  # Return validation metrics as CV, placeholder for test, with feature count
-            with fitness_cache_lock:  # Thread-safe cache write
-                fitness_cache[mask_tuple] = result  # Cache the result for this mask
-            return result  # Return the result for holdout validation
+            return evaluate_individual_holdout(X_train_sel, y_train, estimator_cls, mask_tuple, num_features_selected)  # Delegate to holdout fallback helper
 
         y_train_np = np.array(y_train)  # Convert y_train to numpy array for fast indexing
-        early_stop_triggered = False  # Flag for early stopping
 
-        for fold_idx, (train_idx, val_idx) in enumerate(splits):  # For each fold
-            model = instantiate_estimator(estimator_cls)  # Instantiate the model
-            y_train_fold = y_train_np[train_idx]  # Get training fold labels
-            y_val_fold = y_train_np[val_idx]  # Get validation fold labels
-            model.fit(X_train_sel[train_idx], y_train_fold)  # Fit the model on the training fold
-            y_pred = model.predict(X_train_sel[val_idx])  # Predict on the validation fold
-
-            acc = accuracy_score(y_val_fold, y_pred)  # Calculate accuracy
-            prec = precision_score(y_val_fold, y_pred, average="weighted", zero_division=0)  # Calculate precision
-            rec = recall_score(y_val_fold, y_pred, average="weighted", zero_division=0)  # Calculate recall
-            f1 = f1_score(y_val_fold, y_pred, average="weighted", zero_division=0)  # Calculate F1-score
-
-            cm = confusion_matrix(y_val_fold, y_pred, labels=np.unique(y_val_fold))  # Confusion matrix
-            tn = cm[0, 0] if cm.shape == (2, 2) else 0  # True negatives
-            fp = cm[0, 1] if cm.shape == (2, 2) else 0  # False positives
-            fn = cm[1, 0] if cm.shape == (2, 2) else 0  # False negatives
-            tp = cm[1, 1] if cm.shape == (2, 2) else 0  # True positives
-
-            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # False positive rate
-            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # False negative rate
-
-            metrics[fold_count] = [acc, prec, rec, f1, fpr, fnr]  # Write metrics directly to pre-allocated array
-            fold_count += 1  # Increment fold counter
-
-            if (
-                fold_idx < CONFIG["early_stop"]["folds"] and acc < CONFIG["early_stop"]["acc_threshold"]
-            ):  # Early stopping: If accuracy is below threshold in first few folds, break
-                early_stop_triggered = True  # Set flag
-                break  # Stop evaluating further folds for this individual
+        metrics, fold_count, early_stop_triggered = run_cv_fold_loop(X_train_sel, y_train_np, splits, estimator_cls, n_cv_folds)  # Execute CV fold loop with early stopping
 
         if early_stop_triggered:  # When early stopping triggers, return worst-case fitness
             result = 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, num_features_selected  # Worst possible scores with feature count
