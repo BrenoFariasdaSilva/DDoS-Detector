@@ -64,13 +64,13 @@ import os  # For running a command in the terminal
 import pandas as pd  # For CSV handling
 import platform  # For getting the operating system name
 import random  # For reproducibility
+import shutil  # For disk space queries when psutil is unavailable
+import signal  # For sending signals to this process when critical
 import subprocess  # For running small system commands to query hardware
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
-import time  # For elapsed time tracking
 import threading  # For background resource watcher thread
-import shutil  # For disk space queries when psutil is unavailable
-import signal  # For sending signals to this process when critical
+import time  # For elapsed time tracking
 import torch  # PyTorch core
 import torch.nn as nn  # Neural network modules
 import traceback  # For printing tracebacks on exceptions
@@ -78,7 +78,9 @@ import yaml  # For loading configuration files
 from colorama import Style  # For coloring the terminal
 from contextlib import nullcontext  # For null context manager
 from Logger import Logger  # For logging output to both terminal and file
+from mpl_toolkits.mplot3d import Axes3D  # For 3D projection type annotation and axis method resolution
 from pathlib import Path  # For handling file paths
+from sklearn.manifold import TSNE  # For 3D t-SNE separability visualization
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For data preprocessing
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For Telegram utilities and global exception hook
 from torch import autograd  # For gradient penalty
@@ -3384,6 +3386,88 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
         raise  # Propagate CSV write exceptions to caller (do not swallow)
 
 
+def generate_tsne_3d_separability_plot(
+    original_features: np.ndarray,
+    generated_features: np.ndarray,
+    out_dir: Union[str, Path],
+    dataset_name: Optional[str] = None,
+    config: Optional[Dict] = None,
+) -> None:
+    """
+    Generate and save a 3D t-SNE scatter plot comparing original and synthetic samples.
+
+    :param original_features: Numpy array of original dataset feature values (rows x features).
+    :param generated_features: Numpy array of generated synthetic feature values (rows x features).
+    :param out_dir: Directory under which the multi_run_plots subdirectory will be created.
+    :param dataset_name: Optional dataset identifier used as the filename prefix.
+    :param config: Optional configuration dictionary reserved for future extension.
+    :return: None.
+    """
+
+    try:
+        max_samples = 5000  # Maximum samples per group to keep t-SNE tractable
+        total_combined = len(original_features) + len(generated_features)  # Compute combined dataset row count
+
+        if total_combined > 10000:  # Subsample when combined size exceeds tractability threshold
+            rng = np.random.default_rng(42)  # Seed RNG for reproducible subsampling
+
+            n_orig_sample = min(max_samples, len(original_features))  # Clamp original sample count to max_samples
+            orig_idx = rng.choice(len(original_features), size=n_orig_sample, replace=False)  # Draw random indices from original pool
+            orig_subset = original_features[orig_idx]  # Extract sampled original feature rows
+
+            n_gen_sample = min(max_samples, len(generated_features))  # Clamp generated sample count to max_samples
+            gen_idx = rng.choice(len(generated_features), size=n_gen_sample, replace=False)  # Draw random indices from generated pool
+            gen_subset = generated_features[gen_idx]  # Extract sampled generated feature rows
+
+        else:  # Use full arrays when combined size is within threshold
+            orig_subset = original_features  # Use all original feature rows
+            gen_subset = generated_features  # Use all generated feature rows
+
+        n_orig = len(orig_subset)  # Count original samples used for t-SNE index boundary
+        combined = np.vstack([orig_subset, gen_subset]).astype(np.float32)  # Vertically stack both groups for joint t-SNE fit
+        combined = np.nan_to_num(combined, nan=0.0, posinf=0.0, neginf=0.0)  # Replace non-finite values to prevent t-SNE numerical failure
+
+        tsne = TSNE(n_components=3, random_state=42, perplexity=30)  # Instantiate t-SNE for 3D reduction with fixed seed and default perplexity
+        embedded = tsne.fit_transform(combined)  # Fit and reduce combined array to 3-dimensional embedding
+
+        orig_emb = embedded[:n_orig]  # Slice embedding to isolate original sample coordinates
+        gen_emb = embedded[n_orig:]  # Slice embedding to isolate generated sample coordinates
+
+        fig = plt.figure(figsize=(12, 8))  # Create figure with generous size for 3D scatter legibility
+        ax = cast(Axes3D, fig.add_subplot(111, projection="3d"))  # Cast to Axes3D so pylance resolves 3D scatter signature and set_zlabel method
+
+        ax.scatter(
+            orig_emb[:, 0], orig_emb[:, 1], zs=cast(Any, orig_emb[:, 2]),
+            c="#1f77b4", alpha=0.5, s=8, label="Original Samples",
+        )  # Plot original sample embeddings in blue; cast(Any) bypasses the incorrect int stub for zs
+        ax.scatter(
+            gen_emb[:, 0], gen_emb[:, 1], zs=cast(Any, gen_emb[:, 2]),
+            c="#ff7f0e", alpha=0.5, s=8, label="Generated Samples",
+        )  # Plot generated sample embeddings in orange; cast(Any) bypasses the incorrect int stub for zs
+
+        ax.set_xlabel("TSNE Dimension 1")  # Label x-axis as first t-SNE dimension
+        ax.set_ylabel("TSNE Dimension 2")  # Label y-axis as second t-SNE dimension
+        ax.set_zlabel("TSNE Dimension 3")  # Label z-axis as third t-SNE dimension
+        ax.set_title("WGAN-GP Data Distribution (Original vs Generated) - t-SNE 3D")  # Set descriptive plot title
+        ax.legend(loc="upper left")  # Render legend in upper-left corner of 3D axes
+
+        plots_dir = Path(out_dir) / "multi_run_plots"  # Build multi_run_plots path nested under the provided output directory
+        os.makedirs(str(plots_dir), exist_ok=True)  # Ensure multi_run_plots directory exists before saving
+
+        prefix = f"{dataset_name}_" if dataset_name else ""  # Build filename prefix from dataset name when available
+        plot_path = plots_dir / f"{prefix}tsne_3d_original_vs_generated.png"  # Construct deterministic plot file path
+
+        ensure_figure_min_4k_and_save(fig=fig, path=str(plot_path), dpi=300)  # Save plot enforcing minimum 4K pixel dimensions
+        print(f"{BackgroundColors.GREEN}Saved t-SNE 3D separability plot to {BackgroundColors.CYAN}{plot_path}{Style.RESET_ALL}")  # Confirm plot saved successfully
+
+    except Exception as e:
+        print(f"{BackgroundColors.YELLOW}[WARNING] t-SNE 3D separability plot generation failed: {e}{Style.RESET_ALL}")  # Warn on failure and continue without aborting
+        try:
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Forward t-SNE exception details via Telegram
+        except Exception:
+            pass  # Ignore notification failures to avoid breaking downstream flow
+
+
 def compose_generation_start_message(
     n: int,
     args,
@@ -3944,7 +4028,23 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
                 print(f"{BackgroundColors.YELLOW}Warning: failed to send Telegram notification about augmented file: {_tg_e}{Style.RESET_ALL}")  # Warn about telegram failure
         except Exception as _aug_e:  # If augmented file save fails, warn and continue without aborting generation
             print(f"{BackgroundColors.YELLOW}[WARNING] Failed to save augmented dataset to derived path: {_aug_e}{Style.RESET_ALL}")  # Warn about augmented save failure
-    
+
+    if getattr(args, "csv_path", None):  # Verify csv_path is available for t-SNE separability plot generation
+        try:
+            orig_df_tsne = pd.read_csv(args.csv_path, low_memory=False)  # Load original CSV for t-SNE comparison
+            valid_tsne_cols = [c for c in feature_cols if c in orig_df_tsne.columns]  # Retain only columns present in both original and generated data
+
+            if valid_tsne_cols:  # Proceed only when at least one matching feature column is available
+                X_original_tsne = orig_df_tsne[valid_tsne_cols].apply(pd.to_numeric, errors="coerce").dropna().values.astype(np.float32)  # Extract numeric original feature matrix dropping non-finite rows
+                col_indices = [feature_cols.index(c) for c in valid_tsne_cols]  # Resolve column indices in the generated feature array
+                X_generated_tsne = X_orig[:, col_indices].astype(np.float32)  # Extract matching generated feature columns as float32
+                tsne_out_dir = Path(args.out_file).parent  # Derive output directory from out_file for t-SNE plot storage
+                tsne_dataset_name = Path(args.csv_path).stem  # Derive dataset name from CSV filename stem
+                generate_tsne_3d_separability_plot(X_original_tsne, X_generated_tsne, tsne_out_dir, dataset_name=tsne_dataset_name, config=config)  # Generate 3D t-SNE separability visualization
+
+        except Exception as _tsne_e:
+            print(f"{BackgroundColors.YELLOW}[WARNING] t-SNE separability plot failed: {_tsne_e}{Style.RESET_ALL}")  # Warn about t-SNE failure without aborting generation
+
     return df  # Return constructed DataFrame
 
 
@@ -4273,6 +4373,16 @@ def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset:
         df = postprocess_generated_arrays_to_dataframe(args, config, all_fake, all_labels, scaler, label_encoder, feature_cols, device, n, file_progress_prefix)  # Postprocess arrays into DataFrame and save
         record_sample_generation_timing(args, sample_generation_start_time)  # Record sample generation elapsed time
         notify_generation_finish_via_telegram(args, n, file_progress_prefix)  # Send Telegram finish notification
+
+        try:
+            X_original_inmem = dataset.scaler.inverse_transform(dataset.X.numpy())  # Inverse-transform stored dataset tensor to original feature scale
+            X_generated_inmem = df[feature_cols].values.astype(np.float32)  # Extract generated feature columns from postprocessed DataFrame as float32
+            tsne_out_dir_inmem = Path(args.out_file).parent  # Derive output root directory from out_file path for t-SNE plot storage
+            tsne_name_inmem = Path(args.csv_path).stem if getattr(args, "csv_path", None) else "generated"  # Build dataset name from CSV stem when path is available
+            generate_tsne_3d_separability_plot(X_original_inmem, X_generated_inmem, tsne_out_dir_inmem, dataset_name=tsne_name_inmem, config=config)  # Generate 3D t-SNE separability plot comparing training data and in-memory generated samples
+        except Exception as _tsne_inmem_e:
+            print(f"{BackgroundColors.YELLOW}[WARNING] t-SNE separability plot failed (in-memory): {_tsne_inmem_e}{Style.RESET_ALL}")  # Warn about t-SNE failure without aborting
+
     except Exception as e:
         handle_generate_top_level_exception(e)  # Handle top-level exception by logging and re-raising
 
