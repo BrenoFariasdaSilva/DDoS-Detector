@@ -6200,7 +6200,7 @@ def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str
         parent = out_p.parent  # Get parent directory
         if not parent.exists():  # If parent doesn't exist
             parent.mkdir(parents=True, exist_ok=True)  # Try to create it
-        if not os.access(str(parent), os.W_OK):  # Check parent directory is writable
+        if not os.access(str(parent), os.W_OK):  # Verify parent directory is writable
             raise PermissionError(f"Directory not writable: {parent}")  # Raise on non-writable directory
         styled = apply_zebra_style(df)  # Create styled DataFrame with zebra stripes
         export_dataframe_image(styled, out_p)  # Export styled DataFrame to PNG
@@ -6414,7 +6414,7 @@ if __name__ == "__main__":
         except Exception:  # Ignore notification failures during interrupt handling
             pass  # Continue to cleanup even if notification fails
         try:  # Attempt to flush/close logger for clean logs on interrupt
-            if "logger" in globals() and globals().get("logger") is not None:  # Check logger existence to avoid attribute errors
+            if "logger" in globals() and globals().get("logger") is not None:  # Verify logger existence to avoid attribute errors
                 try:  # Try flushing and closing logger
                     globals()["logger"].flush()  # Flush logger buffer
                     globals()["logger"].close()  # Close logger handle
@@ -6440,7 +6440,7 @@ if __name__ == "__main__":
             except Exception:  # If printing fails, swallow
                 pass  # Swallow to avoid further errors
         try:  # Attempt to flush and close logger to preserve logs on fatal errors
-            if "logger" in globals() and globals().get("logger") is not None:  # Check logger exists
+            if "logger" in globals() and globals().get("logger") is not None:  # Verify logger exists
                 try:  # Try to flush/close logger
                     globals()["logger"].flush()  # Flush logger buffer
                     globals()["logger"].close()  # Close logger handle
@@ -6448,12 +6448,12 @@ if __name__ == "__main__":
                     pass  # Continue after best-effort cleanup
             else:  # Fallback if logger unavailable
                 try:  # Try to flush/close sys.stdout if possible
-                    if hasattr(sys.stdout, "flush"):  # Check stdout flush
+                    if hasattr(sys.stdout, "flush"):  # Verify stdout flush
                         try:
                             sys.stdout.flush()  # Attempt to flush stdout
                         except Exception:  # Ignore flush errors
                             pass  # Continue cleanup
-                    if hasattr(sys.stdout, "close"):  # Check stdout close
+                    if hasattr(sys.stdout, "close"):  # Verify stdout close
                         try:
                             sys.stdout.close()  # Attempt to close stdout
                         except Exception:  # Ignore close errors
