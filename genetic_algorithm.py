@@ -2630,6 +2630,95 @@ def build_ga_history_data_dict(fitness_history, best_features_history, avg_f1_hi
         raise  # Re-raise to preserve original failure semantics
 
 
+def create_and_evaluate_offspring(population, toolbox, cxpb, mutpb):
+    """
+    Apply crossover and mutation to produce offspring, then evaluate individuals with invalid fitness.
+
+    :param population: Current population used as the basis for offspring.
+    :param toolbox: DEAP toolbox with registered operators.
+    :param cxpb: Crossover probability.
+    :param mutpb: Mutation probability.
+    :return: Tuple of (offspring list, number of individuals that were evaluated).
+    """
+
+    try:
+        offspring = algorithms.varAnd(population, toolbox, cxpb=cxpb, mutpb=mutpb)  # Apply crossover and mutation
+
+        invalid_ind = [ind for ind in offspring if not ind.fitness.valid]  # Filter to only individuals needing evaluation
+        if invalid_ind:  # If there are individuals to evaluate
+            invalid_fits = list(toolbox.map(toolbox.evaluate, invalid_ind))  # Evaluate only invalid offspring in parallel
+            for ind, fit in zip(invalid_ind, invalid_fits):  # Assign fitness to evaluated individuals
+                ind.fitness.values = fit  # Set the fitness value
+
+        return offspring, len(invalid_ind)  # Return offspring and count of evaluated individuals
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def check_ga_early_stop(current_best_f1, best_fitness, gens_without_improvement, early_stop_gens, gen):
+    """
+    Evaluate whether the GA should stop early due to fitness stagnation.
+
+    :param current_best_f1: Best F1-score observed in the current generation.
+    :param best_fitness: Best F1-score observed across all previous generations.
+    :param gens_without_improvement: Counter of consecutive generations with no improvement.
+    :param early_stop_gens: Number of stagnant generations before triggering early stop.
+    :param gen: Current generation number (for logging).
+    :return: Tuple of (updated_best_fitness, updated_gens_without_improvement, should_stop).
+    """
+
+    try:
+        if best_fitness is None or (current_best_f1 is not None and current_best_f1 > best_fitness):  # If new best fitness found
+            return current_best_f1, 0, False  # Update best, reset counter, continue
+
+        gens_without_improvement += 1  # Increment stagnation counter
+
+        if gens_without_improvement >= early_stop_gens:  # Verify early-stop condition
+            print(
+                f"{BackgroundColors.YELLOW}Early stopping: No improvement in best fitness for {early_stop_gens} generations. Stopping at generation {gen}.{Style.RESET_ALL}"
+            )  # Print early stopping message
+            return best_fitness, gens_without_improvement, True  # Signal loop termination
+
+        return best_fitness, gens_without_improvement, False  # No improvement but not yet at threshold
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def check_telegram_progress_milestone(gen, n_generations, telegram_enabled, show_progress, telegram_progress_pct, last_telegram_block):
+    """
+    Determine whether a Telegram progress notification should be sent for the current generation.
+
+    :param gen: Current generation number.
+    :param n_generations: Total number of generations configured.
+    :param telegram_enabled: Whether Telegram notifications are globally enabled.
+    :param show_progress: Whether progress display is active.
+    :param telegram_progress_pct: Percentage interval between notifications.
+    :param last_telegram_block: Last percentage block that was notified.
+    :return: Tuple of (should_send, updated_last_telegram_block).
+    """
+
+    try:
+        should_send = False  # Initialize flag for Telegram progress notification
+        if telegram_enabled and show_progress and telegram_progress_pct > 0:  # Only evaluate if Telegram notifications are active and percent threshold is set
+            try:  # Try to determine if a percent milestone was reached
+                current_pct = (gen * 100) // max(1, int(n_generations))  # Compute current generation progress percentage (0-100)
+                current_block = current_pct // telegram_progress_pct  # Map progress to discrete notification block
+                if current_block > last_telegram_block:  # Verify if a new notification block was entered
+                    should_send = True  # Trigger Telegram notification for this milestone
+                    last_telegram_block = current_block  # Advance the last-notified block tracker
+            except Exception:  # On any error
+                should_send = False  # Suppress notification on error
+        return should_send, last_telegram_block  # Return send decision and updated block tracker
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def run_genetic_algorithm_loop(
     toolbox,
     population,
@@ -2733,17 +2822,11 @@ def run_genetic_algorithm_loop(
                 else None
             )  # Update progress bar if provided
 
-            offspring = algorithms.varAnd(population, toolbox, cxpb=cxpb, mutpb=mutpb)  # Apply crossover and mutation
-
-            invalid_ind = [ind for ind in offspring if not ind.fitness.valid]  # Filter to only invalid individuals
-            if invalid_ind:  # If there are individuals to evaluate
-                invalid_fits = list(toolbox.map(toolbox.evaluate, invalid_ind))  # Evaluate only invalid offspring
-                for ind, fit in zip(invalid_ind, invalid_fits):  # Assign fitness to evaluated individuals
-                    ind.fitness.values = fit  # Set the fitness value
+            offspring, n_evaluated = create_and_evaluate_offspring(population, toolbox, cxpb, mutpb)  # Apply crossover, mutation, and evaluate offspring fitness
 
             if progress_state and isinstance(progress_state, dict):  # Update progress state if provided
                 try:  # Try to update progress state
-                    progress_state["current_it"] = int(progress_state.get("current_it", 0)) + len(invalid_ind) * folds
+                    progress_state["current_it"] = int(progress_state.get("current_it", 0)) + n_evaluated * folds
                     (
                         update_progress_bar(
                             progress_bar,
@@ -2789,31 +2872,19 @@ def run_genetic_algorithm_loop(
                 diversity_history,
             )  # Append all per-generation metrics to their respective history lists
 
-            if best_fitness is None or (current_best_fitness_f1 is not None and current_best_fitness_f1 > best_fitness):
-                best_fitness = current_best_fitness_f1  # Update best F1-score
-                gens_without_improvement = 0  # Reset counter
-            else:  # If no improvement in best F1-score
-                gens_without_improvement += 1  # Increment counter
+            best_fitness, gens_without_improvement, should_stop = check_ga_early_stop(
+                current_best_fitness_f1, best_fitness, gens_without_improvement, early_stop_gens, gen
+            )  # Evaluate early-stop condition and update best fitness tracking
 
-                if gens_without_improvement >= early_stop_gens:  # Verify early-stop condition
-                    print(
-                        f"{BackgroundColors.YELLOW}Early stopping: No improvement in best fitness for {early_stop_gens} generations. Stopping at generation {gen}.{Style.RESET_ALL}"
-                    )  # Print early stopping message
-                    gens_ran = gen  # Record how many generations were executed before early stopping
-                    with global_state_lock:  # Thread-safe update
-                        GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
-                    break  # Stop the loop early
+            if should_stop:  # If early stopping was triggered
+                gens_ran = gen  # Record how many generations were executed before early stopping
+                with global_state_lock:  # Thread-safe update
+                    GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
+                break  # Stop the loop early
 
-            should_send = False  # Initialize flag for Telegram progress notification
-            if telegram_enabled and show_progress and telegram_progress_pct > 0:  # Only evaluate if Telegram notifications are active and percent threshold is set
-                try:  # Try to determine if a percent milestone was reached
-                    current_pct = (gen * 100) // max(1, int(n_generations))  # Compute current generation progress percentage (0-100)
-                    current_block = current_pct // telegram_progress_pct  # Map progress to discrete notification block
-                    if current_block > last_telegram_block:  # Verify if a new notification block was entered
-                        should_send = True  # Trigger Telegram notification for this milestone
-                        last_telegram_block = current_block  # Advance the last-notified block tracker
-                except Exception:  # On any error
-                    should_send = False  # Suppress notification on error
+            should_send, last_telegram_block = check_telegram_progress_milestone(
+                gen, n_generations, telegram_enabled, show_progress, telegram_progress_pct, last_telegram_block
+            )  # Determine whether a Telegram progress milestone notification should be sent
 
             send_telegram_message(
                 TELEGRAM_BOT,
