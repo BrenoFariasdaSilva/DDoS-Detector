@@ -472,10 +472,42 @@ def process_multiple_files() -> None:
         file_report = analyze_file(filepath)  # Analyze the current Python file
         files_data[filepath.name] = file_report  # Store the per-file report under the filename key
 
-    multi_report = {  # Build the multi-file report dictionary
+    max_sizes = {}  # Verify mapping from filename to its largest function size across all categories
+
+    for fname, freport in files_data.items():  # Iterate over collected per-file reports to compute maxima
+        max_fn_size = 0  # Initialize maximum function size for this file to zero
+
+        top_list = freport.get("top-level functions", [])  # Retrieve top-level function entries list if present
+        for entry in top_list:  # Iterate each top-level function entry to update maximum
+            size = entry.get("function_size", 0)  # Read function_size value or default to zero
+            if size > max_fn_size:  # Verify if this function's size is larger than current maximum
+                max_fn_size = size  # Update maximum with larger size found
+
+        nested_list = freport.get("nested functions", [])  # Retrieve nested function entries list if present
+        for entry in nested_list:  # Iterate each nested function entry to update maximum
+            size = entry.get("function_size", 0)  # Read function_size value or default to zero
+            if size > max_fn_size:  # Verify if this function's size is larger than current maximum
+                max_fn_size = size  # Update maximum with larger size found
+
+        classes_dict = freport.get("classes", {})  # Retrieve classes mapping of lists of method entries
+        for class_methods in classes_dict.values():  # Iterate lists of methods for every class in the report
+            for entry in class_methods:  # Iterate each method entry inside the class methods list
+                size = entry.get("function_size", 0)  # Read function_size value or default to zero
+                if size > max_fn_size:  # Verify if this method's size is larger than current maximum
+                    max_fn_size = size  # Update maximum with larger size found
+
+        max_sizes[fname] = max_fn_size  # Store the computed maximum function size for this file
+
+    sorted_fnames = sorted(max_sizes.items(), key=lambda kv: kv[1], reverse=True)  # Sort tuples (filename, max_size) by max_size desc
+
+    sorted_files = {}  # Initialize ordered mapping for sorted files to preserve JSON insertion order
+    for fname, _ in sorted_fnames:  # Iterate sorted filenames in desired order
+        sorted_files[fname] = files_data[fname]  # Copy original per-file report into ordered mapping maintaining internal structure
+
+    multi_report = {  # Build the multi-file report dictionary with sorted files mapping
         "total_files_processed": len(python_files),  # Store the total number of processed files
-        "files": files_data,  # Store the per-file analysis results
-    }
+        "files": sorted_files,  # Store the per-file analysis results in sorted order
+    }  # End multi_report construction
 
     save_report(multi_report, output_path)  # Save the multi-file report to disk
 
