@@ -3900,10 +3900,12 @@ def aggregate_run_metrics(run_result):
 
 def build_comparison_rows(results_dict, min_pop, max_pop, dataset_name, cxpb, mutpb, n_generations):
     """
-    Build a list of row dicts for the multi-run comparison table.
+    Build a list of row dicts for the multi-run comparison table including cross-run feature overlap columns.
 
     Iterates over all population sizes in [min_pop, max_pop] and all runs
-    within each population size, aggregating metrics per run.
+    within each population size, aggregating metrics per run. After collecting
+    all rows, computes common_features (intersection across all runs) and
+    unique_features (features exclusive to each run) and appends them as columns.
 
     :param results_dict: Dict mapping pop_size to {"runs": [...], ...}.
     :param min_pop: Minimum population size to include.
@@ -3912,19 +3914,25 @@ def build_comparison_rows(results_dict, min_pop, max_pop, dataset_name, cxpb, mu
     :param cxpb: Crossover probability to record in each row.
     :param mutpb: Mutation probability to record in each row.
     :param n_generations: Configured maximum number of generations.
-    :return: List of row dicts ready for DataFrame construction.
+    :return: List of row dicts with common_features and unique_features columns appended.
     """
 
     try:
         comparison_rows = []  # Initialize list to collect comparison row dicts
+        all_feature_sets = []  # Initialize parallel list to collect feature sets per row for cross-run analysis
+
         for pop_size in range(min_pop, max_pop + 1):  # Iterate over all population sizes
             if pop_size not in results_dict:  # Skip population sizes with no results
                 continue  # Skip to next population size
+
             runs_list = results_dict[pop_size].get("runs", [])  # Extract runs list for this population size
+
             for run_idx, run_result in enumerate(runs_list, start=1):  # Iterate runs with 1-based index
                 aggregated = aggregate_run_metrics(run_result)  # Aggregate metrics from this run
+
                 if aggregated is None:  # Skip runs with failed aggregation
                     continue  # Skip this run
+
                 features_list_str = "[" + ",".join(aggregated["best_features_list"]) + "]"  # Format selected features as CSV-safe bracketed string
                 row = {
                     "dataset": dataset_name,  # Dataset name
@@ -3942,8 +3950,24 @@ def build_comparison_rows(results_dict, min_pop, max_pop, dataset_name, cxpb, mu
                     "pareto_size_final": aggregated["pareto_size_final"],  # Final Pareto size
                     "hypervolume_final": aggregated["hypervolume_final"],  # Final hypervolume
                     "convergence_gen": aggregated["convergence_gen"],  # Convergence generation
-                }  # Build row dict with new schema column order
-                comparison_rows.append(row)  # Add row to list
+                }  # Build row dict with schema column order
+                comparison_rows.append(row)  # Add row to comparison list
+                all_feature_sets.append(set(aggregated["best_features_list"]))  # Collect feature set for cross-run overlap computation
+
+        if comparison_rows:  # Compute cross-run feature columns only when results are available
+            common_features_set = set.intersection(*all_feature_sets) if len(all_feature_sets) > 1 else set(all_feature_sets[0])  # Intersection of all run feature sets for this dataset
+            common_features_str = ",".join(sorted(common_features_set))  # Format as sorted comma-separated string
+
+            for idx, row in enumerate(comparison_rows):  # Annotate each row with cross-run feature analysis
+                run_feature_set = all_feature_sets[idx]  # Feature set for this specific run
+                other_sets = [all_feature_sets[j] for j in range(len(all_feature_sets)) if j != idx]  # All other runs' feature sets
+                union_others = set.union(*other_sets) if other_sets else set()  # Union of all feature sets except this run
+                unique_features_set = run_feature_set - union_others  # Features exclusive to this run not present in any other run
+                unique_features_str = ",".join(sorted(unique_features_set))  # Format as sorted comma-separated string
+
+                row["common_features"] = common_features_str  # Same value for all runs of this dataset
+                row["unique_features"] = unique_features_str  # Value specific to this run
+
         return comparison_rows  # Return collected comparison rows
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -4019,7 +4043,7 @@ def generate_run_comparison_table(results_dict, csv_path, dataset_name, min_pop,
 
             df_comparison = pd.DataFrame(comparison_rows)  # Create DataFrame from rows
 
-            csv_column_order = ["dataset", "run_id", "pop_size", "n_generations", "gens_executed", "cxpb", "mutpb", "best_f1_final", "avg_population_f1", "n_features", "avg_feature_count", "features_list", "pareto_size_final", "hypervolume_final", "convergence_gen"]  # Define required CSV column order
+            csv_column_order = ["dataset", "run_id", "pop_size", "n_generations", "gens_executed", "cxpb", "mutpb", "best_f1_final", "avg_population_f1", "n_features", "avg_feature_count", "features_list", "pareto_size_final", "hypervolume_final", "convergence_gen", "common_features", "unique_features"]  # Define required CSV column order including cross-run feature analysis columns
             df_comparison = df_comparison.reindex(columns=csv_column_order)  # Enforce exact column order for output schema
 
             df_comparison = df_comparison.sort_values(["pop_size", "run_id"]).reset_index(drop=True)  # Sort and reset index
