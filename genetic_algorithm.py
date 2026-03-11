@@ -2430,6 +2430,62 @@ def save_generation_state(output_dir, state_id, gen, population, hof_best, histo
         raise  # Re-raise to preserve original failure semantics
 
 
+def compute_population_aggregate_metrics(population):
+    """
+    Compute all population-level aggregate metrics for one generation.
+
+    Calculates average F1-score, average feature count, Pareto front size,
+    hypervolume, and diversity from the current generation's population.
+    Individual metric failures are silently absorbed, returning 0.0 defaults.
+
+    :param population: Current generation population (list of individuals with fitness).
+    :return: Tuple of (avg_f1, avg_features, pareto_size, hypervolume, diversity).
+    """
+
+    try:
+        try:  # Track population average F1 score
+            valid_f1_scores = [ind.fitness.values[0] for ind in population if ind.fitness.valid and len(ind.fitness.values) > 0]  # Extract valid F1 scores from population
+            avg_f1 = sum(valid_f1_scores) / len(valid_f1_scores) if valid_f1_scores else 0.0  # Calculate average F1
+        except Exception:  # If calculation fails
+            avg_f1 = 0.0  # Default to zero
+
+        try:  # Track population average feature count
+            valid_feature_counts = [-ind.fitness.values[1] for ind in population if ind.fitness.valid and len(ind.fitness.values) > 1]  # Extract valid feature counts (negate second objective)
+            avg_features = sum(valid_feature_counts) / len(valid_feature_counts) if valid_feature_counts else 0.0  # Calculate average feature count
+        except Exception:  # If calculation fails
+            avg_features = 0.0  # Default to zero
+
+        try:  # Track Pareto front size
+            pareto_front = extract_pareto_front(population)  # Extract Pareto front from population
+            pareto_size = len(pareto_front)  # Count Pareto front individuals
+        except Exception:  # If extraction fails
+            pareto_size = 0  # Default to zero
+
+        try:  # Track hypervolume metric
+            pareto_front_hv = extract_pareto_front(population)  # Extract Pareto front for hypervolume computation
+            hv = calculate_hypervolume(pareto_front_hv)  # Calculate hypervolume for Pareto front
+            if hv is None:  # If hypervolume calculation returns None
+                hypervolume = 0.0  # Default to zero
+            else:  # If hypervolume is valid
+                try:  # Try to convert hypervolume to float
+                    hypervolume = float(hv)  # Convert to float
+                except Exception:  # If conversion fails
+                    hypervolume = 0.0  # Default to zero
+        except Exception:  # If calculation fails
+            hypervolume = 0.0  # Default to zero
+
+        try:  # Track population diversity
+            diversity = float(calculate_population_diversity(population))  # Calculate and convert diversity metric
+        except Exception:  # If calculation fails
+            diversity = 0.0  # Default to zero
+
+        return avg_f1, avg_features, pareto_size, hypervolume, diversity  # Return all five aggregate metrics
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def update_generation_histories(
     population,
     current_best_fitness_f1,
@@ -2476,44 +2532,12 @@ def update_generation_histories(
         except Exception:  # If tracking fails
             best_features_history.append(0)  # Record zero
 
-        try:  # Track population average F1 score
-            valid_f1_scores = [ind.fitness.values[0] for ind in population if ind.fitness.valid and len(ind.fitness.values) > 0]  # Extract valid F1 scores from population
-            avg_f1 = sum(valid_f1_scores) / len(valid_f1_scores) if valid_f1_scores else 0.0  # Calculate average F1
-            avg_f1_history.append(float(avg_f1))  # Record average F1 score
-        except Exception:  # If calculation fails
-            avg_f1_history.append(0.0)  # Record zero
-
-        try:  # Track population average feature count
-            valid_feature_counts = [-ind.fitness.values[1] for ind in population if ind.fitness.valid and len(ind.fitness.values) > 1]  # Extract valid feature counts (negate second objective)
-            avg_features = sum(valid_feature_counts) / len(valid_feature_counts) if valid_feature_counts else 0.0  # Calculate average feature count
-            avg_features_history.append(float(avg_features))  # Record average feature count
-        except Exception:  # If calculation fails
-            avg_features_history.append(0.0)  # Record zero
-
-        try:  # Track Pareto front size
-            pareto_front = extract_pareto_front(population)  # Extract Pareto front from population
-            pareto_size_history.append(len(pareto_front))  # Record Pareto front size
-        except Exception:  # If extraction fails
-            pareto_size_history.append(0)  # Record zero
-
-        try:  # Track hypervolume metric
-            pareto_front = extract_pareto_front(population)  # Extract Pareto front (recompute if needed or reuse from above)
-            hv = calculate_hypervolume(pareto_front)  # Calculate hypervolume for Pareto front
-            if hv is None:  # If hypervolume calculation returns None, record zero
-                hypervolume_history.append(0.0)  # Record zero
-            else:  # If hypervolume is valid, record the value
-                try:  # Try to convert hypervolume to float for recording
-                    hypervolume_history.append(float(hv))  # Record hypervolume
-                except Exception:  # If conversion fails
-                    hypervolume_history.append(0.0)
-        except Exception:  # If calculation fails
-            hypervolume_history.append(0.0)  # Record zero
-
-        try:  # Track population diversity
-            diversity = calculate_population_diversity(population)  # Calculate population diversity
-            diversity_history.append(float(diversity))  # Record diversity metric
-        except Exception:  # If calculation fails
-            diversity_history.append(0.0)  # Record zero
+        avg_f1, avg_features, pareto_size, hypervolume, diversity = compute_population_aggregate_metrics(population)  # Compute all population-level aggregate metrics for this generation
+        avg_f1_history.append(avg_f1)  # Record population average F1-score
+        avg_features_history.append(avg_features)  # Record population average feature count
+        pareto_size_history.append(pareto_size)  # Record Pareto front size
+        hypervolume_history.append(hypervolume)  # Record hypervolume metric
+        diversity_history.append(diversity)  # Record population diversity metric
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
