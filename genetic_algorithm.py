@@ -5671,12 +5671,7 @@ def save_results(
 
         eval_metrics, testing_time_s = evaluate_final_on_test(model_local, X_test_selected, y_test)  # Evaluate trained model on held-out test set
 
-        ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})  # Read GA export configuration
-        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")  # Resolve GA results directory from config or use default
-        if os.path.isabs(ga_results_dir_raw):  # If results dir is absolute, use it directly
-            output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))  # Normalize absolute output directory path
-        else:  # If results dir is relative, resolve it relative to csv_path
-            output_dir = os.path.abspath(os.path.expanduser(os.path.join(os.path.dirname(csv_path) or ".", ga_results_dir_raw)))  # Resolve to absolute path relative to dataset
+        output_dir = resolve_ga_output_dir(csv_path)  # Resolve canonical GA output directory from configuration
         os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
 
         try:  # Try to round the feature extraction time
@@ -5848,6 +5843,64 @@ def analyze_results(saved_info, X, y, feature_names, csv_path):
         raise  # Re-raise to preserve original failure semantics
 
 
+def finalize_sweep_best_result(best_result, best_metrics, feature_names, X_train, y_train, X_test, y_test, csv_path, n_generations, cxpb, mutpb, elapsed_run_time):
+    """
+    Process the best result from a population sweep: print summary, save results, and analyze.
+
+    :param best_result: Tuple of (best_pop_size, runs_list, common_features) from aggregation.
+    :param best_metrics: Aggregate best metrics from the sweep for verbose printing.
+    :param feature_names: List of feature names from the dataset.
+    :param X_train: Training feature set.
+    :param y_train: Training target variable.
+    :param X_test: Test feature set (or None).
+    :param y_test: Test target variable (or None).
+    :param csv_path: Path to the dataset CSV.
+    :param n_generations: Number of generations configured for the sweep.
+    :param cxpb: Crossover probability used.
+    :param mutpb: Mutation probability used.
+    :param elapsed_run_time: Total elapsed time in seconds for the entire sweep.
+    :return: None
+    """
+
+    try:
+        best_pop_size, runs_list, common_features = best_result  # Unpack the best result
+        print(
+            f"\n{BackgroundColors.GREEN}Best population size: {BackgroundColors.CYAN}{best_pop_size}{Style.RESET_ALL}"
+        )  # Print best population size
+        print(
+            f"{BackgroundColors.GREEN}Common features across runs: {BackgroundColors.CYAN}{len(common_features)}{Style.RESET_ALL}"
+        )  # Print common feature count
+        print_metrics(best_metrics) if CONFIG.get("execution", {}).get("verbose", False) else None  # Print metrics if VERBOSE is enabled
+        best_run = max(runs_list, key=lambda r: r["metrics"][3])  # Select the run with the best F1-Score
+        best_ind = best_run["best_ind"]  # Get the best individual from the best run
+        best_metrics = best_run["metrics"]  # Get the metrics from the best run
+
+        union_feats = compute_union_features_across_runs(runs_list)  # Compute the union of features across all runs for this population size
+
+        saved = save_results(
+            best_ind,
+            feature_names,
+            X_train,
+            y_train,
+            csv_path,
+            metrics=best_metrics,
+            X_test=X_test,
+            y_test=y_test,
+            n_generations=n_generations,
+            best_pop_size=best_pop_size,
+            runs_list=runs_list,
+            union_features_across_runs=union_feats,
+            cxpb=cxpb,
+            mutpb=mutpb,
+            elapsed_run_time=elapsed_run_time,
+        )  # Save the best results
+        analyze_results(saved, X_train, y_train, feature_names, csv_path)  # Analyze the saved results
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def run_population_sweep(
     dataset_name,
     csv_path,
@@ -5982,38 +6035,10 @@ def run_population_sweep(
         elapsed_run_time = time.perf_counter() - start_run_time  # Calculate elapsed time for the entire run process
         
         if best_result:  # If a best result was found
-            best_pop_size, runs_list, common_features = best_result  # Unpack the best result
-            print(
-                f"\n{BackgroundColors.GREEN}Best population size: {BackgroundColors.CYAN}{best_pop_size}{Style.RESET_ALL}"
-            )
-            print(
-                f"{BackgroundColors.GREEN}Common features across runs: {BackgroundColors.CYAN}{len(common_features)}{Style.RESET_ALL}"
-            )
-            print_metrics(best_metrics) if CONFIG.get("execution", {}).get("verbose", False) else None  # Print metrics if VERBOSE is enabled
-            best_run = max(runs_list, key=lambda r: r["metrics"][3])  # Select the run with the best F1-Score
-            best_ind = best_run["best_ind"]  # Get the best individual from the best run
-            best_metrics = best_run["metrics"]  # Get the metrics from the best run
-
-            union_feats = compute_union_features_across_runs(runs_list)  # Compute the union of features across all runs for this population size
-
-            saved = save_results(
-                best_ind,
-                feature_names,
-                X_train,
-                y_train,
-                csv_path,
-                metrics=best_metrics,
-                X_test=X_test,
-                y_test=y_test,
-                n_generations=n_generations,
-                best_pop_size=best_pop_size,
-                runs_list=runs_list,
-                union_features_across_runs=union_feats,
-                cxpb=cxpb,
-                mutpb=mutpb,
-                elapsed_run_time=elapsed_run_time,
-            )  # Save the best results
-            analyze_results(saved, X_train, y_train, feature_names, csv_path)  # Analyze the saved results
+            finalize_sweep_best_result(
+                best_result, best_metrics, feature_names, X_train, y_train, X_test, y_test,
+                csv_path, n_generations, cxpb, mutpb, elapsed_run_time,
+            )  # Process best result: print summary, save results, and run analysis
         else:  # If no valid result was found
             print(f"{BackgroundColors.RED}No valid results found during the sweep.{Style.RESET_ALL}")
 
