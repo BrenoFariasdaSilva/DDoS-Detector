@@ -4649,6 +4649,49 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         raise  # Re-raise to preserve original failure semantics
 
 
+def compute_feature_usage_counts(results_dict: dict, min_pop: int, max_pop: int, feature_names: list) -> tuple:
+    """
+    Compute per-feature usage counts across all GA runs from a population sweep results dict.
+
+    :param results_dict: Dict mapping pop_size to {"runs": [...], ...}.
+    :param min_pop: Minimum population size in the sweep.
+    :param max_pop: Maximum population size in the sweep.
+    :param feature_names: Complete list of all feature names in the dataset.
+    :return: Tuple (feature_run_counts, total_runs) where feature_run_counts maps feature name to number of runs using it.
+    """
+
+    try:
+        feature_run_counts = {fname: 0 for fname in (feature_names if feature_names is not None else [])}  # Initialize counts to zero for every dataset feature
+        total_runs = 0  # Initialize counter for total valid runs processed
+
+        for pop_size in range(min_pop, max_pop + 1):  # Iterate over all population sizes in sweep
+            if pop_size not in results_dict:  # Skip population sizes with no recorded results
+                continue  # Move to next population size
+
+            runs_list = results_dict[pop_size].get("runs", [])  # Extract completed runs list for this population size
+
+            for run_result in runs_list:  # Iterate over each individual run result
+                if not run_result:  # Skip invalid or empty run results
+                    continue  # Move to next run
+
+                total_runs += 1  # Increment valid run counter
+
+                best_features = run_result.get("best_features", [])  # Extract list of features selected in this run
+                best_features_safe = best_features if best_features is not None else []  # Guard against None to prevent iteration errors
+
+                for feature in best_features_safe:  # Iterate over each feature selected in this run
+                    if feature in feature_run_counts:  # Update count for a known dataset feature
+                        feature_run_counts[feature] += 1  # Increment usage count for this feature
+                    else:  # Handle features not present in original feature_names (defensive)
+                        feature_run_counts[feature] = 1  # Initialize count for previously unseen feature
+
+        return feature_run_counts, total_runs  # Return feature usage counts and total run count
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def plot_feature_usage_top10(feature_run_counts: dict, total_runs: int, comparison_dir: str, base_dataset_name: str, dataset_name: str) -> str | None:
     """
     Generate a horizontal bar chart of the top 10 most frequently selected features.
