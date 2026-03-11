@@ -4404,7 +4404,7 @@ def get_hardware_specifications(device_used=None):
 
         device_used_str = "CPU"  # Default device used label
         try:
-            if isinstance(device_used, torch.device):  # If a torch.device was provided
+            if isinstance(device_used, torch.device) and device_used is not None:  # If a valid torch.device was provided
                 device_used_str = "CUDA" if device_used.type == "cuda" else "CPU"  # Map to human label
             else:  # If not a torch.device, try string representation
                 device_used_str = str(device_used)  # Use provided value as string
