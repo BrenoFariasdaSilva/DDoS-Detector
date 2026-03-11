@@ -4649,6 +4649,58 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         raise  # Re-raise to preserve original failure semantics
 
 
+def plot_feature_usage_top10(feature_run_counts: dict, total_runs: int, comparison_dir: str, base_dataset_name: str, dataset_name: str) -> str | None:
+    """
+    Generate a horizontal bar chart of the top 10 most frequently selected features.
+
+    :param feature_run_counts: Dict mapping feature name to number of runs in which it was selected.
+    :param total_runs: Total number of GA runs executed.
+    :param comparison_dir: Output directory where the plot will be saved.
+    :param base_dataset_name: Sanitized dataset name used for the output filename.
+    :param dataset_name: Display name of the dataset for the plot title.
+    :return: Path to the saved plot file, or None if generation failed.
+    """
+
+    try:
+        if not feature_run_counts or total_runs == 0:  # Verify that data is available before plotting
+            return None  # Return None when no data is present
+
+        features_sorted = sorted(feature_run_counts, key=lambda f: feature_run_counts[f], reverse=True)  # Sort all features descending by usage count
+        top_features = features_sorted[:10]  # Select at most 10 highest-usage features
+        top_counts = [feature_run_counts[f] for f in top_features]  # Extract counts for top features
+        top_pcts = [(c / total_runs) * 100 for c in top_counts]  # Compute usage percentage for each top feature
+
+        fig_height = max(6, len(top_features) * 0.6)  # Compute dynamic figure height based on feature count
+        fig, ax = plt.subplots(figsize=(14, fig_height))  # Create figure with dynamic height
+
+        y_pos = list(range(len(top_features)))  # Generate y-axis positions for bars
+        bars = ax.barh(y_pos, top_pcts, color="#1f77b4", alpha=0.85, edgecolor="black", linewidth=0.5)  # Draw horizontal bars
+
+        ax.set_yticks(y_pos)  # Set y-axis tick positions
+        ax.set_yticklabels(top_features, fontsize=10)  # Set feature names as y-axis labels
+        ax.invert_yaxis()  # Invert so highest usage appears at the top
+
+        for bar, count, pct in zip(bars, top_counts, top_pcts):  # Annotate each bar with percentage and count labels
+            ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2, f"{pct:.2f}% ({count}/{total_runs})", va="center", ha="left", fontsize=9)  # Place label just right of bar tip
+
+        ax.set_xlabel("Percentage of Runs Using Feature (%)", fontsize=12)  # Set X-axis label
+        ax.set_ylabel("Feature", fontsize=12)  # Set Y-axis label
+        ax.set_title(f"Top 10 Most Frequently Selected Features\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+        ax.set_xlim(0, 115)  # Extend X limit to leave space for bar labels
+        ax.grid(True, linestyle="--", alpha=0.3, axis="x")  # Add X-axis grid lines
+
+        plt.tight_layout()  # Adjust layout to prevent clipping
+
+        plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_feature_usage_top10.png")  # Construct full output path
+        ensure_figure_min_4k_and_save(fig=plt.gcf(), path=plot_path, dpi=300)  # Save figure at minimum 4K resolution
+        plt.close()  # Close figure to free memory
+
+        return plot_path  # Return path to saved plot
+    except Exception:  # If plotting fails do not abort the pipeline
+        plt.close()  # Close any open figure to prevent memory leak
+        return None  # Return None on failure
+
+
 def plot_feature_usage_used_only(feature_run_counts: dict, total_runs: int, comparison_dir: str, base_dataset_name: str, dataset_name: str) -> str | None:
     """
     Generate a horizontal bar chart of all features selected in at least one GA run.
