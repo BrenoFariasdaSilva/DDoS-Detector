@@ -202,35 +202,16 @@ def parse_cli_args():
         raise  # Re-raise to preserve original failure semantics
 
 
-def get_default_config():
+def build_genetic_algorithm_defaults():
     """
-    Returns the default configuration dictionary for the genetic algorithm.
+    Build and return the default "genetic_algorithm" configuration sub-tree.
 
-    :return: Dictionary containing all default configuration parameters
+    :return: Dict containing all default genetic algorithm parameters including
+             population sizes, crossover/mutation operators, and export settings.
     """
 
-    try:  # Wrap full function logic to ensure production-safe monitoring
+    try:
         return {
-        "execution": {
-            "verbose": False,  # Set to True to output verbose messages
-            "skip_train_if_model_exists": False,  # If True, try loading exported models instead of retraining
-            "runs": 5,  # Number of runs for Genetic Algorithm analysis
-            "resume_progress": True,  # When True, attempt to resume progress from saved state files
-            "progress_save_interval": 10,  # Save progress every N generations
-            "play_sound": True,  # Set to True to play a sound when the program finishes
-        },
-        "telegram": {
-            "enabled": True,  # Enable Telegram progress notifications
-            "progress_pct": 10,  # Send Telegram updates every N percent of total generations (default 10%)
-        },
-        "dataset": {
-            "files_to_ignore": [],  # List of files to ignore during processing
-            "test_size": 0.2,  # Test set size for train-test split
-            "min_test_fraction": 0.05,  # Minimum acceptable test fraction
-            "max_test_fraction": 0.50,  # Maximum acceptable test fraction
-            "remove_zero_variance": True,  # Remove zero-variance features during preprocessing
-        },
-        "genetic_algorithm": {
             "n_generations": 200,  # Number of generations for GA
             "min_pop": 20,  # Minimum population size
             "max_pop": 20,  # Maximum population size
@@ -270,7 +251,66 @@ def get_default_config():
                     "rfe_ranking",
                 ],
             },
+        }  # Return default genetic algorithm configuration
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def build_resource_monitor_defaults():
+    """
+    Build and return the default "resource_monitor" configuration sub-tree.
+
+    :return: Dict containing all default resource monitor parameters.
+    """
+
+    try:
+        return {
+            "enabled": True,  # Enable resource monitoring
+            "interval_seconds": 30,  # Interval between monitoring cycles in seconds
+            "reserve_cpu_frac": 0.15,  # Fraction of CPU reserved from worker allocation
+            "reserve_mem_frac": 0.15,  # Fraction of memory reserved from worker allocation
+            "min_procs": 1,  # Minimum number of processes allowed
+            "max_procs": None,  # Maximum number of processes allowed
+            "min_gens_before_update": 10,  # Minimum GA generations before updating workers
+            "daemon": True,  # Whether the monitoring thread runs as daemon
+        }  # Return default resource monitor configuration
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def get_default_config():
+    """
+    Returns the default configuration dictionary for the genetic algorithm.
+
+    :return: Dictionary containing all default configuration parameters
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        return {
+        "execution": {
+            "verbose": False,  # Set to True to output verbose messages
+            "skip_train_if_model_exists": False,  # If True, try loading exported models instead of retraining
+            "runs": 5,  # Number of runs for Genetic Algorithm analysis
+            "resume_progress": True,  # When True, attempt to resume progress from saved state files
+            "progress_save_interval": 10,  # Save progress every N generations
+            "play_sound": True,  # Set to True to play a sound when the program finishes
         },
+        "telegram": {
+            "enabled": True,  # Enable Telegram progress notifications
+            "progress_pct": 10,  # Send Telegram updates every N percent of total generations (default 10%)
+        },
+        "dataset": {
+            "files_to_ignore": [],  # List of files to ignore during processing
+            "test_size": 0.2,  # Test set size for train-test split
+            "min_test_fraction": 0.05,  # Minimum acceptable test fraction
+            "max_test_fraction": 0.50,  # Maximum acceptable test fraction
+            "remove_zero_variance": True,  # Remove zero-variance features during preprocessing
+        },
+        "genetic_algorithm": build_genetic_algorithm_defaults(),  # Default genetic algorithm configuration
         "early_stop": {
             "acc_threshold": 0.75,  # Minimum acceptable accuracy for an individual
             "folds": 3,  # Number of folds to verify before early stopping
@@ -283,16 +323,7 @@ def get_default_config():
             "n_jobs": -1,  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
             "cpu_processes": None,  # Initial number of worker processes; None -> use all available CPUs
         },
-        "resource_monitor": {
-            "enabled": True,  # Enable resource monitoring
-            "interval_seconds": 30,  # Interval between monitoring cycles in seconds
-            "reserve_cpu_frac": 0.15,  # Fraction of CPU reserved from worker allocation
-            "reserve_mem_frac": 0.15,  # Fraction of memory reserved from worker allocation
-            "min_procs": 1,  # Minimum number of processes allowed
-            "max_procs": None,  # Maximum number of processes allowed
-            "min_gens_before_update": 10,  # Minimum GA generations before updating workers
-            "daemon": True,  # Whether the monitoring thread runs as daemon
-        },
+        "resource_monitor": build_resource_monitor_defaults(),  # Default resource monitor configuration
         "model": {
             "estimator": "RandomForestClassifier",  # Default estimator for GA fitness evaluation
             "random_state": None,  # Random state for reproducibility (None for non-deterministic)
