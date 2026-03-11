@@ -2342,6 +2342,182 @@ def save_generation_state(output_dir, state_id, gen, population, hof_best, histo
         raise  # Re-raise to preserve original failure semantics
 
 
+def update_generation_histories(
+    population,
+    current_best_fitness_f1,
+    current_best_num_features,
+    fitness_history,
+    best_features_history,
+    avg_f1_history,
+    avg_features_history,
+    pareto_size_history,
+    hypervolume_history,
+    diversity_history,
+):
+    """
+    Append per-generation metrics to all seven GA history lists in-place.
+
+    Individual metric failures are silently absorbed to avoid interrupting
+    the generation loop.
+
+    :param population: Current generation population (list of individuals).
+    :param current_best_fitness_f1: Best F1-score for the current generation (float or None).
+    :param current_best_num_features: Feature count of best individual (int or None).
+    :param fitness_history: Collects best F1-score per generation.
+    :param best_features_history: Collects best feature count per generation.
+    :param avg_f1_history: Collects population average F1-score per generation.
+    :param avg_features_history: Collects population average feature count per generation.
+    :param pareto_size_history: Collects Pareto front size per generation.
+    :param hypervolume_history: Collects hypervolume metric per generation.
+    :param diversity_history: Collects population diversity per generation.
+    :return: None (mutates all history lists in-place).
+    """
+
+    try:
+        try:  # Try to append best fitness to history
+            fitness_history.append(
+                float(current_best_fitness_f1) if current_best_fitness_f1 is not None else np.nan
+            )  # Record best F1-score for convergence tracking
+        except Exception:  # If conversion fails
+            fitness_history.append(np.nan)  # Record NaN
+
+        try:  # Track number of features in best individual
+            best_features_history.append(
+                int(current_best_num_features) if current_best_num_features is not None else 0
+            )  # Record best feature count
+        except Exception:  # If tracking fails
+            best_features_history.append(0)  # Record zero
+
+        try:  # Track population average F1 score
+            valid_f1_scores = [ind.fitness.values[0] for ind in population if ind.fitness.valid and len(ind.fitness.values) > 0]  # Extract valid F1 scores from population
+            avg_f1 = sum(valid_f1_scores) / len(valid_f1_scores) if valid_f1_scores else 0.0  # Calculate average F1
+            avg_f1_history.append(float(avg_f1))  # Record average F1 score
+        except Exception:  # If calculation fails
+            avg_f1_history.append(0.0)  # Record zero
+
+        try:  # Track population average feature count
+            valid_feature_counts = [-ind.fitness.values[1] for ind in population if ind.fitness.valid and len(ind.fitness.values) > 1]  # Extract valid feature counts (negate second objective)
+            avg_features = sum(valid_feature_counts) / len(valid_feature_counts) if valid_feature_counts else 0.0  # Calculate average feature count
+            avg_features_history.append(float(avg_features))  # Record average feature count
+        except Exception:  # If calculation fails
+            avg_features_history.append(0.0)  # Record zero
+
+        try:  # Track Pareto front size
+            pareto_front = extract_pareto_front(population)  # Extract Pareto front from population
+            pareto_size_history.append(len(pareto_front))  # Record Pareto front size
+        except Exception:  # If extraction fails
+            pareto_size_history.append(0)  # Record zero
+
+        try:  # Track hypervolume metric
+            pareto_front = extract_pareto_front(population)  # Extract Pareto front (recompute if needed or reuse from above)
+            hv = calculate_hypervolume(pareto_front)  # Calculate hypervolume for Pareto front
+            if hv is None:  # If hypervolume calculation returns None, record zero
+                hypervolume_history.append(0.0)  # Record zero
+            else:  # If hypervolume is valid, record the value
+                try:  # Try to convert hypervolume to float for recording
+                    hypervolume_history.append(float(hv))  # Record hypervolume
+                except Exception:  # If conversion fails
+                    hypervolume_history.append(0.0)
+        except Exception:  # If calculation fails
+            hypervolume_history.append(0.0)  # Record zero
+
+        try:  # Track population diversity
+            diversity = calculate_population_diversity(population)  # Calculate population diversity
+            diversity_history.append(float(diversity))  # Record diversity metric
+        except Exception:  # If calculation fails
+            diversity_history.append(0.0)  # Record zero
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def resolve_ga_output_dir(csv_path):
+    """
+    Resolve the canonical GA output directory from configuration.
+
+    Consults CONFIG["genetic_algorithm"]["export"]["results_dir"]; if absent,
+    defaults to "Feature_Analysis/Genetic_Algorithm" resolved relative to the
+    directory that contains "csv_path".
+
+    :param csv_path: Path to the source dataset CSV file.
+    :return: Absolute path string for the GA output directory.
+    """
+
+    try:
+        ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})  # Read GA export configuration section
+        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")  # Use configured dir or default subdirectory
+        if os.path.isabs(ga_results_dir_raw):  # If results dir is an absolute path
+            return os.path.abspath(os.path.expanduser(ga_results_dir_raw))  # Normalize and return the absolute path
+        base_dir = os.path.dirname(csv_path) if csv_path else "."  # Use dataset directory as base for relative path resolution
+        return os.path.abspath(os.path.expanduser(os.path.join(base_dir, ga_results_dir_raw)))  # Resolve relative path against dataset directory
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def initialize_ga_history_lists(loaded_history):
+    """
+    Initialize the seven per-generation history lists from a previously loaded state.
+
+    When resuming a run each list is pre-populated from the loaded state dictionary;
+    otherwise an empty list is returned for each metric.
+
+    :param loaded_history: Dictionary returned by "load_and_apply_generation_state", or None.
+    :return: Tuple of seven lists in order: (fitness_history, best_features_history,
+             avg_f1_history, avg_features_history, pareto_size_history,
+             hypervolume_history, diversity_history).
+    """
+
+    try:
+        hist = loaded_history if isinstance(loaded_history, dict) else {}  # Normalize None or non-dict to empty dict
+        fitness_history = hist.get("best_f1", [])  # Best F1 scores per generation
+        best_features_history = hist.get("best_features", [])  # Best feature counts per generation
+        avg_f1_history = hist.get("avg_f1", [])  # Population average F1 per generation
+        avg_features_history = hist.get("avg_features", [])  # Population average feature count per generation
+        pareto_size_history = hist.get("pareto_size", [])  # Pareto front size per generation
+        hypervolume_history = hist.get("hypervolume", [])  # Hypervolume metric per generation
+        diversity_history = hist.get("diversity", [])  # Population diversity per generation
+        return fitness_history, best_features_history, avg_f1_history, avg_features_history, pareto_size_history, hypervolume_history, diversity_history  # Return all seven history lists as a tuple
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def build_ga_history_data_dict(fitness_history, best_features_history, avg_f1_history, avg_features_history, pareto_size_history, hypervolume_history, diversity_history):
+    """
+    Build the consolidated per-generation history dictionary used for state persistence
+    and downstream plot generation.
+
+    :param fitness_history: List of best F1-score values, one per completed generation.
+    :param best_features_history: List of best feature counts, one per completed generation.
+    :param avg_f1_history: List of population-average F1 values, one per generation.
+    :param avg_features_history: List of population-average feature counts, one per generation.
+    :param pareto_size_history: List of Pareto front sizes, one per generation.
+    :param hypervolume_history: List of hypervolume values, one per generation.
+    :param diversity_history: List of population diversity values, one per generation.
+    :return: Dictionary with keys "best_f1", "best_features", "avg_f1", "avg_features",
+             "pareto_size", "hypervolume", "diversity".
+    """
+
+    try:
+        return {  # Build consolidated history dictionary
+            "best_f1": fitness_history,  # Best F1 score per generation (backward compatible key)
+            "best_features": best_features_history,  # Best feature count per generation
+            "avg_f1": avg_f1_history,  # Population average F1 per generation
+            "avg_features": avg_features_history,  # Population average feature count per generation
+            "pareto_size": pareto_size_history,  # Pareto front size per generation
+            "hypervolume": hypervolume_history,  # Hypervolume metric per generation
+            "diversity": diversity_history,  # Population diversity per generation
+        }
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def run_genetic_algorithm_loop(
     toolbox,
     population,
@@ -2401,13 +2577,7 @@ def run_genetic_algorithm_loop(
 
         folds = CONFIG.get("cross_validation", {}).get("n_folds", 10)  # Use configured constant for CV folds
 
-        ga_export_cfg = CONFIG.get("genetic_algorithm", {}).get("export", {})
-        ga_results_dir_raw = ga_export_cfg.get("results_dir") or os.path.join("Feature_Analysis", "Genetic_Algorithm")
-        if os.path.isabs(ga_results_dir_raw):
-            output_dir = os.path.abspath(os.path.expanduser(ga_results_dir_raw))
-        else:
-            base_dir = os.path.dirname(csv_path) if csv_path else "."
-            output_dir = os.path.abspath(os.path.expanduser(os.path.join(base_dir, ga_results_dir_raw)))
+        output_dir = resolve_ga_output_dir(csv_path)  # Resolve canonical GA output directory from configuration
         state_id = compute_state_id(
             csv_path or "", pop_size or 0, n_generations, cxpb, mutpb, run or 0, folds, test_frac=None
         )  # Deterministic state id for resume/caching
@@ -2417,13 +2587,7 @@ def run_genetic_algorithm_loop(
             toolbox, population, output_dir, state_id, run=run
         )  # Load and apply saved generation state if available, updating start generation and history
 
-        fitness_history = loaded_history.get("best_f1", []) if isinstance(loaded_history, dict) else []  # Best F1 scores
-        best_features_history = loaded_history.get("best_features", []) if isinstance(loaded_history, dict) else []  # Best feature counts
-        avg_f1_history = loaded_history.get("avg_f1", []) if isinstance(loaded_history, dict) else []  # Population avg F1
-        avg_features_history = loaded_history.get("avg_features", []) if isinstance(loaded_history, dict) else []  # Population avg features
-        pareto_size_history = loaded_history.get("pareto_size", []) if isinstance(loaded_history, dict) else []  # Pareto front sizes
-        hypervolume_history = loaded_history.get("hypervolume", []) if isinstance(loaded_history, dict) else []  # Hypervolume values
-        diversity_history = loaded_history.get("diversity", []) if isinstance(loaded_history, dict) else []  # Diversity values
+        fitness_history, best_features_history, avg_f1_history, avg_features_history, pareto_size_history, hypervolume_history, diversity_history = initialize_ga_history_lists(loaded_history)  # Initialize seven per-generation history lists from loaded state (or empty)
 
         gen_range = (
             tqdm(range(start_gen, n_generations + 1), desc=f"{BackgroundColors.GREEN}Generations{Style.RESET_ALL}")
@@ -2500,58 +2664,18 @@ def run_genetic_algorithm_loop(
             current_best_num_features = (
                 -hof[0].fitness.values[1] if hof and hof[0].fitness.values and len(hof[0].fitness.values) > 1 else None
             )  # Get current number of features (negated second objective) from multi-objective fitness
-            try:  # Try to append best fitness to history
-                fitness_history.append(
-                    float(current_best_fitness_f1) if current_best_fitness_f1 is not None else np.nan
-                )  # Record best F1-score for convergence tracking
-            except Exception:  # If conversion fails
-                fitness_history.append(np.nan)  # Record NaN
-
-            try:  # Track number of features in best individual
-                best_features_history.append(
-                    int(current_best_num_features) if current_best_num_features is not None else 0
-                )  # Record best feature count
-            except Exception:  # If tracking fails
-                best_features_history.append(0)  # Record zero
-
-            try:  # Track population average F1 score
-                valid_f1_scores = [ind.fitness.values[0] for ind in population if ind.fitness.valid and len(ind.fitness.values) > 0]  # Extract valid F1 scores from population
-                avg_f1 = sum(valid_f1_scores) / len(valid_f1_scores) if valid_f1_scores else 0.0  # Calculate average F1
-                avg_f1_history.append(float(avg_f1))  # Record average F1 score
-            except Exception:  # If calculation fails
-                avg_f1_history.append(0.0)  # Record zero
-
-            try:  # Track population average feature count
-                valid_feature_counts = [-ind.fitness.values[1] for ind in population if ind.fitness.valid and len(ind.fitness.values) > 1]  # Extract valid feature counts (negate second objective)
-                avg_features = sum(valid_feature_counts) / len(valid_feature_counts) if valid_feature_counts else 0.0  # Calculate average feature count
-                avg_features_history.append(float(avg_features))  # Record average feature count
-            except Exception:  # If calculation fails
-                avg_features_history.append(0.0)  # Record zero
-
-            try:  # Track Pareto front size
-                pareto_front = extract_pareto_front(population)  # Extract Pareto front from population
-                pareto_size_history.append(len(pareto_front))  # Record Pareto front size
-            except Exception:  # If extraction fails
-                pareto_size_history.append(0)  # Record zero
-
-            try:  # Track hypervolume metric
-                pareto_front = extract_pareto_front(population)  # Extract Pareto front (recompute if needed or reuse from above)
-                hv = calculate_hypervolume(pareto_front)  # Calculate hypervolume for Pareto front
-                if hv is None:  # If hypervolume calculation returns None, record zero
-                    hypervolume_history.append(0.0)  # Record zero
-                else:  # If hypervolume is valid, record the value
-                    try:  # Try to convert hypervolume to float for recording
-                        hypervolume_history.append(float(hv))  # Record hypervolume
-                    except Exception:  # If conversion fails
-                        hypervolume_history.append(0.0)
-            except Exception:  # If calculation fails
-                hypervolume_history.append(0.0)  # Record zero
-
-            try:  # Track population diversity
-                diversity = calculate_population_diversity(population)  # Calculate population diversity
-                diversity_history.append(float(diversity))  # Record diversity metric
-            except Exception:  # If calculation fails
-                diversity_history.append(0.0)  # Record zero
+            update_generation_histories(
+                population,
+                current_best_fitness_f1,
+                current_best_num_features,
+                fitness_history,
+                best_features_history,
+                avg_f1_history,
+                avg_features_history,
+                pareto_size_history,
+                hypervolume_history,
+                diversity_history,
+            )  # Append all per-generation metrics to their respective history lists
 
             if best_fitness is None or (current_best_fitness_f1 is not None and current_best_fitness_f1 > best_fitness):
                 best_fitness = current_best_fitness_f1  # Update best F1-score
@@ -2594,30 +2718,14 @@ def run_genetic_algorithm_loop(
 
             try:  # Persist per-generation progress so runs can be resumed (every N gens to reduce I/O)
                 if CONFIG["execution"]["resume_progress"] and state_id is not None and (gen % CONFIG["execution"]["progress_save_interval"] == 0 or gen == n_generations):  # Use configured interval
-                    current_history_data = {
-                        "best_f1": fitness_history,  # Best F1 scores up to current generation
-                        "best_features": best_features_history,  # Best feature counts up to current generation
-                        "avg_f1": avg_f1_history,  # Average F1 scores up to current generation
-                        "avg_features": avg_features_history,  # Average feature counts up to current generation
-                        "pareto_size": pareto_size_history,  # Pareto sizes up to current generation
-                        "hypervolume": hypervolume_history,  # Hypervolume values up to current generation
-                        "diversity": diversity_history,  # Diversity values up to current generation
-                    }  # Consolidated history for state persistence
+                    current_history_data = build_ga_history_data_dict(fitness_history, best_features_history, avg_f1_history, avg_features_history, pareto_size_history, hypervolume_history, diversity_history)  # Build consolidated history for state persistence
                     save_generation_state(
                         output_dir, state_id, gen, population, hof[0] if hof and len(hof) > 0 else None, current_history_data
                     )
             except Exception:  # If saving fails
                 pass  # Do nothing
 
-        history_data = {
-            "best_f1": fitness_history,  # Best F1 score per generation (backward compatible)
-            "best_features": best_features_history,  # Best feature count per generation
-            "avg_f1": avg_f1_history,  # Population average F1 per generation
-            "avg_features": avg_features_history,  # Population average feature count per generation
-            "pareto_size": pareto_size_history,  # Pareto front size per generation
-            "hypervolume": hypervolume_history,  # Hypervolume metric per generation
-            "diversity": diversity_history,  # Population diversity per generation
-        }  # Consolidated history dictionary for plotting
+        history_data = build_ga_history_data_dict(fitness_history, best_features_history, avg_f1_history, avg_features_history, pareto_size_history, hypervolume_history, diversity_history)  # Build consolidated history dictionary for plotting
 
         return hof[0], gens_ran, history_data  # Return the best individual, gens ran and comprehensive history data
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
