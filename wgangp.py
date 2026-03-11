@@ -3492,20 +3492,16 @@ def compute_expected_samples_for_percentage(percent: float, args, config: Option
         if class_dist is None:  # If still undetermined
             return None  # Cannot compute expected value safely
 
-        threshold = int(config.get("generation", {}).get("small_class_threshold", 100))  # Small class threshold
-        small_min = int(config.get("generation", {}).get("small_class_min_samples", 10))  # Minimum small class samples
+        total_preprocessed = int(sum(class_dist.values()))  # Compute preprocessed total for original size estimation
+        original_dataset_size = total_preprocessed  # Default to preprocessed total when CSV unavailable
 
-        n_per_class = {}  # Container for computed samples per class
+        if getattr(args, "csv_path", None):  # If CSV path is available on args
+            try:
+                original_dataset_size = len(pd.read_csv(args.csv_path, low_memory=False))  # Read original CSV row count for exact multiplier basis
+            except Exception:
+                original_dataset_size = total_preprocessed  # Fallback to preprocessed total on CSV read failure
 
-        for label, original_count in class_dist.items():  # Iterate over classes
-            calculated = int(original_count * percent)  # Percentage-based computation
-            final_count = max(
-                small_min if original_count < threshold else 1,
-                calculated,
-            )  # Apply small-class logic
-            n_per_class[int(label)] = final_count  # Store per-class result
-
-        return sum(n_per_class.values())  # Return total expected samples
+        return max(1, int(original_dataset_size * percent))  # Return target count as exact multiplier of original CSV row count
 
     except Exception as e:
         print(str(e))
@@ -3784,34 +3780,55 @@ def compute_generation_counts_and_labels(args, config: Dict, class_distribution:
     small_class_threshold = int(config.get("generation", {}).get("small_class_threshold", 100))  # Get small class threshold and cast to int
     small_class_min_samples = int(config.get("generation", {}).get("small_class_min_samples", 10))  # Get min samples for small classes and cast to int
     n_per_class = None  # Initialize per-class count dictionary
-    if args.n_samples <= 1.0:  # Percentage mode: generate percentage of training data per class (1.0 == 100%)
+    if args.n_samples <= 1.0:  # Percentage mode: generate percentage of original dataset size (1.0 == 100%)
         if class_distribution is None:  # If class distribution not available
             raise RuntimeError(
                 "Percentage-based generation requires class_distribution in checkpoint or --csv_path to calculate it."
-            )  # Raise error
-        print(f"{BackgroundColors.CYAN}Generating {args.n_samples*100:.1f}% of training data per class (min {small_class_min_samples} samples for small classes){Style.RESET_ALL}")
+            )  # Raise error when class distribution missing
+
+        total_preprocessed = int(sum(class_distribution.values()))  # Compute preprocessed total for proportional distribution
+        original_dataset_size = total_preprocessed  # Default to preprocessed total as fallback when CSV unavailable
+
+        if getattr(args, "csv_path", None):  # If CSV path is available on args
+            try:
+                original_dataset_size = len(pd.read_csv(args.csv_path, low_memory=False))  # Read original CSV row count for exact multiplier basis
+            except Exception:
+                original_dataset_size = total_preprocessed  # Fallback to preprocessed total on CSV read failure
+
+        target_n = max(1, int(original_dataset_size * args.n_samples))  # Target total as exact multiplier of original CSV row count
+
+        print(f"{BackgroundColors.CYAN}Generating {args.n_samples*100:.1f}% of original dataset ({target_n} of {original_dataset_size} samples, min {small_class_min_samples} samples for small classes){Style.RESET_ALL}")  # Print generation percentage summary
+
         if args.label is not None:  # If specific label requested
-            if args.label not in class_distribution:  # Verify label exists
-                raise ValueError(f"Label {args.label} not found in training data class distribution")  # Raise error
-            original_count = class_distribution[args.label]  # Get original class count
-            calculated = int(original_count * args.n_samples)  # Calculate percentage-based count
-            final_count = max(small_class_min_samples if original_count < small_class_threshold else 1, calculated)  # Apply minimum threshold
-            n_per_class = {args.label: final_count}  # Store final count
-        else:  # Generate for all classes
-            n_per_class = {}  # Initialize dictionary
-            for label, original_count in class_distribution.items():  # For each class
-                calculated = int(original_count * args.n_samples)  # Calculate percentage-based count
-                final_count = max(small_class_min_samples if original_count < small_class_threshold else 1, calculated)  # Apply minimum threshold
-                n_per_class[label] = final_count  # Store final count
+            if args.label not in class_distribution:  # Verify label exists in distribution
+                raise ValueError(f"Label {args.label} not found in training data class distribution")  # Raise error for unknown label
+            n_per_class = {args.label: target_n}  # Assign all target samples to the requested class
+        else:  # Generate for all classes proportionally
+            n_per_class = {}  # Initialize per-class count dictionary
+
+            for label, original_count in class_distribution.items():  # For each class in distribution
+                proportion = original_count / max(1, total_preprocessed)  # Proportional share for this class in preprocessed data
+                raw_count = int(proportion * target_n)  # Proportional count scaled to target total
+                final_count = max(small_class_min_samples if original_count < small_class_threshold else 1, raw_count)  # Apply small-class minimum threshold
+                n_per_class[label] = final_count  # Store computed count for this class
+
+            current_total = sum(n_per_class.values())  # Sum per-class counts to verify against target
+            diff = target_n - current_total  # Discrepancy between target and current per-class sum
+
+            if diff != 0:  # If per-class totals do not sum to exactly target_n
+                largest_label = max(n_per_class, key=lambda k: n_per_class[k])  # Find class with most samples for adjustment
+                n_per_class[largest_label] = max(1, n_per_class[largest_label] + diff)  # Adjust largest class to reach exact target total
+
         labels = []  # List to build label array
         for label, count in n_per_class.items():  # For each class
             labels.extend([label] * count)  # Repeat label by count
-        labels = np.array(labels, dtype=np.int64)  # Convert to array
-        n = len(labels)  # Total number of samples
-        print(f"{BackgroundColors.GREEN}Total samples to generate: {BackgroundColors.CYAN}{n}{Style.RESET_ALL}")
+        labels = np.array(labels, dtype=np.int64)  # Convert to numpy int64 array
+        n = len(labels)  # Total number of samples equals target_n
+
+        print(f"{BackgroundColors.GREEN}Total samples to generate: {BackgroundColors.CYAN}{n}{Style.RESET_ALL}")  # Print total sample count
         for label, count in n_per_class.items():  # Print per-class breakdown
-            class_name = label_encoder.inverse_transform([label])[0]  # Get class name
-            print(f"{BackgroundColors.GREEN}  - Class '{class_name}': {BackgroundColors.CYAN}{count}{BackgroundColors.GREEN} samples{Style.RESET_ALL}")
+            class_name = label_encoder.inverse_transform([label])[0]  # Get human-readable class name
+            print(f"{BackgroundColors.GREEN}  - Class '{class_name}': {BackgroundColors.CYAN}{count}{BackgroundColors.GREEN} samples{Style.RESET_ALL}")  # Print per-class count
     else:  # Absolute count mode: generate exact number of samples
         n = int(args.n_samples)  # Convert to integer
         print(f"{BackgroundColors.CYAN}Generating {n} samples (absolute count){Style.RESET_ALL}")
