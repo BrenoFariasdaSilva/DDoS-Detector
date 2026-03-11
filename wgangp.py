@@ -3255,7 +3255,7 @@ def train(args, config: Optional[Dict] = None):
 
     :param args: parsed arguments namespace containing training configuration
     :param config: Optional configuration dictionary (will use global CONFIG if not provided)
-    :return: None
+    :return: Tuple of (Generator, CSVFlowDataset, device) for in-memory generation fallback, or None on failure
     """
 
     try:
@@ -3286,6 +3286,7 @@ def train(args, config: Optional[Dict] = None):
         write_final_timing_and_csv_row(args, config, device, dataset, training_start_time, file_start_time, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history, opt_G, opt_D)  # Write final timing and CSV row
         generate_training_plots(args, config, metrics_history, file_progress_prefix)  # Generate training plots
         send_final_telegram_messages(args, config, file_progress_prefix)  # Send final telegram messages
+        return (G, dataset, device)  # Return trained generator, dataset, and device for in-memory generation fallback
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -4220,6 +4221,45 @@ def generate(args, config: Optional[Dict] = None):
         handle_generate_top_level_exception(e)  # Handle top-level exception by logging and re-raising
 
 
+def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset: Any, device: torch.device) -> None:
+    """
+    Generate synthetic samples using an in-memory trained generator when no checkpoint is available on disk.
+
+    :param args: Parsed arguments namespace containing generation options and output path.
+    :param config: Configuration dictionary with generation and paths settings.
+    :param G: Trained generator model already in memory from the training phase.
+    :param dataset: CSVFlowDataset instance with scaler, label_encoder, feature_cols, and labels.
+    :param device: Torch device for tensor allocation during generation.
+    :return: None
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG or get_default_config()  # Use global or default config
+
+        file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Retrieve colored progress prefix from args or use default
+
+        scaler = dataset.scaler  # Extract fitted scaler from dataset for inverse transform
+        label_encoder = dataset.label_encoder  # Extract fitted label encoder from dataset for label decoding
+        feature_cols = dataset.feature_cols  # Extract feature column names from dataset for DataFrame reconstruction
+
+        unique_labels, label_counts = np.unique(dataset.labels, return_counts=True)  # Compute class distribution from training dataset labels
+        class_distribution = dict(zip(unique_labels.tolist(), label_counts.tolist()))  # Build label-to-count mapping for percentage-based generation
+
+        n_classes = dataset.n_classes  # Get number of classes from dataset
+
+        G.eval()  # Set generator to evaluation mode for deterministic inference
+
+        n_per_class, labels, n = compute_generation_counts_and_labels(args, config, class_distribution, label_encoder, n_classes)  # Compute per-class counts and label array
+        notify_start_of_generation(args, n)  # Send Telegram notification about generation start
+        all_fake, all_labels, sample_generation_start_time = generate_batches_and_collect_results(args, G, device, labels, n)  # Generate synthetic samples in batches
+        df = postprocess_generated_arrays_to_dataframe(args, config, all_fake, all_labels, scaler, label_encoder, feature_cols, device, n, file_progress_prefix)  # Postprocess arrays into DataFrame and save
+        record_sample_generation_timing(args, sample_generation_start_time)  # Record sample generation elapsed time
+        notify_generation_finish_via_telegram(args, n, file_progress_prefix)  # Send Telegram finish notification
+    except Exception as e:
+        handle_generate_top_level_exception(e)  # Handle top-level exception by logging and re-raising
+
+
 def to_seconds(obj):
     """
     Converts various time-like objects to seconds.
@@ -4799,18 +4839,19 @@ def setup_single_file_output_path(args: Any, config: Dict, csv_path_obj: Path, m
     return data_aug_dir  # Return canonical data augmentation directory path for downstream use
 
 
-def execute_training_with_timing(args: Any, config: Dict) -> None:
+def execute_training_with_timing(args: Any, config: Dict) -> Optional[tuple]:
     """
     Execute model training and store elapsed time on args.
 
     :param args: Argument namespace with all training configuration settings.
     :param config: Configuration dictionary passed to the train function.
-    :return: None
+    :return: Tuple of (Generator, CSVFlowDataset, device) from train, or None on failure.
     """
 
     training_start_time = time.time()  # Record training start timestamp for elapsed time calculation
-    train(args, config)  # Execute WGAN-GP training loop with provided configuration
+    result = train(args, config)  # Execute WGAN-GP training loop with provided configuration
     args._last_training_time = time.time() - training_start_time  # Store elapsed training seconds on args for reporting
+    return result  # Return training artifacts for in-memory generation fallback
 
 
 def execute_generation_with_verification(args: Any, config: Dict) -> None:
@@ -4828,7 +4869,7 @@ def execute_generation_with_verification(args: Any, config: Dict) -> None:
         print(f"{BackgroundColors.GREEN}Skipping generation: output file already satisfies configured n_samples.{Style.RESET_ALL}")  # Inform user that generation is skipped
 
 
-def resolve_checkpoint_after_training(args: Any, config: Dict, csv_path_obj: Path, data_aug_dir: Path) -> Path:
+def resolve_checkpoint_after_training(args: Any, config: Dict, csv_path_obj: Path, data_aug_dir: Path) -> Optional[Path]:
     """
     Resolve the generator checkpoint path produced after training and assign it to args.
 
@@ -4836,7 +4877,7 @@ def resolve_checkpoint_after_training(args: Any, config: Dict, csv_path_obj: Pat
     :param config: Configuration dictionary with paths settings.
     :param csv_path_obj: Path object for the trained CSV source file.
     :param data_aug_dir: Path object for the data augmentation output directory.
-    :return: Resolved checkpoint Path object pointing to the latest available checkpoint.
+    :return: Resolved checkpoint Path object pointing to the latest available checkpoint, or None when no checkpoint exists.
     """
 
     checkpoint_prefix = csv_path_obj.stem  # Derive checkpoint filename prefix from input CSV stem
@@ -4848,8 +4889,9 @@ def resolve_checkpoint_after_training(args: Any, config: Dict, csv_path_obj: Pat
         checkpoints = sorted(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))  # Discover all matching checkpoints in directory
         if checkpoints:  # Assign latest checkpoint when at least one file exists
             checkpoint_path = checkpoints[-1]  # Select the last entry by sorted order as the latest checkpoint
-        else:  # Raise a descriptive error when no checkpoints exist at all
-            raise FileNotFoundError(f"No generator checkpoint found for {csv_path_obj.name} in {checkpoint_dir}")  # Abort with informative message
+        else:  # No checkpoint files found on disk; signal in-memory fallback to caller
+            print(f"{BackgroundColors.YELLOW}[WARNING] No generator checkpoint found for {csv_path_obj.name} in {checkpoint_dir}. Will use in-memory generator.{Style.RESET_ALL}")  # Warn about missing checkpoint and inform fallback strategy
+            return None  # Return None to signal in-memory generation fallback
         
     args.checkpoint = str(checkpoint_path)  # Assign resolved checkpoint path string to args for generation
     
@@ -4909,13 +4951,32 @@ def run_both_mode_for_csv(args: Any, config: Dict, csv_path_obj: Path, data_aug_
 
     file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Retrieve colored progress prefix from args or use default
     print(f"{BackgroundColors.GREEN}[1/2] {training_label}{Style.RESET_ALL}")  # Print training phase progress header with label
-    execute_training_with_timing(args, config)  # Train model and record elapsed time on args
+    training_result = execute_training_with_timing(args, config)  # Train model and capture in-memory artifacts for fallback generation
     checkpoint_path = resolve_checkpoint_after_training(args, config, csv_path_obj, data_aug_dir)  # Resolve generator checkpoint produced by training
-    print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")  # Print generation phase progress header with checkpoint filename
-    print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print resolved output file destination path
-    print(f"{file_progress_prefix} {BackgroundColors.GREEN}[INFO] Generating synthetic samples for {BackgroundColors.CYAN}{csv_path_obj.name}{Style.RESET_ALL}")  # Log generation start for this CSV file
-    send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} [INFO] Generating synthetic samples for {csv_path_obj.name}")  # Send generation start notification via Telegram
-    execute_generation_with_verification(args, config)  # Verify necessity and execute synthetic sample generation
+
+    if checkpoint_path is not None:  # Checkpoint file available on disk for standard generation path
+        print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")  # Print generation phase progress header with checkpoint filename
+        print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print resolved output file destination path
+        print(f"{file_progress_prefix} {BackgroundColors.GREEN}[INFO] Generating synthetic samples for {BackgroundColors.CYAN}{csv_path_obj.name}{Style.RESET_ALL}")  # Log generation start for this CSV file
+        send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} [INFO] Generating synthetic samples for {csv_path_obj.name}")  # Send generation start notification via Telegram
+        execute_generation_with_verification(args, config)  # Verify necessity and execute synthetic sample generation from checkpoint
+    else:  # No checkpoint on disk; fall back to in-memory trained generator
+        print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from in-memory trained generator...{Style.RESET_ALL}")  # Print generation phase header for in-memory fallback
+        print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print resolved output file destination path
+        print(f"{file_progress_prefix} {BackgroundColors.YELLOW}[INFO] Checkpoint saving was skipped; using in-memory generator for {csv_path_obj.name}{Style.RESET_ALL}")  # Log in-memory fallback for this CSV file
+        send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} [INFO] Using in-memory generator for {csv_path_obj.name} (checkpoint was skipped)")  # Send in-memory fallback notification via Telegram
+        if training_result is not None:  # Verify training returned generator artifacts successfully
+            G, dataset, device = training_result  # Unpack trained generator, dataset, and device from training result
+            if verify_data_augmentation_file(args, config):  # Verify if generation is necessary according to existing output and configuration
+                generate_from_in_memory_generator(args, config, G, dataset, device)  # Generate synthetic samples using in-memory trained generator
+            else:  # Skip generation when configured n_samples already satisfied by existing output
+                print(f"{BackgroundColors.GREEN}Skipping generation: output file already satisfies configured n_samples.{Style.RESET_ALL}")  # Inform user that generation is skipped
+        else:  # Training failed to return artifacts; cannot generate without checkpoint or in-memory generator
+            error_msg = f"[ERROR] Training did not return generator artifacts and no checkpoint exists for {csv_path_obj.name}"  # Build descriptive error message
+            print(f"{BackgroundColors.RED}{error_msg}{Style.RESET_ALL}")  # Print error to console in red
+            send_telegram_message(TELEGRAM_BOT, error_msg)  # Send failure notification via Telegram
+            raise RuntimeError(error_msg)  # Raise to prevent silent failure
+
     print(f"{file_progress_prefix} {BackgroundColors.GREEN}[INFO] Saving augmented dataset: {BackgroundColors.CYAN}{Path(args.out_file).name}{Style.RESET_ALL}")  # Log augmented dataset file name being validated
     validate_augmentation_output(args, csv_path_obj, file_progress_prefix)  # Validate augmented output file exists, is non-empty, and has rows
 
