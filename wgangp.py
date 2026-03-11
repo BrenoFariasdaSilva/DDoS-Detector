@@ -1810,7 +1810,7 @@ def send_file_saved_and_timing_messages(args: Any, config: Dict) -> None:  # Cre
         try:  # Attempt derivation of default generated file path from csv_path and config
             csv_obj = Path(args.csv_path)  # Construct Path from provided CSV path
             suffix = config.get("wgangp", {}).get("results_suffix", "_data_augmented")  # Read results suffix from wgangp config
-            derived = csv_obj.parent / config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / f"{csv_obj.stem}{suffix}.csv"  # Build derived path
+            derived = csv_obj.parent / config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / "Samples" / f"{csv_obj.stem}{suffix}.csv"  # Build derived path in Data_Augmentation/Samples
             gen_file = str(derived)  # Use derived path string as generated file path
         except Exception:  # If derivation fails, fall back to empty string silently
             gen_file = ""  # Leave generated file string empty on failure
@@ -3143,7 +3143,7 @@ def build_final_training_runtime_row(args, config: Dict, dataset, metrics_histor
         try:  # Attempt to construct derived augmented file path
             csv_obj = Path(args.csv_path)  # Path object for csv
             suffix = config.get("wgangp", {}).get("results_suffix", "_data_augmented")  # Suffix from wgangp config
-            derived = csv_obj.parent / config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / f"{csv_obj.stem}{suffix}.csv"  # Construct path
+            derived = csv_obj.parent / config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / "Samples" / f"{csv_obj.stem}{suffix}.csv"  # Construct path in Data_Augmentation/Samples
             gen_file = str(derived)  # Use derived path string
         except Exception:  # If derivation fails
             gen_file = ""  # Leave blank on failure
@@ -4009,26 +4009,6 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
     safe_log("info", f"Successfully saved {n} generated samples to {args.out_file}")  # Log generation save completion at INFO level after writing
     print(f"{file_progress_prefix} {BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} generated samples to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message with prefix
     
-    if getattr(args, "csv_path", None):  # Verify csv_path is available to derive augmented output path
-        try:  # Guard augmented file save to avoid breaking generation on path derivation failure
-            csv_src = Path(args.csv_path)  # Create Path object from original training dataset path
-            suffix = config.get("wgangp", {}).get("results_suffix", "_data_augmented")  # Read results suffix from wgangp config with fallback
-            augmented_path = csv_src.parent / f"{csv_src.stem}{suffix}.csv"  # Derive augmented path in same directory as original dataset
-            df.to_csv(str(augmented_path), index=False)  # Save generated samples to augmented file without row index
-            print(f"{file_progress_prefix} {BackgroundColors.GREEN}Saved augmented dataset to {BackgroundColors.CYAN}{augmented_path}{Style.RESET_ALL}")  # Print augmented file save confirmation
-            try:  # Guard telegram notification to avoid breaking generation on notify failure
-                size_bytes = augmented_path.stat().st_size if augmented_path.exists() else 0  # Get augmented file size in bytes safely
-                if size_bytes >= 1024 ** 3:  # If size is in gigabytes
-                    size_str = f"{size_bytes / (1024 ** 3):.2f} GB"  # Format size in GB for readability
-                else:  # Otherwise show size in megabytes
-                    size_str = f"{size_bytes / (1024 ** 2):.2f} MB"  # Format size in MB for readability
-                msg = f"{file_progress_prefix} Augmented dataset saved: {augmented_path.name} ({int(n)} samples, {size_str}) at {str(augmented_path)}"  # Compose detailed telegram message
-                send_telegram_message(TELEGRAM_BOT, msg)  # Send Telegram notification with file, count and size details
-            except Exception as _tg_e:  # If notification fails, warn to console but continue
-                print(f"{BackgroundColors.YELLOW}Warning: failed to send Telegram notification about augmented file: {_tg_e}{Style.RESET_ALL}")  # Warn about telegram failure
-        except Exception as _aug_e:  # If augmented file save fails, warn and continue without aborting generation
-            print(f"{BackgroundColors.YELLOW}[WARNING] Failed to save augmented dataset to derived path: {_aug_e}{Style.RESET_ALL}")  # Warn about augmented save failure
-
     if getattr(args, "csv_path", None):  # Verify csv_path is available for t-SNE separability plot generation
         try:
             orig_df_tsne = pd.read_csv(args.csv_path, low_memory=False)  # Load original CSV for t-SNE comparison
@@ -4762,7 +4742,9 @@ def dispatch_wgangp_execution_mode(args, final_config: Dict) -> None:
                 results_suffix = final_config.get("wgangp", {}).get("results_suffix", "_data_augmented")  # Read output filename suffix from config
                 output_filename = f"{csv_path_obj.stem}{results_suffix}{csv_path_obj.suffix}"  # Build output filename by appending suffix to input stem
                 if args.out_file == "generated.csv":  # Update default output path when still at default value
-                    args.out_file = str(data_aug_dir / output_filename)  # Assign resolved output file path to args for generation
+                    samples_dir = data_aug_dir / "Samples"  # Build Samples subdirectory path inside Data_Augmentation
+                    os.makedirs(samples_dir, exist_ok=True)  # Ensure Samples subdirectory exists before output file assignment
+                    args.out_file = str(samples_dir / output_filename)  # Assign resolved output file path to args for generation
                 checkpoint_dir = data_aug_dir / final_config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")  # Construct checkpoint directory path under Data_Augmentation
                 checkpoint_path = checkpoint_dir / f"{csv_path_obj.stem}_generator_epoch{args.epochs}.pt"  # Construct expected final-epoch checkpoint filename
                 if not checkpoint_path.exists():  # Find latest if specific epoch not found
@@ -4959,7 +4941,9 @@ def setup_single_file_output_path(args: Any, config: Dict, csv_path_obj: Path, m
         data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation subdirectory path alongside input file
         os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before output path assignment
         output_filename = f"{csv_path_obj.stem}{results_suffix}{csv_path_obj.suffix}"  # Build output filename by appending suffix to input stem
-        args.out_file = str(data_aug_dir / output_filename)  # Assign resolved output file path to args for downstream use
+        samples_dir = data_aug_dir / "Samples"  # Build Samples subdirectory path inside Data_Augmentation
+        os.makedirs(samples_dir, exist_ok=True)  # Ensure Samples subdirectory exists before output file assignment
+        args.out_file = str(samples_dir / output_filename)  # Assign resolved output file path to args for downstream use
     data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Re-read subdir name for authoritative path computation
     data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Build canonical Data_Augmentation directory path for results CSV
     os.makedirs(data_aug_dir, exist_ok=True)  # Ensure canonical Data_Augmentation directory exists before results CSV creation
@@ -5199,7 +5183,9 @@ def setup_per_file_output(args: Any, config: Dict, file: str, results_suffix: st
     data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation directory path relative to input file
     os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before output file creation
     output_filename = f"{csv_path_obj.stem}{results_suffix}{csv_path_obj.suffix}"  # Build output filename by appending suffix to input stem
-    args.out_file = str(data_aug_dir / output_filename)  # Assign computed output file path to args
+    samples_dir = data_aug_dir / "Samples"  # Build Samples subdirectory path inside Data_Augmentation
+    os.makedirs(samples_dir, exist_ok=True)  # Ensure Samples subdirectory exists before output file creation
+    args.out_file = str(samples_dir / output_filename)  # Assign computed output file path to args
     args.csv_path = file  # Assign current CSV file path to args for train and generate functions
     return csv_path_obj, data_aug_dir  # Return Path objects for mode dispatch use
 
