@@ -2457,11 +2457,11 @@ def generate_pairwise_report(group_info):
                     "Dataset B": b_name,  # Second dataset group name
                     "Files in A": len(a_info["files"]),  # Number of files in A
                     "Files in B": len(b_info["files"]),  # Number of files in B
-                    "n_common_features": n_common,  # Integer count of common features between A and B
+                    "N Common Features": n_common,  # Integer count of common features between A and B
                     "Common Features (A ∩ B)": ", ".join(common_between) or "None",  # Common features between A and B
-                    "n_extra_features_in_a": n_extra_a,  # Integer count of extra features present in A but not in B
+                    "N Extra Features in A": n_extra_a,  # Integer count of extra features present in A but not in B
                     "Extra Features in A (A \\ B)": ", ".join(extras_a) or "None",  # Extra features in A
-                    "n_extra_features_in_b": n_extra_b,  # Integer count of extra features present in B but not in A
+                    "N Extra Features in B": n_extra_b,  # Integer count of extra features present in B but not in A
                     "Extra Features in B (B \\ A)": ", ".join(extras_b) or "None",  # Extra features in B
                 }
 
@@ -2495,11 +2495,11 @@ def adjust_rows_for_group(report_rows, group_name):
                     "Dataset B": row["Dataset A"],  # Swap Dataset B
                     "Files in A": row["Files in B"],  # Swap file counts
                     "Files in B": row["Files in A"],  # Swap file counts
-                    "n_common_features": int(row.get("n_common_features", 0)),  # Keep common feature count unchanged on swap
+                    "N Common Features": int(row.get("N Common Features", 0)),  # Keep common feature count unchanged on swap
                     "Common Features (A ∩ B)": row["Common Features (A ∩ B)"],  # Keep common features unchanged on swap
-                    "n_extra_features_in_a": int(row.get("n_extra_features_in_b", 0)),  # Swap extra feature count so A count reflects former B count
+                    "N Extra Features in A": int(row.get("N Extra Features in B", 0)),  # Swap extra feature count so A count reflects former B count
                     "Extra Features in A (A \\ B)": row["Extra Features in B (B \\ A)"],  # Swap extra features so A receives former B extras
-                    "n_extra_features_in_b": int(row.get("n_extra_features_in_a", 0)),  # Swap extra feature count so B count reflects former A count
+                    "N Extra Features in B": int(row.get("N Extra Features in A", 0)),  # Swap extra feature count so B count reflects former A count
                     "Extra Features in B (B \\ A)": row["Extra Features in A (A \\ B)"],  # Swap extra features so B receives former A extras
                 }
                 adjusted.append(swapped)  # Append swapped row
