@@ -452,25 +452,13 @@ def discover_python_files() -> list:
     return discovered  # Return the sorted list of discovered Python file paths
 
 
-def process_multiple_files() -> None:
+def sort_files_by_largest_function(files_data: dict) -> dict:
     """
-    Discovers and processes all Python files in the project directories.
+    Sort files by largest function size.
 
-    :param: None
-    :return: None
+    :param files_data: Mapping of filename to its analysis report dictionary.
+    :return: Ordered mapping of files sorted by largest function size descending.
     """
-
-    output_path = Path("./Scripts/function_size_report-general.json")  # Build the output path with the general suffix for multi-file mode
-    python_files = discover_python_files()  # Discover all Python files in the current and Scripts directories
-
-    print(f"{BackgroundColors.GREEN}Discovered {BackgroundColors.CYAN}{len(python_files)}{BackgroundColors.GREEN} Python files for analysis.{Style.RESET_ALL}")  # Log the number of discovered files
-
-    files_data = {}  # Initialize empty dictionary to store per-file analysis results
-
-    for filepath in python_files:  # Iterate over each discovered Python file
-        print(f"{BackgroundColors.GREEN}Analyzing file: {BackgroundColors.CYAN}{filepath.name}{Style.RESET_ALL}")  # Log the current file being analyzed
-        file_report = analyze_file(filepath)  # Analyze the current Python file
-        files_data[filepath.name] = file_report  # Store the per-file report under the filename key
 
     max_sizes = {}  # Verify mapping from filename to its largest function size across all categories
 
@@ -503,6 +491,31 @@ def process_multiple_files() -> None:
     sorted_files = {}  # Initialize ordered mapping for sorted files to preserve JSON insertion order
     for fname, _ in sorted_fnames:  # Iterate sorted filenames in desired order
         sorted_files[fname] = files_data[fname]  # Copy original per-file report into ordered mapping maintaining internal structure
+
+    return sorted_files  # Return ordered mapping of files sorted by largest function size
+
+
+def process_multiple_files() -> None:
+    """
+    Discovers and processes all Python files in the project directories.
+
+    :param: None
+    :return: None
+    """
+
+    output_path = Path("./Scripts/function_size_report-general.json")  # Build the output path with the general suffix for multi-file mode
+    python_files = discover_python_files()  # Discover all Python files in the current and Scripts directories
+
+    print(f"{BackgroundColors.GREEN}Discovered {BackgroundColors.CYAN}{len(python_files)}{BackgroundColors.GREEN} Python files for analysis.{Style.RESET_ALL}")  # Log the number of discovered files
+
+    files_data = {}  # Initialize empty dictionary to store per-file analysis results
+
+    for filepath in python_files:  # Iterate over each discovered Python file
+        print(f"{BackgroundColors.GREEN}Analyzing file: {BackgroundColors.CYAN}{filepath.name}{Style.RESET_ALL}")  # Log the current file being analyzed
+        file_report = analyze_file(filepath)  # Analyze the current Python file
+        files_data[filepath.name] = file_report  # Store the per-file report under the filename key
+    
+    sorted_files = sort_files_by_largest_function(files_data)  # Sort files by largest function size descending
 
     multi_report = {  # Build the multi-file report dictionary with sorted files mapping
         "total_files_processed": len(python_files),  # Store the total number of processed files
