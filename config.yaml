@@ -135,7 +135,8 @@ paths:  # File and directory paths used across scripts
   csv_path: null                      # Default dataset CSV path (null for auto-detect)
   out_dir: "outputs"                  # Output directory for WGAN-GP models/logs
   checkpoint_subdir: "Checkpoints"    # Checkpoints subdirectory name
-  data_augmentation_subdir: "Data_Augmentation"  # Data augmentation subdirectory name
+  data_augmentation_dir: "Data_Augmentation"  # Base directory for all augmentation artifacts
+  data_augmentation_sample_dir: "Samples"     # Subdirectory containing generated augmented dataset CSV files
 
 # ==============================================================================
 # SOUND — Used by multiple scripts
