@@ -3902,7 +3902,9 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
         except Exception:
             pass  # Ignore hardware population errors and continue
     
+    safe_log("info", f"Saving {n} generated samples to {args.out_file}")  # Log generation save start at INFO level before writing
     generate_csv_and_image(df, args.out_file, is_visualizable=True)  # Save CSV and generate PNG image when appropriate
+    safe_log("info", f"Successfully saved {n} generated samples to {args.out_file}")  # Log generation save completion at INFO level after writing
     print(f"{file_progress_prefix} {BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} generated samples to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message with prefix
     
     if getattr(args, "csv_path", None):  # Verify csv_path is available to derive augmented output path
@@ -4586,15 +4588,28 @@ def dispatch_wgangp_execution_mode(args, final_config: Dict) -> None:
             train(args, final_config)  # Train first
             args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
             if args.csv_path:  # If CSV provided
-                csv_path_obj = Path(args.csv_path)
-                checkpoint_dir = csv_path_obj.parent / final_config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / final_config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")
-                checkpoint_path = checkpoint_dir / f"{csv_path_obj.stem}_generator_epoch{args.epochs}.pt"
+                csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path for path operations
+                data_aug_subdir = final_config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read configured data augmentation subdirectory name
+                data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation directory alongside input file
+                os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before output file assignment
+                results_suffix = final_config.get("wgangp", {}).get("results_suffix", "_data_augmented")  # Read output filename suffix from config
+                output_filename = f"{csv_path_obj.stem}{results_suffix}{csv_path_obj.suffix}"  # Build output filename by appending suffix to input stem
+                if args.out_file == "generated.csv":  # Update default output path when still at default value
+                    args.out_file = str(data_aug_dir / output_filename)  # Assign resolved output file path to args for generation
+                checkpoint_dir = data_aug_dir / final_config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")  # Construct checkpoint directory path under Data_Augmentation
+                checkpoint_path = checkpoint_dir / f"{csv_path_obj.stem}_generator_epoch{args.epochs}.pt"  # Construct expected final-epoch checkpoint filename
                 if not checkpoint_path.exists():  # Find latest if specific epoch not found
-                    checkpoints = sorted(checkpoint_dir.glob(f"{csv_path_obj.stem}_generator_epoch*.pt"))
-                    if checkpoints:
-                        checkpoint_path = checkpoints[-1]
-                args.checkpoint = str(checkpoint_path)
+                    checkpoints = sorted(checkpoint_dir.glob(f"{csv_path_obj.stem}_generator_epoch*.pt"))  # Discover all matching generator checkpoints in directory
+                    if checkpoints:  # Assign latest checkpoint when at least one file exists
+                        checkpoint_path = checkpoints[-1]  # Select the last entry by sorted order as the latest checkpoint
+                    else:  # Raise a descriptive error when no checkpoints exist at all
+                        raise FileNotFoundError(f"No generator checkpoint found for {csv_path_obj.name} in {checkpoint_dir}")  # Abort with informative message
+                args.checkpoint = str(checkpoint_path)  # Assign resolved checkpoint path string to args for generation
+            file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Retrieve or default progress prefix for logging
+            safe_log("info", f"Starting generation after training for {Path(args.csv_path).name if args.csv_path else 'unknown'}")  # Log generation start at INFO level
             generate(args, final_config)  # Generate samples
+            if args.csv_path:  # If CSV path available for post-generation validation
+                validate_augmentation_output(args, Path(args.csv_path), file_progress_prefix)  # Validate augmented output file exists, is non-empty, and has rows
         else:  # Invalid mode
             raise ValueError(f"Invalid mode: {args.mode}")
     except Exception as e:
@@ -5110,6 +5125,10 @@ def process_dataset_path(args: Any, config: Dict, mode: str, input_path: str, re
         except Exception as e:  # Handle any unrecovered error from file processing
             print(f"{BackgroundColors.RED}Error processing {BackgroundColors.CYAN}{file}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")  # Print descriptive error with file path
             traceback.print_exc()  # Print full exception traceback for debugging investigation
+            try:  # Attempt to send error notification via Telegram so monitoring users see failures
+                send_telegram_message(TELEGRAM_BOT, f"[ERROR] Failed to process {Path(file).name}: {e}")  # Send per-file error to Telegram for remote visibility
+            except Exception:  # Ignore Telegram notification failures to avoid masking the original error
+                pass  # Continue to next file even if notification fails
             continue  # Advance to next file despite error in current file
 
 
