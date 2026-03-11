@@ -133,6 +133,8 @@ def get_default_config() -> dict:
         "paths": {
             "dataset_description_subdir": "Dataset_Description",
             "preprocessing_summary_subdir": "Preprocessing_Summary",
+            "data_augmentation_dir": "Data_Augmentation",
+            "data_augmentation_sample_dir": "Samples",
             "logs_dir": "./Logs",
         },
         "execution": {
@@ -1616,7 +1618,7 @@ def get_augmented_sample_count(original_csv_path, config=None) -> int:
 
     Detection logic:
     - Use `config` if provided; otherwise try to load `config.yaml` next to this file.
-    - The augmented file is expected under: <original_parent>/Data_Augmentation/
+    - The augmented file is expected under: <original_parent>/<data_augmentation_dir>/<data_augmentation_sample_dir>/
         with filename: <stem>{results_suffix}{suffix} where `results_suffix` defaults
         to `_data_augmented` (per wgangp defaults).
     - If the exact-stem file exists and is a CSV, read and return its row count.
@@ -1640,12 +1642,13 @@ def get_augmented_sample_count(original_csv_path, config=None) -> int:
                 except Exception:
                     cfg = {}
 
-        data_aug_subdir = cfg.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")
-        results_suffix = cfg.get("execution", {}).get("results_suffix", "_data_augmented")
+        data_aug_dir = cfg.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # GET AUGMENTATION BASE DIRECTORY FROM CONFIG
+        data_aug_sample_dir = cfg.get("paths", {}).get("data_augmentation_sample_dir", "Samples")  # GET AUGMENTATION SAMPLES SUBDIRECTORY FROM CONFIG
+        results_suffix = cfg.get("execution", {}).get("results_suffix", "_data_augmented")  # GET RESULTS SUFFIX FROM CONFIG
 
-        data_aug_dir = p.parent / data_aug_subdir
+        aug_dir = p.parent / data_aug_dir / data_aug_sample_dir  # BUILD FULL AUGMENTATION DIRECTORY PATH USING BOTH CONFIG VARIABLES
 
-        candidate = data_aug_dir / f"{p.stem}{results_suffix}{p.suffix}"
+        candidate = aug_dir / f"{p.stem}{results_suffix}{p.suffix}"  # BUILD CANDIDATE AUGMENTED CSV PATH USING FULL DIRECTORY AND STEM
 
         if candidate.exists() and candidate.is_file() and candidate.suffix.lower() == ".csv":
             try:
