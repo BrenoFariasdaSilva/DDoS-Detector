@@ -4649,6 +4649,73 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         raise  # Re-raise to preserve original failure semantics
 
 
+def generate_feature_usage_charts(results_dict: dict, csv_path: str, dataset_name: str, min_pop: int, max_pop: int, feature_names: list) -> list:
+    """
+    Generate all three feature usage frequency horizontal bar charts for a completed GA sweep.
+
+    :param results_dict: Dict mapping pop_size to {"runs": [...], ...}.
+    :param csv_path: Path to the dataset CSV used to resolve the output directory.
+    :param dataset_name: Display name of the dataset for plot titles.
+    :param min_pop: Minimum population size in the sweep.
+    :param max_pop: Maximum population size in the sweep.
+    :param feature_names: Complete list of all feature names in the dataset.
+    :return: List of paths to all saved feature usage plot files.
+    """
+
+    try:
+        verbose_output(
+            f"{BackgroundColors.GREEN}Generating feature usage charts for {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
+        )  # Log generation start
+
+        try:  # Attempt to generate all feature usage charts
+            output_dir = resolve_ga_output_dir(csv_path)  # Resolve canonical GA output directory from configuration
+            comparison_dir = os.path.join(output_dir, "ga_run_comparisons", "multi_run_plots")  # Reuse the same directory as other multi-run plots
+            os.makedirs(comparison_dir, exist_ok=True)  # Ensure directory exists
+
+            base_dataset_name = safe_filename(os.path.splitext(os.path.basename(csv_path))[0])  # Sanitized dataset name for filenames
+            saved_plots = []  # List to track all saved feature usage plot paths
+
+            feature_run_counts, total_runs = compute_feature_usage_counts(results_dict, min_pop, max_pop, feature_names)  # Compute per-feature usage counts across all runs
+
+            if total_runs == 0:  # Verify that at least one run completed before plotting
+                verbose_output(
+                    f"{BackgroundColors.YELLOW}No runs found for feature usage charts{Style.RESET_ALL}"
+                )  # Log warning when no runs are available
+                return []  # Return empty list when no data is available
+
+            top10_path = plot_feature_usage_top10(feature_run_counts, total_runs, comparison_dir, base_dataset_name, dataset_name)  # Generate top-10 usage chart
+            if top10_path:  # Verify plot was saved successfully
+                saved_plots.append(top10_path)  # Add top-10 plot path to saved list
+
+            used_only_path = plot_feature_usage_used_only(feature_run_counts, total_runs, comparison_dir, base_dataset_name, dataset_name)  # Generate used-only usage chart
+            if used_only_path:  # Verify plot was saved successfully
+                saved_plots.append(used_only_path)  # Add used-only plot path to saved list
+
+            all_features_path = plot_feature_usage_all_features(feature_run_counts, total_runs, feature_names, comparison_dir, base_dataset_name, dataset_name)  # Generate all-features usage chart
+            if all_features_path:  # Verify plot was saved successfully
+                saved_plots.append(all_features_path)  # Add all-features plot path to saved list
+
+            verbose_output(
+                f"{BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{len(saved_plots)}{BackgroundColors.GREEN} feature usage chart(s) to {BackgroundColors.CYAN}{comparison_dir}{Style.RESET_ALL}"
+            )  # Log success with count and directory
+
+            return saved_plots  # Return list of saved plot paths
+
+        except Exception as e:  # If any error occurs during plot generation
+            try:  # Try to close any open plots
+                plt.close("all")  # Close all open figures
+            except Exception:  # Ignore cleanup errors
+                pass  # Do nothing
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Failed to generate feature usage charts: {e}{Style.RESET_ALL}"
+            )  # Log warning but do not abort pipeline
+            return []  # Return empty list on failure
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def print_metrics(metrics):
     """
     Print performance metrics including multi-objective fitness values.
@@ -6096,6 +6163,13 @@ def run_population_sweep(
         except Exception as e:  # If plot generation fails
             verbose_output(
                 f"{BackgroundColors.YELLOW}Skipping multi-run comparison plots due to error: {e}{Style.RESET_ALL}"
+            )  # Log warning but continue
+
+        try:  # Attempt to generate feature usage charts
+            generate_feature_usage_charts(results, csv_path, dataset_name, min_pop, max_pop, feature_names)  # Generate horizontal bar charts showing feature usage frequency across all GA runs
+        except Exception as e:  # If feature usage chart generation fails
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Skipping feature usage charts due to error: {e}{Style.RESET_ALL}"
             )  # Log warning but continue
 
         elapsed_run_time = time.perf_counter() - start_run_time  # Calculate elapsed time for the entire run process
