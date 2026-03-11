@@ -3898,6 +3898,52 @@ def aggregate_run_metrics(run_result):
         raise  # Re-raise to preserve original failure semantics
 
 
+def compute_common_and_unique_features(comparison_rows: list, all_feature_sets: list) -> list:
+    """
+    Compute common and unique features strings for comparison rows.
+
+    :param comparison_rows: List of row dicts produced for the dataset comparisons.
+    :param all_feature_sets: Parallel list of sets containing features for each row.
+    :return: The input list of row dicts with two new keys appended per row: common_features and unique_features.
+    """
+
+    try:  # Protect helper computation to capture and report any unexpected errors
+        if not comparison_rows:  # Verify if there are no comparison rows to process
+            return comparison_rows  # Return early when no rows are present
+
+        if not all_feature_sets:  # Verify if feature sets list is empty despite rows existing
+            for row in comparison_rows:  # Iterate rows to ensure keys exist even when features missing
+                row["common_features"] = ""  # Assign empty string when no feature sets available
+                row["unique_features"] = ""  # Assign empty string when no feature sets available
+            return comparison_rows  # Return rows after adding empty columns
+
+        common_features_set = (
+            set.intersection(*all_feature_sets) if len(all_feature_sets) > 1 else set(all_feature_sets[0])
+        )  # Compute intersection of all run feature sets for this dataset
+
+        common_features_str = ",".join(sorted(common_features_set))  # Format the intersection as sorted comma-separated string
+
+        for idx, row in enumerate(comparison_rows):  # Iterate each row to compute per-run unique features
+            run_feature_set = all_feature_sets[idx] if idx < len(all_feature_sets) else set()  # Safely retrieve corresponding feature set
+
+            other_sets = [all_feature_sets[j] for j in range(len(all_feature_sets)) if j != idx]  # Build list of other runs' feature sets
+
+            union_others = set.union(*other_sets) if other_sets else set()  # Compute union of other runs or empty set when none exist
+
+            unique_features_set = run_feature_set - union_others  # Subtract union of others to get features exclusive to this run
+
+            unique_features_str = ",".join(sorted(unique_features_set))  # Format unique features as sorted comma-separated string
+
+            row["common_features"] = common_features_str  # Assign same common features string to every row
+            row["unique_features"] = unique_features_str  # Assign unique features string specific to this run
+
+        return comparison_rows  # Return augmented rows to caller
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def build_comparison_rows(results_dict, min_pop, max_pop, dataset_name, cxpb, mutpb, n_generations):
     """
     Build a list of row dicts for the multi-run comparison table including cross-run feature overlap columns.
@@ -3954,19 +4000,7 @@ def build_comparison_rows(results_dict, min_pop, max_pop, dataset_name, cxpb, mu
                 comparison_rows.append(row)  # Add row to comparison list
                 all_feature_sets.append(set(aggregated["best_features_list"]))  # Collect feature set for cross-run overlap computation
 
-        if comparison_rows:  # Compute cross-run feature columns only when results are available
-            common_features_set = set.intersection(*all_feature_sets) if len(all_feature_sets) > 1 else set(all_feature_sets[0])  # Intersection of all run feature sets for this dataset
-            common_features_str = ",".join(sorted(common_features_set))  # Format as sorted comma-separated string
-
-            for idx, row in enumerate(comparison_rows):  # Annotate each row with cross-run feature analysis
-                run_feature_set = all_feature_sets[idx]  # Feature set for this specific run
-                other_sets = [all_feature_sets[j] for j in range(len(all_feature_sets)) if j != idx]  # All other runs' feature sets
-                union_others = set.union(*other_sets) if other_sets else set()  # Union of all feature sets except this run
-                unique_features_set = run_feature_set - union_others  # Features exclusive to this run not present in any other run
-                unique_features_str = ",".join(sorted(unique_features_set))  # Format as sorted comma-separated string
-
-                row["common_features"] = common_features_str  # Same value for all runs of this dataset
-                row["unique_features"] = unique_features_str  # Value specific to this run
+        comparison_rows = compute_common_and_unique_features(comparison_rows, all_feature_sets)  # Verify compute and append common/unique columns
 
         return comparison_rows  # Return collected comparison rows
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
