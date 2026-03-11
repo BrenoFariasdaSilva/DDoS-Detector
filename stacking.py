@@ -1206,7 +1206,7 @@ def find_data_augmentation_file(original_file_path, config=None):
             data_augmentation_suffix = config.get("stacking", {}).get("data_augmentation_suffix", "_data_augmented")  # Fallback to stacking config
         original_path = Path(original_file_path)  # Create Path object from the original file path
         data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Use configured Data_Augmentation subdir name
-        augmented_dir = original_path.parent / data_aug_subdir  # Build Data_Augmentation subdirectory path using config
+        augmented_dir = original_path.parent / data_aug_subdir / "Samples"  # Build Data_Augmentation/Samples subdirectory path using config
         augmented_filename = f"{original_path.stem}{data_augmentation_suffix}{original_path.suffix}"  # Build augmented filename with configured suffix
         augmented_file = augmented_dir / augmented_filename  # Construct the full augmented file path
 
