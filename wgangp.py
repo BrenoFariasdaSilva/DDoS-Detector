@@ -4841,6 +4841,45 @@ def resolve_checkpoint_after_training(args: Any, config: Dict, csv_path_obj: Pat
     return checkpoint_path  # Return resolved Path object for caller printing use
 
 
+def validate_augmentation_output(args: Any, csv_path_obj: Path, file_progress_prefix: str) -> None:
+    """
+    Validate that the augmented CSV file was written correctly after generation.
+
+    :param args: Argument namespace containing out_file path to validate.
+    :param csv_path_obj: Path object for the original input CSV file.
+    :param file_progress_prefix: Colored prefix string for progress display.
+    :return: None.
+    """
+
+    out_path = Path(args.out_file)  # Resolve output file path from args
+    original_name = csv_path_obj.name  # Extract original CSV filename for error messages
+    if not out_path.exists():  # Verify augmented file exists on disk
+        error_msg = f"[ERROR] WGAN-GP augmentation failed on {original_name} — generated dataset was not written at {out_path}"  # Build error message with file path
+        print(f"{BackgroundColors.RED}{error_msg}{Style.RESET_ALL}")  # Print error to console in red
+        send_telegram_message(TELEGRAM_BOT, error_msg)  # Send failure notification via Telegram
+        sys.exit(1)  # Terminate the script immediately to prevent silent continuation
+    file_size = out_path.stat().st_size  # Read file size in bytes from disk
+    if file_size == 0:  # Verify file is not empty
+        error_msg = f"[ERROR] WGAN-GP augmentation failed on {original_name} — augmented file {out_path.name} exists but is empty (0 bytes)"  # Build zero-size error message
+        print(f"{BackgroundColors.RED}{error_msg}{Style.RESET_ALL}")  # Print error to console in red
+        send_telegram_message(TELEGRAM_BOT, error_msg)  # Send zero-size failure notification via Telegram
+        sys.exit(1)  # Terminate the script immediately due to empty output
+    try:  # Attempt to read the augmented file to verify row count
+        row_count = len(pd.read_csv(str(out_path), low_memory=False))  # Count rows in the written augmented CSV
+    except Exception as read_err:  # Handle unreadable file gracefully
+        error_msg = f"[ERROR] WGAN-GP augmentation failed on {original_name} — augmented file {out_path.name} is unreadable: {read_err}"  # Build read-failure error message
+        print(f"{BackgroundColors.RED}{error_msg}{Style.RESET_ALL}")  # Print error to console in red
+        send_telegram_message(TELEGRAM_BOT, error_msg)  # Send read-failure notification via Telegram
+        sys.exit(1)  # Terminate the script due to unreadable output
+    if row_count == 0:  # Verify the augmented file contains at least one data row
+        error_msg = f"[ERROR] WGAN-GP augmentation failed on {original_name} — augmented file {out_path.name} has 0 data rows"  # Build zero-row error message
+        print(f"{BackgroundColors.RED}{error_msg}{Style.RESET_ALL}")  # Print error to console in red
+        send_telegram_message(TELEGRAM_BOT, error_msg)  # Send zero-row failure notification via Telegram
+        sys.exit(1)  # Terminate the script due to zero-row output
+    print(f"{file_progress_prefix} {BackgroundColors.GREEN}[INFO] Augmented dataset successfully saved ({BackgroundColors.CYAN}{row_count}{BackgroundColors.GREEN} samples){Style.RESET_ALL}")  # Log successful validation with sample count
+    send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} [INFO] Augmented dataset successfully saved ({row_count} samples) at {out_path}")  # Send success notification via Telegram
+
+
 def run_both_mode_for_csv(args: Any, config: Dict, csv_path_obj: Path, data_aug_dir: Path, training_label: str) -> None:
     """
     Execute combined train-then-generate workflow for a single CSV file.
@@ -4853,12 +4892,17 @@ def run_both_mode_for_csv(args: Any, config: Dict, csv_path_obj: Path, data_aug_
     :return: None
     """
 
+    file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Retrieve colored progress prefix from args or use default
     print(f"{BackgroundColors.GREEN}[1/2] {training_label}{Style.RESET_ALL}")  # Print training phase progress header with label
     execute_training_with_timing(args, config)  # Train model and record elapsed time on args
     checkpoint_path = resolve_checkpoint_after_training(args, config, csv_path_obj, data_aug_dir)  # Resolve generator checkpoint produced by training
     print(f"\n{BackgroundColors.CYAN}[2/2] Generating samples from {checkpoint_path.name}...{Style.RESET_ALL}")  # Print generation phase progress header with checkpoint filename
     print(f"{BackgroundColors.GREEN}Output will be saved to: {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print resolved output file destination path
+    print(f"{file_progress_prefix} {BackgroundColors.GREEN}[INFO] Generating synthetic samples for {BackgroundColors.CYAN}{csv_path_obj.name}{Style.RESET_ALL}")  # Log generation start for this CSV file
+    send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} [INFO] Generating synthetic samples for {csv_path_obj.name}")  # Send generation start notification via Telegram
     execute_generation_with_verification(args, config)  # Verify necessity and execute synthetic sample generation
+    print(f"{file_progress_prefix} {BackgroundColors.GREEN}[INFO] Saving augmented dataset: {BackgroundColors.CYAN}{Path(args.out_file).name}{Style.RESET_ALL}")  # Log augmented dataset file name being validated
+    validate_augmentation_output(args, csv_path_obj, file_progress_prefix)  # Validate augmented output file exists, is non-empty, and has rows
 
 
 def dispatch_single_file_mode(args: Any, config: Dict, mode: str, csv_path_obj: Path, data_aug_dir: Path) -> None:
