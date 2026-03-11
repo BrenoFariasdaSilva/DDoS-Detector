@@ -4648,6 +4648,118 @@ def compute_union_features_across_runs(runs_list):
         return []
 
 
+def parse_rfe_ranking_from_json(json_path):
+    """
+    Attempt to parse RFE rankings from a JSON summary file.
+
+    :param json_path: Path to the RFE_Summary.json file.
+    :return: Dictionary of feature names to RFE rankings, or None if parsing failed or file does not exist.
+    """
+
+    try:
+        if not verify_filepath_exists(json_path):  # If JSON summary does not exist
+            return None  # Signal that JSON was not available
+
+        try:  # Attempt to parse JSON
+            with open(json_path, "r", encoding="utf-8") as jf:  # Open JSON file
+                data = json.load(jf)  # Load JSON content
+            if isinstance(data, dict):  # Ensure data is a dictionary
+                if "rfe_ranking" in data and isinstance(data["rfe_ranking"], dict):  # Rfe_ranking key
+                    return data["rfe_ranking"]  # Use provided ranking
+                if (
+                    "per_run" in data and isinstance(data["per_run"], list) and len(data["per_run"]) > 0
+                ):  # Per_run list exists
+                    first = data["per_run"][0]  # First run entry
+                    if (
+                        isinstance(first, dict) and "ranking" in first and isinstance(first["ranking"], dict)
+                    ):  # Ranking dict
+                        return first["ranking"]  # Use ranking
+        except Exception as e:  # If parsing JSON fails
+            print(
+                f"{BackgroundColors.YELLOW}Failed to parse RFE JSON summary: {str(e)}. Skipping RFE ranking extraction.{Style.RESET_ALL}"
+            )  # Warn user
+            return {}  # Return empty dict to signal attempted but failed
+
+        return {}  # File existed but no ranking found
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def parse_rfe_ranking_from_csv(csv_path_runs):
+    """
+    Attempt to parse RFE rankings from a CSV runs summary file.
+
+    :param csv_path_runs: Path to the RFE_Runs_Summary.csv file.
+    :return: Dictionary of feature names to RFE rankings, or None if parsing failed or file does not exist.
+    """
+
+    try:
+        if not verify_filepath_exists(csv_path_runs):  # If CSV summary does not exist
+            return None  # Signal that CSV was not available
+
+        try:  # Attempt to parse CSV
+            with open(csv_path_runs, "r", encoding="utf-8") as cf:  # Open CSV file
+                reader = csv.DictReader(cf)  # Use DictReader to parse headered CSV
+                for row in reader:  # Iterate rows
+                    for key, val in row.items():  # For each column value
+                        if val and isinstance(val, str) and val.strip().startswith("{"):  # Looks like JSON
+                            try:  # Try parse JSON string
+                                parsed = json.loads(val)  # Parse JSON string
+                                if isinstance(parsed, dict) and all(
+                                    isinstance(k, str) for k in parsed.keys()
+                                ):  # Likely ranking
+                                    return parsed  # Return parsed dict as ranking
+                            except Exception:  # Ignore parse errors and continue
+                                pass  # Do nothing
+        except Exception as e:  # If reading CSV fails
+            print(
+                f"{BackgroundColors.YELLOW}Failed to parse RFE CSV summary: {str(e)}. Skipping RFE ranking extraction.{Style.RESET_ALL}"
+            )  # Warn user
+
+        return None  # CSV existed but no ranking found
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def parse_rfe_ranking_from_txt(legacy_txt):
+    """
+    Attempt to parse RFE rankings from a legacy plain-text results file.
+
+    :param legacy_txt: Path to the legacy RFE TXT file.
+    :return: Dictionary of feature names to RFE rankings (may be empty on parse failure).
+    """
+
+    try:
+        rfe_ranking = {}  # Initialize empty ranking dictionary
+
+        try:  # Attempt to parse TXT file
+            with open(legacy_txt, "r", encoding="utf-8") as f:  # Open legacy TXT
+                lines = f.readlines()  # Read lines
+            for line in lines:  # Iterate lines
+                line = line.strip()  # Strip whitespace
+                if not line:  # Skip empty lines
+                    continue  # Continue
+                m = re.match(r"^\s*(\d+)\.?\s+(.+?)\s*$", line)  # Try numeric prefix
+                if m:  # If matched numbered list
+                    rank = int(m.group(1))  # Get rank number
+                    feat = m.group(2).strip()  # Get feature name
+                    rfe_ranking[feat] = rank  # Store ranking
+        except Exception as e:  # If parsing fails
+            print(
+                f"{BackgroundColors.YELLOW}Failed to parse legacy RFE TXT: {str(e)}. Returning empty ranking.{Style.RESET_ALL}"
+            )  # Notify user
+
+        return rfe_ranking  # Return the RFE rankings dictionary
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def extract_rfe_ranking(csv_path):
     """
     Extract RFE rankings from the RFE results file.
@@ -4673,48 +4785,13 @@ def extract_rfe_ranking(csv_path):
         csv_path_runs = os.path.join(resolved_rfe_dir, "RFE_Runs_Summary.csv")  # Path to runs summary CSV
         legacy_txt = os.path.join(resolved_rfe_dir, "RFE_results_RandomForestClassifier.txt")  # Legacy TXT path (fallback)
 
-        if verify_filepath_exists(json_path):  # If JSON summary exists
-            try:  # Attempt to parse JSON
-                with open(json_path, "r", encoding="utf-8") as jf:  # Open JSON file
-                    data = json.load(jf)  # Load JSON content
-                if isinstance(data, dict):  # Ensure data is a dictionary
-                    if "rfe_ranking" in data and isinstance(data["rfe_ranking"], dict):  # Rfe_ranking key
-                        rfe_ranking = data["rfe_ranking"]  # Use provided ranking
-                    elif (
-                        "per_run" in data and isinstance(data["per_run"], list) and len(data["per_run"]) > 0
-                    ):  # Per_run list exists
-                        first = data["per_run"][0]  # First run entry
-                        if (
-                            isinstance(first, dict) and "ranking" in first and isinstance(first["ranking"], dict)
-                        ):  # Ranking dict
-                            rfe_ranking = first["ranking"]  # Use ranking
-            except Exception as e:  # If parsing JSON fails
-                print(
-                    f"{BackgroundColors.YELLOW}Failed to parse RFE JSON summary: {str(e)}. Skipping RFE ranking extraction.{Style.RESET_ALL}"
-                )  # Warn user
-                return rfe_ranking  # Return whatever we have (likely empty)
-            return rfe_ranking  # Return ranking extracted from JSON
+        json_result = parse_rfe_ranking_from_json(json_path)  # Attempt to extract ranking from JSON summary
+        if json_result is not None:  # If JSON parsing returned a result (even empty dict means file was found)
+            return json_result  # Return ranking extracted from JSON
 
-        if verify_filepath_exists(csv_path_runs):  # If CSV summary exists
-            try:  # Attempt to parse CSV
-                with open(csv_path_runs, "r", encoding="utf-8") as cf:  # Open CSV file
-                    reader = csv.DictReader(cf)  # Use DictReader to parse headered CSV
-                    for row in reader:  # Iterate rows
-                        for key, val in row.items():  # For each column value
-                            if val and isinstance(val, str) and val.strip().startswith("{"):  # Looks like JSON
-                                try:  # Try parse JSON string
-                                    parsed = json.loads(val)  # Parse JSON string
-                                    if isinstance(parsed, dict) and all(
-                                        isinstance(k, str) for k in parsed.keys()
-                                    ):  # Likely ranking
-                                        rfe_ranking = parsed  # Use parsed dict as ranking
-                                        return rfe_ranking  # Return early
-                                except Exception:  # Ignore parse errors and continue
-                                    pass
-            except Exception as e:  # If reading CSV fails
-                print(
-                    f"{BackgroundColors.YELLOW}Failed to parse RFE CSV summary: {str(e)}. Skipping RFE ranking extraction.{Style.RESET_ALL}"
-                )  # Warn user
+        csv_result = parse_rfe_ranking_from_csv(csv_path_runs)  # Attempt to extract ranking from CSV summary
+        if csv_result is not None:  # If CSV parsing returned a result
+            return csv_result  # Return ranking extracted from CSV
 
         if not verify_filepath_exists(legacy_txt):  # If no legacy file either
             print(
@@ -4722,28 +4799,12 @@ def extract_rfe_ranking(csv_path):
             )  # Notify user
             return rfe_ranking  # Return empty dictionary
 
-        try:  # Attempt to parse TXT file
-            with open(legacy_txt, "r", encoding="utf-8") as f:  # Open legacy TXT
-                lines = f.readlines()  # Read lines
-            for line in lines:  # Iterate lines
-                line = line.strip()  # Strip whitespace
-                if not line:  # Skip empty lines
-                    continue  # Continue
-                m = re.match(r"^\s*(\d+)\.?\s+(.+?)\s*$", line)  # Try numeric prefix
-                if m:  # If matched numbered list
-                    rank = int(m.group(1))  # Get rank number
-                    feat = m.group(2).strip()  # Get feature name
-                    rfe_ranking[feat] = rank  # Store ranking
-        except Exception as e:  # If parsing fails
-            print(
-                f"{BackgroundColors.YELLOW}Failed to parse legacy RFE TXT: {str(e)}. Returning empty ranking.{Style.RESET_ALL}"
-            )  # Notify user
-
-            return rfe_ranking  # Return the RFE rankings dictionary
+        return parse_rfe_ranking_from_txt(legacy_txt)  # Parse and return ranking from legacy TXT file
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
         raise  # Re-raise to preserve original failure semantics
+
 
 def extract_elapsed_from_metrics(metrics, index=6):
     """
