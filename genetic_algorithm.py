@@ -5128,6 +5128,48 @@ def sort_run_index_first(df_combined):
         raise  # Re-raise to preserve original failure semantics
 
 
+def merge_and_sort_with_existing_csv(df_new, csv_out, results_cols):
+    """
+    Merge new result rows with an existing CSV file (if present) and sort by timestamp.
+
+    If "csv_out" exists, reads it, ensures all expected columns are present,
+    concatenates with "df_new", and sorts by timestamp (newest first).
+    If no existing file, returns "df_new" unchanged.
+
+    :param df_new: DataFrame of new result rows to append.
+    :param csv_out: Path to the existing (or target) CSV file.
+    :param results_cols: List of expected column names for ordering and completeness.
+    :return: DataFrame with merged and sorted rows.
+    """
+
+    try:
+        if os.path.exists(csv_out):  # If the consolidated CSV already exists, we need to merge with existing data
+            df_existing = pd.read_csv(csv_out, dtype=str)  # Read existing CSV as strings to avoid type issues
+            if "timestamp" not in df_existing.columns:  # If the existing CSV is missing the "timestamp" column, add it with a default value based on file modification time
+                print(
+                    f"{BackgroundColors.YELLOW}Warning: Existing CSV missing 'timestamp' column. Adding default timestamps.{Style.RESET_ALL}"
+                )  # Warn user about missing timestamp
+                mtime = os.path.getmtime(csv_out)  # Get file modification time
+                back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")  # Format timestamp based on file modification time
+                df_existing["timestamp"] = back_ts  # Add the timestamp column with the default value
+            for c in results_cols or []:  # Ensure all expected columns are present in the existing DataFrame, adding any missing ones with None values
+                if c not in df_existing.columns:  # If an expected column is missing
+                    df_existing[c] = None  # Add the missing column with None values
+            df_combined = pd.concat([df_existing[results_cols or []], df_new], ignore_index=True, sort=False)  # Combine existing and new DataFrames, ensuring column order
+            try:  # Try to sort by timestamp if the column exists and is properly formatted
+                df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")  # Parse timestamp into datetime, coercing errors to NaT
+                df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)  # Sort by the parsed datetime column in descending order (newest first)
+                df_combined = df_combined.drop(columns=["timestamp_dt"])  # Remove the temporary datetime column after sorting
+            except Exception:  # If sorting by timestamp fails (e.g., due to parsing issues), fall back to sorting by timestamp string
+                df_combined = df_combined.sort_values(by="timestamp", ascending=False)  # Sort by timestamp as a string (may not be perfectly chronological if formatting is inconsistent)
+            return df_combined.reset_index(drop=True)  # Reset index after sorting and return
+        return df_new  # No existing CSV, use the new DataFrame directly
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def write_consolidated_csv(rows, output_dir):
     """
     Write the consolidated GA results rows to a CSV file inside "output_dir".
@@ -5158,28 +5200,7 @@ def write_consolidated_csv(rows, output_dir):
                     raise ValueError("genetic_algorithm.export.results_filename must end with .csv")
                 csv_out = os.path.join(output_dir, results_filename)  # Build path for consolidated CSV
 
-                if os.path.exists(csv_out):  # If the consolidated CSV already exists, we need to merge with existing data
-                    df_existing = pd.read_csv(csv_out, dtype=str)  # Read existing CSV as strings to avoid type issues
-                    if "timestamp" not in df_existing.columns:  # If the existing CSV is missing the "timestamp" column, add it with a default value based on file modification time
-                        print(
-                            f"{BackgroundColors.YELLOW}Warning: Existing CSV missing 'timestamp' column. Adding default timestamps.{Style.RESET_ALL}"
-                        )
-                        mtime = os.path.getmtime(csv_out)  # Get file modification time
-                        back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")  # Format timestamp based on file modification time
-                        df_existing["timestamp"] = back_ts  # Add the timestamp column with the default value
-                    for c in results_cols or []:  # Ensure all expected columns are present in the existing DataFrame, adding any missing ones with None values
-                        if c not in df_existing.columns:  # If an expected column is missing
-                            df_existing[c] = None  # Add the missing column with None values
-                    df_combined = pd.concat([df_existing[results_cols or []], df_new], ignore_index=True, sort=False)  # Combine existing and new DataFrames, ensuring column order
-                    try:  # Try to sort by timestamp if the column exists and is properly formatted
-                        df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")  # Parse timestamp into datetime, coercing errors to NaT
-                        df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)  # Sort by the parsed datetime column in descending order (newest first)
-                        df_combined = df_combined.drop(columns=["timestamp_dt"])  # Remove the temporary datetime column after sorting
-                    except Exception:  # If sorting by timestamp fails (e.g., due to parsing issues), fall back to sorting by dataset and run_index
-                        df_combined = df_combined.sort_values(by="timestamp", ascending=False)  # Sort by timestamp as a string (may not be perfectly chronological if formatting is inconsistent)
-                    df_out = df_combined.reset_index(drop=True)  # Reset index after sorting
-                else:  # No existing CSV, so we can just use the new DataFrame as is
-                    df_out = df_new  # Use the new DataFrame directly
+                df_out = merge_and_sort_with_existing_csv(df_new, csv_out, results_cols)  # Merge new rows with existing CSV (if present) and sort by timestamp
 
                 df_out = populate_hardware_column(df_out, column_name="hardware")  # Populate hardware column using system specs
 
