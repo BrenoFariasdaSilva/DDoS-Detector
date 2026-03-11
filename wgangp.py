@@ -775,7 +775,8 @@ def build_default_output_and_notification_config() -> Dict:
             "out_dir": "outputs",  # Output directory for models/logs
             "logs_dir": "./Logs",  # Directory for log files
             "checkpoint_subdir": "Checkpoints",  # Checkpoints subdirectory name
-            "data_augmentation_subdir": "Data_Augmentation",  # Data augmentation subdirectory name
+            "data_augmentation_dir": "Data_Augmentation",  # Base directory for all augmentation artifacts
+            "data_augmentation_sample_dir": "Samples",  # Subdirectory containing generated augmented dataset CSV files
         },
         "logging": {  # Logging configuration
             "enabled": True,  # Enable file logging
@@ -1574,13 +1575,13 @@ def resolve_plot_save_directory(out_dir: str, config: Dict) -> Path:
     :return: Path object for the resolved plot save directory.
     """
 
-    data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get data augmentation subdir from config
+    data_aug_subdir = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Get data augmentation base directory name from config
     plotting_subdir = config.get("plotting", {}).get("subdir", "plots")  # Get plotting subdir from config
     out_path = Path(out_dir)  # Convert provided out_dir to a Path object for safe operations
-    if out_path.name == data_aug_subdir:  # If out_dir already ends with the data_augmentation subdir
+    if out_path.name == data_aug_subdir:  # If out_dir already ends with the data_augmentation base directory
         save_dir = out_path / plotting_subdir  # Use out_dir plus plotting subdir (avoid duplicating Data_Augmentation)
     else:  # Otherwise, out_dir does not include data_augmentation yet
-        save_dir = out_path / data_aug_subdir / plotting_subdir  # Append Data_Augmentation then plotting subdir
+        save_dir = out_path / data_aug_subdir / plotting_subdir  # Append data augmentation base directory then plotting subdir
     try:  # Try to create the save directory, but catch exceptions
         save_dir.mkdir(parents=True, exist_ok=True)  # Create save directory with parents if it doesn't exist
     except Exception as e:  # Catch any exception during directory creation
@@ -1810,7 +1811,7 @@ def send_file_saved_and_timing_messages(args: Any, config: Dict) -> None:  # Cre
         try:  # Attempt derivation of default generated file path from csv_path and config
             csv_obj = Path(args.csv_path)  # Construct Path from provided CSV path
             suffix = config.get("wgangp", {}).get("results_suffix", "_data_augmented")  # Read results suffix from wgangp config
-            derived = csv_obj.parent / config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / "Samples" / f"{csv_obj.stem}{suffix}.csv"  # Build derived path in Data_Augmentation/Samples
+            derived = csv_obj.parent / config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation") / config.get("paths", {}).get("data_augmentation_sample_dir", "Samples") / f"{csv_obj.stem}{suffix}.csv"  # Build derived path in data augmentation samples directory
             gen_file = str(derived)  # Use derived path string as generated file path
         except Exception:  # If derivation fails, fall back to empty string silently
             gen_file = ""  # Leave generated file string empty on failure
@@ -2246,9 +2247,9 @@ def init_results_csv_and_feature_dims(args, config: Dict, dataset) -> tuple:
     if getattr(args, "csv_path", None):  # If csv_path provided, prepare persistent results CSV handle
         try:  # Attempt to open results CSV once with header written if needed
             csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
-            data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read Data_Augmentation subdir from config
-            data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation directory under dataset folder
-            os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before writing
+            data_aug_subdir = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Read data augmentation base directory name from config
+            data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct data augmentation directory under dataset folder
+            os.makedirs(data_aug_dir, exist_ok=True)  # Ensure data augmentation directory exists before writing
             results_csv_path = data_aug_dir / "data_augmentation_results.csv"  # Place results CSV inside Data_Augmentation dir
             results_csv_file, results_csv_writer = open_results_csv(results_csv_path, results_cols_cfg)  # Open and cache writer
         except Exception as _rw:  # On failure, warn and continue without persistent csv
@@ -3143,7 +3144,7 @@ def build_final_training_runtime_row(args, config: Dict, dataset, metrics_histor
         try:  # Attempt to construct derived augmented file path
             csv_obj = Path(args.csv_path)  # Path object for csv
             suffix = config.get("wgangp", {}).get("results_suffix", "_data_augmented")  # Suffix from wgangp config
-            derived = csv_obj.parent / config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation") / "Samples" / f"{csv_obj.stem}{suffix}.csv"  # Construct path in Data_Augmentation/Samples
+            derived = csv_obj.parent / config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation") / config.get("paths", {}).get("data_augmentation_sample_dir", "Samples") / f"{csv_obj.stem}{suffix}.csv"  # Construct path in data augmentation samples directory
             gen_file = str(derived)  # Use derived path string
         except Exception:  # If derivation fails
             gen_file = ""  # Leave blank on failure
@@ -4100,9 +4101,9 @@ def resolve_generation_results_csv_path(args, config: Dict, args_ck: Dict) -> tu
     ck_csv_path = None  # Initialize checkpoint csv Path placeholder to satisfy static analysis
     if getattr(args, "csv_path", None):  # If csv_path available on args
         csv_path_obj = Path(args.csv_path)  # Create Path object from args.csv_path
-        data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read configured subdir name
-        data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation directory under dataset folder
-        os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before writing
+        data_aug_subdir = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Read configured data augmentation base directory name
+        data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct data augmentation directory under dataset folder
+        os.makedirs(data_aug_dir, exist_ok=True)  # Ensure data augmentation directory exists before writing
         results_csv_path = data_aug_dir / "data_augmentation_results.csv"  # Use results CSV inside Data_Augmentation dir
     else:  # Try to recover original csv_path from checkpoint args saved in checkpoint
         ck_csv_path = None  # Reset checkpoint csv path
@@ -4111,8 +4112,8 @@ def resolve_generation_results_csv_path(args, config: Dict, args_ck: Dict) -> tu
                 ck_csv_value = args_ck.get("csv_path")  # Get csv_path value from checkpoint args
                 if ck_csv_value:  # If value is non-empty
                     ck_csv_path = Path(ck_csv_value)  # Path object for saved csv_path from checkpoint
-                    ck_data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read subdir name from config
-                    ck_data_aug_dir = ck_csv_path.parent / ck_data_aug_subdir  # Construct Data_Augmentation directory for checkpoint csv_path
+                    ck_data_aug_subdir = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Read data augmentation base directory name from config
+                    ck_data_aug_dir = ck_csv_path.parent / ck_data_aug_subdir  # Construct data augmentation directory for checkpoint csv_path
                     os.makedirs(ck_data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists for checkpoint recover
                     results_csv_path = ck_data_aug_dir / "data_augmentation_results.csv"  # Use results CSV inside Data_Augmentation dir for checkpoint
                 else:  # Empty csv_path value in checkpoint
@@ -4736,14 +4737,14 @@ def dispatch_wgangp_execution_mode(args, final_config: Dict) -> None:
             args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
             if args.csv_path:  # If CSV provided
                 csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path for path operations
-                data_aug_subdir = final_config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read configured data augmentation subdirectory name
-                data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation directory alongside input file
-                os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before output file assignment
+                data_aug_subdir = final_config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Read configured data augmentation base directory name
+                data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct data augmentation directory alongside input file
+                os.makedirs(data_aug_dir, exist_ok=True)  # Ensure data augmentation directory exists before output file assignment
                 results_suffix = final_config.get("wgangp", {}).get("results_suffix", "_data_augmented")  # Read output filename suffix from config
                 output_filename = f"{csv_path_obj.stem}{results_suffix}{csv_path_obj.suffix}"  # Build output filename by appending suffix to input stem
                 if args.out_file == "generated.csv":  # Update default output path when still at default value
-                    samples_dir = data_aug_dir / "Samples"  # Build Samples subdirectory path inside Data_Augmentation
-                    os.makedirs(samples_dir, exist_ok=True)  # Ensure Samples subdirectory exists before output file assignment
+                    samples_dir = data_aug_dir / final_config.get("paths", {}).get("data_augmentation_sample_dir", "Samples")  # Build augmented samples subdirectory path inside data augmentation directory
+                    os.makedirs(samples_dir, exist_ok=True)  # Ensure augmented samples subdirectory exists before output file assignment
                     args.out_file = str(samples_dir / output_filename)  # Assign resolved output file path to args for generation
                 checkpoint_dir = data_aug_dir / final_config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")  # Construct checkpoint directory path under Data_Augmentation
                 checkpoint_path = checkpoint_dir / f"{csv_path_obj.stem}_generator_epoch{args.epochs}.pt"  # Construct expected final-epoch checkpoint filename
@@ -4937,16 +4938,16 @@ def setup_single_file_output_path(args: Any, config: Dict, csv_path_obj: Path, m
     """
 
     if args.out_file == "generated.csv" and mode in ["gen", "both"]:  # Update default output path when in generation or combined mode
-        data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get configured subdir name for this branch
-        data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation subdirectory path alongside input file
-        os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before output path assignment
+        data_aug_subdir = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Get configured data augmentation base directory name for this branch
+        data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct data augmentation subdirectory path alongside input file
+        os.makedirs(data_aug_dir, exist_ok=True)  # Ensure data augmentation directory exists before output path assignment
         output_filename = f"{csv_path_obj.stem}{results_suffix}{csv_path_obj.suffix}"  # Build output filename by appending suffix to input stem
-        samples_dir = data_aug_dir / "Samples"  # Build Samples subdirectory path inside Data_Augmentation
-        os.makedirs(samples_dir, exist_ok=True)  # Ensure Samples subdirectory exists before output file assignment
+        samples_dir = data_aug_dir / config.get("paths", {}).get("data_augmentation_sample_dir", "Samples")  # Build augmented samples subdirectory path inside data augmentation directory
+        os.makedirs(samples_dir, exist_ok=True)  # Ensure augmented samples subdirectory exists before output file assignment
         args.out_file = str(samples_dir / output_filename)  # Assign resolved output file path to args for downstream use
-    data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Re-read subdir name for authoritative path computation
-    data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Build canonical Data_Augmentation directory path for results CSV
-    os.makedirs(data_aug_dir, exist_ok=True)  # Ensure canonical Data_Augmentation directory exists before results CSV creation
+    data_aug_subdir = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Re-read data augmentation base directory name for authoritative path computation
+    data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Build canonical data augmentation directory path for results CSV
+    os.makedirs(data_aug_dir, exist_ok=True)  # Ensure canonical data augmentation directory exists before results CSV creation
     return data_aug_dir  # Return canonical data augmentation directory path for downstream use
 
 
@@ -5179,12 +5180,12 @@ def setup_per_file_output(args: Any, config: Dict, file: str, results_suffix: st
     """
 
     csv_path_obj = Path(file)  # Create Path object from file string for path operations
-    data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Get configured data augmentation subdirectory name
-    data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct Data_Augmentation directory path relative to input file
-    os.makedirs(data_aug_dir, exist_ok=True)  # Ensure Data_Augmentation directory exists before output file creation
+    data_aug_subdir = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Get configured data augmentation base directory name
+    data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct data augmentation directory path relative to input file
+    os.makedirs(data_aug_dir, exist_ok=True)  # Ensure data augmentation directory exists before output file creation
     output_filename = f"{csv_path_obj.stem}{results_suffix}{csv_path_obj.suffix}"  # Build output filename by appending suffix to input stem
-    samples_dir = data_aug_dir / "Samples"  # Build Samples subdirectory path inside Data_Augmentation
-    os.makedirs(samples_dir, exist_ok=True)  # Ensure Samples subdirectory exists before output file creation
+    samples_dir = data_aug_dir / config.get("paths", {}).get("data_augmentation_sample_dir", "Samples")  # Build augmented samples subdirectory path inside data augmentation directory
+    os.makedirs(samples_dir, exist_ok=True)  # Ensure augmented samples subdirectory exists before output file creation
     args.out_file = str(samples_dir / output_filename)  # Assign computed output file path to args
     args.csv_path = file  # Assign current CSV file path to args for train and generate functions
     return csv_path_obj, data_aug_dir  # Return Path objects for mode dispatch use
@@ -5282,8 +5283,8 @@ def process_dataset_path(args: Any, config: Dict, mode: str, input_path: str, re
     :return: None
     """
 
-    data_aug_subdir = config.get("paths", {}).get("data_augmentation_subdir", "Data_Augmentation")  # Read configured data augmentation subdirectory name
-    data_aug_dir = Path(input_path) / data_aug_subdir  # Construct Data_Augmentation directory path inside dataset root
+    data_aug_subdir = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Read configured data augmentation base directory name
+    data_aug_dir = Path(input_path) / data_aug_subdir  # Construct data augmentation directory path inside dataset root
     per_dir_results_csv = data_aug_dir / "data_augmentation_results.csv"  # Build path for per-directory results CSV
     
     create_results_csv_if_absent(per_dir_results_csv, results_cols)  # Write header to results CSV when file does not yet exist
