@@ -1132,6 +1132,88 @@ def signal_new_file(file_path):
         raise  # Re-raise to preserve original failure semantics
 
 
+def build_progress_bar_description(dataset_name, csv_path, pop_size, max_pop, gen, n_generations, run, runs, progress_state):
+    """
+    Build the formatted description string for a tqdm progress bar.
+
+    Assembles dataset name, CSV filename, run/population/generation info,
+    and optional iteration counts into a colour-coded description.
+
+    :param dataset_name: Name of the dataset.
+    :param csv_path: Path to the CSV file.
+    :param pop_size: Current population size (or None).
+    :param max_pop: Maximum population size (or None).
+    :param gen: Current generation number (or None).
+    :param n_generations: Total number of generations (or None).
+    :param run: Current run index, 1-based (or None).
+    :param runs: Total runs (or None).
+    :param progress_state: Optional dict with keys "current_it" and "total_it".
+    :return: Formatted description string.
+    """
+
+    try:
+        run_str = (
+            f"{BackgroundColors.GREEN}Run {BackgroundColors.CYAN}{run}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{runs}{BackgroundColors.GREEN}"
+            if run is not None and runs is not None
+            else None
+        )  # Format run counter string if both run and runs are provided
+
+        csv_basename = os.path.basename(csv_path)  # Get the CSV filename
+        parent_dir = os.path.basename(os.path.dirname(csv_path))  # Get parent directory name
+        if (
+            parent_dir.lower() != (dataset_name or "").lower()
+        ):  # If parent directory differs from dataset_name (case-insensitive)
+            csv_filename = f"{BackgroundColors.CYAN}{parent_dir}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{csv_basename}"  # Include parent directory
+        else:  # If parent directory is same as dataset_name
+            csv_filename = csv_basename  # Use only basename
+
+        if run_str:  # If run string is provided
+            base = f"{BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} Dataset - {BackgroundColors.CYAN}{csv_filename}{BackgroundColors.GREEN}: {run_str}{Style.RESET_ALL}"  # Base description with run info
+        else:  # If no run string
+            base = f"{BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} Dataset - {BackgroundColors.CYAN}{csv_filename}{Style.RESET_ALL}"  # Base description without run info
+
+        details = []  # List to hold detail strings (pop, gen)
+        if pop_size is not None:  # If population size is provided
+            if max_pop is not None:  # If maximum population size is also provided
+                details.append(
+                    f"{BackgroundColors.GREEN}Pop {BackgroundColors.CYAN}{pop_size}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{max_pop}"
+                )  # Show current/max population
+            else:  # If only current population size is provided
+                details.append(
+                    f"{BackgroundColors.GREEN}Pop {BackgroundColors.CYAN}{pop_size}"
+                )  # Show current population only
+
+        if gen is not None and n_generations is not None:  # If generation and total generations are provided
+            details.append(
+                f"{BackgroundColors.GREEN}Gen {BackgroundColors.CYAN}{gen}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{n_generations}"
+            )  # Show current/total generations
+        elif gen is not None:  # If only generation is provided
+            details.append(f"{BackgroundColors.GREEN}Gen {BackgroundColors.CYAN}{gen}")  # Show current generation only
+        elif n_generations is not None:  # If only total generations is provided
+            details.append(
+                f"{BackgroundColors.GREEN}Gen {BackgroundColors.CYAN}{n_generations}"
+            )  # Show total generations only
+        if details:  # If there are any details to show
+            detail_str = ", ".join(details)  # Join details with commas
+            desc = f"{base}{BackgroundColors.GREEN} - {detail_str}{Style.RESET_ALL}"  # Append details to base
+        else:  # If no details
+            desc = base  # Just use the base description
+
+        if progress_state and isinstance(progress_state, dict):  # If progress_state dict is provided
+            try:  # Try to extract iteration info
+                current_it = int(progress_state.get("current_it", 0))  # Current iteration
+                total_it = int(progress_state.get("total_it", 0))  # Total iterations
+                desc = f"{desc} [{BackgroundColors.CYAN}{current_it}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{total_it}{BackgroundColors.GREEN} iterations]{Style.RESET_ALL}"  # Append iteration info
+            except Exception:  # Silently ignore iteration info extraction failures
+                pass  # Do nothing
+
+        return desc  # Return assembled description string
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def update_progress_bar(
     progress_bar,
     dataset_name,
@@ -1163,60 +1245,9 @@ def update_progress_bar(
         if progress_bar is None:  # If no progress bar is provided
             return  # Do nothing
         try:  # Try to update the progress bar
-            run_str = (
-                f"{BackgroundColors.GREEN}Run {BackgroundColors.CYAN}{run}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{runs}{BackgroundColors.GREEN}"
-                if run is not None and runs is not None
-                else None
-            )
-
-            csv_basename = os.path.basename(csv_path)  # Get the CSV filename
-            parent_dir = os.path.basename(os.path.dirname(csv_path))  # Get parent directory name
-            if (
-                parent_dir.lower() != (dataset_name or "").lower()
-            ):  # If parent directory differs from dataset_name (case-insensitive)
-                csv_filename = f"{BackgroundColors.CYAN}{parent_dir}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{csv_basename}"  # Include parent directory
-            else:  # If parent directory is same as dataset_name
-                csv_filename = csv_basename  # Use only basename
-
-            if run_str:  # If run string is provided
-                base = f"{BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} Dataset - {BackgroundColors.CYAN}{csv_filename}{BackgroundColors.GREEN}: {run_str}{Style.RESET_ALL}"  # Base description with run info
-            else:  # If no run string
-                base = f"{BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} Dataset - {BackgroundColors.CYAN}{csv_filename}{Style.RESET_ALL}"  # Base description without run info
-
-            details = []  # List to hold detail strings (pop, gen)
-            if pop_size is not None:  # If population size is provided
-                if max_pop is not None:  # If maximum population size is also provided
-                    details.append(
-                        f"{BackgroundColors.GREEN}Pop {BackgroundColors.CYAN}{pop_size}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{max_pop}"
-                    )  # Show current/max population
-                else:  # If only current population size is provided
-                    details.append(
-                        f"{BackgroundColors.GREEN}Pop {BackgroundColors.CYAN}{pop_size}"
-                    )  # Show current population only
-
-            if gen is not None and n_generations is not None:  # If generation and total generations are provided
-                details.append(
-                    f"{BackgroundColors.GREEN}Gen {BackgroundColors.CYAN}{gen}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{n_generations}"
-                )  # Show current/total generations
-            elif gen is not None:  # If only generation is provided
-                details.append(f"{BackgroundColors.GREEN}Gen {BackgroundColors.CYAN}{gen}")  # Show current generation only
-            elif n_generations is not None:  # If only total generations is provided
-                details.append(
-                    f"{BackgroundColors.GREEN}Gen {BackgroundColors.CYAN}{n_generations}"
-                )  # Show total generations only
-            if details:  # If there are any details to show
-                detail_str = ", ".join(details)  # Join details with commas
-                desc = f"{base}{BackgroundColors.GREEN} - {detail_str}{Style.RESET_ALL}"
-            else:  # If no details
-                desc = base  # Just use the base description
-
-            if progress_state and isinstance(progress_state, dict):  # If progress_state dict is provided
-                try:  # Try to extract iteration info
-                    current_it = int(progress_state.get("current_it", 0))  # Current iteration
-                    total_it = int(progress_state.get("total_it", 0))  # Total iterations
-                    desc = f"{desc} [{BackgroundColors.CYAN}{current_it}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{total_it}{BackgroundColors.GREEN} iterations]{Style.RESET_ALL}"  # Append iteration info
-                except Exception:  # Silently ignore iteration info extraction failures
-                    pass  # Do nothing
+            desc = build_progress_bar_description(
+                dataset_name, csv_path, pop_size, max_pop, gen, n_generations, run, runs, progress_state
+            )  # Build the formatted progress bar description string
 
             progress_bar.set_description(desc)  # Update the progress bar description
             progress_bar.refresh()  # Refresh the progress bar display
