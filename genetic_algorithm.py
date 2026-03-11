@@ -4649,6 +4649,62 @@ def generate_multi_run_comparison_plots(results_dict, csv_path, dataset_name, mi
         raise  # Re-raise to preserve original failure semantics
 
 
+def plot_feature_usage_used_only(feature_run_counts: dict, total_runs: int, comparison_dir: str, base_dataset_name: str, dataset_name: str) -> str | None:
+    """
+    Generate a horizontal bar chart of all features selected in at least one GA run.
+
+    :param feature_run_counts: Dict mapping feature name to number of runs in which it was selected.
+    :param total_runs: Total number of GA runs executed.
+    :param comparison_dir: Output directory where the plot will be saved.
+    :param base_dataset_name: Sanitized dataset name used for the output filename.
+    :param dataset_name: Display name of the dataset for the plot title.
+    :return: Path to the saved plot file, or None if generation failed.
+    """
+
+    try:
+        if not feature_run_counts or total_runs == 0:  # Verify that data is available before plotting
+            return None  # Return None when no data is present
+
+        used_features = {f: c for f, c in feature_run_counts.items() if c > 0}  # Filter to features used at least once
+
+        if not used_features:  # Verify that at least one feature was used across runs
+            return None  # Return None when no features were used
+
+        features_sorted = sorted(used_features, key=lambda f: used_features[f], reverse=True)  # Sort used features descending by usage count
+        counts_sorted = [used_features[f] for f in features_sorted]  # Extract counts in sorted order
+        pcts_sorted = [(c / total_runs) * 100 for c in counts_sorted]  # Compute usage percentages in sorted order
+
+        fig_height = max(6, len(features_sorted) * 0.35)  # Compute dynamic figure height based on feature count
+        fig, ax = plt.subplots(figsize=(14, fig_height))  # Create figure with dynamic height
+
+        y_pos = list(range(len(features_sorted)))  # Generate y-axis positions for bars
+        bars = ax.barh(y_pos, pcts_sorted, color="#2ca02c", alpha=0.85, edgecolor="black", linewidth=0.5)  # Draw horizontal bars
+
+        ax.set_yticks(y_pos)  # Set y-axis tick positions
+        ax.set_yticklabels(features_sorted, fontsize=max(5, min(10, int(200 / max(len(features_sorted), 1)))))  # Set feature name labels with size adaptive to count
+        ax.invert_yaxis()  # Invert so highest usage appears at the top
+
+        for bar, count, pct in zip(bars, counts_sorted, pcts_sorted):  # Annotate each bar with percentage and count labels
+            ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2, f"{pct:.2f}% ({count}/{total_runs})", va="center", ha="left", fontsize=max(5, min(9, int(180 / max(len(features_sorted), 1)))))  # Place label just right of bar tip with adaptive font size
+
+        ax.set_xlabel("Percentage of Runs Using Feature (%)", fontsize=12)  # Set X-axis label
+        ax.set_ylabel("Feature", fontsize=12)  # Set Y-axis label
+        ax.set_title(f"Feature Usage Across Runs (Used At Least Once)\n{dataset_name} ({total_runs} runs)", fontsize=14)  # Set plot title
+        ax.set_xlim(0, 115)  # Extend X limit to leave space for bar labels
+        ax.grid(True, linestyle="--", alpha=0.3, axis="x")  # Add X-axis grid lines
+
+        plt.tight_layout()  # Adjust layout to prevent clipping
+
+        plot_path = os.path.join(comparison_dir, f"{base_dataset_name}_feature_usage_used_only.png")  # Construct full output path
+        ensure_figure_min_4k_and_save(fig=plt.gcf(), path=plot_path, dpi=300)  # Save figure at minimum 4K resolution
+        plt.close()  # Close figure to free memory
+
+        return plot_path  # Return path to saved plot
+    except Exception:  # If plotting fails do not abort the pipeline
+        plt.close()  # Close any open figure to prevent memory leak
+        return None  # Return None on failure
+
+
 def plot_feature_usage_all_features(feature_run_counts: dict, total_runs: int, feature_names: list, comparison_dir: str, base_dataset_name: str, dataset_name: str) -> str | None:
     """
     Generate a horizontal bar chart of all dataset features including those never selected.
