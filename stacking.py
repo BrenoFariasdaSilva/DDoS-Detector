@@ -6388,6 +6388,105 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         raise
 
 
+def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=None):
+    """
+    Evaluates the stacking classifier for one feature set, exports the model, generates metric plots, and returns the result entry.
+
+    :param name: Name of the current feature set being evaluated
+    :param stacking_model: Fitted stacking classifier model object
+    :param X_train_df: Training feature DataFrame with named columns
+    :param y_train: Training target labels
+    :param X_test_df: Test feature DataFrame with named columns
+    :param y_test: Test target labels
+    :param X_test_subset: Test feature array for explainability pipeline input
+    :param X_train_n_cols: Number of training columns used for result entry metadata
+    :param file: Path to the dataset file for export and result metadata
+    :param execution_mode_str: Execution mode string ('binary' or 'multi-class')
+    :param attack_types_combined: List of attack types for multi-class or None for binary
+    :param data_source_label: Label identifying the data source for result traceability
+    :param experiment_id: Unique experiment identifier for traceability
+    :param experiment_mode: Experiment mode string ('original_only' or 'original_plus_augmented')
+    :param augmentation_ratio: Augmentation ratio float or None for original-only experiments
+    :param scaler: Fitted scaler used for dataset preprocessing
+    :param subset_feature_names: List of feature names for the current subset
+    :param total_steps: Total number of evaluation steps for Telegram progress messages
+    :param current_combination: Current combination index counter for progress messages
+    :param progress_bar: tqdm progress bar to update after stacking evaluation
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Tuple (stacking_result_entry, next_current_combination) where stacking_result_entry is the standardized result dict
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        print(
+            f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}"
+        )  # Announce the start of stacking classifier training and evaluation
+        progress_bar.set_description(
+            f"{data_source_label} - {name} (Stacking)"
+        )  # Update progress bar description for stacking classifier
+
+        send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - StackingClassifier")  # Notify Telegram about stacking evaluation start
+
+        stacking_metrics = evaluate_stacking_classifier(
+            stacking_model, X_train_df, y_train, X_test_df, y_test
+        )  # Evaluate stacking model with DataFrames and retrieve metrics tuple
+
+        try:
+            dataset_name = os.path.basename(os.path.dirname(file))  # Get dataset directory name from file path
+            export_model_and_scaler(stacking_model, scaler, dataset_name, "StackingClassifier", subset_feature_names, best_params=None, feature_set=name, dataset_csv_path=file)  # Export fitted stacking model and scaler to disk
+        except Exception:  # If model export fails
+            pass  # Continue without exporting
+
+        s_y_pred = stacking_metrics[7] if len(stacking_metrics) > 7 else None  # Extract stacking predictions from metrics tuple for plot generation
+
+        try:  # Attempt to generate metric plots for stacking model
+            file_path_obj = Path(file)  # Create Path object for the dataset file
+            feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"  # Build Feature_Analysis directory path for outputs
+            stacking_output_dir = get_stacking_output_dir(str(file_path_obj), config)  # Get stacking output directory path from config
+            generate_and_save_metric_plots(y_test, s_y_pred, config.get("stacking", {}), stacking_output_dir)  # Generate and save metric plots to stacking output directory
+        except Exception:  # If metric plot generation fails
+            pass  # Continue without plotting
+
+        stacking_result_entry = build_classifier_result_entry(
+            stacking_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, "Stacking",
+            "StackingClassifier", data_source_label, experiment_id, experiment_mode, augmentation_ratio,
+            X_train_n_cols, len(y_train), len(y_test), stacking_metrics, subset_feature_names,
+        )  # Build standardized result entry for the stacking classifier
+        send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier with F1: {truncate_value(stacking_metrics[3])} in {calculate_execution_time(0, stacking_metrics[6])}")  # Notify Telegram about stacking evaluation completion
+        print(
+            f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{truncate_value(stacking_metrics[0])}{Style.RESET_ALL}"
+        )  # Output stacking classifier accuracy
+        progress_bar.update(1)  # Advance progress bar after stacking evaluation
+        current_combination += 1  # Advance the global combination counter
+
+        if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run explainability on original data
+            try:  # Attempt to run explainability pipeline for stacking model
+                run_explainability_pipeline(
+                    stacking_model,
+                    "StackingClassifier",
+                    X_test_subset,
+                    y_test,
+                    subset_feature_names,
+                    file,
+                    name,
+                    execution_mode_str,
+                    config
+                )  # Run explainability pipeline on original test data only for stacking model
+            except Exception as e:  # If explainability fails
+                verbose_output(
+                    f"{BackgroundColors.YELLOW}Explainability failed for StackingClassifier: {e}{Style.RESET_ALL}",
+                    config=config
+                )  # Log error but continue evaluation
+
+        return (stacking_result_entry, current_combination)  # Return result entry and updated combination counter
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def print_dataset_evaluation_header(data_source_label):
     """
     Prints the formatted header block for a dataset evaluation run.
@@ -6518,67 +6617,13 @@ def evaluate_on_dataset(
             )  # Evaluate all individual classifiers in parallel and collect their result entries
             all_results.update(individual_results)  # Merge this feature set's results into the global results dict
 
-            print(
-                f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}"
-            )
-            progress_bar.set_description(
-                f"{data_source_label} - {name} (Stacking)"
-            )  # Update progress bar description for stacking
-
-            send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - StackingClassifier")
-
-            stacking_metrics = evaluate_stacking_classifier(
-                stacking_model, X_train_df, y_train, X_test_df, y_test
-            )  # Evaluate stacking model with DataFrames (returns metrics + predictions)
-
-            try:
-                dataset_name = os.path.basename(os.path.dirname(file))
-                export_model_and_scaler(stacking_model, scaler, dataset_name, "StackingClassifier", subset_feature_names, best_params=None, feature_set=name, dataset_csv_path=file)
-            except Exception:
-                pass
-
-            s_y_pred = stacking_metrics[7] if len(stacking_metrics) > 7 else None  # Extract stacking predictions for metric plot generation
-
-            try:  # Attempt to generate metric plots for stacking model
-                file_path_obj = Path(file)  # Create Path object for file
-                feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"  # Build Feature_Analysis directory path
-
-                stacking_output_dir = get_stacking_output_dir(str(file_path_obj), config)  # Get stacking output directory
-                generate_and_save_metric_plots(y_test, s_y_pred, config.get("stacking", {}), stacking_output_dir)  # Generate and save metric plots
-            except Exception:  # If metric plot generation fails
-                pass  # Continue without plotting
-            
-            stacking_result_entry = build_classifier_result_entry(
-                stacking_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, "Stacking",
-                "StackingClassifier", data_source_label, experiment_id, experiment_mode, augmentation_ratio,
-                X_train_subset.shape[1], len(y_train), len(y_test), stacking_metrics, subset_feature_names,
-            )  # Build standardized result entry for the stacking classifier
-            all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store result with key
-            send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier with F1: {truncate_value(stacking_metrics[3])} in {calculate_execution_time(0, stacking_metrics[6])}")
-            print(
-                f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{truncate_value(stacking_metrics[0])}{Style.RESET_ALL}"
-            )  # Output accuracy
-            progress_bar.update(1)  # Update progress after stacking
-            current_combination += 1
-            
-            if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run on original data
-                try:  # Attempt explainability
-                    run_explainability_pipeline(
-                        stacking_model,
-                        "StackingClassifier",
-                        X_test_subset,
-                        y_test,
-                        subset_feature_names,
-                        file,
-                        name,
-                        execution_mode_str,
-                        config
-                    )  # Run explainability pipeline on original test data only for stacking model
-                except Exception as e:  # If explainability fails
-                    verbose_output(
-                        f"{BackgroundColors.YELLOW}Explainability failed for StackingClassifier: {e}{Style.RESET_ALL}",
-                        config=config
-                    )  # Log error but continue
+            stacking_result_entry, current_combination = run_stacking_evaluation_for_feature_set(
+                name, stacking_model, X_train_df, y_train, X_test_df, y_test,
+                X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
+                data_source_label, experiment_id, experiment_mode, augmentation_ratio,
+                scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
+            )  # Evaluate stacking classifier, export model artifacts, generate metric plots, and collect result entry
+            all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store stacking result with key
 
         progress_bar.close()  # Close progress bar
         return all_results  # Return dictionary of results
