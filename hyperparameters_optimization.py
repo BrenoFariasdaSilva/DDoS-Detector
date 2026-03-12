@@ -1316,6 +1316,29 @@ def filter_and_log_enabled_models(all_models):
     return enabled_models  # Return the filtered subset of enabled model configurations
 
 
+def build_random_forest_config():
+    """
+    Build the Random Forest classifier instance and hyperparameter search grid.
+
+    :return: Tuple of (RandomForestClassifier instance, param_grid dict) for hyperparameter optimization.
+    """
+
+    return (
+        RandomForestClassifier(random_state=42, n_jobs=N_JOBS),  # Random Forest classifier
+        {
+            "n_estimators": [50, 100, 200],  # Number of trees in the forest
+            "max_depth": [None, 10, 20, 30],  # Maximum depth of the tree
+            "min_samples_split": [2, 5, 10],  # Minimum number of samples required to split an internal node
+            "min_samples_leaf": [1, 2, 4],  # Minimum number of samples required to be at a leaf node
+            "max_features": [
+                "sqrt",
+                "log2",
+                None,
+            ],  # Number of features to consider when looking for the best split
+        },
+    )  # Return the instantiated model and its hyperparameter grid as a tuple
+
+
 def build_all_models_config():
     """
     Build and return the full dictionary of all available model instances paired with their hyperparameter grids.
