@@ -2191,6 +2191,22 @@ def initialize_grid_search_state(global_counter_start):
     return best_score, best_params, best_elapsed, all_results, global_counter  # Return initial state tuple to the caller
 
 
+def report_combination_search_progress(cached_count, combinations_to_test, model_name):
+    """
+    Print a human-readable progress line indicating how many combinations were loaded from cache and how many remain to be tested for the given model.
+
+    :param cached_count: Number of parameter combinations whose results were already loaded from cache.
+    :param combinations_to_test: List of parameter combinations that were not found in cache and must be evaluated.
+    :param model_name: Display name of the model being optimized, used for labelling the output.
+    :return: None
+    """
+
+    if cached_count > 0:  # Report cached count alongside remaining combinations
+        print(f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{cached_count}{BackgroundColors.GREEN} cached results for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Testing {BackgroundColors.CYAN}{len(combinations_to_test)}{BackgroundColors.GREEN} remaining combinations.{Style.RESET_ALL}")  # Print cached + remaining combination counts
+    else:
+        print(f"{BackgroundColors.GREEN}Testing {BackgroundColors.CYAN}{len(combinations_to_test)}{BackgroundColors.GREEN} combinations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}")  # Print total combinations count when no cache was found
+
+
 def manual_grid_search(
     model_name,
     model,
