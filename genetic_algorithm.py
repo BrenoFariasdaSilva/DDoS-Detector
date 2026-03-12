@@ -7184,14 +7184,17 @@ def play_sound():
         raise  # Re-raise to preserve original failure semantics
 
 
-def run_genetic_algorithm(config=None, csv_path=None):
+def initialize_run_ga_config(config, csv_path):
     """
-    Execute genetic algorithm feature selection with provided configuration.
-    This function is the main orchestration entry point for programmatic execution.
+    Initialise the global CONFIG and CPU_PROCESSES values for a programmatic GA run.
 
-    :param config: Configuration dictionary (uses defaults if None)
-    :param csv_path: Path to CSV dataset (uses config/default if None)
-    :return: Dictionary with sweep results
+    If a config dict is provided it replaces the global CONFIG; otherwise defaults are used
+    when CONFIG is empty.  CPU_PROCESSES is set from the merged config when not yet
+    initialised.  A default csv_path is substituted when None is passed.
+
+    :param config: Optional configuration dict to use; None means use existing or defaults.
+    :param csv_path: Optional CSV dataset path; None substitutes the built-in default path.
+    :return: Resolved csv_path string (the original value or the default if None was given).
     """
 
     try:
@@ -7209,6 +7212,25 @@ def run_genetic_algorithm(config=None, csv_path=None):
         if csv_path is None:  # If no path provided
             csv_path = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Use default
 
+        return csv_path  # Return resolved csv_path for downstream use
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def extract_ga_run_parameters(csv_path):
+    """
+    Read and return all GA execution parameters from the global CONFIG.
+
+    Extracts genetic algorithm, execution, and dataset parameters required to run the
+    population sweep, consolidating all CONFIG.get() calls into one place.
+
+    :param csv_path: Path to the CSV dataset; used to derive the dataset_name.
+    :return: Tuple of (n_generations, min_pop, max_pop, cxpb, mutpb, runs, skip_train, dataset_name).
+    """
+
+    try:
         n_generations = CONFIG.get("genetic_algorithm", {}).get("n_generations", 200)  # Get generations from config
         min_pop = CONFIG.get("genetic_algorithm", {}).get("min_pop", 20)  # Get min population from config
         max_pop = CONFIG.get("genetic_algorithm", {}).get("max_pop", 20)  # Get max population from config
@@ -7216,9 +7238,26 @@ def run_genetic_algorithm(config=None, csv_path=None):
         mutpb = CONFIG.get("genetic_algorithm", {}).get("mutpb", 0.01)  # Get mutation probability from config
         runs = CONFIG.get("execution", {}).get("runs", 5)  # Get number of runs from config
         skip_train = CONFIG.get("execution", {}).get("skip_train_if_model_exists", False)  # Get skip train flag from config
+        dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Extract dataset name from path
 
-        dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Extract dataset name
+        return n_generations, min_pop, max_pop, cxpb, mutpb, runs, skip_train, dataset_name  # Return all GA run parameters
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
+
+def log_ga_run_start(dataset_name):
+    """
+    Print the welcome banner, initialise the Telegram bot, and send a run-start notification.
+
+    Records and returns the start timestamp so the caller can compute total execution time.
+
+    :param dataset_name: Dataset name embedded in the Telegram start notification.
+    :return: datetime.datetime start timestamp recorded immediately before the Telegram send.
+    """
+
+    try:
         print(
             f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Genetic Algorithm Feature Selection{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
             end="\n\n",
@@ -7233,11 +7272,24 @@ def run_genetic_algorithm(config=None, csv_path=None):
             [f"Starting Genetic Algorithm Feature Selection for {dataset_name} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"]
         )  # Send start message
 
-        if skip_train:  # If skip training enabled
-            should_return = handle_skip_train_if_model_exists(csv_path)  # Try loading existing model
-            if should_return:  # If model loaded successfully
-                return {}  # Exit early
+        return start_time  # Return recorded start time for elapsed-time computation
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
+
+def start_resource_monitor_if_enabled():
+    """
+    Start the background resource monitor thread when enabled in configuration.
+
+    Reads the resource_monitor config section and calls start_resource_monitor_safe with
+    all configured parameters.  When the feature is disabled in config this is a no-op.
+
+    :return: None
+    """
+
+    try:
         if CONFIG.get("resource_monitor", {}).get("enabled", True):  # If resource monitor enabled
             start_resource_monitor_safe(
                 interval_seconds=CONFIG.get("resource_monitor", {}).get("interval_seconds", 30),
@@ -7247,7 +7299,76 @@ def run_genetic_algorithm(config=None, csv_path=None):
                 max_procs=CONFIG.get("resource_monitor", {}).get("max_procs", None),
                 min_gens_before_update=CONFIG.get("resource_monitor", {}).get("min_gens_before_update", 10),
                 daemon=CONFIG.get("resource_monitor", {}).get("daemon", True),
-            )  # Start resource monitor thread
+            )  # Start resource monitor thread with configured parameters
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def finalize_ga_run(dataset_name, start_time, sweep_results):
+    """
+    Print timing information, log verbose results, send a completion Telegram message, and register the sound callback.
+
+    Called after the population sweep completes to handle all post-sweep output and
+    notification duties.  Verbose result printing is controlled by the execution.verbose
+    config flag.
+
+    :param dataset_name: Dataset name embedded in the completion notification.
+    :param start_time: datetime.datetime start timestamp recorded before the sweep began.
+    :param sweep_results: Dict of sweep results forwarded to verbose logging when enabled.
+    :return: None
+    """
+
+    try:
+        verbose = CONFIG.get("execution", {}).get("verbose", False)  # Read verbose flag from config
+        if verbose and sweep_results:  # If verbose mode is on and results exist
+            print(f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}")  # Print header
+            for pop_size, features in sweep_results.items():  # Iterate results by population size
+                print(f"  Pop {pop_size}: {len(features)} features -> {features}")  # Print per-population details
+
+        finish_time = datetime.datetime.now()  # Record finish time
+        print(
+            f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
+        )  # Print start, finish, and elapsed execution time
+        print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}")  # Print completion banner
+
+        send_telegram_message(
+            TELEGRAM_BOT,
+            [f"Genetic Algorithm feature selection completed for {dataset_name}. Execution time: {calculate_execution_time(start_time, finish_time)}"]
+        )  # Send completion message with total execution time
+
+        if CONFIG.get("execution", {}).get("play_sound", True):  # If sound enabled
+            atexit.register(play_sound)  # Register sound callback for program exit
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def run_genetic_algorithm(config=None, csv_path=None):
+    """
+    Execute genetic algorithm feature selection with provided configuration.
+    This function is the main orchestration entry point for programmatic execution.
+
+    :param config: Configuration dictionary (uses defaults if None)
+    :param csv_path: Path to CSV dataset (uses config/default if None)
+    :return: Dictionary with sweep results
+    """
+
+    try:
+        csv_path = initialize_run_ga_config(config, csv_path)  # Resolve CONFIG, CPU_PROCESSES, and csv_path defaults
+
+        n_generations, min_pop, max_pop, cxpb, mutpb, runs, skip_train, dataset_name = extract_ga_run_parameters(csv_path)  # Read all GA run parameters from CONFIG
+
+        start_time = log_ga_run_start(dataset_name)  # Print welcome banner, init Telegram, send start notification, record start time
+
+        if skip_train:  # If skip training enabled
+            should_return = handle_skip_train_if_model_exists(csv_path)  # Try loading existing model
+            if should_return:  # If model loaded successfully
+                return {}  # Exit early
+
+        start_resource_monitor_if_enabled()  # Start background resource monitor when configured
 
         sweep_results = run_population_sweep(
             dataset_name,
@@ -7259,29 +7380,11 @@ def run_genetic_algorithm(config=None, csv_path=None):
             mutpb=mutpb,
             runs=runs,
             progress_bar=None,
-        )  # Execute population sweep
+        )  # Execute population sweep across configured population size range and run count
 
-        verbose = CONFIG.get("execution", {}).get("verbose", False)  # Get verbose flag
-        if verbose and sweep_results:  # If verbose and results exist
-            print(f"\n{BackgroundColors.GREEN}Detailed sweep results by population size:{Style.RESET_ALL}")  # Print header
-            for pop_size, features in sweep_results.items():  # Iterate results
-                print(f"  Pop {pop_size}: {len(features)} features -> {features}")  # Print details
+        finalize_ga_run(dataset_name, start_time, sweep_results)  # Print timing, log verbose results, send completion notification, register sound callback
 
-        finish_time = datetime.datetime.now()  # Record finish time
-        print(
-            f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
-        )  # Print timing info
-        print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}")  # Print completion
-
-        send_telegram_message(
-            TELEGRAM_BOT,
-            [f"Genetic Algorithm feature selection completed for {dataset_name}. Execution time: {calculate_execution_time(start_time, finish_time)}"]
-        )  # Send completion message
-
-        if CONFIG.get("execution", {}).get("play_sound", True):  # If sound enabled
-            atexit.register(play_sound)  # Register sound callback
-
-        return sweep_results  # Return results
+        return sweep_results  # Return sweep results
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
