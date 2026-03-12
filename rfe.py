@@ -710,6 +710,31 @@ def select_rfe_features(selector, X_train, X_test):
         raise
 
 
+def initialize_rfe_estimator(estimator_name, random_state=42):
+    """
+    Initialize the classifier estimator for RFE metric computation.
+
+    :param estimator_name: Name of the estimator to initialize.
+    :param random_state: Random seed for reproducibility.
+    :return: Initialized classifier model.
+    """
+
+    try:
+        estimator_name_l = (estimator_name or "random_forest").lower()  # Normalize estimator name to lowercase
+
+        if "random" in estimator_name_l:  # Verify if random forest estimator was requested
+            n_jobs_val = CONFIG.get("rfe", {}).get("multiprocessing", {}).get("n_jobs") if isinstance(CONFIG, dict) else -1  # Retrieve n_jobs from config or default to -1
+            model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=int(n_jobs_val) if n_jobs_val is not None else -1)  # Initialize the random forest classifier
+        else:  # Unsupported estimator name
+            raise ValueError(f"Unsupported estimator '{estimator_name}' for compute_rfe_metrics. Supported: 'random_forest'")  # Raise error for unsupported estimator
+
+        return model  # Return the initialized model
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42, estimator_name="random_forest"):
     """
     Computes performance metrics using the RFE-selected features.
@@ -730,12 +755,7 @@ def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state
 
         X_train_selected, X_test_selected = select_rfe_features(selector, X_train, X_test)  # Apply RFE support mask to training and testing feature arrays
 
-        estimator_name_l = (estimator_name or "random_forest").lower()
-        if "random" in estimator_name_l:
-            n_jobs_val = CONFIG.get("rfe", {}).get("multiprocessing", {}).get("n_jobs") if isinstance(CONFIG, dict) else -1
-            model = RandomForestClassifier(n_estimators=100, random_state=random_state, n_jobs=int(n_jobs_val) if n_jobs_val is not None else -1)  # Initialize the model
-        else:
-            raise ValueError(f"Unsupported estimator '{estimator_name}' for compute_rfe_metrics. Supported: 'random_forest'")
+        model = initialize_rfe_estimator(estimator_name, random_state)  # Initialize the classifier estimator for this RFE run
 
         train_start = time.perf_counter()  # Start perf_counter immediately before model.fit (training window)
         model.fit(X_train_selected, y_train)  # Fit the model on selected features (training)
