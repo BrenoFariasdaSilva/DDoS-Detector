@@ -3262,26 +3262,14 @@ def run_genetic_algorithm_loop(
                     GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
                 break  # Stop the loop early
 
-            should_send, last_telegram_block = check_telegram_progress_milestone(
-                gen, n_generations, telegram_enabled, show_progress, telegram_progress_pct, last_telegram_block
-            )  # Determine whether a Telegram progress milestone notification should be sent
-
-            send_telegram_message(
-                TELEGRAM_BOT,
-                [
-                    f"Pop Size {pop_size}: Generation {gen}/{n_generations}, Best F1-Score: {truncate_value(best_fitness)}, Features: {int(current_best_num_features) if current_best_num_features is not None else 'N/A'}"
-                ],
-                should_send,
-            )  # Send periodic updates to Telegram with multi-objective fitness values at configured percent milestones
-
-            gens_ran = update_global_generation_count(gen)  # Record completed generation count in gens_ran and the global counter
-            gens_ran = gen if gens_ran == 0 else gens_ran  # Preserve gens_ran when the loop did not execute any generation
-
-            persist_generation_state_if_needed(
-                output_dir, state_id, gen, n_generations, population, hof,
+            gens_ran, last_telegram_block = finalize_generation_and_notify(
+                gen, n_generations, gens_ran, last_telegram_block, best_fitness,
+                current_best_fitness_f1, current_best_num_features,
+                telegram_enabled, show_progress, telegram_progress_pct, pop_size,
+                output_dir, state_id, population, hof,
                 fitness_history, best_features_history, avg_f1_history,
                 avg_features_history, pareto_size_history, hypervolume_history, diversity_history,
-            )  # Checkpoint generation state to disk at configured intervals to enable resume
+            )  # Send Telegram notification, update completed generation counter, and persist GA state to disk
 
         history_data = build_ga_history_data_dict(fitness_history, best_features_history, avg_f1_history, avg_features_history, pareto_size_history, hypervolume_history, diversity_history)  # Build consolidated history dictionary for plotting
 
