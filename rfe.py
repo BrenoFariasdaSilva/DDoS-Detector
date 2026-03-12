@@ -1843,6 +1843,36 @@ def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparamet
         raise
 
 
+def split_and_scale_for_cv(X_numeric: pd.DataFrame, y_array: np.ndarray, random_state: int) -> Tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
+    """
+    Split the dataset into train/test sets and scale the training features for cross-validation.
+
+    :param X_numeric: Numeric features DataFrame.
+    :param y_array: Target label array.
+    :param random_state: Random seed for reproducibility.
+    :return: Tuple of (X_train_df, X_test_df, y_train_array, y_test_array, X_train_scaled, X_test_scaled, scaling_time_s).
+    """
+
+    try:
+        stratify_param = y_array if len(np.unique(y_array)) > 1 else None  # Avoid stratify for constant labels
+        X_train_df, X_test_df, y_train_array, y_test_array = train_test_split(
+            X_numeric, y_array, test_size=0.2, random_state=int(random_state), stratify=stratify_param
+        )  # Split dataset into train/test portions
+
+        scaler_for_run = StandardScaler()  # Create scaler for the run
+        scale_start = time.perf_counter()  # Start perf_counter immediately before scaling (feature extraction window begins)
+        X_train_scaled = scaler_for_run.fit_transform(X_train_df.values)  # Fit scaler and transform training data (scaling)
+        X_test_scaled = scaler_for_run.transform(X_test_df.values)  # Transform test data using fitted scaler
+        scale_end = time.perf_counter()  # End perf_counter immediately after scaling (feature extraction window part)
+        scaling_time_s = round(scale_end - scale_start, 6)  # Compute scaling time rounded to 6 decimals
+
+        return X_train_df, X_test_df, y_train_array, y_test_array, X_train_scaled, X_test_scaled, scaling_time_s  # Return all split and scaled artifacts
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n_features_to_select=None, step=1, estimator_name="random_forest", random_state=42):
     """
     Handles RFE with stratified cross-validation.
@@ -1857,18 +1887,8 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n
     
     try:
         verbose_output(f"{BackgroundColors.GREEN}Starting RFE with Stratified K-Fold Cross-Validation...{Style.RESET_ALL}")
-        
-        stratify_param = y_array if len(np.unique(y_array)) > 1 else None
-        X_train_df, X_test_df, y_train_array, y_test_array = train_test_split(
-            X_numeric, y_array, test_size=0.2, random_state=int(random_state), stratify=stratify_param
-        )
 
-        scaler_for_run = StandardScaler()  # Create scaler for the run
-        scale_start = time.perf_counter()  # Start perf_counter immediately before scaling (feature extraction window begins)
-        X_train_scaled = scaler_for_run.fit_transform(X_train_df.values)  # Fit scaler and transform training data (scaling)
-        X_test_scaled = scaler_for_run.transform(X_test_df.values)  # Transform test data using fitted scaler
-        scale_end = time.perf_counter()  # End perf_counter immediately after scaling (feature extraction window part)
-        scaling_time_s = round(scale_end - scale_start, 6)  # Compute scaling time rounded to 6 decimals
+        X_train_df, X_test_df, y_train_array, y_test_array, X_train_scaled, X_test_scaled, scaling_time_s = split_and_scale_for_cv(X_numeric, y_array, random_state)  # Split dataset and scale training features
 
         unique_tr, counts_tr = np.unique(y_train_array, return_counts=True)
         min_class_count_tr = counts_tr.min() if counts_tr.size > 0 else 0
