@@ -339,6 +339,34 @@ def collect_nested_functions(tree: ast.Module, parent_map: dict) -> list:
     return nested  # Return the sorted list of nested functions
 
 
+def compute_avg_function_size(classes: dict, top_level: list, nested: list, total_functions: int) -> float:
+    """
+    Compute average function size for file.
+
+    :param classes: Mapping of class keys to lists of method metadata.
+    :param top_level: List of top-level function metadata dictionaries.
+    :param nested: List of nested function metadata dictionaries.
+    :param total_functions: Total number of functions detected in the file.
+    :return: The average function size as a float.
+    """
+
+    total_function_size = 0  # Initialize accumulator for total size of all functions in file
+
+    for entry in top_level:  # Iterate top-level functions to accumulate sizes
+        total_function_size += entry.get("function_size", 0)  # Add each top-level function size to accumulator
+
+    for entry in nested:  # Iterate nested functions to accumulate sizes
+        total_function_size += entry.get("function_size", 0)  # Add each nested function size to accumulator
+
+    for class_methods in classes.values():  # Iterate each class's methods lists to accumulate sizes
+        for entry in class_methods:  # Iterate each method entry inside the class methods list
+            total_function_size += entry.get("function_size", 0)  # Add each class method size to accumulator
+
+    avg = (total_function_size / total_functions) if total_functions > 0 else 0  # Compute average size or zero when no functions
+
+    return float(avg)  # Return the computed average as float
+
+
 def build_report(tree: ast.Module) -> dict:
     """
     Builds the complete JSON report structure from the parsed AST.
@@ -357,11 +385,14 @@ def build_report(tree: ast.Module) -> dict:
     total_methods = sum(len(methods) for methods in classes.values())  # Compute the total method count across all classes
     total_functions = total_methods + len(top_level) + len(nested)  # Compute the grand total across all categories
 
+    avg_function_size = compute_avg_function_size(classes, top_level, nested, total_functions)  # Compute average size using helper
+
     report = {  # Build the complete report dictionary
         "total_functions": total_functions,  # Store the total function count
         "classes": classes,  # Store the class methods data
         "top-level functions": top_level,  # Store the top-level functions data
         "nested functions": nested,  # Store the nested functions data
+        "avg_function_size": avg_function_size,  # Store the computed average function size for the file
     }
 
     return report  # Return the completed report dictionary
