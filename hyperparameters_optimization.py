@@ -2054,6 +2054,21 @@ def process_cached_combinations(
         raise
 
 
+def expand_parameter_grid(param_grid):
+    """
+    Expand a hyperparameter grid dictionary into an ordered list of all parameter name/value combinations.
+
+    :param param_grid: Dictionary mapping parameter names to lists of candidate values.
+    :return: Tuple of (keys, param_combinations, total_combinations) where keys is the ordered parameter name list, param_combinations is the full Cartesian product list, and total_combinations is its length.
+    """
+
+    keys = list(param_grid.keys())  # PARAMETER NAMES
+    values = [v if isinstance(v, (list, tuple)) else [v] for v in param_grid.values()]  # ENSURE EACH VALUE IS ITERABLE
+    param_combinations = list(product(*values))  # CARTESIAN PRODUCT OF HYPERPARAMETER VALUES
+    total_combinations = len(param_combinations)  # TOTAL COMBINATIONS COUNT
+    return keys, param_combinations, total_combinations  # RETURN EXPANDED GRID COMPONENTS
+
+
 def manual_grid_search(
     model_name,
     model,
@@ -2097,10 +2112,7 @@ def manual_grid_search(
         if not param_grid:  # No hyperparameters to optimize — return a full tuple matching the caller's unpack
             return None, -float("inf"), 0.0, [], global_counter_start
 
-        keys = list(param_grid.keys())  # Parameter names
-        values = [v if isinstance(v, (list, tuple)) else [v] for v in param_grid.values()]  # Ensure each value is iterable
-        param_combinations = list(product(*values))  # Cartesian product of hyperparameter values
-        total_combinations = len(param_combinations)  # Total combinations count
+        keys, param_combinations, total_combinations = expand_parameter_grid(param_grid)  # EXPAND PARAM GRID INTO ORDERED LIST OF ALL COMBINATIONS
 
         cache_dict = load_cache_results(csv_path) if csv_path else {}  # Load cache
         
