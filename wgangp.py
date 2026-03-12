@@ -4384,7 +4384,7 @@ def to_seconds(obj):
         if hasattr(obj, "total_seconds"):  # Timedelta-like objects
             try:  # Attempt to call total_seconds()
                 return float(obj.total_seconds())  # Use the total_seconds() method
-            except Exception as e:  # total_seconds() failed
+            except Exception as e:  # Total_seconds() failed
                 print(str(e))  # Print error to terminal for visibility
                 try:  # Attempt to notify about total_seconds failure via Telegram
                     send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full error via Telegram
@@ -4393,7 +4393,7 @@ def to_seconds(obj):
         if hasattr(obj, "timestamp"):  # Datetime-like objects
             try:  # Attempt to call timestamp()
                 return float(obj.timestamp())  # Use timestamp() to get seconds since epoch
-            except Exception as e:  # timestamp() failed
+            except Exception as e:  # Timestamp() failed
                 print(str(e))  # Print error to terminal for visibility
                 try:  # Attempt to notify about timestamp failure via Telegram
                     send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full error via Telegram
@@ -4612,7 +4612,7 @@ def row_style_for_zebra(row):
     :param row: pandas Series representing a row
     :return: List[str] of CSS style strings for each cell
     """
-    bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # white for even rows, light gray for odd rows
+    bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # White for even rows, light gray for odd rows
     return [f"background-color: {bg};" for _ in row.index]  # Return style for every column in the row
 
 
