@@ -6679,6 +6679,7 @@ def save_results(
 
     try:
         best_features, rfe_ranking, rf_metrics = resolve_ga_best_metrics(best_ind, feature_names, csv_path, metrics, X, y, X_test, y_test)  # Extract features, ranking, and normalized metrics in one step
+
         (
             n_train,
             n_test,
@@ -6694,15 +6695,10 @@ def save_results(
             params_path,
         ) = prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generations, rfe_ranking, y, y_test, cxpb, mutpb)  # Prepare all output paths and base row metadata
 
-        model_local, model_params, training_time_s, X_test_selected, final_scaling_time = train_and_save_final_model(
-            best_features, X, y, feature_names, X_test, model_path, scaler_path, features_path, params_path
-        )  # Train final Random Forest on selected features and persist artifacts
-
-        eval_metrics, testing_time_s = evaluate_final_on_test(model_local, X_test_selected, y_test)  # Evaluate trained model on held-out test set
-
-        output_dir, feature_extraction_time_s = prepare_output_dir_and_feature_extraction_time(
-            csv_path, final_scaling_time
-        )  # Resolve output directory, create it if needed, and convert scaling time to seconds
+        model_local, model_params, training_time_s, X_test_selected, eval_metrics, testing_time_s, output_dir, feature_extraction_time_s = run_model_training_and_evaluation(
+            best_features, X, y, feature_names, X_test, y_test,
+            model_path, scaler_path, features_path, params_path, csv_path,
+        )  # Train final model on selected features, evaluate on test set, and prepare output directory
 
         build_and_write_run_results(
             ts,
