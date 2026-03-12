@@ -294,95 +294,116 @@ def validate_config_structure(config: dict) -> None:
         raise ValueError("'pca.dimensionality.n_components' must be an integer > 0")
 
 
-def get_config() -> tuple:
+def resolve_config_file_path(cli_config_arg) -> str | None:
     """
-    Produce the final configuration using precedence: CLI > config.yaml > defaults.
+    Resolve the configuration file path using the CLI argument or auto-detection.
 
-    Returns (config_dict, sources_dict) where sources_dict maps top-level keys
-    to the origin ('cli'|'config'|'default').
+    :param cli_config_arg: Config path from CLI, or None to trigger auto-detection.
+    :return: Resolved config file path string, or None if not found.
     """
 
-    cli = parse_cli_args()
+    if cli_config_arg:  # Use CLI-provided path when available
+        return cli_config_arg  # Return the CLI-specified config path directly
 
-    # Determine config file path (CLI overrides auto-detection)
-    cfg_path = cli.get("config")
-    if not cfg_path:
-        candidate = Path(__file__).parent / "config.yaml"
-        candidate_example = Path(__file__).parent / "config.yaml.example"
-        if candidate.exists():
-            cfg_path = str(candidate)
-        elif candidate_example.exists():
-            cfg_path = str(candidate_example)
-        else:
-            cfg_path = None
+    candidate = Path(__file__).parent / "config.yaml"  # Auto-detect config.yaml in script directory
+    candidate_example = Path(__file__).parent / "config.yaml.example"  # Check for example config file as fallback
 
-    file_cfg = {}
-    if cfg_path:
-        try:
-            file_cfg = load_config_file(cfg_path)
-        except Exception as e:
-            raise
+    if candidate.exists():  # Verify if the primary config file exists
+        return str(candidate)  # Return the primary config file path
+    elif candidate_example.exists():  # Verify if the example config file exists
+        return str(candidate_example)  # Return the example config file path
 
-    defaults = get_default_config()
+    return None  # Return None when neither config file is found
 
-    # Merge defaults <- file
-    merged = deep_merge_dicts(defaults, file_cfg)
 
-    # Translate CLI flat args into nested override structure for PCA
-    pca_overrides = {}  # Prepare dict to collect CLI overrides for PCA section
-    pca_overrides.setdefault("pca", {})  # Ensure top-level 'pca' mapping exists in overrides
-    # execution
+def build_execution_overrides(cli: dict) -> dict:
+    """
+    Build the execution section overrides from CLI arguments.
+
+    :param cli: Dictionary of parsed CLI arguments.
+    :return: Nested override dict for the execution section or empty dict.
+    """
+
     exec_ov = {}  # Collect execution-related override values
-    if cli.get("verbose") is not None:
-        exec_ov.setdefault("execution", {})["verbose"] = bool(cli.get("verbose"))
-    if cli.get("skip_train_if_model_exists") is not None:
-        exec_ov.setdefault("execution", {})["skip_train_if_model_exists"] = bool(cli.get("skip_train_if_model_exists"))
-    if cli.get("dataset_path") is not None:
-        exec_ov.setdefault("execution", {})["dataset_path"] = cli.get("dataset_path")
-    if exec_ov:
-        pca_overrides["pca"].update(exec_ov)
 
-    # model
+    if cli.get("verbose") is not None:  # Verify if verbose was specified via CLI
+        exec_ov.setdefault("execution", {})["verbose"] = bool(cli.get("verbose"))  # Store boolean verbose override
+    if cli.get("skip_train_if_model_exists") is not None:  # Verify if skip flag was specified
+        exec_ov.setdefault("execution", {})["skip_train_if_model_exists"] = bool(cli.get("skip_train_if_model_exists"))  # Store boolean skip override
+    if cli.get("dataset_path") is not None:  # Verify if dataset path was specified
+        exec_ov.setdefault("execution", {})["dataset_path"] = cli.get("dataset_path")  # Store dataset path override
+
+    return exec_ov  # Return the collected execution overrides
+
+
+def build_model_overrides(cli: dict) -> dict:
+    """
+    Build the model section overrides from CLI arguments.
+
+    :param cli: Dictionary of parsed CLI arguments.
+    :return: Nested override dict for the model section or empty dict.
+    """
+
     model_ov = {}  # Collect model-related override values
     raw_random_state: Any = cli.get("random_state")  # Retrieve raw CLI value for random_state (may be None)
+
     if raw_random_state is not None:  # Only process when CLI provided to preserve original behavior
         if not isinstance(raw_random_state, (int, str)):  # Validate acceptable input types
-            raise TypeError("--random_state must be an int or string convertible to int")
+            raise TypeError("--random_state must be an int or string convertible to int")  # Raise on invalid type
         try:
             model_ov.setdefault("model", {})["random_state"] = int(raw_random_state)  # Safely convert to int
         except Exception as e:
-            raise ValueError(f"Invalid --random_state value: {raw_random_state}") from e
-    if model_ov:
-        pca_overrides["pca"].update(model_ov)
+            raise ValueError(f"Invalid --random_state value: {raw_random_state}") from e  # Raise with context
+
+    return model_ov  # Return the collected model overrides
+
+
+def build_export_overrides(cli: dict) -> dict:
+    """
+    Build the export section overrides from CLI arguments.
+
+    :param cli: Dictionary of parsed CLI arguments.
+    :return: Nested override dict for the export section or empty dict.
+    """
 
     export_ov = {}  # Collect export-related override values
-    if cli.get("results_dir") is not None:
-        export_ov.setdefault("export", {})["results_dir"] = cli.get("results_dir")
-    if cli.get("results_filename") is not None:
-        export_ov.setdefault("export", {})["results_filename"] = cli.get("results_filename")
-    if export_ov:
-        pca_overrides["pca"].update(export_ov)
 
-    # dimensionality
+    if cli.get("results_dir") is not None:  # Verify if results_dir was overridden via CLI
+        export_ov.setdefault("export", {})["results_dir"] = cli.get("results_dir")  # Store results_dir override
+    if cli.get("results_filename") is not None:  # Verify if results_filename was overridden via CLI
+        export_ov.setdefault("export", {})["results_filename"] = cli.get("results_filename")  # Store results_filename override
+
+    return export_ov  # Return the collected export overrides
+
+
+def build_dimensionality_overrides(cli: dict) -> dict:
+    """
+    Build the dimensionality section overrides from CLI arguments.
+
+    :param cli: Dictionary of parsed CLI arguments.
+    :return: Nested override dict for the dimensionality section or empty dict.
+    """
+
     dim_ov = {}  # Collect dimensionality-related override values
-    if cli.get("n_components") is not None:
+
+    if cli.get("n_components") is not None:  # Verify if n_components was specified
         raw_ncomp: Any = cli.get("n_components")  # Retrieve raw CLI value for n_components (may be str/int)
-        if raw_ncomp is None:  # Defensive check; preserve original conditional logic by not changing behavior
+        if raw_ncomp is None:  # Defensive guard; preserve original conditional logic
             pass  # No-op when raw_ncomp unexpectedly None (keeps original semantics)
         else:
             if not isinstance(raw_ncomp, (int, str)):  # Ensure convertible types
-                raise TypeError("--n_components must be an int or string convertible to int")
+                raise TypeError("--n_components must be an int or string convertible to int")  # Raise on invalid type
             try:
                 validated_ncomp: int = int(raw_ncomp)  # Convert to int after validation
             except Exception as e:
-                raise ValueError(f"Invalid --n_components value: {raw_ncomp}") from e
+                raise ValueError(f"Invalid --n_components value: {raw_ncomp}") from e  # Raise with context
             dim_ov.setdefault("dimensionality", {})["n_components"] = validated_ncomp  # Store validated int
             dim_ov.setdefault("dimensionality", {})["n_components_list"] = [validated_ncomp]  # Store single-item list
-    elif cli.get("n_components_list") is not None:
+    elif cli.get("n_components_list") is not None:  # Verify if n_components_list was specified instead
         try:
             raw_list: Any = cli.get("n_components_list")  # Retrieve raw CLI value for n_components_list
             if not isinstance(raw_list, str):  # Ensure it is a comma-separated string as expected
-                raise TypeError("--n_components_list must be a comma-separated string of integers")
+                raise TypeError("--n_components_list must be a comma-separated string of integers")  # Raise on wrong type
             parts = []  # Prepare list to collect validated ints
             for x in raw_list.split(","):  # Iterate substrings to validate and convert each
                 s = x.strip()  # Strip whitespace from the substring
@@ -391,90 +412,199 @@ def get_config() -> tuple:
                 try:
                     parts.append(int(s))  # Convert validated substring to int and append
                 except Exception as e:
-                    raise ValueError(f"Invalid integer in --n_components_list: {s}") from e
+                    raise ValueError(f"Invalid integer in --n_components_list: {s}") from e  # Raise on bad value
         except Exception:
-            raise ValueError("--n_components_list must be a comma-separated list of integers")
-        dim_ov.setdefault("dimensionality", {})["n_components_list"] = parts
-    if dim_ov:
-        pca_overrides["pca"].update(dim_ov)
+            raise ValueError("--n_components_list must be a comma-separated list of integers")  # Raise on parse failure
+        dim_ov.setdefault("dimensionality", {})["n_components_list"] = parts  # Store validated list
 
-    # preprocessing
+    return dim_ov  # Return the collected dimensionality overrides
+
+
+def build_preprocessing_overrides(cli: dict) -> dict:
+    """
+    Build the preprocessing section overrides from CLI arguments.
+
+    :param cli: Dictionary of parsed CLI arguments.
+    :return: Nested override dict for the preprocessing section or empty dict.
+    """
+
     prep_ov = {}  # Collect preprocessing-related override values
-    if cli.get("scale_data") is not None:
-        prep_ov.setdefault("preprocessing", {})["scale_data"] = bool(cli.get("scale_data"))
-    if cli.get("remove_zero_variance") is not None:
-        prep_ov.setdefault("preprocessing", {})["remove_zero_variance"] = bool(cli.get("remove_zero_variance"))
-    if prep_ov:
-        pca_overrides["pca"].update(prep_ov)
 
-    # cross_validation
+    if cli.get("scale_data") is not None:  # Verify if scale_data was specified via CLI
+        prep_ov.setdefault("preprocessing", {})["scale_data"] = bool(cli.get("scale_data"))  # Store boolean scale_data override
+    if cli.get("remove_zero_variance") is not None:  # Verify if remove_zero_variance was specified
+        prep_ov.setdefault("preprocessing", {})["remove_zero_variance"] = bool(cli.get("remove_zero_variance"))  # Store boolean override
+
+    return prep_ov  # Return the collected preprocessing overrides
+
+
+def build_cv_overrides(cli: dict) -> dict:
+    """
+    Build the cross-validation section overrides from CLI arguments.
+
+    :param cli: Dictionary of parsed CLI arguments.
+    :return: Nested override dict for the cross_validation section or empty dict.
+    """
+
     cv_ov = {}  # Collect cross-validation-related override values
     raw_n_folds: Any = cli.get("n_folds")  # Retrieve raw CLI value for n_folds
+
     if raw_n_folds is not None:  # Only process when provided
         if not isinstance(raw_n_folds, (int, str)):  # Validate expected input types
-            raise TypeError("--n_folds must be an int or string convertible to int")
+            raise TypeError("--n_folds must be an int or string convertible to int")  # Raise on invalid type
         try:
             cv_ov.setdefault("cross_validation", {})["n_folds"] = int(raw_n_folds)  # Safely convert to int
         except Exception as e:
-            raise ValueError(f"Invalid --n_folds value: {raw_n_folds}") from e
-    if cv_ov:
-        pca_overrides["pca"].update(cv_ov)
+            raise ValueError(f"Invalid --n_folds value: {raw_n_folds}") from e  # Raise with context
 
-    # multiprocessing
+    return cv_ov  # Return the collected cross-validation overrides
+
+
+def build_multiprocessing_overrides(cli: dict) -> dict:
+    """
+    Build the multiprocessing section overrides from CLI arguments.
+
+    :param cli: Dictionary of parsed CLI arguments.
+    :return: Nested override dict for the multiprocessing section or empty dict.
+    """
+
     multi_ov = {}  # Collect multiprocessing-related override values
     raw_n_jobs: Any = cli.get("n_jobs")  # Retrieve raw CLI value for n_jobs
+
     if raw_n_jobs is not None:  # Only process when provided
         if not isinstance(raw_n_jobs, (int, str)):  # Validate acceptable types
-            raise TypeError("--n_jobs must be an int or string convertible to int")
+            raise TypeError("--n_jobs must be an int or string convertible to int")  # Raise on invalid type
         try:
             multi_ov.setdefault("multiprocessing", {})["n_jobs"] = int(raw_n_jobs)  # Convert to int safely
         except Exception as e:
-            raise ValueError(f"Invalid --n_jobs value: {raw_n_jobs}") from e
+            raise ValueError(f"Invalid --n_jobs value: {raw_n_jobs}") from e  # Raise with context
+
     raw_cpu_processes: Any = cli.get("cpu_processes")  # Retrieve raw CLI value for cpu_processes
+
     if raw_cpu_processes is not None:  # Only process when provided
         if not isinstance(raw_cpu_processes, (int, str)):  # Validate acceptable types
-            raise TypeError("--cpu_processes must be an int or string convertible to int")
+            raise TypeError("--cpu_processes must be an int or string convertible to int")  # Raise on invalid type
         try:
             multi_ov.setdefault("multiprocessing", {})["cpu_processes"] = int(raw_cpu_processes)  # Convert to int safely
         except Exception as e:
-            raise ValueError(f"Invalid --cpu_processes value: {raw_cpu_processes}") from e
-    if multi_ov:
-        pca_overrides["pca"].update(multi_ov)
+            raise ValueError(f"Invalid --cpu_processes value: {raw_cpu_processes}") from e  # Raise with context
 
-    # caching
+    return multi_ov  # Return the collected multiprocessing overrides
+
+
+def build_caching_overrides(cli: dict) -> dict:
+    """
+    Build the caching section overrides from CLI arguments.
+
+    :param cli: Dictionary of parsed CLI arguments.
+    :return: Nested override dict for the caching section or empty dict.
+    """
+
     cache_ov = {}  # Collect caching-related override values
-    if cli.get("caching_enabled") is not None:
-        cache_ov.setdefault("caching", {})["enabled"] = bool(cli.get("caching_enabled"))
+
+    if cli.get("caching_enabled") is not None:  # Verify if caching_enabled was provided
+        cache_ov.setdefault("caching", {})["enabled"] = bool(cli.get("caching_enabled"))  # Store boolean caching override
+
     raw_pickle_protocol: Any = cli.get("pickle_protocol")  # Retrieve raw CLI value for pickle_protocol
+
     if raw_pickle_protocol is not None:  # Only process when provided
         if not isinstance(raw_pickle_protocol, (int, str)):  # Validate types
-            raise TypeError("--pickle_protocol must be an int or string convertible to int")
+            raise TypeError("--pickle_protocol must be an int or string convertible to int")  # Raise on invalid type
         try:
             cache_ov.setdefault("caching", {})["pickle_protocol"] = int(raw_pickle_protocol)  # Safely convert to int
         except Exception as e:
-            raise ValueError(f"Invalid --pickle_protocol value: {raw_pickle_protocol}") from e
-    if cache_ov:
-        pca_overrides["pca"].update(cache_ov)
+            raise ValueError(f"Invalid --pickle_protocol value: {raw_pickle_protocol}") from e  # Raise with context
 
-    # Merge merged <- pca_overrides (CLI)
-    final = deep_merge_dicts(merged, pca_overrides)
+    return cache_ov  # Return the collected caching overrides
 
-    # Validate structure
-    validate_config_structure(final.get("pca", {}))
 
-    # Build a simple sources map (top-level pca subkeys)
-    sources = {"pca": {}}
-    for top in ("execution", "model", "dimensionality", "preprocessing", "cross_validation", "multiprocessing", "caching", "export"):
-        src = "default"
-        # if present in file_cfg -> config
-        if isinstance(file_cfg, dict) and file_cfg.get("pca", {}).get(top) is not None:
-            src = "config"
-        # if overridden by CLI
-        if pca_overrides.get("pca", {}).get(top) is not None:
-            src = "cli"
-        sources["pca"][top] = src
+def build_sources_map(file_cfg: dict, pca_overrides: dict) -> dict:
+    """
+    Build a sources map indicating the origin of each top-level PCA config section.
 
-    return final, sources
+    :param file_cfg: The file-loaded configuration dictionary.
+    :param pca_overrides: The CLI-derived nested override dictionary.
+    :return: Dict mapping each pca config section to its origin ('cli', 'config', or 'default').
+    """
+
+    sources = {"pca": {}}  # Initialize the sources map with the pca key
+
+    for top in ("execution", "model", "dimensionality", "preprocessing", "cross_validation", "multiprocessing", "caching", "export"):  # Iterate all tracked config sections
+        src = "default"  # Start with default as the baseline origin
+        if isinstance(file_cfg, dict) and file_cfg.get("pca", {}).get(top) is not None:  # Verify if section is present in file config
+            src = "config"  # Mark as config-sourced when found in file
+        if pca_overrides.get("pca", {}).get(top) is not None:  # Verify if section was overridden via CLI
+            src = "cli"  # Mark as cli-sourced when CLI override exists
+        sources["pca"][top] = src  # Store the origin label for this section
+
+    return sources  # Return the completed sources map
+
+
+def get_config() -> tuple:
+    """
+    Produce the final configuration using precedence: CLI > config.yaml > defaults.
+
+    Returns (config_dict, sources_dict) where sources_dict maps top-level keys
+    to the origin ('cli'|'config'|'default').
+    """
+
+    cli = parse_cli_args()  # Parse all CLI arguments into a flat dictionary
+
+    cfg_path = resolve_config_file_path(cli.get("config"))  # Resolve configuration file path from CLI or auto-detection
+
+    file_cfg = {}  # Initialize file config as empty
+    if cfg_path:  # Verify if a config file path was resolved
+        try:
+            file_cfg = load_config_file(cfg_path)  # Load and parse the YAML config file
+        except Exception as e:
+            raise  # Re-raise loading errors for caller to handle
+
+    defaults = get_default_config()  # Retrieve the complete set of default configuration values
+
+    merged = deep_merge_dicts(defaults, file_cfg)  # Merge defaults with file config, file taking precedence
+
+    pca_overrides = {}  # Prepare dict to collect CLI overrides for PCA section
+    pca_overrides.setdefault("pca", {})  # Ensure top-level 'pca' mapping exists in overrides
+
+    exec_ov = build_execution_overrides(cli)  # Build execution section overrides from CLI
+    if exec_ov:  # Only update when overrides are present
+        pca_overrides["pca"].update(exec_ov)  # Merge execution overrides into pca_overrides
+
+    model_ov = build_model_overrides(cli)  # Build model section overrides from CLI
+    if model_ov:  # Only update when overrides are present
+        pca_overrides["pca"].update(model_ov)  # Merge model overrides into pca_overrides
+
+    export_ov = build_export_overrides(cli)  # Build export section overrides from CLI
+    if export_ov:  # Only update when overrides are present
+        pca_overrides["pca"].update(export_ov)  # Merge export overrides into pca_overrides
+
+    dim_ov = build_dimensionality_overrides(cli)  # Build dimensionality section overrides from CLI
+    if dim_ov:  # Only update when overrides are present
+        pca_overrides["pca"].update(dim_ov)  # Merge dimensionality overrides into pca_overrides
+
+    prep_ov = build_preprocessing_overrides(cli)  # Build preprocessing section overrides from CLI
+    if prep_ov:  # Only update when overrides are present
+        pca_overrides["pca"].update(prep_ov)  # Merge preprocessing overrides into pca_overrides
+
+    cv_ov = build_cv_overrides(cli)  # Build cross-validation section overrides from CLI
+    if cv_ov:  # Only update when overrides are present
+        pca_overrides["pca"].update(cv_ov)  # Merge cross-validation overrides into pca_overrides
+
+    multi_ov = build_multiprocessing_overrides(cli)  # Build multiprocessing section overrides from CLI
+    if multi_ov:  # Only update when overrides are present
+        pca_overrides["pca"].update(multi_ov)  # Merge multiprocessing overrides into pca_overrides
+
+    cache_ov = build_caching_overrides(cli)  # Build caching section overrides from CLI
+    if cache_ov:  # Only update when overrides are present
+        pca_overrides["pca"].update(cache_ov)  # Merge caching overrides into pca_overrides
+
+    final = deep_merge_dicts(merged, pca_overrides)  # Merge merged config with CLI overrides
+
+    validate_config_structure(final.get("pca", {}))  # Validate the final merged config structure before use
+
+    sources = build_sources_map(file_cfg, pca_overrides)  # Build the origin map for all config sections
+
+    return final, sources  # Return the final config dict and sources map
 
 
 def verbose_output(true_string="", false_string=""):
