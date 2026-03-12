@@ -1469,6 +1469,25 @@ def build_lightgbm_config():
     )  # Return the instantiated model and its hyperparameter grid as a tuple
 
 
+def build_mlp_config():
+    """
+    Build the MLP Neural Network classifier instance and hyperparameter search grid.
+
+    :return: Tuple of (MLPClassifier instance, param_grid dict) for hyperparameter optimization.
+    """
+
+    return (
+        MLPClassifier(max_iter=500, random_state=42),  # Multi-layer Perceptron classifier
+        {
+            "hidden_layer_sizes": [(50,), (100,), (100, 50), (100, 100)],  # Number of neurons in the hidden layers
+            "activation": ["relu", "tanh", "logistic"],  # Activation function for the hidden layer
+            "solver": ["adam", "sgd"],  # The solver for weight optimization
+            "alpha": [0.0001, 0.001, 0.01],  # L2 penalty (regularization term) parameter
+            "learning_rate": ["constant", "adaptive"],  # Learning rate schedule for weight updates
+        },
+    )  # Return the instantiated model and its hyperparameter grid as a tuple
+
+
 def build_all_models_config():
     """
     Build and return the full dictionary of all available model instances paired with their hyperparameter grids.
