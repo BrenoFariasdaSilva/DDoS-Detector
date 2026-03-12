@@ -7355,6 +7355,33 @@ def save_multiclass_results_to_csv(reference_file, results_list, config=None):
         raise
 
 
+def print_multiclass_augmentation_header(augmentation_ratios):
+    """
+    Prints the formatted header block announcing ratio-based data augmentation experiments for multi-class mode.
+
+    :param augmentation_ratios: List of augmentation ratio floats to be evaluated
+    :return: None
+    """
+
+    try:
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
+        )  # Print top separator line for the augmentation experiments section
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}RATIO-BASED DATA AUGMENTATION EXPERIMENTS (Multi-Class){Style.RESET_ALL}"
+        )  # Print the section title for ratio-based multi-class augmentation
+        print(
+            f"{BackgroundColors.GREEN}Ratios to evaluate: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in augmentation_ratios]}{Style.RESET_ALL}"
+        )  # Print the list of augmentation ratios that will be evaluated
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
+        )  # Print bottom separator line for the augmentation experiments section
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def load_and_combine_augmented_multiclass_files(original_files_list, config=None):
     """
     Loads augmented files for multi-class mode and combines them into a single DataFrame.
@@ -7432,18 +7459,7 @@ def process_multiclass_augmentation_testing(reference_file, original_files_list,
         if combined_augmented_df is None:  # If loading or combining augmented files failed
             return  # Exit function early as signaled by the helper
 
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
-        )  # Print separator line for visual clarity
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}RATIO-BASED DATA AUGMENTATION EXPERIMENTS (Multi-Class){Style.RESET_ALL}"
-        )  # Print header for the ratio-based experiments section
-        print(
-            f"{BackgroundColors.GREEN}Ratios to evaluate: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in augmentation_ratios]}{Style.RESET_ALL}"
-        )  # Print the list of ratios that will be evaluated
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
-        )  # Print closing separator line
+        print_multiclass_augmentation_header(augmentation_ratios)  # Print the section header for ratio-based multi-class augmentation experiments
 
         all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
 
