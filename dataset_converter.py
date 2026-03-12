@@ -303,7 +303,7 @@ def verify_filepath_exists(filepath):
         raise  # Re-raise to preserve original failure semantics
 
 
-def extract_input_paths_from_datasets(dmap: dict) -> list:  # Define a nested helper to extract candidate paths
+def extract_input_paths_from_datasets(dmap: dict) -> list:  # Define a nested function to extract candidate paths
     """
     Extract input path candidates from datasets mapping.
 
@@ -311,7 +311,7 @@ def extract_input_paths_from_datasets(dmap: dict) -> list:  # Define a nested he
     :return: List of candidate input path strings.
     """
 
-    try:  # Wrap helper logic to ensure production-safe monitoring
+    try:  # Wrap function logic to ensure production-safe monitoring
         if not dmap or not isinstance(dmap, dict):  # Verify mapping is a dict
             return []  # Return empty list when mapping is missing or invalid
         candidates = []  # Initialize list of candidate paths
@@ -342,13 +342,13 @@ def extract_input_paths_from_datasets(dmap: dict) -> list:  # Define a nested he
                             candidates.append(cleaned)  # Append each cleaned candidate to the list
         
         return candidates  # Return collected candidate paths
-    except Exception as e:  # Catch exceptions inside helper
-        print(str(e))  # Print helper exception to terminal for logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send helper exception via Telegram
+    except Exception as e:  # Catch exceptions inside function
+        print(str(e))  # Print function exception to terminal for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send function exception via Telegram
         raise  # Re-raise to preserve failure semantics
 
 
-def validate_and_prepare_input_paths(paths: list) -> list:  # Define a nested helper to validate and create inputs
+def validate_and_prepare_input_paths(paths: list) -> list:  # Define a nested function to validate and create inputs
     """
     Validate candidate input paths and ensure directories exist.
 
@@ -356,7 +356,7 @@ def validate_and_prepare_input_paths(paths: list) -> list:  # Define a nested he
     :return: List of validated input paths.
     """
 
-    try:  # Wrap helper logic to ensure production-safe monitoring
+    try:  # Wrap function logic to ensure production-safe monitoring
         valid = []  # Initialize list for validated existing paths
         for p in paths:  # Iterate provided candidate paths
             p_str = str(p).strip() if p is not None else ""  # Strip surrounding whitespace and coerce to string
@@ -369,9 +369,9 @@ def validate_and_prepare_input_paths(paths: list) -> list:  # Define a nested he
                 continue  # Skip non-existing configured input paths without creating them
         
         return valid  # Return the list of validated paths
-    except Exception as e:  # Catch exceptions inside helper
-        print(str(e))  # Print helper exception to terminal for logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send helper exception via Telegram
+    except Exception as e:  # Catch exceptions inside function
+        print(str(e))  # Print function exception to terminal for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send function exception via Telegram
         raise  # Re-raise to preserve failure semantics
 
 
@@ -384,13 +384,13 @@ def resolve_output_path(arg_output: Optional[str], cfg_section: dict) -> str:
     :return: Resolved output path string.
     """
 
-    try:  # Wrap helper logic to ensure production-safe monitoring
+    try:  # Wrap function logic to ensure production-safe monitoring
         output_default = cfg_section.get("output_directory", "./Output") or "./Output"  # Determine configured default
         out = arg_output if arg_output else output_default  # Choose CLI-provided output or fallback default; do not create directories here to keep creation lazy
         return out  # Return the resolved output path without creating it (creation is performed lazily per-dataset)
-    except Exception as e:  # Catch exceptions inside helper
-        print(str(e))  # Print helper exception to terminal for logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send helper exception via Telegram
+    except Exception as e:  # Catch exceptions inside function
+        print(str(e))  # Print function exception to terminal for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send function exception via Telegram
         raise  # Re-raise to preserve failure semantics
 
 
@@ -412,7 +412,7 @@ def resolve_io_paths(args):
 
         input_candidates = [args.input] if args.input else extract_input_paths_from_datasets(datasets_cfg)  # Build initial candidate list from CLI or config
         resolved_inputs = validate_and_prepare_input_paths(input_candidates)  # Validate and prepare candidate input paths
-        out_path = resolve_output_path(args.output if hasattr(args, "output") else None, cfg)  # Resolve output path using helper
+        out_path = resolve_output_path(args.output if hasattr(args, "output") else None, cfg)  # Resolve output path using function
 
         if not resolved_inputs:  # If no validated input paths were found
             print(f"{BackgroundColors.RED}No input path available from CLI or configuration datasets{Style.RESET_ALL}")  # Report missing input paths
@@ -1377,7 +1377,7 @@ def process_dataset_paths(ds_paths: list, context: dict, cfg: dict) -> None:
             pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len_dataset_files, leave=False, dynamic_ncols=True)  # Create a single-line progress bar for the conversion process
 
             for idx, input_path in enumerate(pbar, start=1):  # Iterate files for this configured path with index
-                process_dataset_file(idx, len_dataset_files, input_path, effective_input, effective_output_base, formats_list, pbar)  # Delegate per-file processing to helper
+                process_dataset_file(idx, len_dataset_files, input_path, effective_input, effective_output_base, formats_list, pbar)  # Delegate per-file processing to function
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -1471,7 +1471,7 @@ def process_configured_datasets(context: dict) -> None:
             return  # Return immediately when configured datasets are not present or invalid
 
         for ds_name, ds_paths in datasets_cfg.items():  # Iterate each dataset entry in configuration mapping
-            process_dataset_paths(ds_paths, context, cfg)  # Delegate per-dataset processing to helper function
+            process_dataset_paths(ds_paths, context, cfg)  # Delegate per-dataset processing to function
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs in case of top-level failure
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram for top-level failures
@@ -1486,13 +1486,13 @@ def prepare_processing_context(context: dict) -> tuple:
     :return: Tuple containing (cfg, input_directory, output_directory).
     """
 
-    try:  # Wrap helper logic to ensure production-safe monitoring
+    try:  # Wrap function logic to ensure production-safe monitoring
         cfg = context.get("cfg", {})  # Retrieve configuration section from context for processing
         input_directory, output_directory = prepare_input_context(context, cfg)  # Prepare input and output directories for processing
         return cfg, input_directory, output_directory  # Return prepared context values
-    except Exception as e:  # Catch exceptions inside helper
-        print(str(e))  # Print helper exception to terminal for logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send helper exception via Telegram
+    except Exception as e:  # Catch exceptions inside function
+        print(str(e))  # Print function exception to terminal for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send function exception via Telegram
         raise  # Re-raise to preserve failure semantics
 
 
@@ -1505,15 +1505,15 @@ def get_and_verify_dataset_files(input_directory: str, cfg: dict) -> tuple:
     :return: Tuple containing (dataset_files_list, len_dataset_files).
     """
 
-    try:  # Wrap helper logic to ensure production-safe monitoring
+    try:  # Wrap function logic to ensure production-safe monitoring
         dataset_files, len_dataset_files = gather_dataset_files(input_directory, cfg)  # Gather dataset files and their count for processing
         if not dataset_files:  # If no dataset files were found
             print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}")  # Print error message when directory is empty
             return [], 0  # Return empty results to signal caller to exit early
         return dataset_files, len_dataset_files  # Return discovered dataset files and their count
-    except Exception as e:  # Catch exceptions inside helper
-        print(str(e))  # Print helper exception to terminal for logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send helper exception via Telegram
+    except Exception as e:  # Catch exceptions inside function
+        print(str(e))  # Print function exception to terminal for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send function exception via Telegram
         raise  # Re-raise to preserve failure semantics
 
 
@@ -1526,19 +1526,19 @@ def create_progress_bar(dataset_files: list, len_dataset_files: int):
     :return: A tqdm progress bar instance.
     """
 
-    try:  # Wrap helper logic to ensure production-safe monitoring
+    try:  # Wrap function logic to ensure production-safe monitoring
         bar_format_str = BackgroundColors.CYAN + "{l_bar}{bar} " + BackgroundColors.CYAN + "{percentage:3.0f}%" + Style.RESET_ALL + "{r_bar}"  # Compose bar_format with cyan percentage field
         pbar = tqdm(dataset_files, desc=f"{BackgroundColors.CYAN}Converting {BackgroundColors.CYAN}{len_dataset_files}{BackgroundColors.GREEN} {'file' if len_dataset_files == 1 else 'files'}{Style.RESET_ALL}", unit="file", colour="green", total=len_dataset_files, leave=False, dynamic_ncols=True, bar_format=bar_format_str)  # Create a single-line progress bar for the conversion process with colored percentage
         return pbar  # Return the created progress bar instance
-    except Exception as e:  # Catch exceptions inside helper
-        print(str(e))  # Print helper exception to terminal for logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send helper exception via Telegram
+    except Exception as e:  # Catch exceptions inside function
+        print(str(e))  # Print function exception to terminal for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send function exception via Telegram
         raise  # Re-raise to preserve failure semantics
 
 
 def iterate_and_process_with_pbar(pbar, input_directory: str, output_directory: str, formats_list: list, len_dataset_files: int) -> None:
     """
-    Iterate progress bar and delegate per-file processing to the per-file helper.
+    Iterate progress bar and delegate per-file processing to the per-file function.
 
     :param pbar: Progress bar instance iterating dataset files.
     :param input_directory: Source input directory used for relative calculations.
@@ -1548,12 +1548,12 @@ def iterate_and_process_with_pbar(pbar, input_directory: str, output_directory: 
     :return: None
     """
 
-    try:  # Wrap helper logic to ensure production-safe monitoring
+    try:  # Wrap function logic to ensure production-safe monitoring
         for idx, input_path in enumerate(pbar, start=1):  # Iterate through each dataset file with index
-            process_single_input_file(idx, {"input_path": input_path, "input_directory": input_directory, "output_directory": output_directory, "formats_list": formats_list, "len_dataset_files": len_dataset_files, "pbar": pbar})  # Delegate per-file work to helper
-    except Exception as e:  # Catch exceptions inside helper
-        print(str(e))  # Print helper exception to terminal for logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send helper exception via Telegram
+            process_single_input_file(idx, {"input_path": input_path, "input_directory": input_directory, "output_directory": output_directory, "formats_list": formats_list, "len_dataset_files": len_dataset_files, "pbar": pbar})  # Delegate per-file work to function
+    except Exception as e:  # Catch exceptions inside function
+        print(str(e))  # Print function exception to terminal for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send function exception via Telegram
         raise  # Re-raise to preserve failure semantics
 
 
@@ -1570,14 +1570,14 @@ def process_input_directory(context: dict) -> None:
 
         dataset_files, len_dataset_files = get_and_verify_dataset_files(input_directory, cfg)  # Gather dataset files and verify non-empty
         if not dataset_files:  # If no dataset files were found after verification
-            return  # Exit early when helper signaled empty discovery
+            return  # Exit early when function signaled empty discovery
 
         formats_list = resolve_formats(context.get("formats"))  # Normalize and validate output formats for the run
         formats_list = resolve_standardize_formats(formats_list)  # Apply configured standardize_formats override when present
 
         pbar = create_progress_bar(dataset_files, len_dataset_files)  # Create a progress bar for the conversion process
 
-        iterate_and_process_with_pbar(pbar, input_directory, output_directory, formats_list, len_dataset_files)  # Iterate and process all files using helper
+        iterate_and_process_with_pbar(pbar, input_directory, output_directory, formats_list, len_dataset_files)  # Iterate and process all files using function
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs when top-level failure occurs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram for top-level failures
@@ -1645,7 +1645,7 @@ def process_single_input_file(idx: int, params: dict) -> None:
         if orig_format in formats_list:  # Verify whether native format is included in requested targets
             formats_list = [f for f in formats_list if f != orig_format]  # Remove native format to avoid rewriting original file
 
-        update_progress_description(pbar, input_path, input_directory)  # Update progress bar description using helper
+        update_progress_description(pbar, input_path, input_directory)  # Update progress bar description using function
 
         if not is_supported_extension(ext):  # Verify that the file has a supported extension before further work
             return  # Return early to the caller when unsupported extension
@@ -1713,14 +1713,14 @@ def update_progress_description(pbar, input_path: Optional[str], input_directory
         input_path_str = str(input_path) if input_path is not None else ""  # Normalize input_path to string to satisfy os.path expectations
         rel = input_path_str  # Use the full input path string instead of computing a relative path
         try:  # Attempt to retrieve file size in bytes safely
-            size_str = compute_file_size_str(input_path_str)  # Retrieve formatted file size string using helper
+            size_str = compute_file_size_str(input_path_str)  # Retrieve formatted file size string using function
         except Exception:  # Fallback when size retrieval fails for any reason
             size_str = "0.00 GB"  # Use default size string on error
     except Exception:  # Fallback when unexpected errors occur during path normalization
         input_path_str = str(input_path) if input_path is not None else ""  # Normalize input_path again in exception path
         rel = input_path_str  # Use the full input path string in exception path as well
         try:  # Attempt to retrieve file size in exception path
-            size_str = compute_file_size_str(input_path_str)  # Retrieve formatted file size string using helper in exception path
+            size_str = compute_file_size_str(input_path_str)  # Retrieve formatted file size string using function in exception path
         except Exception:  # Fallback when size retrieval fails in exception path
             size_str = "0.00 GB"  # Use default size string on error
     pbar.set_description(f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{rel}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{size_str}{BackgroundColors.GREEN}){Style.RESET_ALL}")  # Update the progress bar description with the input path and file size
