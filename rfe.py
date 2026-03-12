@@ -688,6 +688,28 @@ def run_rfe_selector(X_train, y_train, n_select=10, step=1, estimator_name="rand
         raise
 
 
+def select_rfe_features(selector, X_train, X_test):
+    """
+    Apply the RFE support mask to select features from training and testing arrays.
+
+    :param selector: Fitted RFE object containing the support mask.
+    :param X_train: Training feature array.
+    :param X_test: Testing feature array.
+    :return: Tuple of (X_train_selected, X_test_selected) with only RFE-selected columns.
+    """
+
+    try:
+        support = selector.support_  # Get the boolean mask of selected features
+        X_train_selected = X_train[:, support]  # Apply mask to select training features
+        X_test_selected = X_test[:, support]  # Apply mask to select testing features
+
+        return X_train_selected, X_test_selected  # Return the selected feature arrays
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42, estimator_name="random_forest"):
     """
     Computes performance metrics using the RFE-selected features.
@@ -706,9 +728,7 @@ def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state
             f"{BackgroundColors.GREEN}Computing performance metrics using RFE-selected features...{Style.RESET_ALL}"
         )  # Output the verbose message
 
-        support = selector.support_  # Get the mask of selected features
-        X_train_selected = X_train[:, support]  # Select training features
-        X_test_selected = X_test[:, support]  # Select testing features
+        X_train_selected, X_test_selected = select_rfe_features(selector, X_train, X_test)  # Apply RFE support mask to training and testing feature arrays
 
         estimator_name_l = (estimator_name or "random_forest").lower()
         if "random" in estimator_name_l:
