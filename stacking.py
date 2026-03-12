@@ -1265,8 +1265,16 @@ def combine_files_for_multiclass(files_list, config=None):
         concat_result = concat_files_into_multiclass_df(processed_files_with_labels, common_features_list, attack_types_set, config)  # CONCATENATE FILES INTO MULTICLASS DATAFRAME
         if concat_result is None:  # IF CONCATENATION FAILED
             return (None, None, None)  # RETURN FAILURE TUPLE
-        combined_df, attack_types_list = concat_result  # UNPACK COMBINED DATAFRAME AND ATTACK TYPES LIST
-        return (combined_df, attack_types_list, 'attack_type')  # RETURN COMBINED DATAFRAME, ATTACK TYPES LIST, AND TARGET COLUMN NAME
+        
+        if not isinstance(concat_result, (list, tuple)) or len(concat_result) != 2:  # Verify concat_result is iterable and has exactly two items
+            print(f"{BackgroundColors.RED}Unexpected return from concat_files_into_multiclass_df: {type(concat_result)}{Style.RESET_ALL}")  # Log unexpected return type for diagnosis
+            err_val = ValueError("concat_files_into_multiclass_df returned unexpected format")  # Create ValueError to describe unexpected format
+            send_exception_via_telegram(type(err_val), err_val, err_val.__traceback__)  # Notify via Telegram about unexpected format
+            return (None, None, None)  # Return failure tuple due to unexpected format
+        
+        result = tuple(concat_result)  # Convert verified concat_result into tuple for safe unpacking
+        combined_df, attack_types_list = result  # Unpack combined dataframe and attack types list after casting
+        return (combined_df, attack_types_list, 'attack_type')  # Return combined dataframe, attack types list, and target column name
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
