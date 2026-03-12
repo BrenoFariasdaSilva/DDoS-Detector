@@ -53,11 +53,14 @@ import atexit  # For playing a sound when the program finishes
 import datetime  # For getting the current date and time
 import os  # For running a command in the terminal
 import platform  # For getting the operating system name
+import re  # For splitting comment text while preserving whitespace
+import string  # For punctuation classification used in token checks
 import sys  # For system-specific parameters and functions
 import tokenize  # For safe Python token parsing
 from colorama import Style  # For coloring the terminal
 from io import BytesIO  # For tokenizing byte streams
 from pathlib import Path  # For handling file paths
+
 
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)  # Project root directory
 if PROJECT_ROOT not in sys.path:  # Add project root to sys.path
@@ -253,6 +256,61 @@ def is_all_lower(text: str) -> bool:
     
     return all(char.islower() for char in letters)  # Return True when all letters are lowercase
 
+
+def is_protected(token: str, strip_chars: str) -> bool:
+    """
+    Determine whether a token must be preserved exactly.
+
+    :param token: Token to evaluate.
+    :param strip_chars: Characters to strip from the token for analysis.
+    :return: True when token is protected and must not be changed.
+    """
+
+    if "_" in token:  # Verify if token contains underscore
+        return True  # Preserve identifiers with underscore
+    if "-" in token:  # Verify if token contains hyphen
+        return True  # Preserve hyphenated identifiers
+    if any(ch.isdigit() for ch in token):  # Verify if token contains digits
+        return True  # Preserve numeric tokens
+
+    core = token.strip(strip_chars)  # Remove common surrounding punctuation for letter analysis
+
+    alpha = "".join(ch for ch in core if ch.isalpha())  # Extract alphabetic characters
+    if not alpha:  # Verify if no alphabetic characters remain
+        return True  # Preserve tokens without letters (numbers/punctuation)
+
+    if len(alpha) > 1 and alpha.isupper():  # Verify all-letters uppercase acronyms
+        return True  # Preserve acronyms in uppercase form
+
+    if any(c.isupper() for c in alpha) and any(c.islower() for c in alpha):  # Mixed case detection
+        return True  # Preserve mixed-case identifiers
+
+    return False  # Token is natural language and may be normalized
+
+
+def transform_natural(token: str, capitalize_first: bool) -> str:
+    """
+    Transform a natural-language token to sentence-case form.
+
+    :param token: Token to transform.
+    :param capitalize_first: Whether to capitalize the first alphabetic character.
+    :return: Transformed token.
+    """
+
+    chars = list(token)  # Operate on character list to preserve punctuation
+    first_alpha_seen = False  # Track first alphabetic character inside this token
+
+    for i, ch in enumerate(chars):  # Iterate characters to apply casing rules
+        if ch.isalpha():  # Identify alphabetic characters only
+            if not first_alpha_seen and capitalize_first:  # Capitalize the first alphabetic if requested
+                chars[i] = ch.upper()  # Uppercase first alphabetic
+                first_alpha_seen = True  # Mark that first alphabetic was handled
+            else:
+                chars[i] = ch.lower()  # Lowercase other alphabetic characters
+
+    return "".join(chars)  # Rebuild token preserving non-letter characters
+
+
 def to_sentence_case(text: str) -> str:
     """
     Convert text to sentence case using the first alphabetic character.
@@ -260,18 +318,34 @@ def to_sentence_case(text: str) -> str:
     :param text: Text to normalize.
     :return: Text converted to sentence case.
     """
+    normalized = text  # Preserve provided text exactly for whitespace
 
-    normalized = text.strip()  # Remove surrounding whitespace from the text
-    if not normalized:  # Verify if text is empty after trimming
-        return normalized  # Return empty text without changes
+    if not normalized:  # Verify if text is empty
+        return normalized  # Return immediately when empty
 
-    lowered = normalized.lower()  # Convert all letters to lowercase before capitalization
+    parts = re.split(r"(\s+)", normalized)  # Split text preserving whitespace separators
 
-    for index, char in enumerate(lowered):  # Iterate through text to find first letter
-        if char.isalpha():  # Verify if current character is alphabetic
-            return lowered[:index] + char.upper() + lowered[index + 1 :]  # Capitalize only the first alphabetic character
+    strip_chars = "".join(ch for ch in string.punctuation if ch not in ("_", "-"))  # Punctuation to strip for core checks
 
-    return lowered  # Return lowered text when no alphabetic character exists
+    out_parts = []  # Collect transformed parts preserving original separators
+    first_natural_found = False  # Track whether first natural-language word was already processed
+
+    for part in parts:  # Iterate parts including whitespace separators
+        if part.isspace():  # Preserve whitespace separators exactly
+            out_parts.append(part)  # Append separator
+            continue  # Move to next part
+
+        if is_protected(part, strip_chars):  # Preserve protected tokens as-is
+            out_parts.append(part)  # Append protected token unchanged
+            continue  # Move to next part
+
+        if not first_natural_found:  # First natural token must be capitalized
+            out_parts.append(transform_natural(part, True))  # Capitalize first natural token
+            first_natural_found = True  # Mark that first natural token has been handled
+        else:
+            out_parts.append(transform_natural(part, False))  # Lowercase subsequent natural tokens
+
+    return "".join(out_parts)  # Reconstruct and return the normalized comment body
 
 
 def process_comment_line(original_line: str, tok_string: str, start_col: int) -> str:
