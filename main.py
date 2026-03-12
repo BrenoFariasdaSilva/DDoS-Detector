@@ -1903,6 +1903,23 @@ def run_baseline_evaluation_for_dataset(train_df, test_df, split_required, label
     return baseline_scores  # Return per-model baseline metric dictionaries to the caller
 
 
+def resolve_dataset_entry_paths(dataset_info):
+    """
+    Extract the training path, testing path, feature files list, directory, and dataset name from a dataset entry.
+
+    :param dataset_info: Dictionary with keys 'train', 'test', and optionally 'features' from the DATASETS mapping.
+    :return: Tuple of (training_file_path, testing_file_path, feature_files, dataset_dir, dataset_name).
+    """
+
+    training_file_path = dataset_info.get("train")  # Retrieve training file path from dataset entry
+    testing_file_path = dataset_info.get("test")  # Retrieve testing file path from dataset entry
+    feature_files = dataset_info.get("features", [])  # Retrieve feature files list, defaulting to empty list
+    dataset_dir = os.path.dirname(str(training_file_path))  # Derive dataset directory from training file path
+    dataset_name = os.path.splitext(os.path.basename(str(training_file_path)))[0]  # Extract dataset name without extension from training file basename
+
+    return training_file_path, testing_file_path, feature_files, dataset_dir, dataset_name  # Return all resolved path components to the caller
+
+
 def main(use_cv=False, extract_features=True, compare_feature_selection=None):
     """
     Main function to run the machine learning pipeline on multiple datasets.
