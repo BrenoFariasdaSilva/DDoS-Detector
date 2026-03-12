@@ -1548,7 +1548,7 @@ def compute_metrics_from_predictions(model, y_true, y_pred, X=None):
 
 def evaluate_single_combination(model, model_name, keys, combination, X_train, y_train, current_index, total_combinations):
     """
-    Helper function to evaluate a single parameter combination.
+    Function to evaluate a single parameter combination.
     Designed to be called in parallel via ThreadPoolExecutor with memory safety.
 
     :param model: Clone of the model instance
@@ -1683,8 +1683,8 @@ def update_optimization_progress_bar(
 
             desc = f"{BackgroundColors.GREEN}Dataset: {dataset_ref}{BackgroundColors.GREEN} - {idx_str} {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}:{combo_str}"  # Base description for progress
 
-            def short(value, limit=30):  # Helper to create short string representations
-                return str(value) if len(str(value)) <= limit else str(value)[: limit - 3] + "..."  # Truncate helper
+            def short(value, limit=30):  # Function to create short string representations
+                return str(value) if len(str(value)) <= limit else str(value)[: limit - 3] + "..."  # Truncate long values
 
             if isinstance(param_grid, dict):  # If param_grid is dict, prepare compact display
                 parts = []  # List to accumulate parameter summaries
@@ -2557,7 +2557,7 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     :return: pandas Styler with alternating row background colors
     """
     try:
-        def row_style(row):  # Define row-wise styling helper
+        def row_style(row):  # Define row-wise styling function
             bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # white/light-gray alternation
             return [f"background-color: {bg};" for _ in row.index]  # Return style per cell preserving order
 
