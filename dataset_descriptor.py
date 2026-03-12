@@ -2345,7 +2345,7 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
                     )  # Create metrics row dict
                     preprocessing_metrics.append(metrics_row)  # Append metrics row to list for this directory
                 except Exception as _pm:  # If metrics collection fails
-                    tqdm.write(f"{BackgroundColors.YELLOW}Warning: failed to collect preprocessing metrics for {file_basename}: {_pm}{Style.RESET_ALL}")  # Write warning via tqdm to preserve progress bar
+                    print(f"{BackgroundColors.YELLOW}Warning: failed to collect preprocessing metrics for {file_basename}: {_pm}{Style.RESET_ALL}")  # Write warning via tqdm to preserve progress bar
 
             try:  # Attempt to release dataset memory to minimize peak RAM consumption
                 del df_current  # Delete the current dataset reference to allow garbage collection
