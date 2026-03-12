@@ -5669,6 +5669,225 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
         raise
 
 
+def sanitize_and_verify_feature_selections(ga_selected_features, rfe_selected_features, feature_names, config=None):
+    """
+    Sanitize and verify GA and RFE feature selections against available features.
+
+    :param ga_selected_features: Features selected by genetic algorithm
+    :param rfe_selected_features: Features selected by RFE
+    :param feature_names: List of available feature names
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Tuple of (sanitized_ga_features, sanitized_rfe_features)
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        if ga_selected_features:  # If GA features are provided
+            ga_selected_features = sanitize_feature_names(ga_selected_features)  # Sanitize GA feature names
+        if rfe_selected_features:  # If RFE features are provided
+            rfe_selected_features = sanitize_feature_names(rfe_selected_features)  # Sanitize RFE feature names
+
+        try:  # Verify GA features exist in dataset
+            if ga_selected_features:  # If GA features remain after sanitization
+                ga_selected_features = verify_selected_features_exist(ga_selected_features, feature_names, "GA")  # Verify GA features exist
+        except ValueError as e:  # All GA features missing from dataset
+            verbose_output(str(e), config=config)  # Log warning about missing GA features
+            ga_selected_features = []  # Reset GA features to empty list
+
+        try:  # Verify RFE features exist in dataset
+            if rfe_selected_features:  # If RFE features remain after sanitization
+                rfe_selected_features = verify_selected_features_exist(rfe_selected_features, feature_names, "RFE")  # Verify RFE features exist
+        except ValueError as e:  # All RFE features missing from dataset
+            verbose_output(str(e), config=config)  # Log warning about missing RFE features
+            rfe_selected_features = []  # Reset RFE features to empty list
+
+        return ga_selected_features, rfe_selected_features  # Return cleaned and verified feature selections
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def prepare_evaluation_data_splits(df, df_augmented_for_training=None, config=None):
+    """
+    Prepare training/test data splits with optional augmented data merging.
+
+    :param df: DataFrame with the original dataset
+    :param df_augmented_for_training: Optional augmented DataFrame to merge into training set only
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Tuple of (X_train_scaled, X_test_scaled, y_train, y_test, scaler) or None if single-class target
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        X_full = df.select_dtypes(include=np.number).iloc[:, :-1]  # Extract numeric feature columns excluding the last (target)
+        y = df.iloc[:, -1]  # Extract target column as the last column
+
+        if len(np.unique(y)) < 2:  # Verify if there is more than one class
+            print(
+                f"{BackgroundColors.RED}Target column has only one class. Cannot perform classification. Skipping.{Style.RESET_ALL}"
+            )  # Output the error message
+            return None  # Return None to signal classification is not possible
+
+        if df_augmented_for_training is not None:  # If augmented data provided for training enhancement
+            X_augmented = df_augmented_for_training.select_dtypes(include=np.number).iloc[:, :-1]  # Extract augmented features (numeric only)
+            y_augmented = df_augmented_for_training.iloc[:, -1]  # Extract augmented target
+            X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
+                X_full, y, config=config, X_augmented=X_augmented, y_augmented=y_augmented
+            )  # Scale and split with augmented data merged into training set only
+        else:  # No augmented data provided
+            X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
+                X_full, y, config=config
+            )  # Scale and split the data normally (original-only)
+
+        return X_train_scaled, X_test_scaled, y_train, y_test, scaler  # Return the prepared data splits
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def build_evaluation_stacking_model(base_models, config=None):
+    """
+    Build a StackingClassifier from base models excluding SVM.
+
+    :param base_models: Dictionary of base models
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: StackingClassifier instance
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        estimators = [
+            (name, model) for name, model in base_models.items() if name != "SVM"
+        ]  # Define estimators list excluding SVM which is incompatible with stacking
+
+        stacking_model = StackingClassifier(
+            estimators=estimators,
+            final_estimator=RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=config.get("evaluation", {}).get("n_jobs", -1)),
+            cv=StratifiedKFold(n_splits=10, shuffle=True, random_state=42),
+            n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
+        )  # Define the Stacking Classifier model with cross-validated base estimators
+
+        return stacking_model  # Return the constructed stacking model
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file):
+    """
+    Build feature sets dictionary from full, GA, PCA, and RFE feature subsets.
+
+    :param X_train_scaled: Scaled training features
+    :param X_test_scaled: Scaled test features
+    :param feature_names: List of all feature names
+    :param ga_selected_features: GA selected features
+    :param pca_n_components: Number of PCA components
+    :param rfe_selected_features: RFE selected features
+    :param file: Path to dataset file (for PCA artifact lookup)
+    :return: Sorted dictionary mapping feature set names to (X_train, X_test, feature_names) tuples
+    """
+
+    try:
+        X_train_pca, X_test_pca = apply_pca_transformation(
+            X_train_scaled, X_test_scaled, pca_n_components, file
+        )  # Apply PCA transformation if applicable
+
+        X_train_ga, ga_actual_features = get_feature_subset(X_train_scaled, ga_selected_features, feature_names)  # Get GA feature subset for training
+        X_test_ga, _ = get_feature_subset(X_test_scaled, ga_selected_features, feature_names)  # Get GA feature subset for testing
+
+        X_train_rfe, rfe_actual_features = get_feature_subset(X_train_scaled, rfe_selected_features, feature_names)  # Get RFE feature subset for training
+        X_test_rfe, _ = get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)  # Get RFE feature subset for testing
+
+        feature_sets = {  # Dictionary of feature sets to evaluate
+            "Full Features": (X_train_scaled, X_test_scaled, feature_names),  # All features with names
+            "GA Features": (X_train_ga, X_test_ga, ga_actual_features),  # GA subset with actual names
+            "PCA Components": (
+                (X_train_pca, X_test_pca, None) if X_train_pca is not None else None
+            ),  # PCA components (only if PCA was applied)
+            "RFE Features": (X_train_rfe, X_test_rfe, rfe_actual_features),  # RFE subset with actual names
+        }  # Build the complete feature sets dictionary
+
+        feature_sets = {
+            k: v for k, v in feature_sets.items() if v is not None
+        }  # Remove any None entries (e.g., PCA if not applied)
+        feature_sets = dict(sorted(feature_sets.items()))  # Sort the feature sets by name
+
+        return feature_sets  # Return the assembled and sorted feature sets dictionary
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def build_classifier_result_entry(model_class, file, execution_mode_str, attack_types_combined, feature_set_name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, n_features, n_samples_train, n_samples_test, metrics_tuple, subset_feature_names, hyperparams_map=None):
+    """
+    Build a standardized result entry dictionary for classifier evaluation results.
+
+    :param model_class: Class name of the model
+    :param file: Path to the dataset file
+    :param execution_mode_str: Execution mode string ('binary' or 'multi-class')
+    :param attack_types_combined: List of attack types for multi-class or None
+    :param feature_set_name: Name of the feature set used
+    :param classifier_type: Type of classifier ('Individual' or 'Stacking')
+    :param model_name: Name of the model
+    :param data_source_label: Label for the data source
+    :param experiment_id: Unique experiment identifier
+    :param experiment_mode: Experiment mode string
+    :param augmentation_ratio: Augmentation ratio or None
+    :param n_features: Number of features used
+    :param n_samples_train: Number of training samples
+    :param n_samples_test: Number of test samples
+    :param metrics_tuple: Tuple of (accuracy, precision, recall, f1, fpr, fnr, elapsed, ...)
+    :param subset_feature_names: List of feature names used
+    :param hyperparams_map: Dictionary mapping model names to hyperparameters
+    :return: Dictionary containing the result entry
+    """
+
+    try:
+        acc, prec, rec, f1, fpr, fnr, elapsed = metrics_tuple[:7]  # Unpack the first 7 metrics from the tuple
+        return {
+            "model": model_class,  # Model class name for identification
+            "dataset": os.path.relpath(file),  # Relative dataset path for portability
+            "execution_mode": execution_mode_str,  # Execution mode (binary or multi-class)
+            "attack_types_combined": json.dumps(attack_types_combined) if attack_types_combined else None,  # JSON-serialized attack types or None
+            "feature_set": feature_set_name,  # Name of the feature set evaluated
+            "classifier_type": classifier_type,  # Classifier type (Individual or Stacking)
+            "model_name": model_name,  # Model name for result identification
+            "data_source": data_source_label,  # Data source label for experiment traceability
+            "experiment_id": experiment_id,  # Unique experiment identifier
+            "experiment_mode": experiment_mode,  # Experiment mode (original_only or original_plus_augmented)
+            "augmentation_ratio": augmentation_ratio,  # Augmentation ratio or None for original-only
+            "n_features": n_features,  # Number of features used in evaluation
+            "n_samples_train": n_samples_train,  # Number of training samples
+            "n_samples_test": n_samples_test,  # Number of test samples
+            "accuracy": truncate_value(acc),  # Truncated accuracy metric
+            "precision": truncate_value(prec),  # Truncated precision metric
+            "recall": truncate_value(rec),  # Truncated recall metric
+            "f1_score": truncate_value(f1),  # Truncated F1 score metric
+            "fpr": truncate_value(fpr),  # Truncated false positive rate
+            "fnr": truncate_value(fnr),  # Truncated false negative rate
+            "elapsed_time_s": int(round(elapsed)),  # Rounded elapsed time in seconds
+            "cv_method": f"StratifiedKFold(n_splits=10)",  # Cross-validation method description
+            "top_features": json.dumps(subset_feature_names),  # JSON-serialized subset feature names
+            "rfe_ranking": None,  # RFE ranking placeholder (not computed here)
+            "hyperparameters": json.dumps(hyperparams_map.get(model_name)) if hyperparams_map and hyperparams_map.get(model_name) is not None else None,  # JSON-serialized hyperparameters or None
+            "features_list": subset_feature_names,  # Raw list of feature names for downstream use
+        }  # Return the constructed result entry dictionary
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def evaluate_on_dataset(
     file,
     df,
@@ -5708,93 +5927,32 @@ def evaluate_on_dataset(
     """
     
     try:
-        if ga_selected_features:
-            ga_selected_features = sanitize_feature_names(ga_selected_features)
-        if rfe_selected_features:
-            rfe_selected_features = sanitize_feature_names(rfe_selected_features)
-
-        # Verify selected features exist in the dataset. Do not crash; handle gracefully.
-        try:
-            if ga_selected_features:
-                ga_selected_features = verify_selected_features_exist(ga_selected_features, feature_names, "GA")
-        except ValueError as e:
-            # All GA features missing: warn and treat as no GA features selected
-            verbose_output(str(e), config=config)
-            ga_selected_features = []
-
-        try:
-            if rfe_selected_features:
-                rfe_selected_features = verify_selected_features_exist(rfe_selected_features, feature_names, "RFE")
-        except ValueError as e:
-            # All RFE features missing: warn and treat as no RFE features selected
-            verbose_output(str(e), config=config)
-            rfe_selected_features = []
+        ga_selected_features, rfe_selected_features = sanitize_and_verify_feature_selections(
+            ga_selected_features, rfe_selected_features, feature_names, config=config
+        )  # Sanitize and verify GA/RFE feature selections against available features
 
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}"
-        )
+        )  # Print top separator line for evaluation section
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating on: {BackgroundColors.CYAN}{data_source_label} Data{Style.RESET_ALL}"
-        )
+        )  # Print the data source label being evaluated
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}\n"
-        )
+        )  # Print bottom separator line for evaluation section
 
-        X_full = df.select_dtypes(include=np.number).iloc[:, :-1]  # Features (numeric only)
-        y = df.iloc[:, -1]  # Target
+        data_splits = prepare_evaluation_data_splits(df, df_augmented_for_training, config=config)  # Prepare training/test data splits with optional augmentation
 
-        if len(np.unique(y)) < 2:  # Verify if there is more than one class
-            print(
-                f"{BackgroundColors.RED}Target column has only one class. Cannot perform classification. Skipping.{Style.RESET_ALL}"
-            )  # Output the error message
+        if data_splits is None:  # If data preparation failed (single-class target)
             return {}  # Return empty dictionary
 
-        if df_augmented_for_training is not None:  # If augmented data provided for training enhancement
-            X_augmented = df_augmented_for_training.select_dtypes(include=np.number).iloc[:, :-1]  # Extract augmented features (numeric only)
-            y_augmented = df_augmented_for_training.iloc[:, -1]  # Extract augmented target
-            
-            X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
-                X_full, y, config=config, X_augmented=X_augmented, y_augmented=y_augmented
-            )  # Scale and split with augmented data merged into training set only
-        else:  # No augmented data provided
-            X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
-                X_full, y, config=config
-            )  # Scale and split the data normally (original-only)
+        X_train_scaled, X_test_scaled, y_train, y_test, scaler = data_splits  # Unpack the data splits tuple
 
-        estimators = [
-            (name, model) for name, model in base_models.items() if name != "SVM"
-        ]  # Define estimators (excluding SVM)
+        stacking_model = build_evaluation_stacking_model(base_models, config=config)  # Build stacking classifier from base models
 
-        stacking_model = StackingClassifier(
-            estimators=estimators,
-            final_estimator=RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=config.get("evaluation", {}).get("n_jobs", -1)),
-            cv=StratifiedKFold(n_splits=10, shuffle=True, random_state=42),
-            n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
-        )  # Define the Stacking Classifier model
-
-        X_train_pca, X_test_pca = apply_pca_transformation(
-            X_train_scaled, X_test_scaled, pca_n_components, file
-        )  # Apply PCA transformation if applicable
-
-        X_train_ga, ga_actual_features = get_feature_subset(X_train_scaled, ga_selected_features, feature_names)
-        X_test_ga, _ = get_feature_subset(X_test_scaled, ga_selected_features, feature_names)
-        
-        X_train_rfe, rfe_actual_features = get_feature_subset(X_train_scaled, rfe_selected_features, feature_names)
-        X_test_rfe, _ = get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)
-
-        feature_sets = {  # Dictionary of feature sets to evaluate
-            "Full Features": (X_train_scaled, X_test_scaled, feature_names),  # All features with names
-            "GA Features": (X_train_ga, X_test_ga, ga_actual_features),  # GA subset with actual names
-            "PCA Components": (
-                (X_train_pca, X_test_pca, None) if X_train_pca is not None else None
-            ),  # PCA components (only if PCA was applied)
-            "RFE Features": (X_train_rfe, X_test_rfe, rfe_actual_features),  # RFE subset with actual names
-        }
-
-        feature_sets = {
-            k: v for k, v in feature_sets.items() if v is not None
-        }  # Remove any None entries (e.g., PCA if not applied)
-        feature_sets = dict(sorted(feature_sets.items()))  # Sort the feature sets by name
+        feature_sets = assemble_feature_sets(
+            X_train_scaled, X_test_scaled, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file
+        )  # Assemble feature sets dictionary for evaluation
 
         individual_models = {
             k: v for k, v in base_models.items()
@@ -5865,37 +6023,14 @@ def evaluate_on_dataset(
                 for future in concurrent.futures.as_completed(future_to_model):  # As each evaluation completes
                     model_name, model_class, comb_idx = future_to_model[future]  # Get metadata from mapping
                     metrics = future.result()  # Get the metrics from the completed future
-                    acc, prec, rec, f1, fpr, fnr, elapsed = metrics
-                    result_entry = {
-                        "model": model_class,
-                        "dataset": os.path.relpath(file),
-                        "execution_mode": execution_mode_str,
-                        "attack_types_combined": json.dumps(attack_types_combined) if attack_types_combined else None,
-                        "feature_set": name,
-                        "classifier_type": "Individual",
-                        "model_name": model_name,
-                        "data_source": data_source_label,
-                        "experiment_id": experiment_id,
-                        "experiment_mode": experiment_mode,
-                        "augmentation_ratio": augmentation_ratio,
-                        "n_features": X_train_subset.shape[1],
-                        "n_samples_train": len(y_train),
-                        "n_samples_test": len(y_test),
-                        "accuracy": truncate_value(acc),
-                        "precision": truncate_value(prec),
-                        "recall": truncate_value(rec),
-                        "f1_score": truncate_value(f1),
-                        "fpr": truncate_value(fpr),
-                        "fnr": truncate_value(fnr),
-                        "elapsed_time_s": int(round(elapsed)),
-                        "cv_method": f"StratifiedKFold(n_splits=10)",
-                        "top_features": json.dumps(subset_feature_names),
-                        "rfe_ranking": None,
-                        "hyperparameters": json.dumps(hyperparams_map.get(model_name)) if hyperparams_map and hyperparams_map.get(model_name) is not None else None,
-                        "features_list": subset_feature_names,
-                    }  # Prepare result entry
+                    result_entry = build_classifier_result_entry(
+                        model_class, file, execution_mode_str, attack_types_combined, name, "Individual",
+                        model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio,
+                        X_train_subset.shape[1], len(y_train), len(y_test), metrics, subset_feature_names,
+                        hyperparams_map=hyperparams_map,
+                    )  # Build standardized result entry for this individual classifier
                     all_results[(name, model_name)] = result_entry  # Store result with key
-                    send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} with F1: {truncate_value(f1)} in {calculate_execution_time(0, elapsed)}")
+                    send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} with F1: {truncate_value(metrics[3])} in {calculate_execution_time(0, metrics[6])}")
                     print(
                         f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(metrics[0])}{Style.RESET_ALL}"
                     )  # Output accuracy
@@ -5940,47 +6075,24 @@ def evaluate_on_dataset(
             except Exception:
                 pass
 
-            s_acc, s_prec, s_rec, s_f1, s_fpr, s_fnr, s_elapsed, s_y_pred = stacking_metrics
+            s_y_pred = stacking_metrics[7] if len(stacking_metrics) > 7 else None  # Extract stacking predictions for metric plot generation
 
-            try:
-                file_path_obj = Path(file)
-                feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"
+            try:  # Attempt to generate metric plots for stacking model
+                file_path_obj = Path(file)  # Create Path object for file
+                feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"  # Build Feature_Analysis directory path
 
-                stacking_output_dir = get_stacking_output_dir(str(file_path_obj), config)
-                generate_and_save_metric_plots(y_test, s_y_pred, config.get("stacking", {}), stacking_output_dir)
-            except Exception:
-                pass
+                stacking_output_dir = get_stacking_output_dir(str(file_path_obj), config)  # Get stacking output directory
+                generate_and_save_metric_plots(y_test, s_y_pred, config.get("stacking", {}), stacking_output_dir)  # Generate and save metric plots
+            except Exception:  # If metric plot generation fails
+                pass  # Continue without plotting
             
-            stacking_result_entry = {
-                "model": stacking_model.__class__.__name__,
-                "dataset": os.path.relpath(file),
-                "execution_mode": execution_mode_str,
-                "attack_types_combined": json.dumps(attack_types_combined) if attack_types_combined else None,
-                "feature_set": name,
-                "classifier_type": "Stacking",
-                "model_name": "StackingClassifier",
-                "data_source": data_source_label,
-                "experiment_id": experiment_id,
-                "experiment_mode": experiment_mode,
-                "augmentation_ratio": augmentation_ratio,
-                "n_features": X_train_subset.shape[1],
-                "n_samples_train": len(y_train),
-                "n_samples_test": len(y_test),
-                "accuracy": truncate_value(s_acc),
-                "precision": truncate_value(s_prec),
-                "recall": truncate_value(s_rec),
-                "f1_score": truncate_value(s_f1),
-                "fpr": truncate_value(s_fpr),
-                "fnr": truncate_value(s_fnr),
-                "elapsed_time_s": int(round(s_elapsed)),
-                "cv_method": f"StratifiedKFold(n_splits=10)",
-                "top_features": json.dumps(subset_feature_names),
-                "rfe_ranking": None,
-                "hyperparameters": None,
-                "features_list": subset_feature_names,
-            }  # Prepare stacking result entry
+            stacking_result_entry = build_classifier_result_entry(
+                stacking_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, "Stacking",
+                "StackingClassifier", data_source_label, experiment_id, experiment_mode, augmentation_ratio,
+                X_train_subset.shape[1], len(y_train), len(y_test), stacking_metrics, subset_feature_names,
+            )  # Build standardized result entry for the stacking classifier
             all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store result with key
-            send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier with F1: {truncate_value(s_f1)} in {calculate_execution_time(0, s_elapsed)}")
+            send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier with F1: {truncate_value(stacking_metrics[3])} in {calculate_execution_time(0, stacking_metrics[6])}")
             print(
                 f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{truncate_value(stacking_metrics[0])}{Style.RESET_ALL}"
             )  # Output accuracy
