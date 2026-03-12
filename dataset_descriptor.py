@@ -2091,6 +2091,45 @@ def upscale_image_if_needed(path, fallback=False):
         pass  # Continue silently on upscale failures to preserve original behavior
 
 
+def attempt_matplotlib_export_fallback(styled_df, output_path, e_inner):
+    """
+    Attempt to export a styled DataFrame to PNG using pure matplotlib table rendering as a last-resort fallback.
+
+    :param styled_df: pandas.Styler or DataFrame object to render as a table image.
+    :param output_path: File system path where the rendered PNG will be written.
+    :param e_inner: Exception from the previous fallback attempt, or None when a prior method succeeded.
+    :return: None when export succeeded, or the last encountered exception when matplotlib rendering also failed.
+    """
+
+    if e_inner is None:  # Skip matplotlib fallback when a prior method already succeeded
+        return None  # Prior method succeeded; no further fallback is needed
+    try:  # Attempt pure matplotlib table rendering as the final deterministic fallback
+        try:  # Extract the underlying DataFrame from the Styler when possible
+            df_to_render = getattr(styled_df, "data", styled_df)  # Access the raw DataFrame from a Styler or use the object as-is
+        except Exception:  # Fall back to using styled_df directly when attribute access fails
+            df_to_render = styled_df  # Use the original styled_df when data extraction is unavailable
+        fig = plt.figure(figsize=(12, 8))  # Create a matplotlib figure sized for a readable table layout
+        ax = fig.add_subplot(111)  # Add a single subplot to host the table
+        ax.axis("off")  # Disable axes to produce a table-only image without borders or ticks
+        try:  # Build the table from DataFrame values and column labels directly
+            table = ax.table(cellText=list(df_to_render.values), colLabels=list(df_to_render.columns), loc='center')  # Construct the matplotlib table from the DataFrame
+        except Exception:  # Fall back to stringified values when direct construction fails
+            table = ax.table(cellText=[[str(x) for x in row] for row in df_to_render.values], colLabels=[str(c) for c in df_to_render.columns], loc='center')  # Build table with all values converted to strings
+        table.auto_set_font_size(False)  # Disable automatic font sizing for consistent appearance
+        table.set_fontsize(6)  # Set a small font size to fit large tables within the figure bounds
+        fig.tight_layout()  # Adjust the layout to fit the table within the figure area
+        fig.savefig(output_path, dpi=300)  # Save the rendered table to disk at 300 DPI
+        plt.close(fig)  # Close the figure immediately after saving to free memory
+        if os.path.exists(output_path):  # Verify the output file was actually created on disk
+            print(f"{BackgroundColors.GREEN}[DEBUG] Exported image (matplotlib fallback): {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log matplotlib fallback success
+            print(f"{BackgroundColors.GREEN}[INFO] Table image successfully saved to: {BackgroundColors.CYAN}{os.path.abspath(output_path)}{Style.RESET_ALL}")  # Log the absolute save path
+            return None  # Return None to signal matplotlib export succeeded
+        else:  # File not present after the save attempt indicates a silent failure
+            return RuntimeError("Matplotlib fallback failed to produce output file")  # Return explicit error for caller to raise
+    except Exception as _e_matplot:  # Capture any exception during matplotlib rendering for final re-raise
+        return _e_matplot  # Return exception to allow the caller to perform final error handling
+
+
 def attempt_chrome_export_fallback(styled_df, output_path, e_inner, export_kwargs, timeout_ms):
     """
     Attempt to export a styled DataFrame to PNG using Chrome as the table conversion engine.
@@ -2223,31 +2262,7 @@ def export_dataframe_image(styled_df, output_path):
             e_inner = attempt_chrome_export_fallback(styled_df, output_path, e_inner, export_kwargs, timeout_ms)  # Try Chrome as first deterministic fallback and update e_inner
 
         if e_inner is not None:  # If both Playwright and chrome fallbacks failed, attempt matplotlib rendering as last resort
-            try:  # Try pure matplotlib table rendering as final deterministic fallback
-                try:  # Derive DataFrame from Styler when possible to render table
-                    df_to_render = getattr(styled_df, "data", styled_df)  # Extract underlying DataFrame from Styler or use passed object
-                except Exception:  # If extraction fails, fall back to using styled_df as-is
-                    df_to_render = styled_df  # Use original styled_df when data extraction fails
-                fig = plt.figure(figsize=(12, 8))  # Create matplotlib figure for table rendering
-                ax = fig.add_subplot(111)  # Add single subplot to host table
-                ax.axis("off")  # Disable axes for table-only image
-                try:  # Attempt to build table from DataFrame values and column labels
-                    table = ax.table(cellText=list(df_to_render.values), colLabels=list(df_to_render.columns), loc='center')  # Construct matplotlib table from DataFrame
-                except Exception:  # If direct values/columns fail, build fallback textual table representation
-                    table = ax.table(cellText=[[str(x) for x in row] for row in df_to_render.values], colLabels=[str(c) for c in df_to_render.columns], loc='center')  # Construct table with stringified values
-                table.auto_set_font_size(False)  # Disable auto font sizing for consistent output
-                table.set_fontsize(6)  # Set small font size to fit large tables
-                fig.tight_layout()  # Adjust layout to fit table within figure
-                fig.savefig(output_path, dpi=300)  # Save rendered matplotlib table to disk
-                plt.close(fig)  # Close the figure to free memory immediately after saving
-                if os.path.exists(output_path):  # Verify that the saved file exists before declaring success
-                    print(f"{BackgroundColors.GREEN}[DEBUG] Exported image (matplotlib fallback): {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log matplotlib fallback debug message
-                    print(f"{BackgroundColors.GREEN}[INFO] Table image successfully saved to: {BackgroundColors.CYAN}{os.path.abspath(output_path)}{Style.RESET_ALL}")  # Log absolute save path after matplotlib fallback success
-                    e_inner = None  # Clear last exception to indicate success
-                else:  # If file not present after save attempt
-                    e_inner = RuntimeError("Matplotlib fallback failed to produce output file")  # Set explicit error for final re-raise
-            except Exception as _e_matplot:  # Capture any exception during matplotlib fallback for final re-raise
-                e_inner = _e_matplot  # Record matplotlib fallback exception for potential final re-raise
+            e_inner = attempt_matplotlib_export_fallback(styled_df, output_path, e_inner)  # Try matplotlib as final fallback and update e_inner
 
         if e_inner is not None:  # If all methods failed, re-raise the last encountered exception to be handled by outer block
             raise e_inner  # Re-raise last exception to preserve original outer logging and telemetry behavior
