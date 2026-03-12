@@ -2295,8 +2295,7 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
         )  # Create a single in-place progress bar instance
         for idx, filepath in enumerate(progress, 1):  # Process each matching file
             file_basename = os.path.relpath(filepath, base_dir).replace("\\", "/")  # Get the file path relative to base_dir and normalize slashes
-            colored_desc = f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{file_basename}{Style.RESET_ALL}"  # Compose colored description using BackgroundColors while keeping length bounded
-            progress.set_description(colored_desc)  # Update progress bar description with colored, truncated filename for inline display
+            progress.set_postfix_str(f"{BackgroundColors.CYAN}{file_basename}{Style.RESET_ALL}")  # Update postfix inline without redrawing the bar
 
             df_current = load_dataset(filepath, low_memory)  # Load one dataset at a time to minimize peak RAM usage
             if df_current is None:  # Verify that the dataset was loaded successfully
@@ -2346,7 +2345,7 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
                     )  # Create metrics row dict
                     preprocessing_metrics.append(metrics_row)  # Append metrics row to list for this directory
                 except Exception as _pm:  # If metrics collection fails
-                    print(f"{BackgroundColors.YELLOW}Warning: failed to collect preprocessing metrics for {file_basename}: {_pm}{Style.RESET_ALL}")  # Warn without breaking the progress bar
+                    tqdm.write(f"{BackgroundColors.YELLOW}Warning: failed to collect preprocessing metrics for {file_basename}: {_pm}{Style.RESET_ALL}")  # Write warning via tqdm to preserve progress bar
 
             try:  # Attempt to release dataset memory to minimize peak RAM consumption
                 del df_current  # Delete the current dataset reference to allow garbage collection
