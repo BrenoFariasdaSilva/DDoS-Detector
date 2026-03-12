@@ -6429,6 +6429,27 @@ def build_save_results_metadata(
         raise  # Re-raise to preserve original failure semantics
 
 
+def resolve_ga_best_metrics(best_ind, feature_names, csv_path, metrics, X, y, X_test, y_test):
+    """
+    Extract selected features, normalize metrics, and optionally re-evaluate the best individual on a test set.
+
+    :param best_ind: Best DEAP individual (binary mask) from the completed GA run.
+    :param feature_names: List of feature names corresponding to individual gene indices.
+    :param csv_path: Path to the dataset CSV used for deriving the RFE ranking output path.
+    :param metrics: Optional precomputed metrics tuple; when None the individual is re-evaluated.
+    :param X: Training feature set used for re-evaluation when metrics are absent.
+    :param y: Training target variable used for re-evaluation when metrics are absent.
+    :param X_test: Test feature set used for re-evaluation when metrics are absent.
+    :param y_test: Test target variable used for re-evaluation when metrics are absent.
+    :return: Tuple of (best_features, rfe_ranking, rf_metrics).
+    """
+
+    best_features, rfe_ranking = determine_best_features_and_ranking(best_ind, feature_names, csv_path)  # Extract selected feature names and their RFE ranking from the best individual
+    rf_metrics = determine_rf_metrics(metrics)  # Normalize the provided metrics to the expected 12-element slice
+    rf_metrics = maybe_evaluate_on_test(rf_metrics, best_ind, X, y, X_test, y_test)  # Re-evaluate best individual on the test set when precomputed metrics are absent
+    return best_features, rfe_ranking, rf_metrics  # Return extracted features, ranking, and final metrics as a tuple
+
+
 def save_results(
     best_ind,
     feature_names,
@@ -6484,9 +6505,7 @@ def save_results(
     """
 
     try:
-        best_features, rfe_ranking = determine_best_features_and_ranking(best_ind, feature_names, csv_path)  # Extract selected feature names and RFE ranking
-        rf_metrics = determine_rf_metrics(metrics)  # Normalize metrics to expected 12-element slice
-        rf_metrics = maybe_evaluate_on_test(rf_metrics, best_ind, X, y, X_test, y_test)  # Optionally evaluate best individual on test set if metrics are missing
+        best_features, rfe_ranking, rf_metrics = resolve_ga_best_metrics(best_ind, feature_names, csv_path, metrics, X, y, X_test, y_test)  # Extract features, ranking, and normalized metrics in one step
         (
             n_train,
             n_test,
