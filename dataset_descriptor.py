@@ -1513,6 +1513,24 @@ def save_tsne_3d_plot(X_emb, labels, output_path, title):
         raise  # Re-raise to preserve original failure semantics
 
 
+def resolve_tsne_output_directory(filepath, output_dir, config):
+    """
+    Resolve the t-SNE output directory from an explicit path or from the configuration, and create it.
+
+    :param filepath: Path to the source CSV file used to derive the default output directory location.
+    :param output_dir: Explicit output directory path when already known; None triggers config-based resolution.
+    :param config: Configuration dictionary used to read the data separability subdirectory name; None loads the default.
+    :return: Resolved absolute output directory path that is guaranteed to exist on disk.
+    """
+
+    if output_dir is None:  # Use config-based default when no explicit directory was provided by the caller
+        cfg = config or get_default_config()  # Load the default config when no external config was passed
+        tsne_subdir = cfg.get("paths", {}).get("data_separability_subdir", "Data_Separability")  # Read the configured t-SNE subdirectory name with fallback
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(filepath)), tsne_subdir)  # Build the output path relative to the dataset's directory
+    os.makedirs(output_dir, exist_ok=True)  # Create the output directory and any missing parents if they do not exist
+    return output_dir  # Return the resolved and created output directory path
+
+
 def generate_tsne_plot(
     filepath,
     df=None,
@@ -1569,11 +1587,7 @@ def generate_tsne_plot(
             if n_rows <= max(3, int(perplexity) + 1):  # Check t-SNE feasibility
                 return None, None  # Abort if too few samples for t-SNE
 
-            if output_dir is None:  # Determine output directory
-                cfg = config or get_default_config()
-                tsne_subdir = cfg.get("paths", {}).get("data_separability_subdir", "Data_Separability")
-                output_dir = os.path.join(os.path.dirname(os.path.abspath(filepath)), tsne_subdir)
-            os.makedirs(output_dir, exist_ok=True)  # Ensure directory exists
+            output_dir = resolve_tsne_output_directory(filepath, output_dir, config)  # Resolve output directory from explicit path or config and create it
 
             base = os.path.splitext(os.path.basename(filepath))[0]  # Base filename
             
