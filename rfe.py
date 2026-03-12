@@ -1350,6 +1350,48 @@ def build_result_row(r: Dict[str, Any], csv_path: str, cols: list) -> Dict[str, 
         raise
 
 
+def resolve_results_export_path(csv_path: str) -> Tuple[str, str]:
+    """
+    Resolve the absolute results directory and full CSV file path for RFE result export.
+
+    :param csv_path: Path to the original CSV dataset file.
+    :return: Tuple of (resolved_dir, run_csv_path).
+    """
+
+    try:
+        cfg_source = CONFIG if isinstance(CONFIG, dict) and CONFIG else get_default_config()  # Use global config or fallback to defaults
+        rfe_cfg = cfg_source.get("rfe") if isinstance(cfg_source.get("rfe"), dict) else cfg_source  # Extract RFE config section
+        export_cfg = (rfe_cfg or {}).get("export", {})  # Extract export subsection
+        results_dir_raw = export_cfg.get("results_dir")  # Read raw results directory setting
+        results_filename = export_cfg.get("results_filename")  # Read results filename setting
+
+        if not isinstance(results_dir_raw, str) or not results_dir_raw:  # Verify results_dir is a non-empty string
+            raise ValueError("rfe.export.results_dir must be a non-empty string in configuration")  # Raise on invalid results directory
+        if not isinstance(results_filename, str) or not results_filename:  # Verify results_filename is a non-empty string
+            raise ValueError("rfe.export.results_filename must be a non-empty string in configuration")  # Raise on invalid filename
+        if not results_filename.lower().endswith(".csv"):  # Verify filename ends with .csv
+            raise ValueError("rfe.export.results_filename must end with .csv")  # Raise on invalid extension
+
+        if os.path.isabs(results_dir_raw):  # Verify if the configured path is absolute
+            resolved_dir = os.path.abspath(os.path.expanduser(results_dir_raw))  # Use absolute path directly
+        else:  # Relative path: resolve relative to the dataset directory
+            dataset_dir = os.path.dirname(csv_path) or "."  # Get dataset parent directory
+            resolved_dir = os.path.abspath(os.path.expanduser(os.path.join(dataset_dir, results_dir_raw)))  # Join and resolve
+
+        os.makedirs(resolved_dir, exist_ok=True)  # Ensure the results directory exists
+        if not os.access(resolved_dir, os.W_OK):  # Verify write access to the results directory
+            raise PermissionError(f"Directory not writable: {resolved_dir}")  # Raise on non-writable directory
+
+        run_csv_path = os.path.join(resolved_dir, results_filename)  # Compose full CSV path
+        print(f"{BackgroundColors.GREEN}Resolved results directory: {BackgroundColors.CYAN}{resolved_dir}{Style.RESET_ALL}")  # Log resolved directory to terminal
+
+        return resolved_dir, run_csv_path  # Return resolved directory and full CSV path
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def save_rfe_results(csv_path, run_results):
     """
     Saves results from RFE run to a structured CSV file.
@@ -1372,31 +1414,7 @@ def save_rfe_results(csv_path, run_results):
         cols = get_results_csv_columns(CONFIG if CONFIG else None)
         df_new = pd.DataFrame(rows, columns=cols)
 
-        cfg_source = CONFIG if isinstance(CONFIG, dict) and CONFIG else get_default_config()
-        
-        rfe_cfg = cfg_source.get("rfe") if isinstance(cfg_source.get("rfe"), dict) else cfg_source
-        export_cfg = (rfe_cfg or {}).get("export", {})
-        results_dir_raw = export_cfg.get("results_dir")
-        results_filename = export_cfg.get("results_filename")
-        if not isinstance(results_dir_raw, str) or not results_dir_raw:
-            raise ValueError("rfe.export.results_dir must be a non-empty string in configuration")
-        if not isinstance(results_filename, str) or not results_filename:
-            raise ValueError("rfe.export.results_filename must be a non-empty string in configuration")
-        if not results_filename.lower().endswith(".csv"):
-            raise ValueError("rfe.export.results_filename must end with .csv")
-
-        if os.path.isabs(results_dir_raw):
-            resolved_dir = os.path.abspath(os.path.expanduser(results_dir_raw))
-        else:
-            dataset_dir = os.path.dirname(csv_path) or "."
-            resolved_dir = os.path.abspath(os.path.expanduser(os.path.join(dataset_dir, results_dir_raw)))
-
-        os.makedirs(resolved_dir, exist_ok=True)
-        if not os.access(resolved_dir, os.W_OK):
-            raise PermissionError(f"Directory not writable: {resolved_dir}")
-
-        run_csv_path = os.path.join(resolved_dir, results_filename)
-        print(f"{BackgroundColors.GREEN}Resolved results directory: {BackgroundColors.CYAN}{resolved_dir}{Style.RESET_ALL}")
+        resolved_dir, run_csv_path = resolve_results_export_path(csv_path)  # Resolve destination directory and full CSV path
 
         if os.path.exists(run_csv_path):
             try:
