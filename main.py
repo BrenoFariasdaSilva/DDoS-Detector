@@ -1825,6 +1825,28 @@ def resolve_dataset_label_col_interactively(train_df, dataset_name):
         raise
 
 
+def build_overall_feature_extraction_method_tag(features_to_use, features_file_used):
+    """
+    Map the features file name to a method tag string used in output filenames and summary reports.
+
+    :param features_to_use: List of selected features, or None when no feature selection was applied.
+    :param features_file_used: Path to the last-used features file, or None when no features file was loaded.
+    :return: Method tag string such as "GA", "RFE", "PCA", a generic prefix, or an empty string.
+    """
+
+    if features_to_use is None or not features_file_used:  # Return empty tag when no feature selection was applied
+        return ""  # No feature selection means no method tag required
+    features_basename = os.path.basename(features_file_used)  # Extract the base filename from the full path
+    features_name = os.path.splitext(features_basename)[0]  # Strip the file extension to get the bare name
+    if "Genetic" in features_name or "GA" in features_name:  # Genetic Algorithm indicator found in filename
+        return "GA"  # Tag identifies Genetic Algorithm as the feature extraction method
+    elif "RFE" in features_name:  # RFE indicator found in filename
+        return "RFE"  # Tag identifies Recursive Feature Elimination as the method
+    elif "PCA" in features_name:  # PCA indicator found in filename
+        return "PCA"  # Tag identifies Principal Component Analysis as the method
+    return f"-{features_name[:15]}"  # Generic prefix from first 15 characters of the features filename
+
+
 def run_baseline_evaluation_for_dataset(train_df, test_df, split_required, label_col, dataset_dir, dataset_name, use_cv):
     """
     Split the dataset without feature selection and train all models to collect baseline performance scores.
@@ -1955,18 +1977,7 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
             if compare_feature_selection and features_to_use is not None:  # If comparing Feature Selection is enabled
                 feature_selected_metrics.extend(dataset_model_scores)  # Store Feature Selection metrics
 
-        feat_extraction_method = ""  # Initialize method tag
-        if features_to_use is not None and features_file_used:  # Map features file to method
-            features_basename = os.path.basename(features_file_used)  # Extract base filename
-            features_name = os.path.splitext(features_basename)[0]  # Remove extension
-            if "Genetic" in features_name or "GA" in features_name:  # If Genetic Algorithm indicated
-                feat_extraction_method = "GA"  # Genetic Algorithm tag
-            elif "RFE" in features_name:
-                feat_extraction_method = "RFE"  # RFE tag
-            elif "PCA" in features_name:
-                feat_extraction_method = "PCA"  # PCA tag
-            else:  # Generic case
-                feat_extraction_method = f"-{features_name[:15]}"  # Generic prefix
+        feat_extraction_method = build_overall_feature_extraction_method_tag(features_to_use, features_file_used)  # Map the features file to a method tag string for summary output and file naming
 
         (
             generate_overall_performance_summary(all_model_scores, feat_extraction_method=feat_extraction_method)
