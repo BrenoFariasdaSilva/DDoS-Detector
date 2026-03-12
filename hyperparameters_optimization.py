@@ -1804,6 +1804,36 @@ def truncate_value(value):
         raise
 
 
+def update_best_if_improved(metrics, elapsed, current_params, best_score, best_params, best_elapsed, all_results):
+    """
+    Update and return the best score, params, and elapsed time when the current combination improves on the best seen so far.
+
+    :param metrics: Optional dict of metric names to values; when None or missing "f1_score" the best is left unchanged.
+    :param elapsed: Execution time in seconds for the current combination.
+    :param current_params: Dictionary of hyperparameter names to values for the current combination.
+    :param best_score: Current best F1 score across all combinations evaluated so far.
+    :param best_params: Current best hyperparameter dictionary corresponding to best_score.
+    :param best_elapsed: Execution time of the current best combination.
+    :param all_results: Accumulated list of result entries used to look up the best combination's execution time.
+    :return: Tuple of (best_score, best_params, best_elapsed) updated when the current combination is better.
+    """
+
+    if metrics is None or "f1_score" not in metrics:  # Skip update when metrics are unavailable or incomplete
+        return best_score, best_params, best_elapsed  # Return unchanged best values when no valid F1 score exists
+    f1 = metrics["f1_score"]  # Extract F1 score from the evaluated metrics
+    current_best_elapsed = (
+        next((r["execution_time"] for r in all_results if r.get("f1_score") == best_score), float("inf"))
+        if best_score != -float("inf")
+        else float("inf")
+    )  # Look up execution time of the current best combination for tie-breaking by speed
+    if (f1 > best_score) or (f1 == best_score and elapsed < current_best_elapsed):  # Accept when F1 improves or ties with lower elapsed
+        best_score = f1  # Update the best F1 score
+        best_params = current_params  # Record the params that achieved the best score
+        best_elapsed = elapsed  # Record the execution time of the new best combination
+        verbose_output(f"{BackgroundColors.GREEN}New best F1 score: {BackgroundColors.CYAN}{truncate_value(best_score)}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}")  # Log the new best for observability
+    return best_score, best_params, best_elapsed  # Return the possibly updated best values to the caller
+
+
 def build_result_entry_with_metrics(current_params, elapsed, metrics):
     """
     Build an OrderedDict result entry from a hyperparameter combination, execution time, and evaluation metrics.
@@ -1927,18 +1957,7 @@ def run_parallel_evaluation(
             result_entry = build_result_entry_with_metrics(current_params, elapsed, metrics)  # Build an OrderedDict result entry from params, execution time, and metrics
             all_results.append(result_entry)  # Append to list
 
-            if metrics is not None and "f1_score" in metrics:  # Update best if improved
-                f1 = metrics["f1_score"]  # Extract F1 score
-                current_best_elapsed = (
-                    next((r["execution_time"] for r in all_results if r.get("f1_score") == best_score), float("inf"))
-                    if best_score != -float("inf")
-                    else float("inf")
-                )  # Find current best elapsed
-                if (f1 > best_score) or (f1 == best_score and elapsed < current_best_elapsed):
-                    best_score = f1
-                    best_params = current_params
-                    best_elapsed = elapsed
-                    verbose_output(f"{BackgroundColors.GREEN}New best F1 score: {BackgroundColors.CYAN}{truncate_value(best_score)}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}")
+            best_score, best_params, best_elapsed = update_best_if_improved(metrics, elapsed, current_params, best_score, best_params, best_elapsed, all_results)  # Update best score, params, and elapsed time when the current combination improves on the best seen so far
 
         return best_params, best_score, best_elapsed, all_results, global_counter  # Return updated results
     except Exception as e:
