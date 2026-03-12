@@ -1125,6 +1125,41 @@ def extract_attack_label_from_path(file_path):
         raise  # Re-raise to preserve original failure semantics
 
 
+def process_files_and_extract_labels(files_list, config):
+    """
+    Process each dataset file, extract its attack type label, and accumulate results into a list suitable for multi-class combination.
+
+    :param files_list: List of dataset CSV file paths to process.
+    :param config: Configuration dictionary passed through to processing helpers.
+    :return: Tuple of (processed_files_with_labels, attack_types_set) on success, or None when no files could be processed.
+    """
+
+    processed_files_with_labels = []  # INITIALIZE LIST FOR PROCESSED FILE DATA WITH ATTACK LABELS
+    attack_types_set = set()  # INITIALIZE SET TO TRACK UNIQUE ATTACK TYPES
+
+    for f in files_list:  # ITERATE OVER EACH FILE IN THE LIST
+        result = process_single_file(f, config=config)  # PROCESS THE SINGLE FILE
+        if result is not None:  # IF PROCESSING SUCCEEDED
+            df_clean, target_col, feat_cols = result  # UNPACK THE RESULT
+            attack_label = extract_attack_label_from_path(f)  # EXTRACT ATTACK TYPE FROM FILENAME
+            attack_types_set.add(attack_label)  # ADD ATTACK TYPE TO SET
+            processed_files_with_labels.append((f, df_clean, target_col, feat_cols, attack_label))  # ADD TO PROCESSED LIST WITH LABEL
+        else:  # IF PROCESSING FAILED
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Skipping file due to processing failure: {BackgroundColors.CYAN}{f}{Style.RESET_ALL}",
+                config=config
+            )  # OUTPUT WARNING MESSAGE
+
+    if not processed_files_with_labels:  # IF NO FILES WERE PROCESSED SUCCESSFULLY
+        print(f"{BackgroundColors.RED}No compatible files found to combine for multi-class dataset.{Style.RESET_ALL}")  # PRINT ERROR MESSAGE
+        return None  # SIGNAL FAILURE TO CALLER
+
+    print(
+        f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{len(attack_types_set)}{BackgroundColors.GREEN} unique attack types for multi-class: {BackgroundColors.CYAN}{sorted(attack_types_set)}{Style.RESET_ALL}"
+    )  # PRINT ATTACK TYPES SUMMARY
+    return processed_files_with_labels, attack_types_set  # RETURN PROCESSED DATA AND ATTACK TYPES SET
+
+
 def combine_files_for_multiclass(files_list, config=None):
     """
     Combine multiple dataset files into a single multi-class dataset.
@@ -1148,29 +1183,10 @@ def combine_files_for_multiclass(files_list, config=None):
             print(f"{BackgroundColors.RED}No files provided for multi-class combination.{Style.RESET_ALL}")  # Print error message
             return (None, None, None)  # Return None tuple
         
-        processed_files_with_labels = []  # Initialize list for processed file data with attack labels
-        attack_types_set = set()  # Initialize set to track unique attack types
-        
-        for f in files_list:  # Iterate over each file in the list
-            result = process_single_file(f, config=config)  # Process the single file
-            if result is not None:  # If processing succeeded
-                df_clean, target_col, feat_cols = result  # Unpack the result
-                attack_label = extract_attack_label_from_path(f)  # Extract attack type from filename
-                attack_types_set.add(attack_label)  # Add attack type to set
-                processed_files_with_labels.append((f, df_clean, target_col, feat_cols, attack_label))  # Add to processed list with label
-            else:  # If processing failed
-                verbose_output(
-                    f"{BackgroundColors.YELLOW}Skipping file due to processing failure: {BackgroundColors.CYAN}{f}{Style.RESET_ALL}",
-                    config=config
-                )  # Output warning message
-        
-        if not processed_files_with_labels:  # If no files were processed successfully
-            print(f"{BackgroundColors.RED}No compatible files found to combine for multi-class dataset.{Style.RESET_ALL}")  # Print error
-            return (None, None, None)  # Return None tuple
-        
-        print(
-            f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{len(attack_types_set)}{BackgroundColors.GREEN} unique attack types for multi-class: {BackgroundColors.CYAN}{sorted(attack_types_set)}{Style.RESET_ALL}"
-        )  # Print attack types summary
+        process_result = process_files_and_extract_labels(files_list, config)  # PROCESS FILES AND EXTRACT ATTACK LABELS
+        if process_result is None:  # IF PROCESSING FAILED
+            return (None, None, None)  # RETURN FAILURE TUPLE
+        processed_files_with_labels, attack_types_set = process_result  # UNPACK PROCESSED DATA AND ATTACK TYPES SET
         
         common_features = None  # Initialize common features set
         target_col_name = None  # Initialize target column name
