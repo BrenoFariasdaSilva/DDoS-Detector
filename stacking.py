@@ -3523,6 +3523,64 @@ def compute_fpr_fnr(y_test, y_pred):
         raise
 
 
+def load_existing_model_if_available(model, model_name, dataset_file, feature_set, X_test, y_test, scaler, config=None):
+    """
+    Attempts to load a previously trained model from disk and evaluate it, skipping retraining.
+
+    :param model: The classifier model object used as fallback when no saved model is found
+    :param model_name: Name of the classifier for file pattern matching
+    :param dataset_file: Path to the dataset file used to locate the saved models directory
+    :param feature_set: Feature set name used to narrow the saved model file search
+    :param X_test: Testing features for evaluation (numpy array)
+    :param y_test: Testing target labels for metric computation
+    :param scaler: Optional scaler object to load alongside the model from disk
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, 0.0) if a model was loaded, else None
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        models_dir = Path(dataset_file).parent / "Classifiers" / "Models"  # Build models directory path from dataset file location
+        if not models_dir.exists():  # If models directory does not exist on disk
+            return None  # No saved models available, signal caller to retrain
+
+        safe_model = re.sub(r'[\\/*?:"<>|]', "_", str(model_name))  # Sanitize model name for filesystem pattern matching
+        pattern = f"*{safe_model}*"  # Build default glob pattern using sanitized model name
+
+        if feature_set:  # If feature set name was provided for narrowing the search
+            safe_fs = re.sub(r'[\\/*?:"<>|]', "_", str(feature_set))  # Sanitize feature set name for filesystem pattern
+            pattern = f"*{safe_model}*{safe_fs}*"  # Build narrowed pattern combining model and feature set names
+
+        matches = list(models_dir.glob(f"{pattern}_model.joblib"))  # Search for matching model files using the pattern
+        if not matches:  # If no matching model file found on disk
+            return None  # No saved model available, signal caller to retrain
+
+        try:  # Attempt to load the found model and evaluate it
+            loaded = load(str(matches[0]))  # Load the serialized model from the first match
+            model = loaded  # Replace in-memory model with the loaded one
+            scaler_path = str(matches[0]).replace("_model.joblib", "_scaler.joblib")  # Build expected scaler path from model path
+            if os.path.exists(scaler_path):  # If scaler file exists alongside the model
+                scaler = load(scaler_path)  # Load the serialized scaler from disk
+            verbose_output(f"Loaded existing model from {matches[0]}")  # Log that an existing model was loaded
+            y_pred = model.predict(X_test)  # Predict labels using the loaded model on test features
+            elapsed_time = 0.0  # Set elapsed time to zero since retraining was skipped
+            acc = accuracy_score(y_test, y_pred)  # Calculate accuracy score on test predictions
+            prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted precision score
+            rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted recall score
+            f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted F1 score
+            fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute false positive and false negative rates
+            return (acc, prec, rec, f1, fpr, fnr, elapsed_time)  # Return the metrics tuple with zero elapsed time
+        except Exception:  # If loading or evaluation fails
+            verbose_output(f"Failed to load existing model for {model_name}; retraining.")  # Log fallback to retraining
+            return None  # Signal caller to retrain from scratch
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None):
     """
     Trains an individual classifier and evaluates its performance on the test set.
@@ -3554,42 +3612,10 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
 
         start_time = time.time()  # Record the start time
 
-        if dataset_file is not None and skip_train_if_model_exists:
-            try:
-                models_dir = Path(dataset_file).parent / "Classifiers" / "Models"
-                if models_dir.exists():
-                    safe_model = re.sub(r'[\\/*?:"<>|]', "_", str(model_name))
-                    pattern = f"*{safe_model}*"
-                    if feature_set:
-                        safe_fs = re.sub(r'[\\/*?:"<>|]', "_", str(feature_set))
-                        pattern = f"*{safe_model}*{safe_fs}*"
-                    matches = list(models_dir.glob(f"{pattern}_model.joblib"))
-                    if matches:
-                        try:
-                            loaded = load(str(matches[0]))
-                            model = loaded
-                            scaler_path = str(matches[0]).replace("_model.joblib", "_scaler.joblib")
-                            if os.path.exists(scaler_path):
-                                scaler = load(scaler_path)
-                            verbose_output(f"Loaded existing model from {matches[0]}")
-                            y_pred = model.predict(X_test)
-                            elapsed_time = 0.0
-                            acc = accuracy_score(y_test, y_pred)
-                            prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)
-                            rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)
-                            f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
-                            if len(np.unique(y_test)) == 2:
-                                tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
-                                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
-                                fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0
-                            else:
-                                fpr = 0.0
-                                fnr = 0.0
-                            return (acc, prec, rec, f1, fpr, fnr, elapsed_time)
-                        except Exception:
-                            verbose_output(f"Failed to load existing model for {model_name}; retraining.")
-            except Exception:
-                pass
+        if dataset_file is not None and skip_train_if_model_exists:  # If dataset file provided and skip-train flag enabled
+            existing_metrics = load_existing_model_if_available(model, model_name, dataset_file, feature_set, X_test, y_test, scaler, config=config)  # Attempt to load a previously saved model from disk
+            if existing_metrics is not None:  # If a valid existing model was found and used
+                return existing_metrics  # Return cached metrics without retraining
 
         model.fit(X_train, y_train)  # Fit the model on the training data
 
