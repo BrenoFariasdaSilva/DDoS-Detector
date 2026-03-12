@@ -54,6 +54,7 @@ import ast  # For parsing Python source files into an abstract syntax tree
 import atexit  # For playing a sound when the program finishes
 import datetime  # For getting the current date and time
 import json  # For serializing the structured report to a JSON file
+import math  # For rounding up average function size
 import os  # For interacting with the filesystem
 import platform  # For getting the operating system name
 import sys  # For system-specific parameters and functions
@@ -392,7 +393,7 @@ def build_report(tree: ast.Module) -> dict:
         "classes": classes,  # Store the class methods data
         "top-level functions": top_level,  # Store the top-level functions data
         "nested functions": nested,  # Store the nested functions data
-        "avg_function_size": avg_function_size,  # Store the computed average function size for the file
+        "avg_function_size": int(math.ceil(avg_function_size)),  # Round up average function size to nearest integer
     }
 
     return report  # Return the completed report dictionary
