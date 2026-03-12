@@ -1557,7 +1557,7 @@ def cache_preprocessed_data(result, cache_file, csv_path):
         )  # Estimate the size of the data to cache
         cache_dir = os.path.dirname(cache_file)  # Get the directory of the cache file
         total, used, free = shutil.disk_usage(cache_dir)  # Get disk usage information
-        if free < estimated_size * 1.1:  # 10% margin
+        if free < estimated_size * 1.1:  # 10% Margin
             print(
                 f"{BackgroundColors.YELLOW}Warning: Insufficient disk space for caching ({estimated_size / (1024**3):.2f} GB needed, {free / (1024**3):.2f} GB free). Skipping cache save.{Style.RESET_ALL}"
             )  # Output warning message
