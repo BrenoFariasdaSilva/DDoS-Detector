@@ -626,16 +626,16 @@ def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label
     """
     
     try:
-        verbose_output(f"{BackgroundColors.GREEN}Preprocessing features and labels...{Style.RESET_ALL}")
+        verbose_output(f"{BackgroundColors.GREEN}Preprocessing features and labels...{Style.RESET_ALL}")  # Log preprocessing start
         verbose_output(
             f"\t{BackgroundColors.GREEN}Label Column: {BackgroundColors.CYAN}{label_col}{BackgroundColors.GREEN}{Style.RESET_ALL}"
-        )
+        )  # Log label column name
         verbose_output(
             f"\t{BackgroundColors.GREEN}Dataframe Shape: {BackgroundColors.CYAN}{df.shape}{BackgroundColors.GREEN}{Style.RESET_ALL}"
-        )
+        )  # Log DataFrame shape
         verbose_output(
             f"\tSelected Features {BackgroundColors.CYAN}{len(selected_features) if selected_features else 'All'}{BackgroundColors.GREEN}{Style.RESET_ALL}"
-        )
+        )  # Log selected features count
 
         label_col = resolve_and_validate_label_column(df, label_col)  # Resolve and validate the label column name
 
@@ -655,7 +655,7 @@ def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label
 
         if ref_columns is not None:  # If reference columns are provided
             X_encoded = X_encoded.reindex(columns=ref_columns, fill_value=0)  # Reindex to match reference columns
-            verbose_output(f"{BackgroundColors.GREEN}Reindexed features to match reference columns.{Style.RESET_ALL}")
+            verbose_output(f"{BackgroundColors.GREEN}Reindexed features to match reference columns.{Style.RESET_ALL}")  # Log reindexing completion
 
         X_scaled, scaler = fit_or_transform_scaler(X_encoded, scaler)  # Fit new scaler or transform using existing one
 
@@ -682,21 +682,21 @@ def split_data(train_df, test_df, split_required, label_col=None, selected_featu
     
     try:
         if split_required:  # If a split is required
-            verbose_output(f"{BackgroundColors.GREEN}Splitting data into train/test sets (75/25)...{Style.RESET_ALL}")
-            if label_col is None:
-                label_col = detect_label_column(train_df.columns)
-                if label_col is None:
-                    raise ValueError(f"{BackgroundColors.RED}No label column detected for stratified split.{Style.RESET_ALL}")
+            verbose_output(f"{BackgroundColors.GREEN}Splitting data into train/test sets (75/25)...{Style.RESET_ALL}")  # Log the start of the split operation
+            if label_col is None:  # Auto-detect label column when not explicitly provided
+                label_col = detect_label_column(train_df.columns)  # Attempt automatic label column detection
+                if label_col is None:  # Raise when auto-detection also fails
+                    raise ValueError(f"{BackgroundColors.RED}No label column detected for stratified split.{Style.RESET_ALL}")  # Abort if label column cannot be found
 
-            df_clean = train_df.dropna(subset=[label_col])
+            df_clean = train_df.dropna(subset=[label_col])  # Remove rows with missing label values before splitting
 
             train_df_part, test_df_part = train_test_split(
                 df_clean, test_size=0.25, random_state=42, stratify=df_clean[label_col]
-            )
+            )  # Perform stratified 75/25 split on cleaned data
 
             X_train_scaled, y_train, feature_names, _, scaler, label_encoder = preprocess_features(
                 train_df_part, label_col, selected_features=selected_features
-            )
+            )  # Preprocess training partition to get scaled features and fitted transformers
 
             X_test_scaled, y_test, feature_names_test, _, _, _ = preprocess_features(
                 test_df_part,
@@ -705,17 +705,17 @@ def split_data(train_df, test_df, split_required, label_col=None, selected_featu
                 scaler=scaler,
                 label_encoder=label_encoder,
                 selected_features=selected_features,
-            )
+            )  # Preprocess testing partition using fitted transformers from training
 
-            if list(feature_names) != list(feature_names_test):
+            if list(feature_names) != list(feature_names_test):  # Ensure feature column alignment between partitions
                 raise ValueError(
                     f"{BackgroundColors.RED}Mismatch in feature columns between training and testing partitions after preprocessing.{Style.RESET_ALL}"
-                )
+                )  # Abort when training and testing feature sets diverge
 
-            X_train, X_test = X_train_scaled, X_test_scaled
+            X_train, X_test = X_train_scaled, X_test_scaled  # Assign scaled training and testing feature arrays
             verbose_output(
                 f"{BackgroundColors.GREEN}Split and preprocessing complete. Train: {X_train.shape}, Test: {X_test.shape}{Style.RESET_ALL}"
-            )
+            )  # Log completion of the split and the resulting data shapes
         else:  # If no split is required
             X_train_scaled, y_train, feature_names_train, _, scaler, label_encoder = preprocess_features(
                 train_df, label_col, selected_features=selected_features
@@ -954,11 +954,17 @@ def evaluate_model(model, X_test, y_test, duration_str):
 def zebra(row):
     """
     Function to apply zebra striping to a DataFrame row for styling.
-    
+
     :param row: A row of the DataFrame
     :return: List of CSS styles for the row (alternating background colors)
     """
-    return ["background-color: #ffffff" if i % 2 == 0 else "background-color: #f2f2f2" for i in range(len(row))]  # Return CSS list per column
+
+    try:
+        return ["background-color: #ffffff" if i % 2 == 0 else "background-color: #f2f2f2" for i in range(len(row))]  # Return CSS list per column
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def apply_zebra_style(df):
@@ -971,8 +977,10 @@ def apply_zebra_style(df):
     try:
         styled = df.style.apply(zebra, axis=1)  # Create Styler with zebra striping applied
         return styled  # Return styled object
-    except Exception as e:  # If styling fails
-        raise  # Propagate exception without swallowing
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def export_dataframe_image(styled_df, output_path):
@@ -997,8 +1005,10 @@ def export_dataframe_image(styled_df, output_path):
 
         dfi.export(styled_df, str(out_path))  # Use dataframe_image to export styled DataFrame to PNG
         return  # Return None explicitly
-    except Exception:
-        raise  # Propagate any exception (do not swallow)
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def generate_table_image_from_dataframe(df, csv_path):
@@ -1014,8 +1024,10 @@ def generate_table_image_from_dataframe(df, csv_path):
         styled = apply_zebra_style(df)  # Apply zebra styling to DataFrame
         export_dataframe_image(styled, png_path)  # Export styled DataFrame as PNG image
         return png_path  # Return path to generated PNG
-    except Exception:
-        raise  # Propagate exceptions to caller
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def generate_csv_and_image(df, csv_path, is_visualizable=True, **to_csv_kwargs):
@@ -1033,8 +1045,10 @@ def generate_csv_and_image(df, csv_path, is_visualizable=True, **to_csv_kwargs):
         if is_visualizable:  # Generate image only if flagged
             generate_table_image_from_dataframe(df, csv_path)  # Generate PNG from in-memory DataFrame
         return csv_path  # Return CSV path
-    except Exception:
-        raise  # Propagate exceptions (no silent failures)
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def save_results(report, metrics_df, results_dir, index, model_name, feat_extraction_method=""):
@@ -1427,7 +1441,7 @@ def train_and_evaluate_models(
     try:
         verbose_output(
             f"{BackgroundColors.GREEN}Starting training and evaluation of models using {'cross-validation' if use_cv else 'train/test split'}...{Style.RESET_ALL}"
-        )
+        )  # Log training start and method type
 
         models = get_models()  # Get the dictionary of models to train
         model_metrics_list = []  # List to store metrics for each model
@@ -1442,11 +1456,11 @@ def train_and_evaluate_models(
             desc=f"Training models for {dataset_name}",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
             ncols=100,
-        )
+        )  # Initialize progress bar for the model training loop
 
         for index, (name, model) in enumerate(model_pbar, start=1):  # Iterate through each model with progress bar
             model_pbar.set_description(f"[{index}/{total_models}] {name}")  # Update progress bar description
-            send_telegram_message(TELEGRAM_BOT, [f"Training model {index}/{total_models}: {name} for dataset {dataset_name}"])
+            send_telegram_message(TELEGRAM_BOT, [f"Training model {index}/{total_models}: {name} for dataset {dataset_name}"])  # Notify Telegram about the current model being trained
             if use_cv:  # If cross-validation is to be used
                 mean_score, std_score = cross_validate_model(model, X_train, y_train)  # Perform cross-validation
                 duration = [0, "CV"]  # CV is not timed here
@@ -1471,7 +1485,7 @@ def train_and_evaluate_models(
         ):  # If feature selection is used and metrics are available
             print(
                 f"{BackgroundColors.GREEN}Models trained with {BackgroundColors.CYAN}{len(selected_features)}{BackgroundColors.GREEN} selected features{Style.RESET_ALL}"
-            )
+            )  # Print the number of selected features used for training
 
         return models, model_metrics_list  # Return trained models and their metrics
     except Exception as e:
@@ -1831,15 +1845,20 @@ def run_feature_selection_comparison_if_needed(compare_feature_selection, baseli
     :return: None
     """
 
-    if not (compare_feature_selection and baseline_metrics and feature_selected_metrics):  # Skip when any required condition is false or data is empty
-        return  # Nothing to compare, exit early without generating the report
-    comparison_output_path = os.path.join(os.getcwd(), OUTPUT_DIR)  # Build the absolute output path for the comparison report
-    generate_feature_selection_comparison(
-        baseline_metrics,
-        feature_selected_metrics,
-        output_path=comparison_output_path,
-        feat_extraction_method=feat_extraction_method,
-    )  # Produce and persist the feature selection vs baseline comparison report
+    try:
+        if not (compare_feature_selection and baseline_metrics and feature_selected_metrics):  # Skip when any required condition is false or data is empty
+            return  # Nothing to compare, exit early without generating the report
+        comparison_output_path = os.path.join(os.getcwd(), OUTPUT_DIR)  # Build the absolute output path for the comparison report
+        generate_feature_selection_comparison(
+            baseline_metrics,
+            feature_selected_metrics,
+            output_path=comparison_output_path,
+            feat_extraction_method=feat_extraction_method,
+        )  # Produce and persist the feature selection vs baseline comparison report
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def build_overall_feature_extraction_method_tag(features_to_use, features_file_used):
@@ -1851,17 +1870,22 @@ def build_overall_feature_extraction_method_tag(features_to_use, features_file_u
     :return: Method tag string such as "GA", "RFE", "PCA", a generic prefix, or an empty string.
     """
 
-    if features_to_use is None or not features_file_used:  # Return empty tag when no feature selection was applied
-        return ""  # No feature selection means no method tag required
-    features_basename = os.path.basename(features_file_used)  # Extract the base filename from the full path
-    features_name = os.path.splitext(features_basename)[0]  # Strip the file extension to get the bare name
-    if "Genetic" in features_name or "GA" in features_name:  # Genetic Algorithm indicator found in filename
-        return "GA"  # Tag identifies Genetic Algorithm as the feature extraction method
-    elif "RFE" in features_name:  # RFE indicator found in filename
-        return "RFE"  # Tag identifies Recursive Feature Elimination as the method
-    elif "PCA" in features_name:  # PCA indicator found in filename
-        return "PCA"  # Tag identifies Principal Component Analysis as the method
-    return f"-{features_name[:15]}"  # Generic prefix from first 15 characters of the features filename
+    try:
+        if features_to_use is None or not features_file_used:  # Return empty tag when no feature selection was applied
+            return ""  # No feature selection means no method tag required
+        features_basename = os.path.basename(features_file_used)  # Extract the base filename from the full path
+        features_name = os.path.splitext(features_basename)[0]  # Strip the file extension to get the bare name
+        if "Genetic" in features_name or "GA" in features_name:  # Genetic Algorithm indicator found in filename
+            return "GA"  # Tag identifies Genetic Algorithm as the feature extraction method
+        elif "RFE" in features_name:  # RFE indicator found in filename
+            return "RFE"  # Tag identifies Recursive Feature Elimination as the method
+        elif "PCA" in features_name:  # PCA indicator found in filename
+            return "PCA"  # Tag identifies Principal Component Analysis as the method
+        return f"-{features_name[:15]}"  # Generic prefix from first 15 characters of the features filename
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def run_baseline_evaluation_for_dataset(train_df, test_df, split_required, label_col, dataset_dir, dataset_name, use_cv):
@@ -1906,13 +1930,18 @@ def resolve_dataset_entry_paths(dataset_info):
     :return: Tuple of (training_file_path, testing_file_path, feature_files, dataset_dir, dataset_name).
     """
 
-    training_file_path = dataset_info.get("train")  # Retrieve training file path from dataset entry
-    testing_file_path = dataset_info.get("test")  # Retrieve testing file path from dataset entry
-    feature_files = dataset_info.get("features", [])  # Retrieve feature files list, defaulting to empty list
-    dataset_dir = os.path.dirname(str(training_file_path))  # Derive dataset directory from training file path
-    dataset_name = os.path.splitext(os.path.basename(str(training_file_path)))[0]  # Extract dataset name without extension from training file basename
+    try:
+        training_file_path = dataset_info.get("train")  # Retrieve training file path from dataset entry
+        testing_file_path = dataset_info.get("test")  # Retrieve testing file path from dataset entry
+        feature_files = dataset_info.get("features", [])  # Retrieve feature files list, defaulting to empty list
+        dataset_dir = os.path.dirname(str(training_file_path))  # Derive dataset directory from training file path
+        dataset_name = os.path.splitext(os.path.basename(str(training_file_path)))[0]  # Extract dataset name without extension from training file basename
 
-    return training_file_path, testing_file_path, feature_files, dataset_dir, dataset_name  # Return all resolved path components to the caller
+        return training_file_path, testing_file_path, feature_files, dataset_dir, dataset_name  # Return all resolved path components to the caller
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def process_single_dataset_entry(index, dataset_key, dataset_info, sorted_datasets, extract_features, compare_feature_selection, use_cv):
