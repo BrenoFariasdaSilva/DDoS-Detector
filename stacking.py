@@ -8247,6 +8247,11 @@ def orchestrate_multiclass_combination(files_to_process, ga_sel, pca_n, rfe_sel,
         status, data = execute_original_multiclass_evaluation(files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config)  # COMBINE FILES, EVALUATE ORIGINAL DATASET, AND PERSIST RESULTS
         if status != "ok":  # IF EVALUATION DID NOT SUCCEED
             return status  # PROPAGATE FLOW CONTROL SIGNAL TO CALLER
+
+        if data is None:  # Verify that data payload is present before unpacking
+            print(f"{BackgroundColors.RED}Multi-class evaluation returned no data for combo {suffix}.{Style.RESET_ALL}")
+            return "break"  # Signal to break out of combination loop since we cannot proceed without the combined dataset and metadata
+
         combined_df, attack_types, feature_names = data  # UNPACK EVALUATION RESULTS PAYLOAD
 
         if data_augmentation_enabled:  # IF AUGMENTATION REQUESTED
