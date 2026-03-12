@@ -4498,6 +4498,46 @@ def add_hardware_column(df, columns_order, column_name="Hardware"):
         raise
 
 
+def export_feature_artifacts(df, file_path_obj, stacking_dir, config=None):
+    """
+    Aggregates feature usage statistics, exports the top-features CSV, and generates the heatmap PNG.
+
+    :param df: DataFrame containing stacking results with feature columns
+    :param file_path_obj: Path object for the original CSV file used to derive base filenames
+    :param stacking_dir: Path object for the Stacking output directory where artifacts are saved
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        try:  # Attempt feature usage aggregation
+            feature_counts_df = aggregate_feature_usage(df, None)  # Aggregate feature usage from results DataFrame (None uses config)
+        except ValueError as ve:
+            print(f"{BackgroundColors.YELLOW}No features to aggregate: {ve}{Style.RESET_ALL}")  # Warn when no feature columns are present
+            feature_counts_df = pd.DataFrame()  # Provide empty DataFrame to proceed without crashing
+        except Exception as e:
+            print(f"{BackgroundColors.RED}Feature aggregation failed: {e}{Style.RESET_ALL}")  # Log aggregation failure for debugging
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send aggregation error via Telegram
+            feature_counts_df = pd.DataFrame()  # Provide empty DataFrame to allow downstream code to continue
+
+        try:  # Attempt to export top-features CSV and heatmap
+            dataset_base = file_path_obj.stem  # Extract stem of filename for output file naming
+            top_csv = stacking_dir / f"{dataset_base}_top_features.csv"  # Build path for top-features CSV
+            top_png = stacking_dir / f"{dataset_base}_top_features.png"  # Build path for feature usage heatmap
+            export_top_features_csv(feature_counts_df, str(top_csv), dataset_file=str(file_path_obj))  # Export aggregated feature counts to CSV
+            generate_feature_usage_heatmap(feature_counts_df, str(top_png), dataset_file=str(file_path_obj))  # Generate heatmap PNG of feature usage frequencies
+        except Exception as e:
+            print(f"{BackgroundColors.RED}Failed to export top-features CSV or heatmap: {e}{Style.RESET_ALL}")  # Log export failure details
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram but do not interrupt main flow
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def reorder_and_annotate_dataframe(df, config=None):
     """
     Reorders DataFrame columns according to configuration and appends the hardware column.
@@ -4609,25 +4649,7 @@ def save_stacking_results(csv_path, results_list, config=None):
                 f"\n{BackgroundColors.GREEN}Stacking classifier results successfully saved to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
             )  # Notify user of success
 
-            try:
-                feature_counts_df = aggregate_feature_usage(df, None)  # Aggregate feature usage (None => use config)
-            except ValueError as ve:
-                print(f"{BackgroundColors.YELLOW}No features to aggregate: {ve}{Style.RESET_ALL}")  # Warn when no features present
-                feature_counts_df = pd.DataFrame()  # Ensure downstream code gets an empty DataFrame
-            except Exception as e:
-                print(f"{BackgroundColors.RED}Feature aggregation failed: {e}{Style.RESET_ALL}")  # Print error for debugging
-                send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-                feature_counts_df = pd.DataFrame()  # Continue without crashing
-
-            try:
-                dataset_base = file_path_obj.stem  # Compute dataset base name for output filenames
-                top_csv = stacking_dir / f"{dataset_base}_top_features.csv"  # Build CSV path for top features
-                top_png = stacking_dir / f"{dataset_base}_top_features.png"  # Build PNG path for heatmap
-                export_top_features_csv(feature_counts_df, str(top_csv), dataset_file=str(file_path_obj))  # Export aggregated counts to CSV
-                generate_feature_usage_heatmap(feature_counts_df, str(top_png), dataset_file=str(file_path_obj))  # Generate heatmap PNG
-            except Exception as e:
-                print(f"{BackgroundColors.RED}Failed to export top-features CSV or heatmap: {e}{Style.RESET_ALL}")  # Print failure details
-                send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram but do not interrupt main flow
+            export_feature_artifacts(df, file_path_obj, stacking_dir, config=config)  # Export feature usage CSV and heatmap to the Stacking directory
         except Exception as e:
             print(
                 f"{BackgroundColors.RED}Failed to write Stacking Classifier CSV to {BackgroundColors.CYAN}{output_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
