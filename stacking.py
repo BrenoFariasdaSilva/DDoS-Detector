@@ -6668,6 +6668,83 @@ def initialize_evaluation_run_state(base_models, feature_sets, data_source_label
     return individual_models, total_steps, progress_bar, all_results, current_combination  # Return all initialized evaluation state variables
 
 
+def evaluate_single_feature_set(
+    idx,
+    name,
+    X_train_subset,
+    X_test_subset,
+    subset_feature_names_list,
+    individual_models,
+    stacking_model,
+    y_train,
+    y_test,
+    file,
+    execution_mode_str,
+    attack_types_combined,
+    data_source_label,
+    experiment_id,
+    experiment_mode,
+    augmentation_ratio,
+    hyperparams_map,
+    scaler,
+    total_steps,
+    current_combination,
+    progress_bar,
+    config=None,
+):
+    """
+    Evaluate all individual classifiers and the stacking model on one non-empty feature subset.
+
+    :param idx: 1-based index of the current feature set in the evaluation loop for logging.
+    :param name: Name string identifying the current feature set used for output labeling.
+    :param X_train_subset: Training feature matrix restricted to the current feature subset.
+    :param X_test_subset: Test feature matrix restricted to the current feature subset.
+    :param subset_feature_names_list: List of feature names for the current subset or None to derive from array.
+    :param individual_models: Dictionary of model name to model instance pairs for individual evaluation.
+    :param stacking_model: Stacking classifier instance built from the base models.
+    :param y_train: Training target vector used for fitting all classifiers.
+    :param y_test: Test target vector used for evaluating all classifiers.
+    :param file: Dataset file path used for model artifact export and result labeling.
+    :param execution_mode_str: Execution mode string ('binary' or 'multi-class') selecting the evaluation strategy.
+    :param attack_types_combined: List of attack type strings for multi-class mode or None for binary mode.
+    :param data_source_label: Data source label string included in result entries for traceability.
+    :param experiment_id: Unique experiment identifier string included in result entries for traceability.
+    :param experiment_mode: Experiment mode string included in result entries for traceability.
+    :param augmentation_ratio: Augmentation ratio float included in result entries or None for original-only.
+    :param hyperparams_map: Dictionary mapping model names to best hyperparameter dicts applied before training.
+    :param scaler: Fitted StandardScaler instance used to transform subsets when needed.
+    :param total_steps: Total number of evaluation steps across all feature sets used by the progress bar.
+    :param current_combination: 1-based overall combination counter updated for each model evaluated.
+    :param progress_bar: tqdm progress bar instance advanced after each model evaluation.
+    :param config: Optional configuration dictionary; falls back to global CONFIG when None.
+    :return: Tuple of (individual_results, stacking_result_entry, current_combination) containing per-model result dicts and updated combination counter.
+    """
+
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating models on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}"
+    )  # Output evaluation status
+
+    subset_feature_names = setup_feature_set_names(name, X_train_subset, subset_feature_names_list)  # DETERMINE FEATURE NAMES FOR THIS SUBSET
+
+    X_train_df, X_test_df = convert_subset_to_dataframes(X_train_subset, X_test_subset, subset_feature_names)  # CONVERT FEATURE ARRAYS TO DATAFRAMES WITH NAMED COLUMNS
+
+    individual_results, current_combination = run_individual_classifiers_for_feature_set(
+        name, individual_models, X_train_df, y_train, X_test_df, y_test,
+        X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
+        data_source_label, experiment_id, experiment_mode, augmentation_ratio,
+        hyperparams_map, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
+    )  # Evaluate all individual classifiers in parallel and collect their result entries
+
+    stacking_result_entry, current_combination = run_stacking_evaluation_for_feature_set(
+        name, stacking_model, X_train_df, y_train, X_test_df, y_test,
+        X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
+        data_source_label, experiment_id, experiment_mode, augmentation_ratio,
+        scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
+    )  # Evaluate stacking classifier, export model artifacts, generate metric plots, and collect result entry
+
+    return individual_results, stacking_result_entry, current_combination  # Return per-model results and updated combination counter to the caller
+
+
 def evaluate_on_dataset(
     file,
     df,
