@@ -24,7 +24,7 @@ Description :
         - `OUTPUT_DIR`: base directory for aggregated outputs
         - `VERBOSE`: enable additional stdout diagnostics
         - `RUN_FUNCTIONS` controls optional behaviors (e.g., play sound)
-        - Downsampling and t-SNE helpers enforce a per-class minimum of
+        - Downsampling and t-SNE functions enforce a per-class minimum of
             samples when requested (default min ≈ 50) to preserve minority classes
 
 Usage:
@@ -836,7 +836,7 @@ def evaluate_model(model, X_test, y_test, duration_str):
 
 def zebra(row):
     """
-    Helper function to apply zebra striping to a DataFrame row for styling.
+    Function to apply zebra striping to a DataFrame row for styling.
     
     :param row: A row of the DataFrame
     :return: List of CSS styles for the row (alternating background colors)
