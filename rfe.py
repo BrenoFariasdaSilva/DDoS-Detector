@@ -2053,6 +2053,51 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n
         raise
 
 
+def resolve_rfe_run_params(n_features_to_select: Optional[int], step: Optional[int], estimator_name: Optional[str], random_state: Optional[int]) -> Tuple[Optional[int], int, str, int]:
+    """
+    Extract RFE execution parameters from the global CONFIG and apply CLI argument overrides.
+
+    :param n_features_to_select: Optional CLI override for number of features to select.
+    :param step: Optional CLI override for RFE step size.
+    :param estimator_name: Optional CLI override for estimator name.
+    :param random_state: Optional CLI override for random seed.
+    :return: Tuple of (default_n_select, default_step, default_estimator, default_random_state).
+    """
+
+    try:
+        rfe_cfg = CONFIG["rfe"]  # Access the validated RFE configuration block
+
+        multi_cfg = rfe_cfg.get("multiprocessing", {})  # Extract multiprocessing config
+        n_jobs = int(multi_cfg.get("n_jobs", -1))  # Read configured n_jobs value
+        cpu_procs = int(multi_cfg.get("cpu_processes", 1))  # Read configured CPU process count
+
+        cv_cfg = rfe_cfg.get("cross_validation", {})  # Extract cross-validation config
+        n_folds = int(cv_cfg.get("n_folds", 10))  # Read configured fold count
+
+        cache_cfg = rfe_cfg.get("caching", {})  # Extract caching config
+        caching_enabled = bool(cache_cfg.get("enabled", True))  # Read caching enabled flag
+        pickle_protocol = int(cache_cfg.get("pickle_protocol", 4))  # Read pickle protocol version
+
+        sel_cfg = rfe_cfg.get("selection", {})  # Extract feature selection config
+        cfg_n_select = sel_cfg.get("n_features_to_select")  # Read configured feature count
+        cfg_step = sel_cfg.get("step", 1)  # Read configured RFE step size
+
+        model_cfg = rfe_cfg.get("model", {})  # Extract model config
+        cfg_estimator = model_cfg.get("estimator", "random_forest")  # Read configured estimator name
+        cfg_random_state = int(model_cfg.get("random_state", 42))  # Read configured random state
+
+        default_n_select = n_features_to_select if n_features_to_select is not None else cfg_n_select  # Prefer CLI override over config
+        default_step = step if step is not None else cfg_step  # Prefer CLI override over config
+        default_estimator = estimator_name if estimator_name is not None else cfg_estimator  # Prefer CLI override over config
+        default_random_state = int(random_state) if random_state is not None else cfg_random_state  # Prefer CLI override over config
+
+        return default_n_select, default_step, default_estimator, default_random_state  # Return resolved execution parameters
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def run_rfe(csv_path, n_features_to_select=None, step=None, estimator_name=None, random_state=None):
     """
     Runs Recursive Feature Elimination on the provided dataset, prints the single
@@ -2072,31 +2117,10 @@ def run_rfe(csv_path, n_features_to_select=None, step=None, estimator_name=None,
 
         if not CONFIG or "rfe" not in CONFIG:
             raise ValueError("Configuration not initialized. Call get_config() and set CONFIG before running.")
-        rfe_cfg = CONFIG["rfe"]
 
-        multi_cfg = rfe_cfg.get("multiprocessing", {})
-        n_jobs = int(multi_cfg.get("n_jobs", -1))
-        cpu_procs = int(multi_cfg.get("cpu_processes", 1))
-
-        cv_cfg = rfe_cfg.get("cross_validation", {})
-        n_folds = int(cv_cfg.get("n_folds", 10))
-
-        cache_cfg = rfe_cfg.get("caching", {})
-        caching_enabled = bool(cache_cfg.get("enabled", True))
-        pickle_protocol = int(cache_cfg.get("pickle_protocol", 4))
-
-        sel_cfg = rfe_cfg.get("selection", {})
-        cfg_n_select = sel_cfg.get("n_features_to_select")
-        cfg_step = sel_cfg.get("step", 1)
-
-        model_cfg = rfe_cfg.get("model", {})
-        cfg_estimator = model_cfg.get("estimator", "random_forest")
-        cfg_random_state = int(model_cfg.get("random_state", 42))
-
-        default_n_select = n_features_to_select if n_features_to_select is not None else cfg_n_select
-        default_step = step if step is not None else cfg_step
-        default_estimator = estimator_name if estimator_name is not None else cfg_estimator
-        default_random_state = int(random_state) if random_state is not None else cfg_random_state
+        default_n_select, default_step, default_estimator, default_random_state = resolve_rfe_run_params(
+            n_features_to_select, step, estimator_name, random_state
+        )  # Extract config parameters and apply CLI overrides
 
         df = load_dataset(csv_path)  # Load dataset
 
