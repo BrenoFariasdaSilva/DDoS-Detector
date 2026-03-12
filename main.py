@@ -445,6 +445,28 @@ def load_and_prepare_data(training_data_path=None, testing_data_path=None):
         raise
 
 
+def resolve_and_validate_label_column(df, label_col):
+    """
+    Resolve and validate the label column name for a DataFrame.
+
+    :param df: DataFrame whose columns are searched when label_col is None.
+    :param label_col: Caller-supplied label column name or None for auto-detection.
+    :return: Validated label column name string.
+    """
+
+    try:
+        if label_col is None:  # If label_col is not provided, attempt to detect it automatically
+            label_col = detect_label_column(df.columns)  # Detect label column from available column names
+            if label_col is None:  # If auto-detection also returned None
+                raise ValueError(f"{BackgroundColors.RED}No label column detected in the DataFrame.{Style.RESET_ALL}")  # Raise with descriptive message
+
+        return label_col  # Return validated label column name
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label_encoder=None, selected_features=None):
     """
     Applies one-hot encoding and scaling to features.
@@ -471,10 +493,7 @@ def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label
             f"\tSelected Features {BackgroundColors.CYAN}{len(selected_features) if selected_features else 'All'}{BackgroundColors.GREEN}{Style.RESET_ALL}"
         )
 
-        if label_col is None:  # If label_col is not provided, attempt to detect it
-            label_col = detect_label_column(df.columns)  # Detect label column
-            if label_col is None:  # If no label column is detected
-                raise ValueError(f"{BackgroundColors.RED}No label column detected in the DataFrame.{Style.RESET_ALL}")
+        label_col = resolve_and_validate_label_column(df, label_col)  # Resolve and validate the label column name
 
         df = df.dropna(subset=[label_col])  # Drop rows where label is NaN
         y = df[label_col]  # Extract labels
