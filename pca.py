@@ -84,7 +84,7 @@ from sklearn.model_selection import train_test_split, StratifiedKFold  # For spl
 from sklearn.preprocessing import StandardScaler  # For scaling the data (standardization)
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
-from typing import Any, Union, cast  # For type hints used by helper functions
+from typing import Any, Union, cast  # For type hints used by functions
 
 
 # Macros:
@@ -1243,7 +1243,7 @@ def truncate_value(value):
 
 def row_style_for_zebra(row):
     """
-    Top-level helper to produce zebra row styles for pandas Styler.
+    Top-level function to produce zebra row styles for pandas Styler.
 
     :param row: pandas Series representing a row
     :return: List[str] of CSS style strings for each cell
@@ -1262,7 +1262,7 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """
     
     try:
-        styled = df.style.apply(row_style_for_zebra, axis=1)  # Apply zebra function row-wise using top-level helper
+        styled = df.style.apply(row_style_for_zebra, axis=1)  # Apply zebra function row-wise using top-level function
         styled = styled.set_table_attributes('style="border-collapse:collapse; width:100%;"')  # Tight table style
         styled = cast(pd.io.formats.style.Styler, cast(Any, styled).set_properties(**{"border": "1px solid #ddd", "padding": "6px"}))  # Cell padding/border (cast to Any to satisfy typing)
         return styled  # Return the styled object
