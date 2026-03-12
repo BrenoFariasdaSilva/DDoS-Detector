@@ -483,7 +483,7 @@ setup_global_exception_hook()  # Set global exception hook to shared Telegram ha
 
 def safe_log(level: str, message: str):
     """
-    Safe logging helper that works with the minimal `Logger` (write/flush)
+    Safe logging function that works with the minimal `Logger` (write/flush)
     or with richer logger objects exposing level methods.
 
     :param level: Logging level name (e.g. "debug", "warning", "critical")
@@ -1796,7 +1796,7 @@ def compose_training_start_message(args, file_progress_prefix) -> str:
         raise  # Re-raise exception to allow outer handler to manage it
 
 
-def send_file_saved_and_timing_messages(args: Any, config: Dict) -> None:  # Create helper to send saved-file and timing messages
+def send_file_saved_and_timing_messages(args: Any, config: Dict) -> None:
     """
     Compose and send messages about saved files, sizes, and timing.
 
@@ -1869,7 +1869,7 @@ def send_file_saved_and_timing_messages(args: Any, config: Dict) -> None:  # Cre
             msg = (  # Compose timing-only message without file info for training phase
                 f"{file_progress_prefix} Training completed | Training: {training_time_str}"
             )  # End training-only message composition
-        send_telegram_message(TELEGRAM_BOT, msg)  # Send composed summary by Telegram using shared helper
+        send_telegram_message(TELEGRAM_BOT, msg)  # Send composed summary by Telegram using shared function
     except Exception as e:
         print(str(e))  # Print exception for visibility
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception information via Telegram
@@ -1972,7 +1972,7 @@ def adjust_num_workers_for_file(csv_path: str, suggested_workers: int, config: O
     :return: Adjusted num_workers integer
     """
 
-    try:  # Guard helper with try/except to follow project style
+    try:  # Guard function with try/except to follow project style
         if config is None: config = CONFIG or get_default_config()  # Use provided config or fallback to global/default
 
         file_size_bytes = Path(csv_path).stat().st_size  # Get file size in bytes from filesystem
@@ -2101,7 +2101,7 @@ def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict
                         pass  # Continue without accumulating this file's size
             except Exception:  # If directory traversal fails unexpectedly
                 pass  # Continue with remaining directories
-        free_gb = get_available_disk_space_gb(config)  # Retrieve available disk space in GB via helper
+        free_gb = get_available_disk_space_gb(config)  # Retrieve available disk space in GB via function
         free_bytes = int(safe_float(free_gb, 0.0) * (1024.0 ** 3))  # Convert GB back to bytes for threshold comparison
         required_bytes = total_dataset_size * 2  # Minimum required free space is twice the total dataset size
         dataset_size_gb = safe_float(total_dataset_size, 0.0) / (1024.0 ** 3)  # Convert dataset size to GB for logging
@@ -3092,7 +3092,7 @@ def send_epoch_telegram_notifications(args, telegram_enabled: bool, epoch: int, 
                     f"WGAN-GP training progress: {next_notify}% "  # Short progress message text
                     f"({epoch+1}/{args.epochs} epochs) on {Path(args.csv_path).name if args.csv_path else 'unknown file'}"  # Include filename and epoch info
                 )  # Compose progress message
-                send_telegram_message(TELEGRAM_BOT, msg)  # Send message via shared helper
+                send_telegram_message(TELEGRAM_BOT, msg)  # Send message via shared function
                 next_notify += progress_pct  # Advance to next threshold to avoid duplicate sends
     except Exception as _err:  # Catch any notification errors and continue training
         pass  # Intentionally ignore notification failures to not interrupt training
@@ -3240,7 +3240,7 @@ def generate_training_plots(args, config: Dict, metrics_history: Dict, file_prog
 
 def send_final_telegram_messages(args, config: Dict, file_progress_prefix: str) -> None:
     """
-    Send final training completion messages via telegram and saved-file helper.
+    Send final training completion messages via telegram and saved-file function.
 
     :param args: parsed arguments namespace with csv_path and epochs
     :param config: configuration dictionary passed to send_file_saved_and_timing_messages
@@ -3248,7 +3248,7 @@ def send_final_telegram_messages(args, config: Dict, file_progress_prefix: str) 
     :return: None
     """
 
-    send_file_saved_and_timing_messages(args, config)  # Send saved-file, size and timing messages via helper
+    send_file_saved_and_timing_messages(args, config)  # Send saved-file, size and timing messages via function
     send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Finished WGAN-GP training on {Path(args.csv_path).name} after {args.epochs} epochs")  # Telegram finish with prefix
 
 
@@ -3305,7 +3305,7 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """
     
     try:
-        styled = df.style.apply(row_style_for_zebra, axis=1)  # Apply zebra function row-wise using top-level helper
+        styled = df.style.apply(row_style_for_zebra, axis=1)  # Apply zebra function row-wise using top-level function
         styled = styled.set_table_attributes('style="border-collapse:collapse; width:100%;"')  # Tight table style
         styled = cast(pd.io.formats.style.Styler, cast(Any, styled).set_properties(**{"border": "1px solid #ddd", "padding": "6px"}))  # Cell padding/border (cast to Any to satisfy typing)
         return styled  # Return the styled object
@@ -4258,7 +4258,7 @@ def prepare_and_write_results_csv_row(args, config: Dict, args_ck: Dict, ckpt: D
         try:  # Wrap open/write in try/except to avoid crashing on I/O issues
             f_handle, writer = open_results_csv(results_csv_path, results_cols_cfg)  # Get persistent handle and writer
             if f_handle and writer:  # If we successfully opened or reused a writer
-                ordered = build_ordered_csv_row_from_runtime(row_runtime, results_cols_cfg, config)  # Build ordered CSV row from runtime values using shared helper
+                ordered = build_ordered_csv_row_from_runtime(row_runtime, results_cols_cfg, config)  # Build ordered CSV row from runtime values using shared function
                 writer.writerow(ordered)  # Write the ordered row to CSV
                 flush_csv_file_safely(f_handle)  # Flush CSV file to disk safely
         except Exception as _we:  # On any write/open failure, warn and continue
@@ -4610,7 +4610,7 @@ def populate_hardware_column(df, column_name="hardware", device_used=None):
 
 def row_style_for_zebra(row):
     """
-    Top-level helper to produce zebra row styles for pandas Styler.
+    Top-level function to produce zebra row styles for pandas Styler.
 
     :param row: pandas Series representing a row
     :return: List[str] of CSS style strings for each cell
@@ -4768,7 +4768,7 @@ def dispatch_wgangp_execution_mode(args, final_config: Dict) -> None:
         raise
 
 
-def run_wgangp(config: Optional[Union[Dict, str]] = None, **kwargs) -> None:  # Entry point wrapper accepting optional config dict or path
+def run_wgangp(config: Optional[Union[Dict, str]] = None, **kwargs) -> None:
     """
     Programmatic entry point for WGAN-GP execution from external orchestrators.
 
@@ -4807,7 +4807,7 @@ def run_wgangp(config: Optional[Union[Dict, str]] = None, **kwargs) -> None:  # 
             raise TypeError(f"config must be dict, str, or None, not {type(config)}")
 
         if kwargs:  # If keyword arguments provided
-            cli_style_overrides = build_config_overrides_from_kwargs(kwargs)  # Convert kwargs to config overrides using extracted helper
+            cli_style_overrides = build_config_overrides_from_kwargs(kwargs)  # Convert kwargs to config overrides using extracted function
             final_config = deep_merge(final_config, cli_style_overrides)  # Apply kwargs overrides
 
         CONFIG = final_config  # Update global config
@@ -4826,7 +4826,7 @@ def run_wgangp(config: Optional[Union[Dict, str]] = None, **kwargs) -> None:  # 
         send_telegram_message(TELEGRAM_BOT, f"Starting WGAN-GP (programmatic) at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
         try:  # Execute with error handling
-            dispatch_wgangp_execution_mode(args, final_config)  # Dispatch execution based on mode using extracted helper
+            dispatch_wgangp_execution_mode(args, final_config)  # Dispatch execution based on mode using extracted function
         finally:  # Always show execution time
             finish_time = datetime.datetime.now()
             execution_time = calculate_execution_time(start_time, finish_time)
