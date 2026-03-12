@@ -691,7 +691,7 @@ def run_rfe_selector(X_train, y_train, n_select=10, step=1, estimator_name="rand
 
         n_features = X_train.shape[1]  # Get the number of features
         if n_select is None:
-            n_select = n_features  # default to all (caller may reduce later)
+            n_select = n_features  # Default to all (caller may reduce later)
         n_select = int(n_select)
         if n_select <= 0:
             raise ValueError(f"n_features_to_select must be > 0, got {n_select}")
