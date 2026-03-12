@@ -2996,6 +2996,87 @@ def update_population_selection_and_hof(population, offspring, toolbox, hof):
     enforce_hof_elitism(population, hof)  # Guarantee the best Hall-of-Fame individual is present in the new population
 
 
+def evolve_population_one_generation(
+    population,
+    toolbox,
+    hof,
+    cxpb,
+    mutpb,
+    progress_state,
+    folds,
+    progress_bar,
+    dataset_name,
+    csv_path,
+    pop_size,
+    max_pop,
+    gen,
+    n_generations,
+    run,
+    runs,
+    fitness_history,
+    best_features_history,
+    avg_f1_history,
+    avg_features_history,
+    pareto_size_history,
+    hypervolume_history,
+    diversity_history,
+):
+    """
+    Apply crossover, mutation, evaluation, selection, HOF update, and history recording for one generation.
+
+    :param population: Current population list modified in-place to become the next generation.
+    :param toolbox: DEAP toolbox with registered crossover, mutation, evaluation, and selection operators.
+    :param hof: Hall of Fame instance updated with the best individual from the evolved population.
+    :param cxpb: Crossover probability applied during offspring generation.
+    :param mutpb: Mutation probability applied during offspring generation.
+    :param progress_state: Optional dict tracking iteration progress for external progress bar management.
+    :param folds: Number of CV folds used in fitness evaluation, needed to estimate evaluation steps.
+    :param progress_bar: Optional tqdm progress bar instance refreshed after offspring evaluation.
+    :param dataset_name: Dataset name string displayed in the progress bar description.
+    :param csv_path: CSV file path displayed in the progress bar description.
+    :param pop_size: Current population size displayed in the progress bar description.
+    :param max_pop: Maximum population size displayed in the progress bar description.
+    :param gen: Current generation index used for progress bar display.
+    :param n_generations: Total number of planned generations used for progress bar display.
+    :param run: Current run index used for progress bar display.
+    :param runs: Total number of runs used for progress bar display.
+    :param fitness_history: List accumulating best F1-score per generation.
+    :param best_features_history: List accumulating best feature count per generation.
+    :param avg_f1_history: List accumulating average population F1-score per generation.
+    :param avg_features_history: List accumulating average feature count per generation.
+    :param pareto_size_history: List accumulating Pareto front size per generation.
+    :param hypervolume_history: List accumulating hypervolume indicator per generation.
+    :param diversity_history: List accumulating population diversity per generation.
+    :return: Tuple of (current_best_fitness_f1, current_best_num_features) extracted from the updated HOF.
+    """
+
+    offspring, n_evaluated = create_and_evaluate_offspring(population, toolbox, cxpb, mutpb)  # Apply crossover, mutation, and evaluate offspring fitness
+
+    apply_offspring_progress_update(
+        progress_state, n_evaluated, folds, progress_bar,
+        dataset_name, csv_path, pop_size, max_pop, gen, n_generations, run, runs,
+    )  # Increment progress_state iteration counter and refresh progress bar after evaluation
+
+    update_population_selection_and_hof(population, offspring, toolbox, hof)  # Select next generation, update HOF, and enforce elitism in one step
+
+    current_best_fitness_f1, current_best_num_features = compute_current_best_fitness_values(hof)  # Extract F1-score and feature count from the leading HOF individual
+
+    update_generation_histories(
+        population,
+        current_best_fitness_f1,
+        current_best_num_features,
+        fitness_history,
+        best_features_history,
+        avg_f1_history,
+        avg_features_history,
+        pareto_size_history,
+        hypervolume_history,
+        diversity_history,
+    )  # Append all per-generation metrics to their respective history lists
+
+    return current_best_fitness_f1, current_best_num_features  # Return best F1-score and feature count from the updated HOF
+
+
 def run_genetic_algorithm_loop(
     toolbox,
     population,
