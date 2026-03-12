@@ -531,6 +531,35 @@ def apply_selected_features_filter(X, selected_features):
         raise
 
 
+def clean_invalid_feature_values(X, y):
+    """
+    Replace infinite values with NaN and drop rows with NaN from both X and y.
+
+    :param X: Feature DataFrame potentially containing infinite or NaN values.
+    :param y: Label Series aligned with X.
+    :return: Tuple (X_clean, y_clean) with invalid rows removed and labels realigned.
+    """
+
+    try:
+        X = X.replace([np.inf, -np.inf], np.nan)  # Replace positive and negative infinity with NaN
+        initial_rows = len(X)  # Store row count before dropping to measure data loss
+        X = X.dropna()  # Drop all rows containing any NaN value from features
+        rows_dropped = initial_rows - len(X)  # Calculate number of rows removed during cleaning
+
+        if rows_dropped > 0:  # If any rows were removed during cleaning
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Warning: Dropped {rows_dropped} rows due to NaN/inf values in features.{Style.RESET_ALL}"
+            )  # Warn about data loss from NaN/inf removal
+
+        y = y.loc[X.index]  # Realign labels to match the surviving feature rows
+
+        return X, y  # Return cleaned feature DataFrame and realigned label Series
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label_encoder=None, selected_features=None):
     """
     Applies one-hot encoding and scaling to features.
@@ -567,16 +596,7 @@ def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label
 
         X = apply_selected_features_filter(X, selected_features)  # Filter features to retain only selected subset
 
-        X = X.replace([np.inf, -np.inf], np.nan)  # Replace infinity with NaN
-        initial_rows = len(X)  # Store initial number of rows
-        X = X.dropna()  # Drop rows with NaN values
-        rows_dropped = initial_rows - len(X)  # Calculate number of rows dropped
-        if rows_dropped > 0:  # If any rows were dropped
-            verbose_output(
-                f"{BackgroundColors.YELLOW}Warning: Dropped {rows_dropped} rows due to NaN/inf values in features.{Style.RESET_ALL}"
-            )
-
-        y = y.loc[X.index]  # Align y with cleaned X
+        X, y = clean_invalid_feature_values(X, y)  # Replace inf values and drop NaN rows from features and labels
 
         X_encoded = pd.get_dummies(X)  # One-hot encode categorical features
         X_encoded = X_encoded.dropna()  # Drop any rows with NaN values after encoding
