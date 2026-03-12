@@ -5577,6 +5577,102 @@ def save_automl_results(csv_path, results_list, config=None):
         raise
 
 
+def run_automl_stacking_phase(X_train_scaled, y_train_arr, X_test_scaled, y_test_arr, model_study, file, config=None):
+    """
+    Run AutoML stacking search and evaluation phase if stacking trials are enabled.
+
+    :param X_train_scaled: Scaled training features
+    :param y_train_arr: Training target as numpy array
+    :param X_test_scaled: Scaled test features
+    :param y_test_arr: Test target as numpy array
+    :param model_study: Optuna study from model search phase
+    :param file: Path to the dataset file
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Tuple of (stacking_config, stacking_metrics, stacking_study)
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        stacking_config = None  # Initialize stacking config as None
+        stacking_metrics = None  # Initialize stacking metrics as None
+        stacking_study = None  # Initialize stacking study as None
+
+        if config.get("automl", {}).get("stacking_trials", 20) > 0:  # If stacking search is enabled
+            stacking_config, stacking_study = run_automl_stacking_search(
+                X_train_scaled, y_train_arr, model_study, file, config=config
+            )  # Run stacking search optimization
+
+            if stacking_config is not None:  # If stacking search succeeded
+                best_stacking_model = build_automl_stacking_model(stacking_config, config=config)  # Build best stacking model
+
+                print(
+                    f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating AutoML best stacking model on test set...{Style.RESET_ALL}"
+                )  # Output evaluation message
+
+                stacking_metrics = evaluate_automl_model_on_test(
+                    best_stacking_model, "AutoML_Stacking", X_train_scaled, y_train_arr, X_test_scaled, y_test_arr
+                )  # Evaluate stacking model on test set
+
+        return stacking_config, stacking_metrics, stacking_study  # Return stacking results tuple
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def export_automl_pipeline_artifacts(model_study, stacking_study, stacking_config, stacking_metrics, best_model_name, best_params, individual_metrics, best_individual_model, scaler, file, feature_names, X_train_scaled, y_train_arr, automl_output_dir, config=None):
+    """
+    Export all AutoML pipeline artifacts including search history, configs, and models.
+
+    :param model_study: Optuna study from model search phase
+    :param stacking_study: Optuna study from stacking search phase or None
+    :param stacking_config: Best stacking configuration or None
+    :param stacking_metrics: Stacking evaluation metrics or None
+    :param best_model_name: Name of the best individual model
+    :param best_params: Best individual model parameters
+    :param individual_metrics: Individual model evaluation metrics
+    :param best_individual_model: Best individual model instance
+    :param scaler: Fitted scaler for feature transformation
+    :param file: Path to the dataset file
+    :param feature_names: List of feature column names
+    :param X_train_scaled: Scaled training features
+    :param y_train_arr: Training target as numpy array
+    :param automl_output_dir: Output directory for AutoML artifacts
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        export_automl_search_history(model_study, automl_output_dir, "model_search", dataset_file=file)  # Export model search history
+
+        if stacking_study is not None:  # If stacking study exists
+            export_automl_search_history(stacking_study, automl_output_dir, "stacking_search", dataset_file=file)  # Export stacking search history
+
+        export_automl_best_config(
+            best_model_name, best_params, individual_metrics, stacking_config, automl_output_dir, feature_names, dataset_file=file
+        )  # Export best configuration to file
+
+        export_automl_best_model(
+            best_individual_model, scaler, automl_output_dir, best_model_name, feature_names, dataset_file=file
+        )  # Export best individual model to file
+
+        if stacking_config is not None and stacking_metrics is not None:  # If stacking was successful
+            best_stacking_model_final = build_automl_stacking_model(stacking_config, config=config)  # Rebuild stacking model for export
+            best_stacking_model_final.fit(X_train_scaled, y_train_arr)  # Fit stacking model on full training data
+            export_automl_best_model(
+                best_stacking_model_final, scaler, automl_output_dir, "AutoML_Stacking", feature_names, dataset_file=file
+            )  # Export best stacking model to file
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def run_automl_pipeline(file, df, feature_names, data_source_label="Original", config=None):
     """
     Runs the complete AutoML pipeline: model search, stacking optimization, evaluation, and export.
@@ -5641,48 +5737,18 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
             best_individual_model, best_model_name, X_train_scaled, y_train_arr, X_test_scaled, y_test_arr
         )  # Evaluate best individual model on test set
 
-        stacking_config = None  # Initialize stacking config as None
-        stacking_metrics = None  # Initialize stacking metrics as None
-        stacking_study = None  # Initialize stacking study as None
-
-        if config.get("automl", {}).get("stacking_trials", 20) > 0:  # If stacking search is enabled
-            stacking_config, stacking_study = run_automl_stacking_search(
-                X_train_scaled, y_train_arr, model_study, file, config=config
-            )  # Phase 2: Run stacking search
-
-            if stacking_config is not None:  # If stacking search succeeded
-                best_stacking_model = build_automl_stacking_model(stacking_config, config=config)  # Build best stacking model
-
-                print(
-                    f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating AutoML best stacking model on test set...{Style.RESET_ALL}"
-                )  # Output evaluation message
-
-                stacking_metrics = evaluate_automl_model_on_test(
-                    best_stacking_model, "AutoML_Stacking", X_train_scaled, y_train_arr, X_test_scaled, y_test_arr
-                )  # Evaluate stacking model on test set
+        stacking_config, stacking_metrics, stacking_study = run_automl_stacking_phase(
+            X_train_scaled, y_train_arr, X_test_scaled, y_test_arr, model_study, file, config=config
+        )  # Phase 2: Run stacking search and evaluation if enabled
 
         file_path_obj = Path(file)  # Create Path object for file
         automl_output_dir = str(file_path_obj.parent / "Feature_Analysis" / "AutoML")  # Build AutoML output directory
 
-        export_automl_search_history(model_study, automl_output_dir, "model_search", dataset_file=file)  # Export model search history
-
-        if stacking_study is not None:  # If stacking study exists
-            export_automl_search_history(stacking_study, automl_output_dir, "stacking_search", dataset_file=file)  # Export stacking search history
-
-        export_automl_best_config(
-            best_model_name, best_params, individual_metrics, stacking_config, automl_output_dir, feature_names, dataset_file=file
-        )  # Export best configuration
-
-        export_automl_best_model(
-            best_individual_model, scaler, automl_output_dir, best_model_name, feature_names, dataset_file=file
-        )  # Export best individual model
-
-        if stacking_config is not None and stacking_metrics is not None:  # If stacking was successful
-            best_stacking_model_final = build_automl_stacking_model(stacking_config, config=config)  # Rebuild stacking model for export
-            best_stacking_model_final.fit(X_train_scaled, y_train_arr)  # Fit stacking model on full training data
-            export_automl_best_model(
-                best_stacking_model_final, scaler, automl_output_dir, "AutoML_Stacking", feature_names, dataset_file=file
-            )  # Export best stacking model
+        export_automl_pipeline_artifacts(
+            model_study, stacking_study, stacking_config, stacking_metrics,
+            best_model_name, best_params, individual_metrics, best_individual_model,
+            scaler, file, feature_names, X_train_scaled, y_train_arr, automl_output_dir, config=config,
+        )  # Export all AutoML artifacts (search history, config, models)
 
         results_list = build_automl_results_list(
             best_model_name, best_params, individual_metrics, stacking_metrics, stacking_config,
