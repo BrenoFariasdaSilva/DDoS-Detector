@@ -1427,6 +1427,26 @@ def build_nearest_centroid_config():
     )  # Return the instantiated model and its hyperparameter grid as a tuple
 
 
+def build_gradient_boosting_config():
+    """
+    Build the Gradient Boosting classifier instance and hyperparameter search grid.
+
+    :return: Tuple of (GradientBoostingClassifier instance, param_grid dict) for hyperparameter optimization.
+    """
+
+    return (
+        GradientBoostingClassifier(random_state=42),  # Gradient Boosting classifier
+        {
+            "n_estimators": [50, 100, 200],  # Number of boosting stages to be run
+            "learning_rate": [0.01, 0.1, 0.3],  # Learning rate shrinks the contribution of each tree
+            "max_depth": [3, 5, 7],  # Maximum depth of the individual regression estimators
+            "min_samples_split": [2, 5, 10],  # Minimum number of samples required to split an internal node
+            "min_samples_leaf": [1, 2, 4],  # Minimum number of samples required to be at a leaf node
+            "subsample": [0.6, 0.8, 1.0],  # Subsample ratio of the training instances
+        },
+    )  # Return the instantiated model and its hyperparameter grid as a tuple
+
+
 def build_all_models_config():
     """
     Build and return the full dictionary of all available model instances paired with their hyperparameter grids.
