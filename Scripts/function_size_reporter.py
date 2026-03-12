@@ -390,10 +390,10 @@ def build_report(tree: ast.Module) -> dict:
 
     report = {  # Build the complete report dictionary
         "total_functions": total_functions,  # Store the total function count
+        "avg_function_size": int(math.ceil(avg_function_size)),  # Round up average function size to nearest integer
         "classes": classes,  # Store the class methods data
         "top-level functions": top_level,  # Store the top-level functions data
         "nested functions": nested,  # Store the nested functions data
-        "avg_function_size": int(math.ceil(avg_function_size)),  # Round up average function size to nearest integer
     }
 
     return report  # Return the completed report dictionary
