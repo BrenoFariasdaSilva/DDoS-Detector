@@ -1150,7 +1150,7 @@ def truncate_value(value):
 
 def row_style_for_zebra(row):
     """
-    Top-level helper to produce zebra row styles for pandas Styler.
+    Top-level function to produce zebra row styles for pandas Styler.
 
     :param row: pandas Series representing a row
     :return: List[str] of CSS style strings for each cell
@@ -1169,7 +1169,7 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """
     
     try:
-        styled = df.style.apply(row_style_for_zebra, axis=1)  # Apply zebra function row-wise using top-level helper
+        styled = df.style.apply(row_style_for_zebra, axis=1)  # Apply zebra function row-wise using top-level function
         styled = styled.set_table_attributes('style="border-collapse:collapse; width:100%;"')  # Tight table style
         styled = cast(pd.io.formats.style.Styler, cast(Any, styled).set_properties(**{"border": "1px solid #ddd", "padding": "6px"}))  # Cell padding/border (cast to Any to satisfy typing)
         return styled  # Return the styled object
@@ -1628,7 +1628,7 @@ def evaluate_exported_model(model, scaler, X_numeric, feature_columns, top_featu
 
 def get_final_model(csv_path, X_train, y_train, top_features, feature_columns):
     """
-    Helper function to load or export the final model, scaler, and parameters.
+    Function to load or export the final model, scaler, and parameters.
 
     :param csv_path: Path to the CSV dataset file
     :param X_train: Training features DataFrame
@@ -1682,7 +1682,7 @@ def get_final_model(csv_path, X_train, y_train, top_features, feature_columns):
 
 def build_run_results(final_model, csv_path, hyperparameters, cv_method, cv_metrics=None, test_metrics=None, training_time=None, top_features=None, rfe_ranking=None, feature_extraction_time=None):
     """
-    Helper function to build the run_results dictionary.
+    Function to build the run_results dictionary.
 
     :param final_model: The trained model
     :param csv_path: Path to the CSV dataset file
