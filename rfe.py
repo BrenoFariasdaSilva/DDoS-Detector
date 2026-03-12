@@ -1873,6 +1873,32 @@ def split_and_scale_for_cv(X_numeric: pd.DataFrame, y_array: np.ndarray, random_
         raise
 
 
+def resolve_cv_n_splits(y_train_array: np.ndarray, n_folds: int) -> int:
+    """
+    Compute the effective number of CV splits based on available training data and class distribution.
+
+    :param y_train_array: Training target array.
+    :param n_folds: Configured maximum number of folds.
+    :return: Effective number of CV splits as an int.
+    """
+
+    try:
+        unique_tr, counts_tr = np.unique(y_train_array, return_counts=True)  # Get unique classes and their counts
+        min_class_count_tr = counts_tr.min() if counts_tr.size > 0 else 0  # Minimum class count in training set
+
+        n_splits = int(min(n_folds, len(y_train_array), min_class_count_tr))  # Effective splits bounded by folds, samples, and min class count
+        if n_splits < 2:  # Verify sufficient splits for cross-validation
+            raise ValueError(
+                f"Effective number of CV splits is {n_splits}; must be >= 2 and <= number of training samples and smallest class count"
+            )  # Raise on insufficient splits
+
+        return n_splits  # Return the effective number of CV splits
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n_features_to_select=None, step=1, estimator_name="random_forest", random_state=42):
     """
     Handles RFE with stratified cross-validation.
@@ -1890,17 +1916,8 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n
 
         X_train_df, X_test_df, y_train_array, y_test_array, X_train_scaled, X_test_scaled, scaling_time_s = split_and_scale_for_cv(X_numeric, y_array, random_state)  # Split dataset and scale training features
 
-        unique_tr, counts_tr = np.unique(y_train_array, return_counts=True)
-        min_class_count_tr = counts_tr.min() if counts_tr.size > 0 else 0
-
         resolved_n = int(CONFIG.get("rfe", {}).get("cross_validation", {}).get("n_folds", 10))
-        n_splits = int(min(resolved_n, len(y_train_array), min_class_count_tr))
-        if n_splits < 2:
-            raise ValueError(
-                f"Effective number of CV splits is {n_splits}; must be >= 2 and <= number of training samples and smallest class count"
-            )
-
-        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=int(random_state))
+        n_splits = resolve_cv_n_splits(y_train_array, resolved_n)  # Compute effective number of CV splits
 
         fold_metrics = []  # List to collect per-fold metric tuples
         fold_rankings = []  # List to collect per-fold ranking arrays
@@ -1908,6 +1925,7 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n
         total_elapsed = 0.0  # Accumulator for training times across folds
         total_feature_extraction = float(scaling_time_s)  # Accumulator for total feature extraction time (scaling + selector fits)
 
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=int(random_state))  # Initialize stratified K-fold splitter
         for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X_train_scaled, y_train_array), start=1):
             verbose_output(f"{BackgroundColors.CYAN}Running fold {fold_idx}/{n_splits}{Style.RESET_ALL}")  # Optional fold progress
 
