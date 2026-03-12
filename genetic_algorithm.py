@@ -6580,6 +6580,49 @@ def resolve_ga_best_metrics(best_ind, feature_names, csv_path, metrics, X, y, X_
     return best_features, rfe_ranking, rf_metrics  # Return extracted features, ranking, and final metrics as a tuple
 
 
+def run_model_training_and_evaluation(
+    best_features,
+    X,
+    y,
+    feature_names,
+    X_test,
+    y_test,
+    model_path,
+    scaler_path,
+    features_path,
+    params_path,
+    csv_path,
+):
+    """
+    Train the final Random Forest on selected features, evaluate it on the test set, and prepare the output directory.
+
+    :param best_features: List of feature name strings selected by the GA for final model training.
+    :param X: Full feature matrix (DataFrame or array) used for training the final model.
+    :param y: Target variable (Series or array) used for training the final model.
+    :param feature_names: Complete list of feature names corresponding to columns in X.
+    :param X_test: Test feature matrix evaluated against the trained model.
+    :param y_test: Test target variable used to compute evaluation metrics.
+    :param model_path: File path where the trained Random Forest model artifact is persisted.
+    :param scaler_path: File path where the fitted StandardScaler artifact is persisted.
+    :param features_path: File path where the selected features JSON artifact is persisted.
+    :param params_path: File path where the model hyperparameters JSON artifact is persisted.
+    :param csv_path: Dataset CSV path used to derive the output directory location.
+    :return: Tuple of (model_local, model_params, training_time_s, X_test_selected, eval_metrics, testing_time_s, output_dir, feature_extraction_time_s).
+    """
+
+    model_local, model_params, training_time_s, X_test_selected, final_scaling_time = train_and_save_final_model(
+        best_features, X, y, feature_names, X_test, model_path, scaler_path, features_path, params_path
+    )  # Train final Random Forest on selected features and persist artifacts
+
+    eval_metrics, testing_time_s = evaluate_final_on_test(model_local, X_test_selected, y_test)  # Evaluate trained model on held-out test set
+
+    output_dir, feature_extraction_time_s = prepare_output_dir_and_feature_extraction_time(
+        csv_path, final_scaling_time
+    )  # Resolve output directory, create it if needed, and convert scaling time to seconds
+
+    return model_local, model_params, training_time_s, X_test_selected, eval_metrics, testing_time_s, output_dir, feature_extraction_time_s  # Return all training pipeline outputs for downstream persistence
+
+
 def save_results(
     best_ind,
     feature_names,
