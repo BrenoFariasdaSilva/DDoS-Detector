@@ -247,7 +247,7 @@ def parse_cli_args() -> dict:
         parser.add_argument("--no-remove_zero_variance", dest="remove_zero_variance", action="store_false", help="Do not remove zero-variance features (overrides config)")  # Disable zero-variance removal
         parser.add_argument("--max_workers", type=int, default=None, help="Number of parallel workers (overrides config)")  # Max workers override
         parser.add_argument("--n_folds", type=int, default=None, help="Number of CV folds (overrides config.cross_validation.n_folds)")  # CV folds override
-        parser.add_argument("--n_jobs", type=int, default=None, help="Number of parallel jobs for estimators/CV (-1 uses all cores)")  # n_jobs override
+        parser.add_argument("--n_jobs", type=int, default=None, help="Number of parallel jobs for estimators/CV (-1 uses all cores)")  # N_jobs override
         parser.add_argument("--cpu_processes", type=int, default=None, help="Number of CPU processes for multiprocessing (overrides config.multiprocessing.cpu_processes)")  # CPU processes override
         parser.add_argument("--caching_enabled", type=lambda s: str(s).lower() in ("1", "true", "yes", "y"), default=None, help="Enable/disable caching (true/false). Overrides config.caching.enabled")  # Caching enabled flag
         parser.add_argument("--pickle_protocol", type=int, default=None, help="Pickle protocol (0-5) to use when caching")  # Pickle protocol override
