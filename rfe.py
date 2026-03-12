@@ -1241,6 +1241,152 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
         raise  # Propagate exceptions to caller
 
 
+def resolve_model_display_name(r: Dict[str, Any]) -> str:
+    """
+    Resolve the display name of the model from a run result dict.
+
+    :param r: Run result dictionary from a single RFE run.
+    :return: Friendly display name string for the model.
+    """
+
+    try:
+        model_obj = r.get("model") or r.get("estimator") or ""  # Extract model object or name from result dict
+
+        try:  # Safely resolve model name string from object
+            model_repr = model_obj if isinstance(model_obj, str) else getattr(model_obj, "__class__", type(model_obj)).__name__  # Get class name if not already a string
+        except Exception:  # On resolution failure
+            model_repr = str(model_obj)  # Fallback to string representation of model object
+
+        if isinstance(model_repr, str) and "random" in model_repr.lower() and "forest" in model_repr.lower():  # Verify if model is Random Forest
+            return "Random Forest"  # Return friendly display name for Random Forest
+
+        return model_repr  # Return raw representation for non-random-forest models
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def build_cv_method_string(r: Dict[str, Any]) -> Optional[str]:
+    """
+    Build the cross-validation method description string from a run result dict.
+
+    :param r: Run result dictionary from a single RFE run.
+    :return: CV method description string or None if not available.
+    """
+
+    try:
+        cv_method = r.get("cv_method") or r.get("cv")  # Extract CV method string from result dict
+
+        if not cv_method:  # Verify if CV method string was missing from result
+            n_splits = r.get("cv_n_splits") or r.get("n_splits")  # Attempt to reconstruct from n_splits field
+            if n_splits:  # Verify if n_splits value is available for reconstruction
+                cv_method = f"StratifiedKFold(n_splits={n_splits})"  # Reconstruct CV method string from n_splits
+
+        return cv_method  # Return the resolved or reconstructed CV method string
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def extract_metric_values_into_row(r: Dict[str, Any], data: Dict[str, Optional[Any]], metric_map: Dict[str, tuple]) -> Dict[str, Optional[Any]]:
+    """
+    Extract and format metric values from a run result dict into a data row.
+
+    :param r: Run result dictionary from a single RFE run.
+    :param data: Result row dictionary to populate with metric values.
+    :param metric_map: Mapping of CSV column names to (section, key) lookup tuples.
+    :return: Updated data row dictionary with metric values populated.
+    """
+
+    try:
+        for col, (section, key) in metric_map.items():  # Iterate over each metric column mapping
+            val = r.get(col)  # Attempt direct lookup by column name first
+
+            if val is None:  # Verify if direct lookup returned no value
+                sec = r.get(section)  # Attempt nested section lookup using section key
+                if isinstance(sec, dict):  # Verify the section value is a dict before accessing
+                    val = sec.get(key)  # Extract metric value from nested section dict
+
+            if val is not None:  # Verify a value was resolved before formatting
+                try:  # Safely truncate numeric value to 4 decimal places
+                    data[col] = truncate_value(float(val))  # Format as truncated float string
+                except Exception:  # On float conversion or truncation failure
+                    data[col] = val  # Preserve raw value when formatting fails
+
+        return data  # Return updated data row with populated metric values
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def extract_timing_values_into_row(r: Dict[str, Any], data: Dict[str, Optional[Any]]) -> Dict[str, Optional[Any]]:
+    """
+    Extract and format timing values from a run result dict into a data row.
+
+    :param r: Run result dictionary containing timing fields.
+    :param data: Result row dictionary to populate with timing values.
+    :return: Updated data row dictionary with timing values populated.
+    """
+
+    try:
+        feature_extraction_time = r.get("feature_extraction_time_s")  # Read feature extraction time if present in result
+
+        try:  # Safely convert feature extraction time to rounded float
+            data["feature_extraction_time_s"] = round(float(feature_extraction_time), 6) if feature_extraction_time is not None else None  # Store as float rounded to 6 decimals
+        except Exception:  # On conversion failure
+            data["feature_extraction_time_s"] = None  # Leave as None when conversion fails
+
+        training_time = r.get("training_time_s")  # Read training time from result dict
+
+        try:  # Safely convert training time to rounded float
+            data["training_time_s"] = round(float(training_time), 6) if training_time is not None else None  # Store as float rounded to 6 decimals
+        except Exception:  # On conversion failure
+            data["training_time_s"] = None  # Leave as None when conversion fails
+
+        testing_time = r.get("testing_time_s")  # Read testing time from result dict
+
+        try:  # Safely convert testing time to rounded float
+            data["testing_time_s"] = round(float(testing_time), 6) if testing_time is not None else None  # Store as float rounded to 6 decimals
+        except Exception:  # On conversion failure
+            data["testing_time_s"] = None  # Leave as None when conversion fails
+
+        return data  # Return updated data row with populated timing values
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def serialize_feature_selection_fields(r: Dict[str, Any], data: Dict[str, Optional[Any]]) -> Dict[str, Optional[Any]]:
+    """
+    Serialize feature selection fields from a run result dict into a data row.
+
+    :param r: Run result dictionary containing feature selection output fields.
+    :param data: Result row dictionary to populate with serialized feature fields.
+    :return: Updated data row dictionary with serialized feature selection fields populated.
+    """
+
+    try:
+        try:  # Safely serialize top features list to JSON array
+            data["top_features"] = json.dumps(r.get("top_features") or [], ensure_ascii=False)  # Serialize features to JSON array string
+        except Exception:  # On serialization failure
+            data["top_features"] = str(r.get("top_features") or [])  # Fallback to Python string representation
+
+        try:  # Safely serialize RFE ranking dict to JSON object
+            data["rfe_ranking"] = json.dumps(r.get("rfe_ranking") or {}, sort_keys=True, ensure_ascii=False)  # Serialize sorted JSON object string
+        except Exception:  # On serialization failure
+            data["rfe_ranking"] = str(r.get("rfe_ranking") or {})  # Fallback to Python string representation
+
+        return data  # Return updated data row with serialized feature selection fields
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def build_result_row(r: Dict[str, Any], csv_path: str, cols: list) -> Dict[str, Optional[Any]]:
     """
     Build a single results row dictionary from a run result dict, CSV path and column list.
@@ -1257,39 +1403,25 @@ def build_result_row(r: Dict[str, Any], csv_path: str, cols: list) -> Dict[str, 
         data["timestamp"] = ts  # Assign timestamp to result row
         data["tool"] = "RFE"  # Assign tool identifier
 
-        model_obj = r.get("model") or r.get("estimator") or ""  # Extract model from result dict
-        try:  # Safely resolve model name string
-            model_repr = model_obj if isinstance(model_obj, str) else getattr(model_obj, "__class__", type(model_obj)).__name__  # Get class name if not already string
-        except Exception:  # On resolution failure
-            model_repr = str(model_obj)  # Fallback to string representation
-
-        if isinstance(model_repr, str) and "random" in model_repr.lower() and "forest" in model_repr.lower():  # Verify if model is random forest
-            data["model"] = "Random Forest"  # Use friendly display name
-        else:  # Non-random-forest model
-            data["model"] = model_repr  # Use raw representation
+        data["model"] = resolve_model_display_name(r)  # Resolve and assign friendly model display name
 
         try:  # Safely compute relative dataset path
             data["dataset"] = os.path.relpath(csv_path)  # Resolve relative path for portability
         except Exception:  # On relpath failure (e.g., different drives)
             data["dataset"] = csv_path  # Fallback to absolute path
 
-        hyper = r.get("hyperparameters") or r.get("params") or {}  # Extract hyperparameters from result
+        hyper = r.get("hyperparameters") or r.get("params") or {}  # Extract hyperparameters from result dict
         try:  # Safely serialize hyperparameters to JSON
-            data["hyperparameters"] = json.dumps(hyper, sort_keys=True, ensure_ascii=False)  # Serialize sorted JSON
+            data["hyperparameters"] = json.dumps(hyper, sort_keys=True, ensure_ascii=False)  # Serialize sorted JSON string
         except Exception:  # On serialization failure
-            data["hyperparameters"] = str(hyper)  # Fallback to string
+            data["hyperparameters"] = str(hyper)  # Fallback to string when JSON serialization fails
 
-        cv_method = r.get("cv_method") or r.get("cv")  # Extract CV method string
-        if not cv_method:  # Verify if CV method string was missing
-            n_splits = r.get("cv_n_splits") or r.get("n_splits")  # Attempt to reconstruct from n_splits
-            if n_splits:  # Verify if n_splits is available
-                cv_method = f"StratifiedKFold(n_splits={n_splits})"  # Reconstruct CV method string
-        data["cv_method"] = cv_method  # Assign CV method
+        data["cv_method"] = build_cv_method_string(r)  # Build and assign CV method description string
 
         data["train_test_split"] = r.get("train_test_split") or f"test_size={r.get('test_size', 0.2)}"  # Assign train/test split description
-        data["scaling"] = r.get("scaling") or r.get("scaler") or r.get("preprocessing") or "standard"  # Assign scaling method
+        data["scaling"] = r.get("scaling") or r.get("scaler") or r.get("preprocessing") or "standard"  # Assign scaling method identifier
 
-        metric_map = {  # Mapping of result CSV columns to (section, key) lookups
+        metric_map = {  # Mapping of result CSV columns to (section, key) lookup tuples
             "cv_accuracy": ("cv", "accuracy"),
             "cv_precision": ("cv", "precision"),
             "cv_recall": ("cv", "recall"),
@@ -1302,46 +1434,11 @@ def build_result_row(r: Dict[str, Any], csv_path: str, cols: list) -> Dict[str, 
             "test_fnr": ("test", "fnr"),
         }
 
-        for col, (section, key) in metric_map.items():  # Iterate over each metric column
-            val = r.get(col)  # Attempt direct lookup first
-            if val is None:  # Verify if direct lookup failed
-                sec = r.get(section)  # Attempt nested section lookup
-                if isinstance(sec, dict):  # Verify the section is a dict
-                    val = sec.get(key)  # Extract metric from nested section
+        data = extract_metric_values_into_row(r, data, metric_map)  # Extract and format all metric values into result row
 
-            if val is not None:  # Verify value was found
-                try:  # Safely truncate to 4 decimal places
-                    data[col] = truncate_value(float(val))  # Format as truncated float string
-                except Exception:  # On conversion failure
-                    data[col] = val  # Preserve raw value
+        data = extract_timing_values_into_row(r, data)  # Extract and format all timing values into result row
 
-        feature_extraction_time = r.get("feature_extraction_time_s")  # Read feature extraction time if present
-        try:  # Safely convert feature extraction time
-            data["feature_extraction_time_s"] = round(float(feature_extraction_time), 6) if feature_extraction_time is not None else None  # Store as float rounded to 6 decimals
-        except Exception:  # On conversion failure
-            data["feature_extraction_time_s"] = None  # Leave as None
-
-        training_time = r.get("training_time_s")  # Read training time from result dict
-        try:  # Safely convert training time
-            data["training_time_s"] = round(float(training_time), 6) if training_time is not None else None  # Store as float rounded to 6 decimals
-        except Exception:  # On conversion failure
-            data["training_time_s"] = None  # On error leave as None
-
-        testing_time = r.get("testing_time_s")  # Read testing time from result dict
-        try:  # Safely convert testing time
-            data["testing_time_s"] = round(float(testing_time), 6) if testing_time is not None else None  # Store as float rounded to 6 decimals
-        except Exception:  # On conversion failure
-            data["testing_time_s"] = None  # On error leave as None
-
-        try:  # Safely serialize top features list
-            data["top_features"] = json.dumps(r.get("top_features") or [], ensure_ascii=False)  # Serialize features to JSON array
-        except Exception:  # On serialization failure
-            data["top_features"] = str(r.get("top_features") or [])  # Fallback to string representation
-
-        try:  # Safely serialize RFE ranking dict
-            data["rfe_ranking"] = json.dumps(r.get("rfe_ranking") or {}, sort_keys=True, ensure_ascii=False)  # Serialize sorted JSON object
-        except Exception:  # On serialization failure
-            data["rfe_ranking"] = str(r.get("rfe_ranking") or {})  # Fallback to string representation
+        data = serialize_feature_selection_fields(r, data)  # Serialize feature selection fields into result row
 
         return data  # Return the completed result row dict
     except Exception as e:
