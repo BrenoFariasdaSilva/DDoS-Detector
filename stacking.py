@@ -4498,6 +4498,33 @@ def add_hardware_column(df, columns_order, column_name="Hardware"):
         raise
 
 
+def reorder_and_annotate_dataframe(df, config=None):
+    """
+    Reorders DataFrame columns according to configuration and appends the hardware column.
+
+    :param df: DataFrame containing stacking results to reorder
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Reordered DataFrame with hardware column appended at the proper position
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        results_csv_columns = config.get("stacking", {}).get("results_csv_columns", [])  # Read desired column order from config
+        column_order = list(results_csv_columns) if results_csv_columns else list(config.get("stacking", {}).get("results_csv_columns", []))  # Use config list as ordering reference
+
+        existing_columns = [col for col in column_order if col in df.columns]  # Filter to only columns that exist in the DataFrame
+        df = df[existing_columns + [c for c in df.columns if c not in existing_columns]]  # Reorder with configured columns first, then any remaining
+
+        df = add_hardware_column(df, existing_columns)  # Append hardware annotation column at the configured position
+        return df  # Return the reordered and annotated DataFrame
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def flatten_and_serialize_results(results_list):
     """
     Flattens result dictionaries, truncates numeric metrics, and JSON-serializes nested fields.
@@ -4574,13 +4601,7 @@ def save_stacking_results(csv_path, results_list, config=None):
 
         df = pd.DataFrame(flat_rows)  # Construct results DataFrame from flattened rows
 
-        results_csv_columns = config.get("stacking", {}).get("results_csv_columns", [])  # Get columns from config
-        column_order = list(results_csv_columns) if results_csv_columns else list(config.get("stacking", {}).get("results_csv_columns", []))  # Use config or fallback to global
-
-        existing_columns = [col for col in column_order if col in df.columns]
-        df = df[existing_columns + [c for c in df.columns if c not in existing_columns]]
-
-        df = add_hardware_column(df, existing_columns)
+        df = reorder_and_annotate_dataframe(df, config=config)  # Reorder columns by config order and append hardware annotation
 
         try:
             generate_csv_and_image(df, str(output_path), is_visualizable=True, index=False, encoding="utf-8")  # Persist results CSV and generate PNG
