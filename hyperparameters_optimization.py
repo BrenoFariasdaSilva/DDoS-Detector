@@ -2054,6 +2054,22 @@ def process_cached_combinations(
         raise
 
 
+def log_resource_information(X_train, y_train):
+    """
+    Log the available RAM, dataset size, and core count before beginning combination evaluation.
+
+    :param X_train: Training feature matrix used to estimate dataset memory footprint.
+    :param y_train: Training label vector used alongside X_train for memory estimation.
+    :return: None
+    """
+
+    _, available_memory_gb, data_size_gb = compute_safe_n_jobs(X_train, y_train)  # GET MEMORY STATS FOR LOGGING
+    n_jobs_display = get_n_jobs_display()  # GET READABLE CORE COUNT
+    verbose_output(
+        f"{BackgroundColors.GREEN}Processing combinations sequentially with {BackgroundColors.CYAN}{n_jobs_display}{BackgroundColors.GREEN} per model (Available RAM: {BackgroundColors.CYAN}{available_memory_gb:.1f}GB{BackgroundColors.GREEN}, Dataset: {BackgroundColors.CYAN}{data_size_gb:.2f}GB{BackgroundColors.GREEN}){Style.RESET_ALL}"
+    )  # LOG RESOURCES
+
+
 def expand_parameter_grid(param_grid):
     """
     Expand a hyperparameter grid dictionary into an ordered list of all parameter name/value combinations.
@@ -2139,12 +2155,7 @@ def manual_grid_search(
         else:
             print(f"{BackgroundColors.GREEN}Testing {BackgroundColors.CYAN}{len(combinations_to_test)}{BackgroundColors.GREEN} combinations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}")
 
-        _, available_memory_gb, data_size_gb = compute_safe_n_jobs(X_train, y_train)  # Get memory stats for logging
-
-        n_jobs_display = get_n_jobs_display()  # Get readable core count
-        verbose_output(
-            f"{BackgroundColors.GREEN}Processing combinations sequentially with {BackgroundColors.CYAN}{n_jobs_display}{BackgroundColors.GREEN} per model (Available RAM: {BackgroundColors.CYAN}{available_memory_gb:.1f}GB{BackgroundColors.GREEN}, Dataset: {BackgroundColors.CYAN}{data_size_gb:.2f}GB{BackgroundColors.GREEN}){Style.RESET_ALL}"
-        )  # Log resources
+        log_resource_information(X_train, y_train)  # LOG AVAILABLE RAM, DATASET SIZE, AND CORE COUNT BEFORE EVALUATION
 
         best_params, best_score, best_elapsed, all_results, global_counter = run_parallel_evaluation(
             model_name,
