@@ -7355,6 +7355,42 @@ def save_multiclass_results_to_csv(reference_file, results_list, config=None):
         raise
 
 
+def load_and_combine_augmented_multiclass_files(original_files_list, config=None):
+    """
+    Loads augmented files for multi-class mode and combines them into a single DataFrame.
+
+    :param original_files_list: List of original file paths used to find corresponding augmented files
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Combined augmented DataFrame on success, or None if loading or combination fails
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        augmented_files_list = load_augmented_files_for_multiclass(original_files_list, config=config)  # Load the list of augmented file paths
+
+        if not augmented_files_list:  # If no augmented files were found
+            print(
+                f"{BackgroundColors.YELLOW}No augmented files found for multi-class mode. Skipping augmentation testing.{Style.RESET_ALL}"
+            )  # Print warning about missing augmented files
+            return None  # Signal caller to exit early
+
+        combined_augmented_df, augmented_attack_types, augmented_target_col = combine_files_for_multiclass(augmented_files_list, config=config)  # Combine all augmented files into a single DataFrame
+
+        if combined_augmented_df is None:  # If augmented file combination failed
+            print(
+                f"{BackgroundColors.YELLOW}Failed to combine augmented files for multi-class. Skipping augmentation testing.{Style.RESET_ALL}"
+            )  # Print warning about combination failure
+            return None  # Signal caller to exit early
+
+        return combined_augmented_df  # Return the combined augmented DataFrame for ratio experiments
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def process_multiclass_augmentation_testing(reference_file, original_files_list, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, attack_types_list, results_original, augmentation_ratios, total_steps, feature_analysis_dir, dataset_name, config=None):
     """
     Process multi-class augmented data evaluation with ratio-based experiments.
@@ -7391,21 +7427,10 @@ def process_multiclass_augmentation_testing(reference_file, original_files_list,
             reference_file, combined_multiclass_df, None, None, "original_only"
         )  # Generate t-SNE visualization for original multi-class data only
 
-        augmented_files_list = load_augmented_files_for_multiclass(original_files_list, config=config)  # Load augmented files
+        combined_augmented_df = load_and_combine_augmented_multiclass_files(original_files_list, config=config)  # Load and combine augmented files into a single DataFrame
 
-        if not augmented_files_list:  # If no augmented files found
-            print(
-                f"{BackgroundColors.YELLOW}No augmented files found for multi-class mode. Skipping augmentation testing.{Style.RESET_ALL}"
-            )  # Print warning about missing augmented files
-            return  # Exit function early
-
-        combined_augmented_df, augmented_attack_types, augmented_target_col = combine_files_for_multiclass(augmented_files_list, config=config)  # Combine augmented files
-
-        if combined_augmented_df is None:  # If augmented combination failed
-            print(
-                f"{BackgroundColors.YELLOW}Failed to combine augmented files for multi-class. Skipping augmentation testing.{Style.RESET_ALL}"
-            )  # Print warning about combination failure
-            return  # Exit function early
+        if combined_augmented_df is None:  # If loading or combining augmented files failed
+            return  # Exit function early as signaled by the helper
 
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
