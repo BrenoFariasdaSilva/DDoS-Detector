@@ -1334,6 +1334,221 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
         raise  # Propagate exceptions to caller
 
         
+def resolve_pca_output_dir(cfg: Any, csv_path: str) -> tuple:
+    """
+    Resolve and validate the output directory and CSV file path for PCA results.
+
+    :param cfg: PCA configuration dictionary containing the export section.
+    :param csv_path: Original input CSV dataset path used for relative path resolution.
+    :return: Tuple of (resolved_dir, csv_output) as absolute path strings.
+    """
+
+    export_cfg = (cfg or {}).get("export", {})  # Retrieve the export sub-config safely
+    results_dir_raw = export_cfg.get("results_dir")  # Read configured results directory path
+    results_filename = export_cfg.get("results_filename")  # Read configured results filename
+
+    if not isinstance(results_dir_raw, str) or not results_dir_raw:  # Verify results_dir is a non-empty string
+        raise ValueError("'pca.export.results_dir' must be a non-empty string in configuration")  # Raise on invalid
+    if not isinstance(results_filename, str) or not results_filename:  # Verify results_filename is a non-empty string
+        raise ValueError("'pca.export.results_filename' must be a non-empty string in configuration")  # Raise on invalid
+    if not results_filename.lower().endswith(".csv"):  # Verify results_filename ends with .csv
+        raise ValueError("'pca.export.results_filename' must end with .csv")  # Raise on wrong extension
+
+    if os.path.isabs(results_dir_raw):  # Verify if given path is absolute
+        resolved_dir = os.path.abspath(os.path.expanduser(results_dir_raw))  # Expand and resolve absolute path
+    else:  # Handle relative path resolution against dataset directory
+        dataset_dir = os.path.dirname(csv_path) or "."  # Use dataset directory as base for relative paths
+        resolved_dir = os.path.abspath(os.path.expanduser(os.path.join(dataset_dir, results_dir_raw)))  # Resolve relative path
+
+    os.makedirs(resolved_dir, exist_ok=True)  # Create the output directory if it does not exist
+    if not os.access(resolved_dir, os.W_OK):  # Verify write permission on the resolved directory
+        raise PermissionError(f"Directory not writable: {resolved_dir}")  # Raise on non-writable directory
+
+    csv_output = os.path.join(resolved_dir, results_filename)  # Build the full CSV output path
+
+    return resolved_dir, csv_output  # Return the resolved output directory and CSV file path
+
+
+def build_result_rows(all_results: list, csv_path: str) -> list:
+    """
+    Build a list of normalized row dictionaries from PCA result entries.
+
+    :param all_results: List of per-configuration result dicts from apply_pca_and_evaluate.
+    :param csv_path: Original input CSV dataset path for the dataset column value.
+    :return: List of row dictionaries ready for DataFrame construction.
+    """
+
+    eval_model = "Random Forest"  # Evaluation model descriptor
+    train_test_split_desc = "80/20 split"  # Train/test split descriptor
+    scaling = "StandardScaler"  # Scaling method descriptor
+    evaluator_fallback = {"model": "RandomForestClassifier", "n_estimators": 100, "random_state": 42, "n_jobs": -1}  # Fallback hyperparameters
+    cv_method = "StratifiedKFold(n_splits=10)"  # Cross-validation method descriptor
+
+    rows = []  # List to store one normalized row per result
+
+    for results in all_results:  # Iterate over each PCA configuration result dict
+        eval_params = None  # Initialize eval_params for this result
+        trained_clf = results.get("trained_classifier")  # Retrieve trained classifier object if present
+        if trained_clf is not None:  # Only attempt to extract params when classifier exists
+            try:
+                eval_params = trained_clf.get_params()  # Try to get estimator parameters
+            except Exception:
+                eval_params = None  # Fallback to None if inspection fails
+
+        raw_n_components: Any = results.get("n_components")  # Retrieve raw n_components from result (may be None)
+        if raw_n_components is None:  # If not present, keep None to match original behavior
+            validated_n_components = None  # Preserve original None semantics when missing
+        else:
+            if not isinstance(raw_n_components, (int, str)):  # Validate acceptable input types
+                raise TypeError(f"results['n_components'] must be int or str convertible to int, got {type(raw_n_components)}")  # Raise on invalid type
+            try:
+                validated_n_components = int(raw_n_components)  # Convert to int after validation
+            except Exception as e:
+                raise ValueError(f"Invalid n_components value in results: {raw_n_components}") from e  # Raise with context
+
+        row = {  # Build the normalized row mapping for CSV export
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d_%H_%M_%S"),  # Current timestamp for this row
+            "tool": "PCA",  # Tool name
+            "model": eval_model,  # Model descriptor
+            "dataset": os.path.relpath(csv_path),  # Relative dataset path
+            "hyperparameters": json.dumps(eval_params or evaluator_fallback, sort_keys=True, ensure_ascii=False, default=str),  # JSON-encoded params
+            "cv_method": cv_method,  # CV method string
+            "train_test_split": train_test_split_desc,  # Train/test split descriptor
+            "scaling": scaling,  # Scaling descriptor
+            "n_components": validated_n_components,  # Validated integer or None
+            "explained_variance": truncate_value(results.get("explained_variance")),  # Explained variance formatted
+            "cv_accuracy": truncate_value(results.get("cv_accuracy")),  # CV accuracy formatted
+            "cv_precision": truncate_value(results.get("cv_precision")),  # CV precision formatted
+            "cv_recall": truncate_value(results.get("cv_recall")),  # CV recall formatted
+            "cv_f1_score": truncate_value(results.get("cv_f1_score")),  # CV f1 formatted
+            "test_accuracy": truncate_value(results.get("test_accuracy")),  # Test accuracy formatted
+            "test_precision": truncate_value(results.get("test_precision")),  # Test precision formatted
+            "test_recall": truncate_value(results.get("test_recall")),  # Test recall formatted
+            "test_f1_score": truncate_value(results.get("test_f1_score")),  # Test f1 formatted
+            "test_fpr": truncate_value(results.get("test_fpr")),  # Test FPR formatted
+            "test_fnr": truncate_value(results.get("test_fnr")),  # Test FNR formatted
+            "training_time_s": results.get("training_time_s") if results.get("training_time_s") is not None else None,  # Training time or None
+            "testing_time_s": results.get("testing_time_s") if results.get("testing_time_s") is not None else None,  # Testing time or None
+            "feature_extraction_time_s": results.get("feature_extraction_time_s") if results.get("feature_extraction_time_s") is not None else None,  # Feature extraction time or None
+        }
+        rows.append(row)  # Append the normalized row to the rows collection
+
+    return rows  # Return the list of all normalized result rows
+
+
+def merge_or_create_results_df(csv_output: str, comparison_df: pd.DataFrame, header: list) -> pd.DataFrame:
+    """
+    Merge new results with an existing CSV or return the new DataFrame directly.
+
+    :param csv_output: Absolute path to the output CSV file to read from and merge into.
+    :param comparison_df: DataFrame containing the new result rows to add.
+    :param header: Ordered list of column names defining the CSV structure.
+    :return: Merged and sorted DataFrame ready for saving.
+    """
+
+    if os.path.exists(csv_output):  # Verify if a pre-existing CSV file was found
+        try:
+            df_existing = pd.read_csv(csv_output, dtype=str)  # Read existing CSV with all columns as strings
+            if "timestamp" not in df_existing.columns:  # Verify if timestamp column is missing
+                mtime = os.path.getmtime(csv_output)  # Get file modification time as fallback timestamp
+                back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")  # Format modification time
+                df_existing["timestamp"] = back_ts  # Assign fallback timestamp to all existing rows
+            for c in header:  # Iterate expected header columns
+                if c not in df_existing.columns:  # Verify if column is missing from existing data
+                    df_existing[c] = None  # Add missing column with None values
+
+            df_combined = pd.concat([df_existing[header], comparison_df], ignore_index=True, sort=False)  # Concatenate existing and new rows
+            try:
+                df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")  # Parse timestamps for sorting
+                df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)  # Sort by parsed timestamp descending
+                df_combined = df_combined.drop(columns=["timestamp_dt"])  # Remove temporary sorting column
+            except Exception:
+                df_combined = df_combined.sort_values(by="timestamp", ascending=False)  # Fallback sort by raw timestamp string
+
+            return df_combined.reset_index(drop=True)  # Reset index after merge and sorting
+        except Exception:
+            return comparison_df  # Return new rows only when existing CSV read fails
+
+    return comparison_df  # Return new rows only when no prior CSV exists
+
+
+def resolve_pickle_protocol(cfg: dict) -> int:
+    """
+    Resolve the pickle protocol to use for serializing model artifacts.
+
+    :param cfg: PCA configuration dictionary containing the caching section.
+    :return: Validated integer pickle protocol value.
+    """
+
+    if PICKLE_PROTOCOL is not None:  # Verify if global PICKLE_PROTOCOL was explicitly set
+        return int(PICKLE_PROTOCOL)  # Return the explicitly configured global protocol
+
+    cache_cfg: Any = (cfg or {}).get("caching")  # Safely retrieve 'caching' mapping from cfg
+
+    if cache_cfg is None:  # Verify if caching section is missing
+        return 4  # Return the default pickle protocol fallback
+
+    raw_proto: Any = cache_cfg.get("pickle_protocol")  # Raw value from config (may be None)
+
+    if raw_proto is None:  # Verify if protocol is unspecified in config
+        return 4  # Return the default pickle protocol fallback
+    if not isinstance(raw_proto, (int, str)):  # Validate acceptable types
+        raise TypeError("cfg['caching']['pickle_protocol'] must be int or string convertible to int")  # Raise on invalid type
+    try:
+        return int(raw_proto)  # Convert validated value to int and return
+    except Exception as e:
+        raise ValueError(f"Invalid pickle_protocol value in config: {raw_proto}") from e  # Raise with context
+
+
+def save_pca_model_artifacts(all_results: list, models_dir: str, base_name: str, timestamp: str, cfg: Any) -> None:
+    """
+    Save PCA objects, scalers, and trained classifiers to disk for each configuration.
+
+    :param all_results: List of per-configuration result dicts containing model artifacts.
+    :param models_dir: Directory path where model artifacts will be saved.
+    :param base_name: Base filename stem derived from the dataset path.
+    :param timestamp: Formatted timestamp string used in artifact filenames.
+    :param cfg: PCA configuration dictionary used for pickle protocol resolution.
+    :return: None
+    """
+
+    os.makedirs(models_dir, exist_ok=True)  # Ensure the models directory exists before saving
+
+    for results in all_results:  # Iterate over each PCA configuration result
+        n_comp = results["n_components"]  # Retrieve the number of components for filename construction
+
+        pca_obj = results.get("pca_object")  # Retrieve the PCA object if present
+        if pca_obj:  # Only save when a PCA object exists
+            pca_file = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}.pkl"  # Build the PCA artifact filename
+            try:
+                proto = resolve_pickle_protocol(cfg)  # Resolve pickle protocol from config
+                with open(pca_file, "wb") as f:  # Open file for binary write
+                    pickle.dump(pca_obj, f, protocol=int(proto))  # Dump PCA object using validated protocol
+                verbose_output(f"{BackgroundColors.GREEN}PCA object saved to {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")  # Log successful PCA save
+            except Exception as e:
+                print(f"{BackgroundColors.RED}Failed to save PCA object: {e}{Style.RESET_ALL}")  # Log PCA save failure
+
+        scaler = results.get("scaler")  # Retrieve the scaler if present
+        if scaler is not None:  # Only save when a scaler exists
+            scaler_path = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}-scaler.joblib"  # Build the scaler artifact filename
+            try:
+                proto = resolve_pickle_protocol(cfg)  # Resolve pickle protocol from config
+                dump(scaler, scaler_path, protocol=int(proto))  # Dump scaler using validated protocol
+                verbose_output(f"{BackgroundColors.GREEN}Scaler saved to {BackgroundColors.CYAN}{scaler_path}{Style.RESET_ALL}")  # Log successful scaler save
+            except Exception as e:
+                print(f"{BackgroundColors.RED}Failed to save scaler: {e}{Style.RESET_ALL}")  # Log scaler save failure
+
+        clf = results.get("trained_classifier")  # Retrieve the trained classifier if present
+        if clf is not None:  # Only save when a classifier exists
+            model_path = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}-model.joblib"  # Build the classifier artifact filename
+            try:
+                proto = resolve_pickle_protocol(cfg)  # Resolve pickle protocol from config
+                dump(clf, model_path, protocol=int(proto))  # Dump classifier with validated protocol
+                verbose_output(f"{BackgroundColors.GREEN}Trained classifier saved to {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}")  # Log successful classifier save
+            except Exception as e:
+                print(f"{BackgroundColors.RED}Failed to save classifier: {e}{Style.RESET_ALL}")  # Log classifier save failure
+
+
 def save_pca_results(csv_path, all_results, cfg=None):
     """
     Saves PCA results to a single CSV file containing evaluation metadata
@@ -1341,224 +1556,48 @@ def save_pca_results(csv_path, all_results, cfg=None):
     outputs with one machine-friendly CSV that includes the evaluation
     details repeated on each row for easy consumption by downstream tools.
 
-    :param csv_path: Original CSV file path
-    :param all_results: List of result dictionaries from different PCA configurations
+    :param csv_path: Original CSV file path.
+    :param all_results: List of result dictionaries from different PCA configurations.
+    :param cfg: PCA configuration dictionary.
     :return: None
     """
-    
+
     try:
-        export_cfg = (cfg or {}).get("export", {})
-        results_dir_raw = export_cfg.get("results_dir")
-        results_filename = export_cfg.get("results_filename")
-        if not isinstance(results_dir_raw, str) or not results_dir_raw:
-            raise ValueError("'pca.export.results_dir' must be a non-empty string in configuration")
-        if not isinstance(results_filename, str) or not results_filename:
-            raise ValueError("'pca.export.results_filename' must be a non-empty string in configuration")
-        if not results_filename.lower().endswith(".csv"):
-            raise ValueError("'pca.export.results_filename' must end with .csv")
+        resolved_dir, csv_output = resolve_pca_output_dir(cfg, csv_path)  # Resolve and validate the output directory and CSV path
 
-        if os.path.isabs(results_dir_raw):
-            resolved_dir = os.path.abspath(os.path.expanduser(results_dir_raw))
-        else:
-            dataset_dir = os.path.dirname(csv_path) or "."
-            resolved_dir = os.path.abspath(os.path.expanduser(os.path.join(dataset_dir, results_dir_raw)))
+        print(f"{BackgroundColors.GREEN}Exporting PCA results to CSV: {BackgroundColors.CYAN}{csv_output}{Style.RESET_ALL}")  # Log the export target path
 
-        os.makedirs(resolved_dir, exist_ok=True)
-        if not os.access(resolved_dir, os.W_OK):
-            raise PermissionError(f"Directory not writable: {resolved_dir}")
-
-        csv_output = os.path.join(resolved_dir, results_filename)
-        print(f"{BackgroundColors.GREEN}Exporting PCA results to CSV: {BackgroundColors.CYAN}{csv_output}{Style.RESET_ALL}")
-
-        eval_model = "Random Forest"  # Evaluation model
-        train_test_split = "80/20 split"  # Train/test split
-        scaling = "StandardScaler"  # Scaling method
-
-        rows = []  # List to store one normalized row per result
-        
-        evaluator_fallback = {"model": "RandomForestClassifier", "n_estimators": 100, "random_state": 42, "n_jobs": -1}
-        cv_method = "StratifiedKFold(n_splits=10)"
-        for results in all_results:  # Iterate over each PCA configuration result dict
-            eval_params = None  # Initialize eval_params for this result
-            trained_clf = results.get("trained_classifier")  # Retrieve trained classifier object if present
-            if trained_clf is not None:  # Only attempt to extract params when classifier exists
-                try:
-                    eval_params = trained_clf.get_params()  # Try to get estimator parameters
-                except Exception:
-                    eval_params = None  # Fallback to None if inspection fails
-
-            raw_n_components: Any = results.get("n_components")  # Retrieve raw n_components from result (may be None)
-            if raw_n_components is None:  # If not present, keep None to match original behavior
-                validated_n_components = None  # Preserve original None semantics when missing
-            else:
-                if not isinstance(raw_n_components, (int, str)):  # Validate acceptable input types
-                    raise TypeError(f"results['n_components'] must be int or str convertible to int, got {type(raw_n_components)}")
-                try:
-                    validated_n_components = int(raw_n_components)  # Convert to int after validation
-                except Exception as e:
-                    raise ValueError(f"Invalid n_components value in results: {raw_n_components}") from e
-
-            row = {  # Build the normalized row mapping for CSV export
-                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d_%H_%M_%S"),  # Current timestamp for this row
-                "tool": "PCA",  # Tool name
-                "model": eval_model,  # Model descriptor
-                "dataset": os.path.relpath(csv_path),  # Relative dataset path
-                "hyperparameters": json.dumps(eval_params or evaluator_fallback, sort_keys=True, ensure_ascii=False, default=str),  # JSON-encoded params
-                "cv_method": cv_method,  # CV method string
-                "train_test_split": train_test_split,  # Train/test split descriptor
-                "scaling": scaling,  # Scaling descriptor
-                "n_components": validated_n_components,  # Validated integer or None
-                "explained_variance": truncate_value(results.get("explained_variance")),  # Explained variance formatted
-                "cv_accuracy": truncate_value(results.get("cv_accuracy")),  # CV accuracy formatted
-                "cv_precision": truncate_value(results.get("cv_precision")),  # CV precision formatted
-                "cv_recall": truncate_value(results.get("cv_recall")),  # CV recall formatted
-                "cv_f1_score": truncate_value(results.get("cv_f1_score")),  # CV f1 formatted
-                "test_accuracy": truncate_value(results.get("test_accuracy")),  # Test accuracy formatted
-                "test_precision": truncate_value(results.get("test_precision")),  # Test precision formatted
-                "test_recall": truncate_value(results.get("test_recall")),  # Test recall formatted
-                "test_f1_score": truncate_value(results.get("test_f1_score")),  # Test f1 formatted
-                "test_fpr": truncate_value(results.get("test_fpr")),  # Test FPR formatted
-                "test_fnr": truncate_value(results.get("test_fnr")),  # Test FNR formatted
-                "training_time_s": results.get("training_time_s") if results.get("training_time_s") is not None else None,  # Training time or None
-                "testing_time_s": results.get("testing_time_s") if results.get("testing_time_s") is not None else None,  # Testing time or None
-                "feature_extraction_time_s": results.get("feature_extraction_time_s") if results.get("feature_extraction_time_s") is not None else None,  # Feature extraction time or None
-            }
-            rows.append(row)  # Append the normalized row to the rows collection
-
+        rows = build_result_rows(all_results, csv_path)  # Build normalized row dicts from all result entries
         comparison_df = pd.DataFrame(rows)  # Create DataFrame from rows
 
-        header = None
-        if cfg and isinstance(cfg, dict):
-            header = (cfg or {}).get("export", {}).get("results_csv_columns")
-        if not header:
-            raise ValueError("PCA results CSV header is missing from configuration: pca.export.results_csv_columns")
+        header = None  # Initialize header to None before attempting lookup
+        if cfg and isinstance(cfg, dict):  # Verify if cfg dict is available
+            header = (cfg or {}).get("export", {}).get("results_csv_columns")  # Extract header from config
+        if not header:  # Verify if header was found
+            raise ValueError("PCA results CSV header is missing from configuration: pca.export.results_csv_columns")  # Raise on missing header
 
-        if os.path.exists(csv_output):
-            try:
-                df_existing = pd.read_csv(csv_output, dtype=str)
-                if "timestamp" not in df_existing.columns:
-                    mtime = os.path.getmtime(csv_output)
-                    back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")
-                    df_existing["timestamp"] = back_ts
-
-                for c in header:
-                    if c not in df_existing.columns:
-                        df_existing[c] = None
-
-                df_combined = pd.concat([df_existing[header], comparison_df], ignore_index=True, sort=False)
-
-                try:
-                    df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")
-                    df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)
-                    df_combined = df_combined.drop(columns=["timestamp_dt"])
-                except Exception:
-                    df_combined = df_combined.sort_values(by="timestamp", ascending=False)
-
-                df_out = df_combined.reset_index(drop=True)
-            except Exception:
-                df_out = comparison_df
-        else:
-            df_out = comparison_df
-
+        df_out = merge_or_create_results_df(csv_output, comparison_df, header)  # Merge with existing CSV or use new rows
         df_out = populate_hardware_column(df_out, column_name="hardware")  # Add hardware specs column (lowercase)
 
         try:
-            df_out = df_out.reindex(columns=header)
+            df_out = df_out.reindex(columns=header)  # Reorder columns to match the configured header
         except Exception:
-            pass
+            pass  # Preserve original silent-failure behavior on reindex error
 
         try:  # Attempt to save the CSV
             generate_csv_and_image(df_out, csv_output, is_visualizable=True)  # Save CSV and generate PNG image
-            print(f"{BackgroundColors.GREEN}PCA results saved to {BackgroundColors.CYAN}{csv_output}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.GREEN}PCA results saved to {BackgroundColors.CYAN}{csv_output}{Style.RESET_ALL}")  # Log successful save
         except Exception as e:  # Handle exceptions during file saving
-            print(f"{BackgroundColors.RED}Failed to save PCA CSV: {e}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.RED}Failed to save PCA CSV: {e}{Style.RESET_ALL}")  # Log file save failure
 
-        models_dir = os.path.join(resolved_dir, "Models")
-        os.makedirs(models_dir, exist_ok=True)
-        timestamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
-        base_name = Path(csv_path).stem
-        for results in all_results:
-            n_comp = results["n_components"]
-            pca_obj = results.get("pca_object")
-            if pca_obj:
-                pca_file = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}.pkl"
-                try:
-                    if PICKLE_PROTOCOL is not None:  # Use global PICKLE_PROTOCOL when explicitly set
-                        proto = PICKLE_PROTOCOL  # Use explicit global protocol value
-                    else:
-                        cache_cfg: Any = (cfg or {}).get("caching")  # Safely retrieve 'caching' mapping from cfg or empty
-                        if cache_cfg is None:  # If caching section missing
-                            proto = 4  # Default pickle protocol fallback
-                        else:
-                            raw_proto: Any = cache_cfg.get("pickle_protocol")  # Raw value from config (may be None)
-                            if raw_proto is None:  # If not specified in config
-                                proto = 4  # Default pickle protocol fallback
-                            else:
-                                if not isinstance(raw_proto, (int, str)):  # Validate acceptable types
-                                    raise TypeError("cfg['caching']['pickle_protocol'] must be int or string convertible to int")
-                                try:
-                                    proto = int(raw_proto)  # Convert validated value to int
-                                except Exception as e:
-                                    raise ValueError(f"Invalid pickle_protocol value in config: {raw_proto}") from e
-                    with open(pca_file, "wb") as f:  # Open file for binary write
-                        pickle.dump(pca_obj, f, protocol=int(proto))  # Dump PCA object using validated protocol
-                    verbose_output(f"{BackgroundColors.GREEN}PCA object saved to {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")
-                except Exception as e:
-                    print(f"{BackgroundColors.RED}Failed to save PCA object: {e}{Style.RESET_ALL}")
-            scaler = results.get("scaler")
-            clf = results.get("trained_classifier")
-            if scaler is not None:
-                scaler_path = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}-scaler.joblib"
-                try:
-                    if PICKLE_PROTOCOL is not None:  # Use global PICKLE_PROTOCOL when set
-                        proto = PICKLE_PROTOCOL  # Use explicit protocol value
-                    else:
-                        cache_cfg: Any = (cfg or {}).get("caching")  # Safely get caching mapping from cfg
-                        if cache_cfg is None:  # If caching config missing
-                            proto = 4  # Default fallback protocol
-                        else:
-                            raw_proto: Any = cache_cfg.get("pickle_protocol")  # Raw protocol value
-                            if raw_proto is None:  # If unspecified
-                                proto = 4  # Default fallback protocol
-                            else:
-                                if not isinstance(raw_proto, (int, str)):  # Validate type
-                                    raise TypeError("cfg['caching']['pickle_protocol'] must be int or string convertible to int")
-                                try:
-                                    proto = int(raw_proto)  # Convert to int
-                                except Exception as e:
-                                    raise ValueError(f"Invalid pickle_protocol value in config: {raw_proto}") from e
-                    dump(scaler, scaler_path, protocol=int(proto))  # Dump scaler using validated protocol
-                    verbose_output(f"{BackgroundColors.GREEN}Scaler saved to {BackgroundColors.CYAN}{scaler_path}{Style.RESET_ALL}")
-                except Exception as e:
-                    print(f"{BackgroundColors.RED}Failed to save scaler: {e}{Style.RESET_ALL}")
-            if clf is not None:
-                model_path = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}-model.joblib"
-                try:
-                    if PICKLE_PROTOCOL is not None:  # Use explicit global protocol when present
-                        proto = PICKLE_PROTOCOL  # Use explicit protocol value
-                    else:
-                        cache_cfg: Any = (cfg or {}).get("caching")  # Safely retrieve caching mapping
-                        if cache_cfg is None:  # If not present
-                            proto = 4  # Default fallback protocol
-                        else:
-                            raw_proto: Any = cache_cfg.get("pickle_protocol")  # Raw config value
-                            if raw_proto is None:  # If unspecified
-                                proto = 4  # Default fallback protocol
-                            else:
-                                if not isinstance(raw_proto, (int, str)):  # Validate input type
-                                    raise TypeError("cfg['caching']['pickle_protocol'] must be int or string convertible to int")
-                                try:
-                                    proto = int(raw_proto)  # Convert to int safely
-                                except Exception as e:
-                                    raise ValueError(f"Invalid pickle_protocol value in config: {raw_proto}") from e
-                    dump(clf, model_path, protocol=int(proto))  # Dump classifier with validated protocol
-                    verbose_output(f"{BackgroundColors.GREEN}Trained classifier saved to {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}")
-                except Exception as e:
-                    print(f"{BackgroundColors.RED}Failed to save classifier: {e}{Style.RESET_ALL}")
+        models_dir = os.path.join(resolved_dir, "Models")  # Build the models subdirectory path
+        timestamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")  # Generate timestamp for artifact filenames
+        base_name = Path(csv_path).stem  # Extract the base name from the dataset path
 
-        verbose_output(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}PCA Configuration Comparison:{Style.RESET_ALL}")
-        verbose_output(comparison_df.to_string(index=False))  # Output the comparison DataFrame
-    except Exception as e:
+        save_pca_model_artifacts(all_results, models_dir, base_name, timestamp, cfg)  # Save all model artifacts for each configuration
+
+        verbose_output(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}PCA Configuration Comparison:{Style.RESET_ALL}")  # Log comparison header
+        except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
