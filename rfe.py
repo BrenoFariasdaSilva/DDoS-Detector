@@ -2135,8 +2135,12 @@ def run_rfe(csv_path, n_features_to_select=None, step=None, estimator_name=None,
     set of top features selected, computes and prints performance metrics, and
     saves the structured results.
 
-    :param csv_path: Path to the CSV dataset file
-    :return: None
+    :param csv_path: Path to the CSV dataset file.
+    :param n_features_to_select: Optional override for number of features to select.
+    :param step: Optional override for RFE step size.
+    :param estimator_name: Optional override for estimator name.
+    :param random_state: Optional override for random seed.
+    :return: None.
     """
     
     try:
