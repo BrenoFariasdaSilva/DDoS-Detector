@@ -84,7 +84,7 @@ class BackgroundColors:  # Colors for the terminal
 VERBOSE = False  # Set to True to output verbose messages
 TARGET_FILE_PATH = ""  # Path to the target Python file to analyze
 OUTPUT_FILE = None  # Output path computed at runtime from TARGET_FILE_PATH
-MIN_FUNCTION_SIZE = 99  # Minimum function size in lines to include in the report (functions smaller than this are removed)
+MIN_FUNCTION_SIZE = 0  # Minimum function size in lines to include in the report (functions smaller than this are removed)
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
