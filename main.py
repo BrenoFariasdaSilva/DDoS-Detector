@@ -467,6 +467,34 @@ def resolve_and_validate_label_column(df, label_col):
         raise
 
 
+def drop_non_feature_columns(X):
+    """
+    Remove known metadata and identifier columns from the feature DataFrame.
+
+    :param X: Feature DataFrame potentially containing non-feature columns.
+    :return: Feature DataFrame with metadata/identifier columns removed.
+    """
+
+    try:
+        non_feature_cols = [
+            "Unnamed: 0",
+            "Flow ID",
+            "Source IP",
+            "Destination IP",
+            "Timestamp",
+        ]  # Known non-feature metadata and identifier column names
+        cols_to_drop = [col for col in non_feature_cols if col in X.columns]  # Identify which non-feature columns are present
+
+        if cols_to_drop:  # If any non-feature columns were found
+            X = X.drop(columns=cols_to_drop)  # Drop only the detected non-feature columns
+
+        return X  # Return cleaned feature DataFrame
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label_encoder=None, selected_features=None):
     """
     Applies one-hot encoding and scaling to features.
@@ -499,16 +527,7 @@ def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label
         y = df[label_col]  # Extract labels
         X = df.drop(label_col, axis=1)  # Extract features
 
-        non_feature_cols = [
-            "Unnamed: 0",
-            "Flow ID",
-            "Source IP",
-            "Destination IP",
-            "Timestamp",
-        ]  # Common non-feature columns
-        cols_to_drop = [col for col in non_feature_cols if col in X.columns]  # Identify columns to drop
-        if cols_to_drop:  # If there are columns to drop
-            X = X.drop(columns=cols_to_drop)  # Drop non-feature columns
+        X = drop_non_feature_columns(X)  # Remove known metadata and identifier columns from features
 
         if selected_features is not None:  # If selected_features is provided
             missing_features = [f for f in selected_features if f not in X.columns]  # Identify missing features
