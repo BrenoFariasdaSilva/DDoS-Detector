@@ -3499,6 +3499,30 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_nam
         raise
 
 
+def compute_fpr_fnr(y_test, y_pred):
+    """
+    Computes the False Positive Rate and False Negative Rate from predictions.
+
+    :param y_test: True target labels
+    :param y_pred: Predicted target labels
+    :return: Tuple (fpr, fnr) with 0.0 placeholders for multi-class problems
+    """
+
+    try:
+        if len(np.unique(y_test)) == 2:  # Binary classification problem
+            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()  # Extract confusion matrix components
+            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Calculate False Positive Rate with zero-division guard
+            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Calculate False Negative Rate with zero-division guard
+        else:  # Multi-class problem
+            fpr = 0.0  # Use placeholder for multi-class FPR
+            fnr = 0.0  # Use placeholder for multi-class FNR
+        return (fpr, fnr)  # Return the FPR and FNR tuple
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None):
     """
     Trains an individual classifier and evaluates its performance on the test set.
@@ -3578,13 +3602,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Recall
         f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate F1-Score
 
-        if len(np.unique(y_test)) == 2:  # Binary classification
-            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()  # Get confusion matrix components
-            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Calculate FPR
-            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Calculate FNR
-        else:  # Multi-class
-            fpr = 0.0  # Placeholder
-            fnr = 0.0  # Placeholder
+        fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute False Positive and False Negative rates
 
         verbose_output(
             f"{BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed_time))}s{Style.RESET_ALL}"
@@ -3634,13 +3652,8 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
         rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Recall (weighted)
         f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate F1-Score (weighted)
 
-        if len(np.unique(y_test)) == 2:  # Verify if it's a binary classification problem
-            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()  # Get Confusion Matrix components
-            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Calculate False Positive Rate
-            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Calculate False Negative Rate
-        else:  # For multi-class (simplified approach, actual implementation is complex)
-            fpr = 0.0  # Placeholder
-            fnr = 0.0  # Placeholder
+        fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute False Positive and False Negative rates
+        if len(np.unique(y_test)) != 2:  # For multi-class problems (FPR/FNR set to 0.0 placeholders)
             print(
                 f"{BackgroundColors.YELLOW}Warning: Multi-class FPR/FNR calculation simplified to 0.0.{Style.RESET_ALL}"
             )  # Warning about simplification
