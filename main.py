@@ -1746,6 +1746,44 @@ def play_sound():
         raise
 
 
+def load_and_merge_feature_files(feature_files, extract_features):
+    """
+    Load and merge features from all provided feature files when feature extraction is enabled.
+
+    :param feature_files: List of file paths to feature selection result files.
+    :param extract_features: Boolean flag indicating whether feature extraction is active.
+    :return: Tuple (features_to_use, features_file_used) where features_to_use is a deduplicated list or None, and features_file_used is the last successfully loaded file path or None.
+    """
+
+    try:
+        if not extract_features or not feature_files:  # Verify if feature extraction is active and file list is populated
+            return None, None  # Return None tuple when feature extraction is disabled or no files provided
+
+        merged_features = []  # Initialize list to accumulate features from all files
+        features_file_used = None  # Track the last successfully loaded feature file path
+
+        for feature_file in feature_files:  # Iterate over each provided feature file path
+            if verify_filepath_exists(feature_file):  # Verify the feature file exists before loading
+                feats = get_features_from_file(feature_file)  # Load feature names from the file
+                merged_features.extend(feats)  # Append loaded features to the merged list
+                features_file_used = feature_file  # Update reference to the last successfully loaded file
+            else:  # Feature file was not found at the expected path
+                print(f"{BackgroundColors.RED}Feature file not found: {feature_file}{Style.RESET_ALL}")  # Warn about missing file
+
+        features_to_use = list(dict.fromkeys(merged_features)) if merged_features else None  # Deduplicate while preserving insertion order
+
+        if features_to_use:  # Only log when features were successfully loaded
+            verbose_output(
+                f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(features_to_use)}{BackgroundColors.GREEN} features from multiple feature files.{Style.RESET_ALL}\n"
+            )  # Output loaded feature count
+
+        return features_to_use, features_file_used  # Return deduplicated features and last loaded file reference
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def main(use_cv=False, extract_features=True, compare_feature_selection=None):
     """
     Main function to run the machine learning pipeline on multiple datasets.
@@ -1805,21 +1843,7 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
             features_to_use = None  # Reset feature list per dataset
             features_file_used = None  # Reset last-used features file
 
-            if extract_features and feature_files:  # If Feature Selection is enabled and features exist
-                merged_features = []  # Initialize merged features list
-                for feature_file in feature_files:  # Loop through all feature files
-                    if verify_filepath_exists(feature_file):  # Verify file existence
-                        feats = get_features_from_file(feature_file)  # Load features
-                        merged_features.extend(feats)  # Add to merge list
-                        features_file_used = feature_file  # Track last loaded file
-                    else:  # File not found
-                        print(f"{BackgroundColors.RED}Feature file not found: {feature_file}{Style.RESET_ALL}")
-                features_to_use = list(dict.fromkeys(merged_features)) if merged_features else None  # Remove duplicates
-
-                if features_to_use:  # Print info if features loaded
-                    verbose_output(
-                        f"{BackgroundColors.GREEN}Loaded {BackgroundColors.CYAN}{len(features_to_use)}{BackgroundColors.GREEN} features from multiple feature files.{Style.RESET_ALL}\n"
-                    )
+            features_to_use, features_file_used = load_and_merge_feature_files(feature_files, extract_features)  # Load and merge features from all provided feature files
 
             train_df, test_df, split_required = load_and_prepare_data(
                 training_file_path, testing_file_path
