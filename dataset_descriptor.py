@@ -2753,7 +2753,7 @@ def main():
         results_suffix = config.get("dataset_descriptor", {}).get("csv_output_suffix", "_description")
 
         for dataset_name, paths in datasets.items():
-            print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")
+            verbose_output(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")
             safe_dataset_name = str(dataset_name).replace(" ", "_").replace("/", "_")
 
             for dir_path in paths:
