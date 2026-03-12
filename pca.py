@@ -1597,199 +1597,321 @@ def save_pca_results(csv_path, all_results, cfg=None):
         save_pca_model_artifacts(all_results, models_dir, base_name, timestamp, cfg)  # Save all model artifacts for each configuration
 
         verbose_output(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}PCA Configuration Comparison:{Style.RESET_ALL}")  # Log comparison header
-        except Exception as e:
+        verbose_output(comparison_df.to_string(index=False))  # Output the comparison DataFrame
+    except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
 
 
-def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=True, max_workers=None, random_state=42, scale_data=True, remove_zero_variance=True):
+def check_skip_existing_models(n_components_list: list, models_dir: str, base_name: str) -> bool:
     """
-    Runs PCA analysis with different numbers of components and evaluates performance.
+    Determine if training should be skipped because exported models already exist.
 
-    :param csv_path: Path to the CSV dataset file
-    :param n_components_list: List of component counts to test
+    :param n_components_list: List of n_components values to verify model existence for.
+    :param models_dir: Directory path where model joblib files are stored.
+    :param base_name: Base filename stem for matching stored model files.
+    :return: True if at least one matching model exists and training should be skipped, False otherwise.
+    """
+
+    found = False  # Initialize found flag to False before scanning
+
+    for n_comp in n_components_list:  # Iterate over each component count to scan for matching models
+        pattern = f"{models_dir}/PCA-{base_name}-{n_comp}c-*-model.joblib"  # Build glob pattern for this n_components value
+        matches = glob.glob(pattern)  # Search for matching model files in models directory
+        if matches:  # Verify if any matching model files were found
+            print(f"{BackgroundColors.GREEN}Found exported model for n_components={n_comp}, skipping training.{Style.RESET_ALL}")  # Log the found model
+            found = True  # Mark that at least one model was found
+
+    if found:  # Verify if any model was found across all component counts
+        print(f"{BackgroundColors.GREEN}SKIP_TRAIN_IF_MODEL_EXISTS: At least one model exists, skipping retraining for all configs.{Style.RESET_ALL}")  # Log the skip decision
+
+    return found  # Return whether any matching exported model was found
+
+
+def load_and_prepare_pca_dataset(csv_path: str, remove_zero_variance: bool) -> tuple | None:
+    """
+    Load the dataset, preprocess it, and extract feature and target arrays.
+
+    :param csv_path: Path to the CSV dataset file.
+    :param remove_zero_variance: Whether to drop zero-variance numeric features during preprocessing.
+    :return: Tuple of (X, y) as DataFrame and Series, or None if loading fails.
+    """
+
+    df = load_dataset(csv_path)  # Load the raw dataset from CSV
+    if df is None:  # Verify if dataset loading failed
+        return None  # Return None to signal failure
+
+    cleaned_df = preprocess_dataframe(df, remove_zero_variance=remove_zero_variance)  # Preprocess the DataFrame
+    X = cleaned_df.select_dtypes(include=["number"]).iloc[:, :-1]  # Select numeric features (all columns except last)
+    y = cleaned_df.iloc[:, -1]  # Select target variable (last column)
+
+    return X, y  # Return the feature matrix and target vector
+
+
+def validate_and_filter_components(n_components_list: list, n_features: int) -> list:
+    """
+    Filter and validate the n_components list against the available feature count.
+
+    :param n_components_list: Raw list of requested component counts.
+    :param n_features: Number of available numeric features in the dataset.
+    :return: Filtered list of valid component counts.
+    """
+
+    n_components_list = [n for n in n_components_list if n > 0]  # Filter out non-positive component counts
+    max_components = min(n_features, max(n_components_list)) if n_components_list else 0  # Maximum valid components
+    n_components_list = [n for n in n_components_list if n <= max_components]  # Filter valid component counts
+
+    return n_components_list  # Return the filtered list of valid component counts
+
+
+def print_pca_configuration(n_components_list: list) -> None:
+    """
+    Print the PCA analysis configuration summary to the terminal.
+
+    :param n_components_list: Validated list of component counts to be tested.
     :return: None
     """
-    
-    try:
-        global SKIP_TRAIN_IF_MODEL_EXISTS
 
-        export_cfg_local = (globals().get('cfg') or {}).get("export", {}) if 'cfg' in globals() else None
-        results_dir_raw_local = None
-        if export_cfg_local:
-            results_dir_raw_local = export_cfg_local.get("results_dir")
-        if not results_dir_raw_local:
-            results_dir_raw_local = os.path.join("Feature_Analysis", "PCA")
-        if os.path.isabs(results_dir_raw_local):
-            resolved_models_base = os.path.abspath(os.path.expanduser(results_dir_raw_local))
-        else:
-            dataset_dir_local = os.path.dirname(csv_path) or "."
-            resolved_models_base = os.path.abspath(os.path.expanduser(os.path.join(dataset_dir_local, results_dir_raw_local)))
-        models_dir = os.path.join(resolved_models_base, "Models")
-        base_name = Path(csv_path).stem
-        timestamp = None
-        if SKIP_TRAIN_IF_MODEL_EXISTS:
-            found = False
-            for n_comp in n_components_list:
-                pattern = f"{models_dir}/PCA-{base_name}-{n_comp}c-*-model.joblib"
-                matches = glob.glob(pattern)
-                if matches:
-                    print(f"{BackgroundColors.GREEN}Found exported model for n_components={n_comp}, skipping training.{Style.RESET_ALL}")
-                    found = True
-            if found:
-                print(f"{BackgroundColors.GREEN}SKIP_TRAIN_IF_MODEL_EXISTS: At least one model exists, skipping retraining for all configs.{Style.RESET_ALL}")
-                return
+    print(f"\n{BackgroundColors.CYAN}PCA Configuration:{Style.RESET_ALL}")  # Print configuration section header
+    print(
+        f"  {BackgroundColors.GREEN}• Testing components: {BackgroundColors.CYAN}{n_components_list}{Style.RESET_ALL}"
+    )  # Print the list of components to be tested
+    cv_display = CROSS_N_FOLDS if CROSS_N_FOLDS is not None else cfg.get("cross_validation", {}).get("n_folds", 10)  # Determine CV folds display value
+    print(
+        f"  {BackgroundColors.GREEN}• Evaluation: {BackgroundColors.CYAN}{cv_display}-Fold Stratified Cross-Validation{Style.RESET_ALL}"
+    )  # Print the CV method description
+    print(f"  {BackgroundColors.GREEN}• Model: {BackgroundColors.CYAN}Random Forest (100 estimators){Style.RESET_ALL}")  # Print model description
+    print(f"  {BackgroundColors.GREEN}• Split: {BackgroundColors.CYAN}80/20 (train/test){Style.RESET_ALL}\n")  # Print split description
 
-        df = load_dataset(csv_path)  # Load the dataset
-        if df is None:  # If dataset loading failed
-            return {}  # Return empty dictionary
 
-        cleaned_df = preprocess_dataframe(df, remove_zero_variance=remove_zero_variance)  # Preprocess the DataFrame
+def execute_pca_parallel(X_train, y_train, X_test, y_test, n_components_list: list, scaler, max_workers, random_state: int) -> tuple:
+    """
+    Execute PCA analysis on all component configurations using a process pool.
 
-        X = cleaned_df.select_dtypes(include=["number"]).iloc[:, :-1]  # Select numeric features (all columns except last)
-        y = cleaned_df.iloc[:, -1]  # Select target variable (last column)
+    :param X_train: Scaled training feature array.
+    :param y_train: Training target array or Series.
+    :param X_test: Scaled test feature array.
+    :param y_test: Test target array or Series.
+    :param n_components_list: List of component counts to test in parallel.
+    :param scaler: Fitted scaler with attached scaling time attribute.
+    :param max_workers: Maximum number of parallel workers or None to use CPU count.
+    :param random_state: Random seed for reproducibility.
+    :return: Tuple of (all_results, executed_parallel) where all_results is a list and executed_parallel is a bool.
+    """
 
-        n_components_list = [n for n in n_components_list if n > 0]  # Filter out non-positive component counts
-        max_components = min(X.shape[1], max(n_components_list)) if n_components_list else 0  # Maximum valid components
-        n_components_list = [n for n in n_components_list if n <= max_components]  # Filter valid component counts
+    all_results = []  # Initialize results list for this execution attempt
+    executed_parallel = False  # Initialize flag tracking successful parallel execution
 
-        if not n_components_list:  # If no valid component counts remain
-            print(
-                f"{BackgroundColors.RED}No valid component counts. Dataset has only {X.shape[1]} features.{Style.RESET_ALL}"
-            )
-            return  # Exit the function
-
-        print(f"\\n{BackgroundColors.CYAN}PCA Configuration:{Style.RESET_ALL}")
+    try:  # Attempt parallel execution
+        cpu_count = os.cpu_count() or 1  # Get the number of CPU cores
+        workers = max_workers or min(len(n_components_list), cpu_count)  # Compute initial worker count
+        global CPU_PROCESSES
+        if CPU_PROCESSES is not None:  # Verify if a CPU process limit was configured
+            workers = min(workers, int(CPU_PROCESSES))  # Cap workers at configured process limit
         print(
-            f"  {BackgroundColors.GREEN}• Testing components: {BackgroundColors.CYAN}{n_components_list}{Style.RESET_ALL}"
-        )
-        cv_display = CROSS_N_FOLDS if CROSS_N_FOLDS is not None else cfg.get("cross_validation", {}).get("n_folds", 10)
-        print(
-            f"  {BackgroundColors.GREEN}• Evaluation: {BackgroundColors.CYAN}{cv_display}-Fold Stratified Cross-Validation{Style.RESET_ALL}"
-        )
-        print(f"  {BackgroundColors.GREEN}• Model: {BackgroundColors.CYAN}Random Forest (100 estimators){Style.RESET_ALL}")
-        print(f"  {BackgroundColors.GREEN}• Split: {BackgroundColors.CYAN}80/20 (train/test){Style.RESET_ALL}\\n")
+            f"{BackgroundColors.GREEN}Running {BackgroundColors.CYAN}PCA Analysis{BackgroundColors.GREEN} in Parallel with {BackgroundColors.CYAN}{workers}{BackgroundColors.GREEN} Worker(s)...{Style.RESET_ALL}"
+        )  # Log the parallel execution start
 
-        X_train, X_test, y_train, y_test, scaler = scale_and_split(
-            X, y, random_state=random_state, scale_data=scale_data
-        )  # Scale and split the data
+        results_map = {}  # Map to store results by n_components
+        future_to_ncomp = {}  # Map each future to its n_components value
 
-        all_results = []  # List to store all results
-
-        executed_parallel = False  # Flag to track if parallel execution was successful
-
-        if parallel and len(n_components_list) > 1:  # If parallel execution is enabled and multiple configurations
-            try:  # Attempt parallel execution
-                cpu_count = os.cpu_count() or 1  # Get the number of CPU cores
-                workers = max_workers or min(len(n_components_list), cpu_count)
-                global CPU_PROCESSES
-                if CPU_PROCESSES is not None:
-                    workers = min(workers, int(CPU_PROCESSES))
-                print(
-                    f"{BackgroundColors.GREEN}Running {BackgroundColors.CYAN}PCA Analysis{BackgroundColors.GREEN} in Parallel with {BackgroundColors.CYAN}{workers}{BackgroundColors.GREEN} Worker(s)...{Style.RESET_ALL}"
-                )
-
-                results_map = {}  # Map to store results by n_components
-                future_to_ncomp = {}  # Map each future to its n_components value
-                with concurrent.futures.ProcessPoolExecutor(
-                    max_workers=workers
-                ) as executor:  # Create a process pool executor
-                    for n_components in n_components_list:  # Loop over each number of components
-                        scaling_time_val = getattr(scaler, "_scaling_time", 0.0)  # Retrieve scaling_time attached to scaler
-                        fut = executor.submit(
-                            apply_pca_and_evaluate,
-                            X_train,
-                            y_train,
-                            X_test,
-                            y_test,
-                            n_components,
-                            cv_folds=CROSS_N_FOLDS if CROSS_N_FOLDS is not None else cfg.get("cross_validation", {}).get("n_folds", 10),
-                            workers=workers,
-                            scaling_time=scaling_time_val,
-                            random_state=random_state,
-                        )  # Submit task to the executor with scaling_time
-                        future_to_ncomp[fut] = n_components  # Map future to n_components
-
-                    pbar = tqdm(
-                        total=len(future_to_ncomp),
-                        desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}",
-                        unit="config",
-                        leave=False,
-                    )  # Progress bar for tracking completion
-                    try:  # Handle completion of futures
-                        for fut in concurrent.futures.as_completed(future_to_ncomp):  # As each future completes
-                            n = future_to_ncomp.get(fut)  # Get the corresponding n_components
-                            pbar.set_description(
-                                f"{BackgroundColors.GREEN}Processing PCA with {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} components{Style.RESET_ALL}"
-                            )
-                            try:  # Get the result from the future
-                                res = fut.result()  # Get the result
-                                results_map[res["n_components"]] = res  # Store result in the map
-                                print_pca_results(res) if VERBOSE else None
-                            except Exception as e:  # Handle exceptions from worker processes
-                                print(f"{BackgroundColors.RED}Error in worker: {e}{Style.RESET_ALL}")
-                            finally:  # Update the progress bar
-                                pbar.update(1)  # Update progress bar
-                    finally:  # Ensure progress bar is closed
-                        pbar.close()  # Close the progress bar
-
-                for n in n_components_list:  # Collect results in the original order
-                    if n in results_map:  # If result exists for this n_components
-                        all_results.append(results_map[n])  # Append to all_results
-                executed_parallel = True  # Mark parallel execution as successful
-            except Exception as e:  # Handle exceptions during parallel execution
-                print(
-                    f"{BackgroundColors.YELLOW}Parallel execution failed: {e}. Falling back to sequential execution.{Style.RESET_ALL}"
-                )
-                parallel = False  # Disable parallel for fallback
-
-        if not executed_parallel:  # If parallel was not executed or failed, run sequential
-            for n_components in tqdm(
-                n_components_list, desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}", unit="config"
-            ):
-                send_telegram_message(TELEGRAM_BOT, f"Starting PCA training for n_components={n_components}")
-                print(
-                    f"\\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Testing PCA with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}"
-                )
-                comp_start = time.perf_counter()  # Start high-resolution timer for this component config
+        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:  # Create a process pool executor
+            for n_components in n_components_list:  # Loop over each number of components
                 scaling_time_val = getattr(scaler, "_scaling_time", 0.0)  # Retrieve scaling_time attached to scaler
-                results = apply_pca_and_evaluate(
+                fut = executor.submit(
+                    apply_pca_and_evaluate,
                     X_train,
                     y_train,
                     X_test,
                     y_test,
                     n_components,
                     cv_folds=CROSS_N_FOLDS if CROSS_N_FOLDS is not None else cfg.get("cross_validation", {}).get("n_folds", 10),
-                    workers=1,
+                    workers=workers,
                     scaling_time=scaling_time_val,
                     random_state=random_state,
-                )  # Apply PCA and evaluate (single worker)
-                comp_elapsed = time.perf_counter() - comp_start  # Compute elapsed duration
-                send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} with CV F1: {truncate_value(results['cv_f1_score'])} in {calculate_execution_time(comp_start, time.perf_counter())}")
-                all_results.append(results)  # Append results to the list
-                print_pca_results(results) if VERBOSE else None
+                )  # Submit task to the executor with scaling_time
+                future_to_ncomp[fut] = n_components  # Map future to n_components
 
-        if not all_results:  # If no results were collected
+            pbar = tqdm(
+                total=len(future_to_ncomp),
+                desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}",
+                unit="config",
+                leave=False,
+            )  # Progress bar for tracking completion
+            try:  # Handle completion of futures
+                for fut in concurrent.futures.as_completed(future_to_ncomp):  # As each future completes
+                    n = future_to_ncomp.get(fut)  # Get the corresponding n_components
+                    pbar.set_description(
+                        f"{BackgroundColors.GREEN}Processing PCA with {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} components{Style.RESET_ALL}"
+                    )  # Update progress bar description
+                    try:  # Get the result from the future
+                        res = fut.result()  # Get the result
+                        results_map[res["n_components"]] = res  # Store result in the map
+                        print_pca_results(res) if VERBOSE else None  # Print results if verbose
+                    except Exception as e:  # Handle exceptions from worker processes
+                        print(f"{BackgroundColors.RED}Error in worker: {e}{Style.RESET_ALL}")  # Log worker error
+                    finally:  # Update the progress bar
+                        pbar.update(1)  # Update progress bar
+            finally:  # Ensure progress bar is closed
+                pbar.close()  # Close the progress bar
+
+        for n in n_components_list:  # Collect results in the original order
+            if n in results_map:  # Verify if result exists for this n_components
+                all_results.append(results_map[n])  # Append to all_results
+        executed_parallel = True  # Mark parallel execution as successful
+    except Exception as e:  # Handle exceptions during parallel execution
+        print(
+            f"{BackgroundColors.YELLOW}Parallel execution failed: {e}. Falling back to sequential execution.{Style.RESET_ALL}"
+        )  # Log the fallback decision
+
+    return all_results, executed_parallel  # Return results list and execution success flag
+
+
+def execute_pca_sequential(X_train, y_train, X_test, y_test, n_components_list: list, scaler, random_state: int) -> list:
+    """
+    Execute PCA analysis on all component configurations sequentially.
+
+    :param X_train: Scaled training feature array.
+    :param y_train: Training target array or Series.
+    :param X_test: Scaled test feature array.
+    :param y_test: Test target array or Series.
+    :param n_components_list: List of component counts to test sequentially.
+    :param scaler: Fitted scaler with attached scaling time attribute.
+    :param random_state: Random seed for reproducibility.
+    :return: List of result dicts, one per component count.
+    """
+
+    all_results = []  # Initialize results list for sequential execution
+
+    for n_components in tqdm(
+        n_components_list, desc=f"{BackgroundColors.GREEN}PCA Analysis{Style.RESET_ALL}", unit="config"
+    ):  # Iterate with progress bar over each component count
+        send_telegram_message(TELEGRAM_BOT, f"Starting PCA training for n_components={n_components}")  # Notify training start
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Testing PCA with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}"
+        )  # Log current component count being tested
+        comp_start = time.perf_counter()  # Start high-resolution timer for this component config
+        scaling_time_val = getattr(scaler, "_scaling_time", 0.0)  # Retrieve scaling_time attached to scaler
+        results = apply_pca_and_evaluate(
+            X_train,
+            y_train,
+            X_test,
+            y_test,
+            n_components,
+            cv_folds=CROSS_N_FOLDS if CROSS_N_FOLDS is not None else cfg.get("cross_validation", {}).get("n_folds", 10),
+            workers=1,
+            scaling_time=scaling_time_val,
+            random_state=random_state,
+        )  # Apply PCA and evaluate (single worker)
+        comp_elapsed = time.perf_counter() - comp_start  # Compute elapsed duration
+        send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} with CV F1: {truncate_value(results['cv_f1_score'])} in {calculate_execution_time(comp_start, time.perf_counter())}")  # Notify completion with metrics
+        all_results.append(results)  # Append results to the list
+        print_pca_results(results) if VERBOSE else None  # Print verbose results if configured
+
+    return all_results  # Return the list of all sequential evaluation results
+
+
+def print_best_pca_configuration(all_results: list) -> None:
+    """
+    Identify and print the best PCA configuration based on CV F1-Score.
+
+    :param all_results: List of result dicts from all evaluated PCA configurations.
+    :return: None
+    """
+
+    best_result = max(all_results, key=lambda x: x["cv_f1_score"])  # Find the best configuration based on CV F1-Score
+
+    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Best Configuration:{Style.RESET_ALL}")  # Print best config header
+    print(
+        f"  {BackgroundColors.GREEN}n_components = {BackgroundColors.CYAN}{best_result['n_components']}{Style.RESET_ALL}"
+    )  # Print best n_components
+    print(
+        f"  {BackgroundColors.GREEN}CV F1-Score = {BackgroundColors.CYAN}{truncate_value(best_result['cv_f1_score'])}{Style.RESET_ALL}"
+    )  # Print best CV F1-Score
+    print(
+        f"  {BackgroundColors.GREEN}Explained Variance = {BackgroundColors.CYAN}{truncate_value(best_result['explained_variance'])}{Style.RESET_ALL}"
+    )  # Print best explained variance
+
+
+def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=True, max_workers=None, random_state=42, scale_data=True, remove_zero_variance=True):
+    """
+    Runs PCA analysis with different numbers of components and evaluates performance.
+
+    :param csv_path: Path to the CSV dataset file.
+    :param n_components_list: List of component counts to test.
+    :param parallel: Whether to use parallel execution when multiple configurations exist.
+    :param max_workers: Maximum number of parallel workers or None to auto-detect.
+    :param random_state: Random seed for reproducibility.
+    :param scale_data: Whether to scale data before PCA.
+    :param remove_zero_variance: Whether to drop zero-variance features during preprocessing.
+    :return: None
+    """
+
+    try:
+        global SKIP_TRAIN_IF_MODEL_EXISTS
+
+        export_cfg_local = (globals().get('cfg') or {}).get("export", {}) if 'cfg' in globals() else None  # Retrieve export config from globals if available
+        results_dir_raw_local = None  # Initialize results dir to None before resolution
+        if export_cfg_local:  # Verify if export config was resolved from globals
+            results_dir_raw_local = export_cfg_local.get("results_dir")  # Read results directory from export config
+        if not results_dir_raw_local:  # Verify if results dir is still unresolved
+            results_dir_raw_local = os.path.join("Feature_Analysis", "PCA")  # Fall back to default results directory
+        if os.path.isabs(results_dir_raw_local):  # Verify if the path is absolute
+            resolved_models_base = os.path.abspath(os.path.expanduser(results_dir_raw_local))  # Resolve absolute path
+        else:  # Handle relative path
+            dataset_dir_local = os.path.dirname(csv_path) or "."  # Use dataset directory as relative base
+            resolved_models_base = os.path.abspath(os.path.expanduser(os.path.join(dataset_dir_local, results_dir_raw_local)))  # Resolve relative path
+        models_dir = os.path.join(resolved_models_base, "Models")  # Build the models directory path
+        base_name = Path(csv_path).stem  # Extract base filename stem from dataset path
+
+        if SKIP_TRAIN_IF_MODEL_EXISTS:  # Verify if skip-training flag is enabled
+            if check_skip_existing_models(n_components_list, models_dir, base_name):  # Verify if any exported model already exists
+                return  # Skip all training when at least one model is found
+
+        result = load_and_prepare_pca_dataset(csv_path, remove_zero_variance)  # Load and preprocess the dataset
+        if result is None:  # Verify if dataset loading failed
+            return {}  # Return empty dictionary on load failure
+
+        X, y = result  # Unpack the feature matrix and target vector
+
+        n_components_list = validate_and_filter_components(n_components_list, X.shape[1])  # Filter and validate component counts
+
+        if not n_components_list:  # Verify if any valid component counts remain after filtering
+            print(
+                f"{BackgroundColors.RED}No valid component counts. Dataset has only {X.shape[1]} features.{Style.RESET_ALL}"
+            )  # Log the empty component list error
+            return  # Exit the function
+
+        print_pca_configuration(n_components_list)  # Print PCA configuration summary to terminal
+
+        X_train, X_test, y_train, y_test, scaler = scale_and_split(
+            X, y, random_state=random_state, scale_data=scale_data
+        )  # Scale and split the data
+
+        all_results = []  # List to store all results
+        executed_parallel = False  # Flag to track if parallel execution was successful
+
+        if parallel and len(n_components_list) > 1:  # Verify if parallel execution is enabled and multiple configurations exist
+            parallel_results, executed_parallel = execute_pca_parallel(
+                X_train, y_train, X_test, y_test, n_components_list, scaler, max_workers, random_state
+            )  # Run parallel execution
+            all_results.extend(parallel_results)  # Collect parallel results
+
+        if not executed_parallel:  # Verify if parallel was not executed or failed
+            all_results = execute_pca_sequential(
+                X_train, y_train, X_test, y_test, n_components_list, scaler, random_state
+            )  # Fall back to sequential execution
+
+        if not all_results:  # Verify if no results were collected
             print(
                 f"{BackgroundColors.RED}No results collected from PCA analysis. Verify for errors in worker processes.{Style.RESET_ALL}"
-            )
-            return  # Return
+            )  # Log the empty results warning
+            return  # Return without saving
 
         save_pca_results(csv_path, all_results, cfg)  # Save all results to files (header from config)
 
-        best_result = max(all_results, key=lambda x: x["cv_f1_score"])  # Find the best configuration based on CV F1-Score
-
-        print(f"\\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Best Configuration:{Style.RESET_ALL}")
-        print(
-            f"  {BackgroundColors.GREEN}n_components = {BackgroundColors.CYAN}{best_result['n_components']}{Style.RESET_ALL}"
-        )
-        print(
-            f"  {BackgroundColors.GREEN}CV F1-Score = {BackgroundColors.CYAN}{truncate_value(best_result['cv_f1_score'])}{Style.RESET_ALL}"
-        )
-        print(
-            f"  {BackgroundColors.GREEN}Explained Variance = {BackgroundColors.CYAN}{truncate_value(best_result['explained_variance'])}{Style.RESET_ALL}"
-        )
+        print_best_pca_configuration(all_results)  # Print the best configuration found
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
