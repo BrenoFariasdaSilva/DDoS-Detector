@@ -2091,6 +2091,69 @@ def upscale_image_if_needed(path, fallback=False):
         pass  # Continue silently on upscale failures to preserve original behavior
 
 
+def attempt_playwright_export_with_retry(styled_df, output_path, export_kwargs, timeout_ms):
+    """
+    Attempt to export a styled DataFrame to PNG using Playwright-based dataframe_image with bounded retries.
+
+    :param styled_df: pandas.Styler object to export as a PNG image.
+    :param output_path: File system path where the exported PNG will be written.
+    :param export_kwargs: Pre-built keyword arguments dict for dfi.export including table_conversion and timeout.
+    :param timeout_ms: Timeout in milliseconds used as the fallback kwargs timeout when signature inspection fails.
+    :return: None when export succeeded, or the last encountered exception when all attempts failed.
+    """
+
+    max_attempts = 5  # Define the maximum number of bounded Playwright export attempts
+    e_inner = None  # Track the last exception; None signals success
+    for attempt in range(1, max_attempts + 1):  # Retry up to max_attempts times to handle transient failures
+        try:  # Try exporting using dataframe_image with Playwright and configured kwargs
+            dfi.export(styled_df, output_path, **export_kwargs)  # Export styled DataFrame to PNG using dataframe_image
+            print(f"{BackgroundColors.GREEN}[DEBUG] Exported image: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log successful export for diagnostics
+            upscale_image_if_needed(output_path, fallback=False)  # Upscale exported image if below 4k
+            print(f"{BackgroundColors.GREEN}[INFO] Table image successfully saved to: {BackgroundColors.CYAN}{os.path.abspath(output_path)}{Style.RESET_ALL}")  # Log absolute save path
+            e_inner = None  # Clear last exception on success
+            break  # Exit retry loop after successful export
+        except TypeError:  # Handle dfi versions that raise TypeError for unexpected kwargs
+            try:  # Attempt fallback export using only the minimal supported kwargs
+                try:  # Inspect dfi.export signature to determine supported timeout parameter
+                    _params_fallback = set(signature(dfi.export).parameters.keys())  # Get set of supported parameter names
+                except Exception:  # If signature inspection fails, treat all params as unsupported
+                    _params_fallback = set()  # Use empty set as conservative fallback
+                kwargs_fb: dict[str, Any] = {"table_conversion": "playwright"}  # Build minimal fallback kwargs
+                if "timeout" in _params_fallback:  # Attach timeout only when supported
+                    kwargs_fb["timeout"] = timeout_ms  # Attach timeout using the supported parameter name
+                dfi.export(styled_df, output_path, **kwargs_fb)  # Retry export with minimal kwargs
+                print(f"{BackgroundColors.GREEN}[DEBUG] Exported image (fallback): {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log fallback export success
+                upscale_image_if_needed(output_path, fallback=True)  # Upscale exported image after fallback
+                print(f"{BackgroundColors.GREEN}[INFO] Table image successfully saved to: {BackgroundColors.CYAN}{os.path.abspath(output_path)}{Style.RESET_ALL}")  # Log save path after fallback
+                e_inner = None  # Clear last exception on success
+                break  # Exit retry loop after successful fallback export
+            except Exception as _inner_e:  # Capture fallback exception for downstream retry/raise handling
+                e_inner = _inner_e  # Record inner fallback exception
+        except Exception as _e_export:  # Capture general export exceptions for potential retry
+            e_inner = _e_export  # Record exception for downstream retry/raise logic
+
+        try:  # Import Playwright TimeoutError for precise timeout detection
+            from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError  # Import when available
+        except Exception:  # Disable precise detection when import fails
+            PlaywrightTimeoutError = None  # Set to None when import is unavailable
+
+        if PlaywrightTimeoutError is not None and isinstance(e_inner, PlaywrightTimeoutError):  # Playwright timeout detected
+            if attempt < max_attempts:  # Retry if attempts remain
+                time.sleep(0.5)  # Brief pause before retry to allow transient conditions to clear
+                print(f"{BackgroundColors.YELLOW}[WARNING] Playwright screenshot timeout, retrying export (attempt {attempt})...{Style.RESET_ALL}")  # Log retry
+                continue  # Retry the export
+            else:  # Max attempts exhausted; fall through to fallback strategy
+                pass  # No-op; allow fallback to execute after loop
+        else:  # Non-timeout exception; retry if attempts remain
+            if attempt < max_attempts:  # Retry if attempts remain
+                time.sleep(0.2)  # Brief pause before next retry
+                continue  # Retry the export
+            else:  # Attempts exhausted; fall through to fallback strategy
+                pass  # No-op; allow fallback to execute after loop
+
+    return e_inner  # Return None on success or the last exception on failure
+
+
 def load_tableau_image_config():
     """
     Load the configuration file, resolve the table image timeout, and build the base dataframe_image export kwargs.
@@ -2127,56 +2190,7 @@ def export_dataframe_image(styled_df, output_path):
     try:  # Wrap to ensure exceptions are handled and module logging conventions are preserved
         timeout_ms, export_kwargs = load_tableau_image_config()  # Load config, resolve the table image timeout, and build Playwright export kwargs
 
-        start_time = time.time()  # Record start time for diagnostics and bounded retry logic
-        max_attempts = 5  # Define maximum number of Playwright attempts to avoid infinite retries
-        e_inner = None  # Initialize variable to hold last exception for final re-raise if needed
-        for attempt in range(1, max_attempts + 1):  # Loop bounded number of times for Playwright retries
-            try:  # Try exporting using dataframe_image with Playwright and configured kwargs
-                dfi.export(styled_df, output_path, **export_kwargs)  # Export styled DataFrame to PNG using dataframe_image and provided kwargs
-                print(f"{BackgroundColors.GREEN}[DEBUG] Exported image: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log successful export for diagnostics with colored output
-                upscale_image_if_needed(output_path, fallback=False)  # Attempt to upscale exported image if below 4k
-                print(f"{BackgroundColors.GREEN}[INFO] Table image successfully saved to: {BackgroundColors.CYAN}{os.path.abspath(output_path)}{Style.RESET_ALL}")  # Log absolute save path after success
-                e_inner = None  # Clear last exception on success to signal no failure
-                break  # Exit retry loop on success to preserve original control flow
-            except TypeError:  # Handle dataframe_image versions that raise TypeError for unexpected kwargs
-                try:  # Attempt fallback export excluding dynamic kwargs but still using Playwright
-                    try:  # Verify whether dfi.export supports an explicit timeout parameter by inspecting its signature
-                        _params_fallback = set(signature(dfi.export).parameters.keys())  # Get supported parameter names for dfi.export
-                    except Exception:  # If signature inspection fails, assume timeout may not be supported
-                        _params_fallback = set()  # Use empty set as conservative fallback
-                    kwargs_fb: dict[str, Any] = {"table_conversion": "playwright"}  # Prepare fallback kwargs for dfi.export and annotate types to satisfy static checks
-                    if "timeout" in _params_fallback:  # Verify if timeout name is present in the detected parameters
-                        kwargs_fb["timeout"] = timeout_ms  # Attach timeout to kwargs when supported by signature
-                    dfi.export(styled_df, output_path, **kwargs_fb)  # Retry export using constructed kwargs to avoid unsupported kwarg diagnostics
-                    print(f"{BackgroundColors.GREEN}[DEBUG] Exported image (fallback): {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log fallback export success for diagnostics with colored output
-                    upscale_image_if_needed(output_path, fallback=True)  # Attempt to upscale exported image after fallback export
-                    print(f"{BackgroundColors.GREEN}[INFO] Table image successfully saved to: {BackgroundColors.CYAN}{os.path.abspath(output_path)}{Style.RESET_ALL}")  # Log absolute save path after fallback success
-                    e_inner = None  # Clear last exception on success
-                    break  # Exit retry loop after successful fallback export to preserve original behavior
-                except Exception as _inner_e:  # Capture exception from fallback attempt for downstream analysis and potential retry
-                    e_inner = _inner_e  # Assign inner exception to a common variable for outer handling below
-            except Exception as _e_export:  # Capture general export exceptions for potential retry decisions
-                e_inner = _e_export  # Assign caught exception to e_inner for downstream retry/raise logic
-
-            try:  # Try to import Playwright TimeoutError type for precise timeout detection
-                from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError  # Import Playwright TimeoutError class when available
-            except Exception:  # If Playwright TimeoutError cannot be imported, set to None to disable precise detection
-                PlaywrightTimeoutError = None  # Ensure variable exists and is None when import fails
-
-            if PlaywrightTimeoutError is not None and isinstance(e_inner, PlaywrightTimeoutError):  # If the failure is a Playwright TimeoutError, consider retrying
-                if attempt < max_attempts:  # If still within allowed attempts, pause briefly and retry export
-                    sleep_seconds = 0.5  # Use short fixed sleep between attempts to avoid immediate retries
-                    time.sleep(sleep_seconds)  # Sleep briefly to allow transient conditions to clear before next retry
-                    print(f"{BackgroundColors.YELLOW}[WARNING] Playwright screenshot timeout, retrying export (attempt {attempt})...{Style.RESET_ALL}")  # Log retry attempt for diagnostics with colored output
-                    continue  # Continue retry loop to attempt export again within bounded attempts
-                else:  # If maximum attempts exhausted, fall out to fallback strategy after loop
-                    pass  # No-op to allow fallback strategy to execute after loop completes
-            else:  # For non-Playwright TimeoutError exceptions, decide to retry only if attempts remain
-                if attempt < max_attempts:  # If still within allowed attempts, pause briefly and retry export
-                    time.sleep(0.2)  # Sleep briefly before next retry to reduce retry flapping
-                    continue  # Continue retry loop to attempt export again within bounded attempts
-                else:  # If attempts exhausted, fall out to fallback strategy after loop
-                    pass  # No-op to allow fallback strategy to execute after loop completes
+        e_inner = attempt_playwright_export_with_retry(styled_df, output_path, export_kwargs, timeout_ms)  # Attempt export with bounded Playwright retries and return last exception or None on success
 
         if e_inner is not None:  # If last Playwright/dfi attempt failed and no success occurred
             try:  # Attempt Chrome-based dataframe_image export as first deterministic fallback
