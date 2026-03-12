@@ -1136,29 +1136,29 @@ def concat_files_into_multiclass_df(processed_files_with_labels, common_features
     :return: Tuple of (combined_df, attack_types_list) on success, or None when the result is empty after cleaning.
     """
 
-    combined_parts = []  # INITIALIZE LIST TO ACCUMULATE DATAFRAME PARTS
+    combined_parts = []  # Initialize list to accumulate dataframe parts
 
-    for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # ITERATE OVER PROCESSED FILES
-        df_subset = df_clean[common_features_list].copy()  # SELECT ONLY COMMON FEATURES
-        df_subset['attack_type'] = attack_label  # ADD ATTACK TYPE COLUMN WITH THE EXTRACTED LABEL
-        combined_parts.append(df_subset)  # APPEND TO COMBINED PARTS LIST
+    for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # Iterate over processed files
+        df_subset = df_clean[common_features_list].copy()  # Select only common features
+        df_subset['attack_type'] = attack_label  # Add attack type column with the extracted label
+        combined_parts.append(df_subset)  # Append to combined parts list
         verbose_output(
             f"{BackgroundColors.GREEN}Added {BackgroundColors.CYAN}{len(df_subset)}{BackgroundColors.GREEN} samples from {BackgroundColors.CYAN}{attack_label}{Style.RESET_ALL}",
             config=config
-        )  # OUTPUT SAMPLES ADDED MESSAGE
+        )  # Output samples added message
 
-    combined_df = pd.concat(combined_parts, ignore_index=True)  # CONCATENATE ALL PARTS INTO SINGLE DATAFRAME
-    combined_df = combined_df.replace([np.inf, -np.inf], np.nan).dropna()  # REPLACE INF WITH NAN AND DROP NA
+    combined_df = pd.concat(combined_parts, ignore_index=True)  # Concatenate all parts into single dataframe
+    combined_df = combined_df.replace([np.inf, -np.inf], np.nan).dropna()  # Replace inf with nan and drop na
 
-    if combined_df.empty:  # IF COMBINED DATAFRAME IS EMPTY AFTER CLEANING
-        print(f"{BackgroundColors.RED}Combined multi-class dataset is empty after cleaning.{Style.RESET_ALL}")  # PRINT ERROR
-        return None  # SIGNAL FAILURE TO CALLER
+    if combined_df.empty:  # If combined dataframe is empty after cleaning
+        print(f"{BackgroundColors.RED}Combined multi-class dataset is empty after cleaning.{Style.RESET_ALL}")  # Print error
+        return None  # Signal failure to caller
 
-    attack_types_list = sorted(list(attack_types_set))  # CONVERT ATTACK TYPES SET TO SORTED LIST
+    attack_types_list = sorted(list(attack_types_set))  # Convert attack types set to sorted list
     print(
         f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Multi-class dataset created: {BackgroundColors.CYAN}{len(combined_df)} samples, {len(common_features_list)} features, {len(attack_types_list)} classes{Style.RESET_ALL}"
-    )  # PRINT SUMMARY OF COMBINED DATASET
-    return combined_df, attack_types_list  # RETURN COMBINED DATAFRAME AND ATTACK TYPES LIST
+    )  # Print summary of combined dataset
+    return combined_df, attack_types_list  # Return combined dataframe and attack types list
 
 
 def compute_common_features_across_files(processed_files_with_labels, config):
@@ -1170,28 +1170,28 @@ def compute_common_features_across_files(processed_files_with_labels, config):
     :return: Tuple of (common_features_list, target_col_name) on success, or None when no common features exist.
     """
 
-    common_features = None  # INITIALIZE COMMON FEATURES SET
-    target_col_name = None  # INITIALIZE TARGET COLUMN NAME
+    common_features = None  # Initialize common features set
+    target_col_name = None  # Initialize target column name
 
-    for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # ITERATE OVER PROCESSED FILES
-        if target_col_name is None:  # IF TARGET NOT YET SET
-            target_col_name = this_target  # SET TARGET COLUMN NAME
+    for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # Iterate over processed files
+        if target_col_name is None:  # If target not yet set
+            target_col_name = this_target  # Set target column name
 
-        if common_features is None:  # IF COMMON FEATURES NOT YET INITIALIZED
-            common_features = set(feat_cols)  # INITIALIZE WITH FIRST FILE'S FEATURES
-        else:  # IF COMMON FEATURES ALREADY INITIALIZED
-            common_features = common_features.intersection(set(feat_cols))  # INTERSECT WITH CURRENT FILE'S FEATURES
+        if common_features is None:  # If common features not yet initialized
+            common_features = set(feat_cols)  # Initialize with first file's features
+        else:  # If common features already initialized
+            common_features = common_features.intersection(set(feat_cols))  # Intersect with current file's features
 
-    if not common_features:  # IF NO COMMON FEATURES FOUND
-        print(f"{BackgroundColors.RED}No common features found across files for multi-class combination.{Style.RESET_ALL}")  # PRINT ERROR
-        return None  # SIGNAL FAILURE TO CALLER
+    if not common_features:  # If no common features found
+        print(f"{BackgroundColors.RED}No common features found across files for multi-class combination.{Style.RESET_ALL}")  # Print error
+        return None  # Signal failure to caller
 
-    common_features_list = sorted(list(common_features))  # CONVERT TO SORTED LIST
+    common_features_list = sorted(list(common_features))  # Convert to sorted list
     verbose_output(
         f"{BackgroundColors.GREEN}Common features for multi-class: {BackgroundColors.CYAN}{len(common_features_list)} features{Style.RESET_ALL}",
         config=config
-    )  # OUTPUT COMMON FEATURES COUNT
-    return common_features_list, target_col_name  # RETURN COMMON FEATURES AND TARGET COLUMN NAME
+    )  # Output common features count
+    return common_features_list, target_col_name  # Return common features and target column name
 
 
 def process_files_and_extract_labels(files_list, config):
@@ -1203,30 +1203,30 @@ def process_files_and_extract_labels(files_list, config):
     :return: Tuple of (processed_files_with_labels, attack_types_set) on success, or None when no files could be processed.
     """
 
-    processed_files_with_labels = []  # INITIALIZE LIST FOR PROCESSED FILE DATA WITH ATTACK LABELS
-    attack_types_set = set()  # INITIALIZE SET TO TRACK UNIQUE ATTACK TYPES
+    processed_files_with_labels = []  # Initialize list for processed file data with attack labels
+    attack_types_set = set()  # Initialize set to track unique attack types
 
-    for f in files_list:  # ITERATE OVER EACH FILE IN THE LIST
-        result = process_single_file(f, config=config)  # PROCESS THE SINGLE FILE
-        if result is not None:  # IF PROCESSING SUCCEEDED
-            df_clean, target_col, feat_cols = result  # UNPACK THE RESULT
-            attack_label = extract_attack_label_from_path(f)  # EXTRACT ATTACK TYPE FROM FILENAME
-            attack_types_set.add(attack_label)  # ADD ATTACK TYPE TO SET
-            processed_files_with_labels.append((f, df_clean, target_col, feat_cols, attack_label))  # ADD TO PROCESSED LIST WITH LABEL
-        else:  # IF PROCESSING FAILED
+    for f in files_list:  # Iterate over each file in the list
+        result = process_single_file(f, config=config)  # Process the single file
+        if result is not None:  # If processing succeeded
+            df_clean, target_col, feat_cols = result  # Unpack the result
+            attack_label = extract_attack_label_from_path(f)  # Extract attack type from filename
+            attack_types_set.add(attack_label)  # Add attack type to set
+            processed_files_with_labels.append((f, df_clean, target_col, feat_cols, attack_label))  # Add to processed list with label
+        else:  # If processing failed
             verbose_output(
                 f"{BackgroundColors.YELLOW}Skipping file due to processing failure: {BackgroundColors.CYAN}{f}{Style.RESET_ALL}",
                 config=config
-            )  # OUTPUT WARNING MESSAGE
+            )  # Output warning message
 
-    if not processed_files_with_labels:  # IF NO FILES WERE PROCESSED SUCCESSFULLY
-        print(f"{BackgroundColors.RED}No compatible files found to combine for multi-class dataset.{Style.RESET_ALL}")  # PRINT ERROR MESSAGE
-        return None  # SIGNAL FAILURE TO CALLER
+    if not processed_files_with_labels:  # If no files were processed successfully
+        print(f"{BackgroundColors.RED}No compatible files found to combine for multi-class dataset.{Style.RESET_ALL}")  # Print error message
+        return None  # Signal failure to caller
 
     print(
         f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{len(attack_types_set)}{BackgroundColors.GREEN} unique attack types for multi-class: {BackgroundColors.CYAN}{sorted(attack_types_set)}{Style.RESET_ALL}"
-    )  # PRINT ATTACK TYPES SUMMARY
-    return processed_files_with_labels, attack_types_set  # RETURN PROCESSED DATA AND ATTACK TYPES SET
+    )  # Print attack types summary
+    return processed_files_with_labels, attack_types_set  # Return processed data and attack types set
 
 
 def combine_files_for_multiclass(files_list, config=None):
@@ -1252,19 +1252,19 @@ def combine_files_for_multiclass(files_list, config=None):
             print(f"{BackgroundColors.RED}No files provided for multi-class combination.{Style.RESET_ALL}")  # Print error message
             return (None, None, None)  # Return None tuple
         
-        process_result = process_files_and_extract_labels(files_list, config)  # PROCESS FILES AND EXTRACT ATTACK LABELS
-        if process_result is None:  # IF PROCESSING FAILED
-            return (None, None, None)  # RETURN FAILURE TUPLE
-        processed_files_with_labels, attack_types_set = process_result  # UNPACK PROCESSED DATA AND ATTACK TYPES SET
+        process_result = process_files_and_extract_labels(files_list, config)  # Process files and extract attack labels
+        if process_result is None:  # If processing failed
+            return (None, None, None)  # Return failure tuple
+        processed_files_with_labels, attack_types_set = process_result  # Unpack processed data and attack types set
         
-        feature_result = compute_common_features_across_files(processed_files_with_labels, config)  # COMPUTE COMMON FEATURES ACROSS ALL FILES
-        if feature_result is None:  # IF NO COMMON FEATURES FOUND
-            return (None, None, None)  # RETURN FAILURE TUPLE
-        common_features_list, target_col_name = feature_result  # UNPACK COMMON FEATURES AND TARGET COLUMN NAME
+        feature_result = compute_common_features_across_files(processed_files_with_labels, config)  # Compute common features across all files
+        if feature_result is None:  # If no common features found
+            return (None, None, None)  # Return failure tuple
+        common_features_list, target_col_name = feature_result  # Unpack common features and target column name
         
-        concat_result = concat_files_into_multiclass_df(processed_files_with_labels, common_features_list, attack_types_set, config)  # CONCATENATE FILES INTO MULTICLASS DATAFRAME
-        if concat_result is None:  # IF CONCATENATION FAILED
-            return (None, None, None)  # RETURN FAILURE TUPLE
+        concat_result = concat_files_into_multiclass_df(processed_files_with_labels, common_features_list, attack_types_set, config)  # Concatenate files into multiclass dataframe
+        if concat_result is None:  # If concatenation failed
+            return (None, None, None)  # Return failure tuple
         
         if not isinstance(concat_result, (list, tuple)) or len(concat_result) != 2:  # Verify concat_result is iterable and has exactly two items
             print(f"{BackgroundColors.RED}Unexpected return from concat_files_into_multiclass_df: {type(concat_result)}{Style.RESET_ALL}")  # Log unexpected return type for diagnosis
@@ -2869,7 +2869,7 @@ def verify_selected_features_exist(selected_features: list, dataset_columns: lis
     is_pca = mn == "pca"
     if is_pca:
         if all(isinstance(f, str) and f.strip().upper().startswith("PC") for f in selected_features):
-            return list(dict.fromkeys(selected_features))  # preserve order, remove duplicates
+            return list(dict.fromkeys(selected_features))  # Preserve order, remove duplicates
 
     dataset_set = set(dataset_columns)
     valid_features = []
@@ -6357,9 +6357,9 @@ def submit_classifier_evaluations_to_pool(executor, individual_models, current_c
     :return: Tuple of (future_to_model, current_combination) where future_to_model maps each submitted future to its (model_name, model_class, combination_index) metadata.
     """
 
-    future_to_model = {}  # MAP FUTURES TO (MODEL_NAME, MODEL_CLASS, COMBINATION_INDEX)
-    for model_name, model in individual_models.items():  # ITERATE OVER EACH INDIVIDUAL MODEL
-        send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - {model_name}")  # NOTIFY TELEGRAM ABOUT EVALUATION START
+    future_to_model = {}  # Map futures to (model_name, model_class, combination_index)
+    for model_name, model in individual_models.items():  # Iterate over each individual model
+        send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - {model_name}")  # Notify telegram about evaluation start
         future = executor.submit(
             evaluate_individual_classifier,
             model,
@@ -6372,10 +6372,10 @@ def submit_classifier_evaluations_to_pool(executor, individual_models, current_c
             scaler,
             subset_feature_names,
             name,
-        )  # SUBMIT EVALUATION TASK TO THREAD POOL USING NUMPY ARRAYS
-        future_to_model[future] = (model_name, model.__class__.__name__, current_combination)  # STORE FUTURE WITH METADATA
-        current_combination += 1  # ADVANCE THE GLOBAL COMBINATION COUNTER
-    return future_to_model, current_combination  # RETURN FUTURES MAP AND UPDATED COMBINATION COUNTER
+        )  # Submit evaluation task to thread pool using numpy arrays
+        future_to_model[future] = (model_name, model.__class__.__name__, current_combination)  # Store future with metadata
+        current_combination += 1  # Advance the global combination counter
+    return future_to_model, current_combination  # Return futures map and updated combination counter
 
 
 def collect_classifier_results_from_futures(future_to_model, individual_models, name, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, y_train, y_test, hyperparams_map, subset_feature_names, total_steps, progress_bar, config):
@@ -6404,26 +6404,26 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
     :return: Dictionary mapping (feature_set_name, model_name) tuples to standardized result entry dicts.
     """
 
-    results_dict = {}  # ACCUMULATE RESULT ENTRIES FOR THIS FEATURE SET
-    for future in concurrent.futures.as_completed(future_to_model):  # PROCESS RESULTS AS FUTURES COMPLETE
-        model_name, model_class, comb_idx = future_to_model[future]  # RETRIEVE MODEL METADATA FOR THIS FUTURE
-        metrics = future.result()  # COLLECT METRICS TUPLE FROM COMPLETED EVALUATION
+    results_dict = {}  # Accumulate result entries for this feature set
+    for future in concurrent.futures.as_completed(future_to_model):  # Process results as futures complete
+        model_name, model_class, comb_idx = future_to_model[future]  # Retrieve model metadata for this future
+        metrics = future.result()  # Collect metrics tuple from completed evaluation
         result_entry = build_classifier_result_entry(
             model_class, file, execution_mode_str, attack_types_combined, name, "Individual",
             model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio,
             X_train_n_cols, len(y_train), len(y_test), metrics, subset_feature_names,
             hyperparams_map=hyperparams_map,
-        )  # BUILD STANDARDIZED RESULT ENTRY FOR THIS INDIVIDUAL CLASSIFIER
-        results_dict[(name, model_name)] = result_entry  # STORE RESULT KEYED BY (FEATURE_SET, MODEL_NAME)
-        send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} with F1: {truncate_value(metrics[3])} in {calculate_execution_time(0, metrics[6])}")  # NOTIFY TELEGRAM ABOUT COMPLETION
+        )  # Build standardized result entry for this individual classifier
+        results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
+        send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} with F1: {truncate_value(metrics[3])} in {calculate_execution_time(0, metrics[6])}")  # Notify telegram about completion
         print(
             f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(metrics[0])}{Style.RESET_ALL}"
-        )  # OUTPUT INDIVIDUAL MODEL ACCURACY
-        progress_bar.update(1)  # ADVANCE PROGRESS BAR BY ONE STEP
+        )  # Output individual model accuracy
+        progress_bar.update(1)  # Advance progress bar by one step
 
-        if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # ONLY RUN EXPLAINABILITY ON ORIGINAL DATA
-            try:  # ATTEMPT TO RUN EXPLAINABILITY PIPELINE FOR THIS MODEL
-                trained_model = individual_models[model_name]  # RETRIEVE TRAINED MODEL OBJECT FOR EXPLAINABILITY
+        if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run explainability on original data
+            try:  # Attempt to run explainability pipeline for this model
+                trained_model = individual_models[model_name]  # Retrieve trained model object for explainability
                 run_explainability_pipeline(
                     trained_model,
                     model_name,
@@ -6434,13 +6434,13 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
                     name,
                     execution_mode_str,
                     config
-                )  # RUN EXPLAINABILITY PIPELINE ON ORIGINAL TEST DATA ONLY
-            except Exception as e:  # IF EXPLAINABILITY FAILS
+                )  # Run explainability pipeline on original test data only
+            except Exception as e:  # If explainability fails
                 verbose_output(
                     f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
                     config=config
-                )  # LOG ERROR BUT CONTINUE EVALUATION
-    return results_dict  # RETURN ACCUMULATED RESULT ENTRIES
+                )  # Log error but continue evaluation
+    return results_dict  # Return accumulated result entries
 
 
 def run_individual_classifiers_for_feature_set(name, individual_models, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, hyperparams_map, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=None):
@@ -6482,9 +6482,9 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
 
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=config.get("evaluation", {}).get("threads_limit", 2)
-        ) as executor:  # CREATE A BOUNDED THREAD POOL FOR PARALLEL MODEL EVALUATION
-            future_to_model, current_combination = submit_classifier_evaluations_to_pool(executor, individual_models, current_combination, name, X_train_df, y_train, X_test_df, y_test, file, scaler, subset_feature_names, total_steps)  # SUBMIT ALL CLASSIFIERS TO THREAD POOL AND GET UPDATED COMBINATION COUNTER
-            results_dict = collect_classifier_results_from_futures(future_to_model, individual_models, name, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, y_train, y_test, hyperparams_map, subset_feature_names, total_steps, progress_bar, config)  # COLLECT RESULTS FROM ALL COMPLETED FUTURES
+        ) as executor:  # Create a bounded thread pool for parallel model evaluation
+            future_to_model, current_combination = submit_classifier_evaluations_to_pool(executor, individual_models, current_combination, name, X_train_df, y_train, X_test_df, y_test, file, scaler, subset_feature_names, total_steps)  # Submit all classifiers to thread pool and get updated combination counter
+            results_dict = collect_classifier_results_from_futures(future_to_model, individual_models, name, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, y_train, y_test, hyperparams_map, subset_feature_names, total_steps, progress_bar, config)  # Collect results from all completed futures
 
         return (results_dict, current_combination)  # Return accumulated results and updated combination counter
     except Exception as e:
@@ -6626,11 +6626,11 @@ def setup_feature_set_names(name, X_train_subset, subset_feature_names_list):
     :return: List of feature name strings for the current subset.
     """
 
-    if name == "PCA Components":  # IF THE FEATURE SET IS PCA COMPONENTS
-        return [f"PC{i+1}" for i in range(X_train_subset.shape[1])]  # GENERATE PCA COMPONENT NAMES
+    if name == "PCA Components":  # If the feature set is pca components
+        return [f"PC{i+1}" for i in range(X_train_subset.shape[1])]  # Generate pca component names
     return (
         subset_feature_names_list if subset_feature_names_list else [f"feature_{i}" for i in range(X_train_subset.shape[1])]
-    )  # USE ACTUAL FEATURE NAMES OR GENERATE GENERIC ONES
+    )  # Use actual feature names or generate generic ones
 
 
 def convert_subset_to_dataframes(X_train_subset, X_test_subset, subset_feature_names):
@@ -6643,9 +6643,9 @@ def convert_subset_to_dataframes(X_train_subset, X_test_subset, subset_feature_n
     :return: Tuple of (X_train_df, X_test_df) DataFrames with named columns.
     """
 
-    X_train_df = pd.DataFrame(X_train_subset, columns=subset_feature_names)  # CONVERT TRAINING FEATURES TO DATAFRAME
-    X_test_df = pd.DataFrame(X_test_subset, columns=subset_feature_names)  # CONVERT TEST FEATURES TO DATAFRAME
-    return X_train_df, X_test_df  # RETURN DATAFRAMES WITH NAMED COLUMNS
+    X_train_df = pd.DataFrame(X_train_subset, columns=subset_feature_names)  # Convert training features to dataframe
+    X_test_df = pd.DataFrame(X_test_subset, columns=subset_feature_names)  # Convert test features to dataframe
+    return X_train_df, X_test_df  # Return dataframes with named columns
 
 
 def initialize_evaluation_run_state(base_models, feature_sets, data_source_label):
@@ -6731,9 +6731,9 @@ def evaluate_single_feature_set(
         f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating models on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}"
     )  # Output evaluation status
 
-    subset_feature_names = setup_feature_set_names(name, X_train_subset, subset_feature_names_list)  # DETERMINE FEATURE NAMES FOR THIS SUBSET
+    subset_feature_names = setup_feature_set_names(name, X_train_subset, subset_feature_names_list)  # Determine feature names for this subset
 
-    X_train_df, X_test_df = convert_subset_to_dataframes(X_train_subset, X_test_subset, subset_feature_names)  # CONVERT FEATURE ARRAYS TO DATAFRAMES WITH NAMED COLUMNS
+    X_train_df, X_test_df = convert_subset_to_dataframes(X_train_subset, X_test_subset, subset_feature_names)  # Convert feature arrays to dataframes with named columns
 
     individual_results, current_combination = run_individual_classifiers_for_feature_set(
         name, individual_models, X_train_df, y_train, X_test_df, y_test,
@@ -8135,20 +8135,20 @@ def execute_original_multiclass_evaluation(files_to_process, ga_sel, pca_n, rfe_
     :return: Tuple of ("ok", (combined_df, attack_types, feature_names)) on success, or ("break", None)/("continue", None) on failure.
     """
 
-    try:  # PROTECT MULTICLASS COMBINE STEP
-        combined_df, attack_types, target_col = combine_files_for_multiclass(files_to_process, config=config)  # COMBINE FILES FOR MULTICLASS
-    except Exception as e:  # IF COMBINING FAILS
-        print(f"{BackgroundColors.RED}Failed to combine files for multi-class: {e}{Style.RESET_ALL}")  # ERROR MESSAGE
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # SEND EXCEPTION
-        return "break", None  # SIGNAL TO BREAK OUT OF COMBINATION LOOP
+    try:  # Protect multiclass combine step
+        combined_df, attack_types, target_col = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for multiclass
+    except Exception as e:  # If combining fails
+        print(f"{BackgroundColors.RED}Failed to combine files for multi-class: {e}{Style.RESET_ALL}")  # Error message
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
+        return "break", None  # Signal to break out of combination loop
 
-    if combined_df is None:  # IF NO COMBINED DF PRODUCED
-        print(f"{BackgroundColors.YELLOW}No multi-class dataset available. Skipping multi-class orchestration.{Style.RESET_ALL}")  # WARN
-        return "break", None  # SIGNAL TO BREAK OUT OF COMBINATION LOOP
+    if combined_df is None:  # If no combined df produced
+        print(f"{BackgroundColors.YELLOW}No multi-class dataset available. Skipping multi-class orchestration.{Style.RESET_ALL}")  # Warn
+        return "break", None  # Signal to break out of combination loop
 
-    feature_names = [c for c in combined_df.columns if c != 'attack_type']  # EXTRACT FEATURE NAMES EXCLUDING TARGET
+    feature_names = [c for c in combined_df.columns if c != 'attack_type']  # Extract feature names excluding target
 
-    try:  # PROTECT EVALUATION STEP
+    try:  # Protect evaluation step
         results = evaluate_on_dataset(
             "multiclass_combined", combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,
             data_source_label="Original_MultiClass",
@@ -8157,19 +8157,19 @@ def execute_original_multiclass_evaluation(files_to_process, ga_sel, pca_n, rfe_
             experiment_mode="original_only", augmentation_ratio=None,
             execution_mode_str="multi-class", attack_types_combined=attack_types,
             df_augmented_for_training=None,
-        )  # EVALUATE MULTI-CLASS ORIGINAL DATASET
-    except Exception as e:  # IF EVALUATION FAILS
-        print(f"{BackgroundColors.RED}Multi-class evaluation failed for combo {suffix}: {e}{Style.RESET_ALL}")  # ERROR
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # SEND EXCEPTION
-        return "continue", None  # SIGNAL TO CONTINUE WITH NEXT COMBINATION
+        )  # Evaluate multi-class original dataset
+    except Exception as e:  # If evaluation fails
+        print(f"{BackgroundColors.RED}Multi-class evaluation failed for combo {suffix}: {e}{Style.RESET_ALL}")  # Error
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
+        return "continue", None  # Signal to continue with next combination
 
-    results_list = list(results.values())  # CONVERT RESULTS DICT TO LIST
-    annotate_results_with_combination_flags(results_list, feature_selection_enabled, hyperparameters_enabled, False)  # ANNOTATE RESULTS
+    results_list = list(results.values())  # Convert results dict to list
+    annotate_results_with_combination_flags(results_list, feature_selection_enabled, hyperparameters_enabled, False)  # Annotate results
     save_results_with_optional_suffix(
         files_to_process[0], results_list, suffix, "multiclass_results_filename",
         "Stacking_Classifiers_MultiClass_Results.csv", use_stacking_subdir=False, config=config,
-    )  # SAVE MULTI-CLASS RESULTS WITH OPTIONAL SUFFIX
-    return "ok", (combined_df, attack_types, feature_names)  # RETURN SUCCESS WITH DATA PAYLOAD
+    )  # Save multi-class results with optional suffix
+    return "ok", (combined_df, attack_types, feature_names)  # Return success with data payload
 
 
 def execute_multiclass_augmentation(files_to_process, combined_df, attack_types, feature_names, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config):
@@ -8192,21 +8192,21 @@ def execute_multiclass_augmentation(files_to_process, combined_df, attack_types,
     :return: "continue" when augmentation orchestration fails, or None on success.
     """
 
-    try:  # PROTECT AUGMENTATION ORCHESTRATION
-        augmented_files_list = load_augmented_files_for_multiclass(files_to_process, config=config)  # LOAD AUGMENTED FILES PER FILE
-        if not augmented_files_list:  # IF NONE FOUND
-            print(f"{BackgroundColors.YELLOW}No augmented files found for multi-class combo {suffix}. Skipping augmentation.{Style.RESET_ALL}")  # WARN
-        else:  # HAVE AUGMENTED FILES TO PROCESS
-            combined_aug_df, _, _ = combine_files_for_multiclass(augmented_files_list, config=config)  # COMBINE AUGMENTED FILES
-            if combined_aug_df is None:  # IF COMBINE FAILED
-                print(f"{BackgroundColors.YELLOW}Failed to combine augmented files for multi-class combo {suffix}. Skipping.{Style.RESET_ALL}")  # WARN
-            else:  # PROCEED WITH RATIO EXPERIMENTS
-                for ratio in config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]):  # FOR EACH AUGMENTATION RATIO
-                    df_sampled = sample_augmented_by_ratio(combined_aug_df, combined_df, ratio)  # SAMPLE AUGMENTED DATA
-                    if df_sampled is None:  # IF SAMPLING FAILED
-                        print(f"{BackgroundColors.YELLOW}Sampling failed for ratio {ratio} in combo {suffix}. Skipping ratio.{Style.RESET_ALL}")  # WARN
-                        continue  # NEXT RATIO
-                    try:  # EVALUATE WITH AUGMENTED TRAINING DATA
+    try:  # Protect augmentation orchestration
+        augmented_files_list = load_augmented_files_for_multiclass(files_to_process, config=config)  # Load augmented files per file
+        if not augmented_files_list:  # If none found
+            print(f"{BackgroundColors.YELLOW}No augmented files found for multi-class combo {suffix}. Skipping augmentation.{Style.RESET_ALL}")  # Warn
+        else:  # Have augmented files to process
+            combined_aug_df, _, _ = combine_files_for_multiclass(augmented_files_list, config=config)  # Combine augmented files
+            if combined_aug_df is None:  # If combine failed
+                print(f"{BackgroundColors.YELLOW}Failed to combine augmented files for multi-class combo {suffix}. Skipping.{Style.RESET_ALL}")  # Warn
+            else:  # Proceed with ratio experiments
+                for ratio in config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]):  # For each augmentation ratio
+                    df_sampled = sample_augmented_by_ratio(combined_aug_df, combined_df, ratio)  # Sample augmented data
+                    if df_sampled is None:  # If sampling failed
+                        print(f"{BackgroundColors.YELLOW}Sampling failed for ratio {ratio} in combo {suffix}. Skipping ratio.{Style.RESET_ALL}")  # Warn
+                        continue  # Next ratio
+                    try:  # Evaluate with augmented training data
                         res = evaluate_on_dataset(
                             "multiclass_combined", combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,
                             data_source_label=f"Original+Augmented@{int(ratio*100)}%_MultiClass",
@@ -8215,19 +8215,19 @@ def execute_multiclass_augmentation(files_to_process, combined_df, attack_types,
                             experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
                             execution_mode_str="multi-class", attack_types_combined=attack_types,
                             df_augmented_for_training=df_sampled,
-                        )  # EVALUATE AUGMENTED MULTI-CLASS COMBINATION
-                    except Exception as e:  # IF EVALUATION FAILED
-                        print(f"{BackgroundColors.YELLOW}Augmented evaluation failed for ratio {ratio} combo {suffix}: {e}{Style.RESET_ALL}")  # WARN
-                        send_exception_via_telegram(type(e), e, e.__traceback__)  # SEND EXCEPTION
-                        continue  # NEXT RATIO
-                    res_list = list(res.values())  # CONVERT AUGMENTED RESULTS TO LIST
-                    annotate_results_with_combination_flags(res_list, feature_selection_enabled, hyperparameters_enabled, True)  # ANNOTATE WITH DA ENABLED
-                    save_stacking_results(files_to_process[0], res_list, config=config)  # SAVE AUGMENTED RESULTS
-    except Exception as e:  # CATCH AUGMENTATION ORCHESTRATION ERRORS
-        print(f"{BackgroundColors.YELLOW}Multi-class augmentation orchestration failed for combo {suffix}: {e}{Style.RESET_ALL}")  # WARN
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # SEND EXCEPTION
-        return "continue"  # SIGNAL TO CONTINUE WITH NEXT COMBINATION
-    return None  # SIGNAL SUCCESS
+                        )  # Evaluate augmented multi-class combination
+                    except Exception as e:  # If evaluation failed
+                        print(f"{BackgroundColors.YELLOW}Augmented evaluation failed for ratio {ratio} combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
+                        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
+                        continue  # Next ratio
+                    res_list = list(res.values())  # Convert augmented results to list
+                    annotate_results_with_combination_flags(res_list, feature_selection_enabled, hyperparameters_enabled, True)  # Annotate with da enabled
+                    save_stacking_results(files_to_process[0], res_list, config=config)  # Save augmented results
+    except Exception as e:  # Catch augmentation orchestration errors
+        print(f"{BackgroundColors.YELLOW}Multi-class augmentation orchestration failed for combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
+        return "continue"  # Signal to continue with next combination
+    return None  # Signal success
 
 
 def orchestrate_multiclass_combination(files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, data_augmentation_enabled, suffix, config=None):
@@ -8252,22 +8252,22 @@ def orchestrate_multiclass_combination(files_to_process, ga_sel, pca_n, rfe_sel,
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        status, data = execute_original_multiclass_evaluation(files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config)  # COMBINE FILES, EVALUATE ORIGINAL DATASET, AND PERSIST RESULTS
-        if status != "ok":  # IF EVALUATION DID NOT SUCCEED
-            return status  # PROPAGATE FLOW CONTROL SIGNAL TO CALLER
+        status, data = execute_original_multiclass_evaluation(files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config)  # Combine files, evaluate original dataset, and persist results
+        if status != "ok":  # If evaluation did not succeed
+            return status  # Propagate flow control signal to caller
 
         if data is None:  # Verify that data payload is present before unpacking
             print(f"{BackgroundColors.RED}Multi-class evaluation returned no data for combo {suffix}.{Style.RESET_ALL}")
             return "break"  # Signal to break out of combination loop since we cannot proceed without the combined dataset and metadata
 
-        combined_df, attack_types, feature_names = data  # UNPACK EVALUATION RESULTS PAYLOAD
+        combined_df, attack_types, feature_names = data  # Unpack evaluation results payload
 
-        if data_augmentation_enabled:  # IF AUGMENTATION REQUESTED
-            augmentation_signal = execute_multiclass_augmentation(files_to_process, combined_df, attack_types, feature_names, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config)  # RUN AUGMENTED EXPERIMENTS FOR ALL CONFIGURED RATIOS
-            if augmentation_signal is not None:  # IF AUGMENTATION RETURNED A FLOW CONTROL SIGNAL
-                return augmentation_signal  # PROPAGATE SIGNAL TO CALLER
+        if data_augmentation_enabled:  # If augmentation requested
+            augmentation_signal = execute_multiclass_augmentation(files_to_process, combined_df, attack_types, feature_names, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config)  # Run augmented experiments for all configured ratios
+            if augmentation_signal is not None:  # If augmentation returned a flow control signal
+                return augmentation_signal  # Propagate signal to caller
 
-        return None  # SIGNAL SUCCESS (NO FLOW CONTROL CHANGE NEEDED)
+        return None  # Signal success (no flow control change needed)
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
