@@ -222,6 +222,58 @@ def is_comment_in_string(tok, string_spans: list) -> bool:
     return False  # Comment is not inside string
 
 
+def is_all_upper(text: str) -> bool:
+    """
+    Verify whether text has letters and all letter characters are uppercase.
+
+    :param text: Text to evaluate.
+    :return: True if all letters are uppercase and at least one letter exists.
+    """
+
+    letters = [char for char in text if char.isalpha()]  # Collect only alphabetic characters
+    
+    if not letters:  # Verify if there are letters to evaluate
+        return False  # Return False when no letters are present
+    
+    return all(char.isupper() for char in letters)  # Return True when all letters are uppercase
+
+
+def is_all_lower(text: str) -> bool:
+    """
+    Verify whether text has letters and all letter characters are lowercase.
+
+    :param text: Text to evaluate.
+    :return: True if all letters are lowercase and at least one letter exists.
+    """
+
+    letters = [char for char in text if char.isalpha()]  # Collect only alphabetic characters
+    
+    if not letters:  # Verify if there are letters to evaluate
+        return False  # Return False when no letters are present
+    
+    return all(char.islower() for char in letters)  # Return True when all letters are lowercase
+
+def to_sentence_case(text: str) -> str:
+    """
+    Convert text to sentence case using the first alphabetic character.
+
+    :param text: Text to normalize.
+    :return: Text converted to sentence case.
+    """
+
+    normalized = text.strip()  # Remove surrounding whitespace from the text
+    if not normalized:  # Verify if text is empty after trimming
+        return normalized  # Return empty text without changes
+
+    lowered = normalized.lower()  # Convert all letters to lowercase before capitalization
+
+    for index, char in enumerate(lowered):  # Iterate through text to find first letter
+        if char.isalpha():  # Verify if current character is alphabetic
+            return lowered[:index] + char.upper() + lowered[index + 1 :]  # Capitalize only the first alphabetic character
+
+    return lowered  # Return lowered text when no alphabetic character exists
+
+
 def process_comment_line(original_line: str, tok_string: str, start_col: int) -> str:
     """
     Process a single comment line, standardizing the comment and adjusting whitespace.
@@ -244,6 +296,10 @@ def process_comment_line(original_line: str, tok_string: str, start_col: int) ->
     if is_full_line:  # For full-line comments
         new_line = prefix + standardized + suffix  # Replace comment
     else:  # For inline comments
+        body = standardized[1:].strip()  # Extract normalized inline comment body without the hash symbol
+        if is_all_upper(body) or is_all_lower(body):  # If the comment body is all uppercase or all lowercase
+            standardized = "# " + to_sentence_case(body)  # Convert inline comment text to sentence case
+
         spaces_before = 0  # Count spaces before "#"
         i = hash_idx - 1  # Start from before "#"
         while i >= 0 and original_line[i] == " ":  # Count spaces
