@@ -6285,6 +6285,30 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
         raise
 
 
+def print_dataset_evaluation_header(data_source_label):
+    """
+    Prints the formatted header block for a dataset evaluation run.
+
+    :param data_source_label: Label identifying the data source being evaluated
+    :return: None
+    """
+
+    try:
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}"
+        )  # Print top separator line for evaluation section
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating on: {BackgroundColors.CYAN}{data_source_label} Data{Style.RESET_ALL}"
+        )  # Print the data source label currently being evaluated
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}\n"
+        )  # Print bottom separator line for evaluation section
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def evaluate_on_dataset(
     file,
     df,
@@ -6328,15 +6352,7 @@ def evaluate_on_dataset(
             ga_selected_features, rfe_selected_features, feature_names, config=config
         )  # Sanitize and verify GA/RFE feature selections against available features
 
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}"
-        )  # Print top separator line for evaluation section
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating on: {BackgroundColors.CYAN}{data_source_label} Data{Style.RESET_ALL}"
-        )  # Print the data source label being evaluated
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}\n"
-        )  # Print bottom separator line for evaluation section
+        print_dataset_evaluation_header(data_source_label)  # Print formatted evaluation header for the current data source
 
         data_splits = prepare_evaluation_data_splits(df, df_augmented_for_training, config=config)  # Prepare training/test data splits with optional augmentation
 
