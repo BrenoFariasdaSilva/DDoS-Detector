@@ -524,7 +524,7 @@ def get_n_jobs_display():
     try:
         if N_JOBS > 0:  # Positive number means exact core count
             return f"{N_JOBS} cores"
-        elif N_JOBS == -1:  # -1 means all cores
+        elif N_JOBS == -1:  # -1 Means all cores
             total_cores = os.cpu_count() or 1
             return f"{total_cores} cores (all)"
         elif N_JOBS < -1:  # -2 or less means all but (abs(N_JOBS) - 1) cores
