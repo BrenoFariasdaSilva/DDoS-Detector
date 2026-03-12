@@ -3722,6 +3722,46 @@ def sample_shap_test_data(X_test, y_test, max_samples, random_state):
         raise
 
 
+def save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature_names, output_dir, dataset_name, model_name, max_display):
+    """
+    Saves SHAP summary and bar plots to the output directory.
+
+    :param shap_values_summary: SHAP values array used for plot generation
+    :param X_test_sampled: Sampled test features for plot background data
+    :param feature_names: List of feature names for axis labels
+    :param output_dir: Directory path where plots will be saved
+    :param dataset_name: Dataset name used in output filenames
+    :param model_name: Model name used in output filenames
+    :param max_display: Maximum number of features to display in each plot
+    :return: None
+    """
+
+    try:
+        try:  # Attempt to create SHAP summary plot
+            plt.figure()  # Create new figure for summary plot
+            shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, show=False)  # Create summary plot
+            summary_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_summary.png")  # Build summary plot file path
+            plt.tight_layout()  # Adjust layout for tight fit
+            ensure_figure_min_4k_and_save(fig=plt.gcf(), path=summary_plot_path, dpi=300, bbox_inches='tight')  # Save with minimum 4K resolution
+            plt.close()  # Close summary figure
+        except Exception:  # If summary plot generation fails
+            plt.close()  # Close figure to avoid resource leak
+
+        try:  # Attempt to create SHAP bar plot
+            plt.figure()  # Create new figure for bar plot
+            shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, plot_type="bar", show=False)  # Create bar plot
+            bar_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_bar.png")  # Build bar plot file path
+            plt.tight_layout()  # Adjust layout for tight fit
+            ensure_figure_min_4k_and_save(fig=plt.gcf(), path=bar_plot_path, dpi=300, bbox_inches='tight')  # Save with minimum 4K resolution
+            plt.close()  # Close bar figure
+        except Exception:  # If bar plot generation fails
+            plt.close()  # Close figure to avoid resource leak
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def select_shap_explainer(model, X_test_sampled, random_state):
     """
     Selects and instantiates the appropriate SHAP explainer based on model type.
@@ -3790,25 +3830,7 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
             else:  # Binary or regression case
                 shap_values_summary = shap_values  # Use SHAP values directly
 
-            try:  # Try to create summary plot
-                plt.figure()  # Create new figure
-                shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, show=False)  # Create summary plot
-                summary_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_summary.png")  # Build plot path
-                plt.tight_layout()  # Adjust layout
-                ensure_figure_min_4k_and_save(fig=plt.gcf(), path=summary_plot_path, dpi=300, bbox_inches='tight')  # Save plot
-                plt.close()  # Close plot
-            except Exception:  # If summary plot fails
-                plt.close()  # Close plot
-
-            try:  # Try to create bar plot
-                plt.figure()  # Create new figure
-                shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, plot_type="bar", show=False)  # Create bar plot
-                bar_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_bar.png")  # Build plot path
-                plt.tight_layout()  # Adjust layout
-                ensure_figure_min_4k_and_save(fig=plt.gcf(), path=bar_plot_path, dpi=300, bbox_inches='tight')  # Save plot
-                plt.close()  # Close plot
-            except Exception:  # If bar plot fails
-                plt.close()  # Close plot
+            save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature_names, output_dir, dataset_name, model_name, max_display)  # Save both SHAP summary and bar plots to disk
 
             shap_array = np.array(shap_values_summary)  # Convert to numpy array for type safety
             mean_shap_values = np.mean(np.abs(shap_array), axis=0)  # Compute mean absolute SHAP values
