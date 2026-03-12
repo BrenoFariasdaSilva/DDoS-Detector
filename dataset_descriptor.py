@@ -2320,6 +2320,24 @@ def generate_csv_and_image(df, csv_path, config: dict | None = None):
         raise
 
 
+def resolve_output_filename(output_filename, cfg):
+    """
+    Resolve the output filename for the dataset report CSV, applying config defaults and ensuring a .csv extension.
+
+    :param output_filename: Caller-provided filename string, or None to use a config-derived default.
+    :param cfg: Configuration dictionary used to read the csv_output_suffix fallback value.
+    :return: Resolved output filename string guaranteed to end with ".csv".
+    """
+
+    if output_filename is None:  # Use config-based suffix when no filename was provided by the caller
+        output_filename = cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "description")  # Read configured suffix with hardcoded fallback
+    if not isinstance(output_filename, str):  # Convert non-string filename to string using config suffix as fallback
+        output_filename = str(output_filename or cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "_description"))  # Stringify with config fallback when value is falsy
+    if not output_filename.lower().endswith(".csv"):  # Append .csv extension when absent
+        output_filename = f"{output_filename}.csv"  # Ensure the filename always has the .csv extension
+    return output_filename  # Return the fully resolved output filename
+
+
 def collect_report_input_files(input_path, file_extension, config):
     """
     Determine the matching files and base directory from the provided input path.
@@ -2376,15 +2394,7 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
             print(f"{BackgroundColors.RED}No matching {file_extension} files found in: {input_path}{Style.RESET_ALL}")
             return False  # Exit the function
 
-        cfg = config or get_default_config()
-        if output_filename is None:  # Verify if caller provided an output filename or use configured suffix
-            output_filename = cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "description")  # Get suffix from config or default
-
-        if not isinstance(output_filename, str):  # Validate that the output filename is a string
-            output_filename = str(output_filename or cfg.get("dataset_descriptor", {}).get("csv_output_suffix", "_description"))  # Fallback to config suffix or default if provided filename is not a string
-
-        if not output_filename.lower().endswith(".csv"):  # Ensure the output filename ends with .csv
-            output_filename = f"{output_filename}.csv"  # Append .csv extension if not present
+        output_filename = resolve_output_filename(output_filename, cfg)  # Resolve the output filename, applying config defaults and ensuring a .csv extension
 
         headers_map = build_headers_map(sorted_matching_files, low_memory=low_memory)  # Build headers map using lightweight header-only reads to avoid loading all datasets into memory simultaneously
         common_features, headers_match_all = compute_common_features(headers_map)  # Compute shared features and header uniformity flag from the headers-only map
