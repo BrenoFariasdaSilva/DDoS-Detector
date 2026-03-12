@@ -1356,6 +1356,25 @@ def build_svm_config():
     )  # Return the instantiated model and its hyperparameter grid as a tuple
 
 
+def build_xgboost_config():
+    """
+    Build the XGBoost classifier instance and hyperparameter search grid.
+
+    :return: Tuple of (XGBClassifier instance, param_grid dict) for hyperparameter optimization.
+    """
+
+    return (
+        XGBClassifier(eval_metric="mlogloss", random_state=42, n_jobs=N_JOBS),  # XGBoost classifier
+        {
+            "n_estimators": [50, 100, 200],  # Number of trees in the forest
+            "max_depth": [3, 5, 7, 10],  # Maximum depth of the tree
+            "learning_rate": [0.01, 0.1, 0.3],  # Step size shrinkage
+            "subsample": [0.6, 0.8, 1.0],  # Subsample ratio of the training instances
+            "colsample_bytree": [0.6, 0.8, 1.0],  # Subsample ratio of columns when constructing each tree
+        },
+    )  # Return the instantiated model and its hyperparameter grid as a tuple
+
+
 def build_all_models_config():
     """
     Build and return the full dictionary of all available model instances paired with their hyperparameter grids.
