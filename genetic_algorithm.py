@@ -6436,6 +6436,232 @@ def finalize_sweep_best_result(best_result, best_metrics, feature_names, X_train
         raise  # Re-raise to preserve original failure semantics
 
 
+def log_sweep_start(dataset_name, min_pop, max_pop, n_generations, runs):
+    """
+    Resolve the default run count, emit a verbose start message, clear the fitness cache,
+    and send a Telegram notification announcing the beginning of the population sweep.
+
+    :param dataset_name: Name of the dataset being swept.
+    :param min_pop: Minimum population size in the sweep.
+    :param max_pop: Maximum population size in the sweep.
+    :param n_generations: Number of generations per GA run.
+    :param runs: Requested number of runs per population size, or None to read from config.
+    :return: Resolved run count (int).
+    """
+
+    try:
+        if runs is None:  # If runs is not provided, use the configured default
+            runs = CONFIG.get("execution", {}).get("runs", 5)  # Default to configured runs or 5
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {BackgroundColors.CYAN}{min_pop}{BackgroundColors.GREEN} to {BackgroundColors.CYAN}{max_pop}{BackgroundColors.GREEN}, running {BackgroundColors.CYAN}{n_generations}{BackgroundColors.GREEN} generations and {BackgroundColors.CYAN}{runs}{BackgroundColors.GREEN} runs each.{Style.RESET_ALL}"
+        )  # Log start message with sweep configuration details
+
+        clear_fitness_cache()  # Clear any existing fitness cache to ensure fresh evaluations for the sweep
+
+        send_telegram_message(TELEGRAM_BOT, [
+            f"Starting population sweep for dataset {dataset_name} from size {min_pop} to {max_pop}"
+        ])  # Send start notification to Telegram
+
+        return runs  # Return resolved run count for use in sweep
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def create_sweep_results_and_pool(min_pop, max_pop):
+    """
+    Initialise the per-population results dictionary and create the shared multiprocessing pool.
+
+    Creates one entry in the results dict for every population size in [min_pop, max_pop],
+    then spawns a multiprocessing pool sized according to the current CPU_PROCESSES value.
+
+    :param min_pop: Minimum population size (inclusive lower bound of the sweep range).
+    :param max_pop: Maximum population size (inclusive upper bound of the sweep range).
+    :return: Tuple of (results, shared_pool) where results is the initialised dict and
+             shared_pool is the ready-to-use multiprocessing.Pool instance.
+    """
+
+    try:
+        results = {}  # Dictionary to hold results per population size
+
+        for p in range(min_pop, max_pop + 1):  # For each population size in the sweep range
+            results[p] = {"runs": [], "avg_metrics": None, "common_features": set()}  # Initialise results entry with empty run list and metrics placeholders
+
+        with global_state_lock:  # Thread-safe read of CPU_PROCESSES
+            cpu_procs = CPU_PROCESSES  # Read CPU_PROCESSES value
+
+        shared_pool = multiprocessing.Pool(processes=cpu_procs if cpu_procs else None)  # Create a shared multiprocessing pool for parallel GA runs
+
+        return results, shared_pool  # Return initialised results and pool
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def execute_sweep_iteration_loop(
+    runs,
+    min_pop,
+    max_pop,
+    n_generations,
+    cxpb,
+    mutpb,
+    X_train,
+    y_train,
+    X_test,
+    y_test,
+    feature_names,
+    dataset_name,
+    csv_path,
+    folds,
+    progress_bar,
+    progress_state,
+    shared_pool,
+    results,
+):
+    """
+    Execute all GA iterations across the full grid of runs and population sizes.
+
+    Iterates over every (run, pop_size) combination, calls run_single_ga_iteration for each,
+    appends successful results to the shared results dict, and sends Telegram progress messages.
+
+    :param runs: Total number of runs per population size.
+    :param min_pop: Minimum population size (inclusive).
+    :param max_pop: Maximum population size (inclusive).
+    :param n_generations: Number of GA generations per run.
+    :param cxpb: Crossover probability.
+    :param mutpb: Mutation probability.
+    :param X_train: Training feature matrix.
+    :param y_train: Training target labels.
+    :param X_test: Test feature matrix.
+    :param y_test: Test target labels.
+    :param feature_names: List of feature column names.
+    :param dataset_name: Dataset name used in Telegram messages.
+    :param csv_path: Path to the CSV dataset.
+    :param folds: Number of cross-validation folds.
+    :param progress_bar: Optional tqdm progress bar instance.
+    :param progress_state: Shared progress-tracking dict.
+    :param shared_pool: Active multiprocessing pool forwarded to run_single_ga_iteration.
+    :param results: Mutable dict (mutated in-place) mapping pop_size to run result lists.
+    :return: None
+    """
+
+    try:
+        for run in range(runs):  # For each run
+            for pop_size in range(min_pop, max_pop + 1):  # For each population size
+                send_telegram_message(TELEGRAM_BOT, [
+                    f"Starting Run {run + 1}/{runs} - population size {pop_size}/{max_pop}"
+                ])  # Send start message for this run and population size
+                start_pop_time = time.perf_counter()  # Start timing this population size iteration
+                result = run_single_ga_iteration(
+                    X_train,
+                    y_train,
+                    X_test,
+                    y_test,
+                    feature_names,
+                    pop_size,
+                    n_generations,
+                    cxpb,
+                    mutpb,
+                    run + 1,
+                    runs,
+                    dataset_name,
+                    csv_path,
+                    max_pop,
+                    progress_bar,
+                    progress_state,
+                    folds,
+                    shared_pool=shared_pool,
+                )  # Run GA iteration for this (run, pop_size) combination
+                elapsed_pop_time = time.perf_counter() - start_pop_time  # Calculate elapsed time for this population size
+
+                if result:  # If result is valid
+                    results[pop_size]["runs"].append(result)  # Append result to runs list
+
+                f1_score = result.get("metrics", [None] * 4)[3] if result else None  # Extract F1-Score from metrics if available
+                f1_msg = f" - F1: {f1_score:.4f}" if f1_score is not None else ""  # Prepare F1 score message if available
+                send_telegram_message(
+                    TELEGRAM_BOT,
+                    f"Completed run {run + 1}/{runs} - population size {pop_size}/{max_pop} {f1_msg} in {calculate_execution_time(elapsed_pop_time)}"
+                )  # Send completion message for this run and population size
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def close_shared_pool_safely(shared_pool):
+    """
+    Attempt to cleanly shut down a multiprocessing pool, swallowing all errors.
+
+    Calls close() then join() on the pool for a graceful shutdown.  Any exception
+    (e.g. pool already closed, workers still running) is silently ignored to ensure
+    best-effort cleanup that never propagates failures to the caller.
+
+    :param shared_pool: The multiprocessing.Pool instance to shut down.
+    :return: None
+    """
+
+    try:  # Close the shared pool after all GA iterations are complete
+        shared_pool.close()  # Signal no more work will be submitted
+        shared_pool.join()  # Wait for all workers to finish
+    except Exception:  # If closing the pool fails (e.g., if it was already closed or if an error occurred)
+        pass  # Best-effort cleanup
+
+
+def generate_sweep_visualization_artifacts(results, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb, feature_names):
+    """
+    Generate the full suite of post-sweep visualisation outputs.
+
+    Attempts to produce three independent artefact types — the run comparison CSV table,
+    the multi-run comparison plots, and the feature usage bar charts — with each wrapped
+    in its own try/except so that a failure in one does not prevent the others.
+
+    :param results: Aggregated sweep results dict mapping pop_size to run data.
+    :param csv_path: Path to the original CSV dataset (used to derive output paths).
+    :param dataset_name: Dataset name used in plot titles and file names.
+    :param min_pop: Minimum population size used for the sweep.
+    :param max_pop: Maximum population size used for the sweep.
+    :param n_generations: Number of GA generations per run (used in plot metadata).
+    :param cxpb: Crossover probability used in the sweep (used in plot metadata).
+    :param mutpb: Mutation probability used in the sweep (used in plot metadata).
+    :param feature_names: List of feature names used for the feature usage charts.
+    :return: None
+    """
+
+    try:
+        try:  # Attempt to generate comparison table
+            generate_run_comparison_table(
+                results, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb
+            )  # Generate CSV comparison table with aggregated metrics
+        except Exception as e:  # If table generation fails
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Skipping comparison table generation due to error: {e}{Style.RESET_ALL}"
+            )  # Log warning but continue
+
+        try:  # Attempt to generate comparison plots
+            generate_multi_run_comparison_plots(
+                results, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb
+            )  # Generate multi-run comparison visualization plots
+        except Exception as e:  # If plot generation fails
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Skipping multi-run comparison plots due to error: {e}{Style.RESET_ALL}"
+            )  # Log warning but continue
+
+        try:  # Attempt to generate feature usage charts
+            generate_feature_usage_charts(results, csv_path, dataset_name, min_pop, max_pop, feature_names)  # Generate horizontal bar charts showing feature usage frequency across all GA runs
+        except Exception as e:  # If feature usage chart generation fails
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Skipping feature usage charts due to error: {e}{Style.RESET_ALL}"
+            )  # Log warning but continue
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def run_population_sweep(
     dataset_name,
     csv_path,
@@ -6468,18 +6694,7 @@ def run_population_sweep(
     """
 
     try:
-        if runs is None:  # If runs is not provided, use the configured default
-            runs = CONFIG.get("execution", {}).get("runs", 5)  # Default to configured runs or 5
-
-        verbose_output(
-            f"{BackgroundColors.GREEN}Starting population sweep for dataset {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} from size {BackgroundColors.CYAN}{min_pop}{BackgroundColors.GREEN} to {BackgroundColors.CYAN}{max_pop}{BackgroundColors.GREEN}, running {BackgroundColors.CYAN}{n_generations}{BackgroundColors.GREEN} generations and {BackgroundColors.CYAN}{runs}{BackgroundColors.GREEN} runs each.{Style.RESET_ALL}"
-        )
-
-        clear_fitness_cache()  # Clear any existing fitness cache to ensure fresh evaluations for the sweep
-
-        send_telegram_message(TELEGRAM_BOT, [
-            f"Starting population sweep for dataset {dataset_name} from size {min_pop} to {max_pop}"
-        ])  # Send start message
+        runs = log_sweep_start(dataset_name, min_pop, max_pop, n_generations, runs)  # Resolve run count, log start, clear cache, send Telegram start notification
 
         data = prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations)  # Prepare dataset
         if data is None:  # If preparation failed
@@ -6488,94 +6703,34 @@ def run_population_sweep(
         X_train, X_test, y_train, y_test, feature_names = data  # Unpack prepared data
 
         folds = CONFIG.get("cross_validation", {}).get("n_folds", 10)  # Use configured constant for CV folds
-        
+
         progress_state = compute_progress_state(
             min_pop, max_pop, n_generations, runs, progress_bar, folds=folds
         )  # Compute progress state for tracking
 
-        results = {}  # Dictionary to hold results per population size
-        for p in range(min_pop, max_pop + 1):  # For each population size
-            results[p] = {"runs": [], "avg_metrics": None, "common_features": set()}  # Initialize results entry
+        results, shared_pool = create_sweep_results_and_pool(min_pop, max_pop)  # Initialise per-population results dict and shared multiprocessing pool
 
-        with global_state_lock:  # Thread-safe read of CPU_PROCESSES
-            cpu_procs = CPU_PROCESSES  # Read CPU_PROCESSES value
-        shared_pool = multiprocessing.Pool(processes=cpu_procs if cpu_procs else None)  # Create a shared multiprocessing pool for parallel GA runs
+        start_run_time = time.perf_counter()  # Start timing the entire sweep (includes loop, aggregation, and visualisation)
 
-        start_run_time = time.perf_counter()  # Start timing the entire run process
-        for run in range(runs):  # For each run
-            for pop_size in range(min_pop, max_pop + 1):  # For each population size
-                send_telegram_message(TELEGRAM_BOT, [
-                    f"Starting Run {run + 1}/{runs} - population size {pop_size}/{max_pop}"
-                ])  # Send start message for this run and population size
-                start_pop_time = time.perf_counter()  # Start timing this population size iteration
-                result = run_single_ga_iteration(
-                    X_train,
-                    y_train,
-                    X_test,
-                    y_test,
-                    feature_names,
-                    pop_size,
-                    n_generations,
-                    cxpb,
-                    mutpb,
-                    run + 1,
-                    runs,
-                    dataset_name,
-                    csv_path,
-                    max_pop,
-                    progress_bar,
-                    progress_state,
-                    folds,
-                    shared_pool=shared_pool,
-                )  # Run GA iteration
-                elapsed_pop_time = time.perf_counter() - start_pop_time  # Calculate elapsed time for this population size
-                if result:  # If result is valid
-                    results[pop_size]["runs"].append(result)  # Append result to runs list
+        execute_sweep_iteration_loop(
+            runs, min_pop, max_pop, n_generations, cxpb, mutpb,
+            X_train, y_train, X_test, y_test, feature_names,
+            dataset_name, csv_path, folds, progress_bar, progress_state,
+            shared_pool, results,
+        )  # Run all GA iterations across every (run, pop_size) combination
 
-                f1_score = result.get("metrics", [None]*4)[3] if result else None  # Extract F1-Score from metrics if available
-                f1_msg = f" - F1: {f1_score:.4f}" if f1_score is not None else ""  # Prepare F1 score message if available
-                send_telegram_message(
-                    TELEGRAM_BOT,
-                    f"Completed run {run + 1}/{runs} - population size {pop_size}/{max_pop} {f1_msg} in {calculate_execution_time(elapsed_pop_time)}"
-                )  # Send completion message for this run and population size (no int cast on formatted time)
-
-        try:  # Close the shared pool after all GA iterations are complete
-            shared_pool.close()  # Signal no more work will be submitted
-            shared_pool.join()  # Wait for all workers to finish
-        except Exception:  # If closing the pool fails (e.g., if it was already closed or if an error occurred)
-            pass  # Best-effort cleanup
+        close_shared_pool_safely(shared_pool)  # Cleanly shut down the shared multiprocessing pool
 
         best_score, best_result, best_metrics, results = aggregate_sweep_results(
             results, min_pop, max_pop, dataset_name
         )  # Aggregate results and find best
 
-        try:  # Attempt to generate comparison table
-            generate_run_comparison_table(
-                results, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb
-            )  # Generate CSV comparison table with aggregated metrics
-        except Exception as e:  # If table generation fails
-            verbose_output(
-                f"{BackgroundColors.YELLOW}Skipping comparison table generation due to error: {e}{Style.RESET_ALL}"
-            )  # Log warning but continue
-
-        try:  # Attempt to generate comparison plots
-            generate_multi_run_comparison_plots(
-                results, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb
-            )  # Generate multi-run comparison visualization plots
-        except Exception as e:  # If plot generation fails
-            verbose_output(
-                f"{BackgroundColors.YELLOW}Skipping multi-run comparison plots due to error: {e}{Style.RESET_ALL}"
-            )  # Log warning but continue
-
-        try:  # Attempt to generate feature usage charts
-            generate_feature_usage_charts(results, csv_path, dataset_name, min_pop, max_pop, feature_names)  # Generate horizontal bar charts showing feature usage frequency across all GA runs
-        except Exception as e:  # If feature usage chart generation fails
-            verbose_output(
-                f"{BackgroundColors.YELLOW}Skipping feature usage charts due to error: {e}{Style.RESET_ALL}"
-            )  # Log warning but continue
+        generate_sweep_visualization_artifacts(
+            results, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb, feature_names
+        )  # Generate comparison table, multi-run comparison plots, and feature usage charts
 
         elapsed_run_time = time.perf_counter() - start_run_time  # Calculate elapsed time for the entire run process
-        
+
         if best_result:  # If a best result was found
             finalize_sweep_best_result(
                 best_result, best_metrics, feature_names, X_train, y_train, X_test, y_test,
