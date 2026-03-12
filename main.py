@@ -1302,6 +1302,36 @@ def cross_validate_model(model, X, y, cv=10, scoring="f1_weighted"):
         raise
 
 
+def determine_feature_extraction_method_suffix(selected_features, features_file):
+    """
+    Determine the feature extraction method suffix string from the features file name.
+
+    :param selected_features: List of selected features or None when no feature selection is used.
+    :param features_file: Path to the feature selection file or None when unused.
+    :return: Suffix string identifying the feature extraction method (e.g., '-GA', '-RFE', '-PCA').
+    """
+
+    try:
+        if selected_features is None or not features_file:  # Verify if feature selection is active and file is provided
+            return ""  # No suffix when no feature selection is in use
+
+        features_basename = os.path.basename(features_file)  # Get the base name of the features file path
+        features_name = os.path.splitext(features_basename)[0]  # Remove file extension from base name
+
+        if "Genetic" in features_name or "GA" in features_name:  # Verify if Genetic Algorithm is indicated in filename
+            return "-GA"  # Return GA suffix for Genetic Algorithm feature selection
+        elif "RFE" in features_name:  # Verify if Recursive Feature Elimination is indicated
+            return "-RFE"  # Return RFE suffix for recursive feature elimination
+        elif "PCA" in features_name:  # Verify if PCA is indicated in the filename
+            return "-PCA"  # Return PCA suffix for principal component analysis
+
+        return f"-{features_name[:15]}"  # Return generic prefix from first 15 characters of filename
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def train_and_evaluate_models(
     X_train,
     X_test,
@@ -1341,18 +1371,7 @@ def train_and_evaluate_models(
         model_metrics_list = []  # List to store metrics for each model
         results_dir = os.path.join(dataset_dir, "Results")  # Directory to save results
 
-        feat_extraction_method = ""  # Suffix for feature extraction method
-        if selected_features is not None and features_file:  # If feature selection is used and a features file is provided
-            features_basename = os.path.basename(features_file)  # Get the base name of the features file
-            features_name = os.path.splitext(features_basename)[0]  # Remove file extension
-            if "Genetic" in features_name or "GA" in features_name:  # If genetic algorithm is indicated in the filename
-                feat_extraction_method = "-GA"  # Use GA suffix
-            elif "RFE" in features_name:  # If Recursive Feature Elimination is indicated in the filename
-                feat_extraction_method = "-RFE"  # Use RFE suffix
-            elif "PCA" in features_name:  # If PCA is indicated in the filename
-                feat_extraction_method = "-PCA"  # Use PCA suffix
-            else:  # Use first part of the filename (up to 15 chars) as suffix
-                feat_extraction_method = f"-{features_name[:15]}"  # Generic suffix
+        feat_extraction_method = determine_feature_extraction_method_suffix(selected_features, features_file)  # Determine feature extraction method suffix from features file name
 
         total_models = len(models)  # Total number of models to train
         model_pbar = tqdm(
