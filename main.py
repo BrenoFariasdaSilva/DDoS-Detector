@@ -1825,6 +1825,28 @@ def resolve_dataset_label_col_interactively(train_df, dataset_name):
         raise
 
 
+def run_feature_selection_comparison_if_needed(compare_feature_selection, baseline_metrics, feature_selected_metrics, feat_extraction_method):
+    """
+    Generate a feature selection comparison report when all required conditions and data are present.
+
+    :param compare_feature_selection: Boolean flag indicating whether feature selection comparison is enabled.
+    :param baseline_metrics: List of per-model metric dicts from baseline evaluation without feature selection.
+    :param feature_selected_metrics: List of per-model metric dicts from the feature-selected evaluation run.
+    :param feat_extraction_method: Method tag string such as "GA", "RFE", "PCA", or an empty string.
+    :return: None
+    """
+
+    if not (compare_feature_selection and baseline_metrics and feature_selected_metrics):  # Skip when any required condition is false or data is empty
+        return  # Nothing to compare, exit early without generating the report
+    comparison_output_path = os.path.join(os.getcwd(), OUTPUT_DIR)  # Build the absolute output path for the comparison report
+    generate_feature_selection_comparison(
+        baseline_metrics,
+        feature_selected_metrics,
+        output_path=comparison_output_path,
+        feat_extraction_method=feat_extraction_method,
+    )  # Produce and persist the feature selection vs baseline comparison report
+
+
 def build_overall_feature_extraction_method_tag(features_to_use, features_file_used):
     """
     Map the features file name to a method tag string used in output filenames and summary reports.
@@ -1985,16 +2007,7 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
             else None
         )  # Generate overall summary
 
-        if (
-            compare_feature_selection and baseline_metrics and feature_selected_metrics
-        ):  # If comparing Feature Selection is enabled and metrics exist
-            comparison_output_path = os.path.join(os.getcwd(), OUTPUT_DIR)  # Path for comparison report
-            generate_feature_selection_comparison(
-                baseline_metrics,
-                feature_selected_metrics,
-                output_path=comparison_output_path,
-                feat_extraction_method=feat_extraction_method,
-            )  # Generate Feature Selection comparison
+        run_feature_selection_comparison_if_needed(compare_feature_selection, baseline_metrics, feature_selected_metrics, feat_extraction_method)  # Generate comparison report when conditions are met
 
         finish_time = datetime.datetime.now()  # Get the finish time of the program
         print(
