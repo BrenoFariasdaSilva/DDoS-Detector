@@ -7570,7 +7570,7 @@ def process_multiclass_augmentation_testing(reference_file, original_files_list,
         combined_augmented_df = load_and_combine_augmented_multiclass_files(original_files_list, config=config)  # Load and combine augmented files into a single DataFrame
 
         if combined_augmented_df is None:  # If loading or combining augmented files failed
-            return  # Exit function early as signaled by the helper
+            return  # Exit function early as signaled by the loading function
 
         print_multiclass_augmentation_header(augmentation_ratios)  # Print the section header for ratio-based multi-class augmentation experiments
 
@@ -8017,7 +8017,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     Optimization (HP), and Data Augmentation (DA) for each execution mode.
 
     This function does not change internal evaluation logic; it calls existing
-    helpers and evaluation routines with appropriate arguments per combination.
+    evaluation functions with appropriate arguments per combination.
 
     :param input_path: Path containing dataset files to process.
     :param dataset_name: Optional dataset name for logging.
@@ -8036,7 +8036,6 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     for mode in modes:  # For each mode
         for file in files_to_process:  # For each file in the input path
             try:  # Protect individual-file orchestration
-                # Consolidate artifact discovery into a single helper for clarity
                 artifacts = locate_and_verify_artifacts(file, config=config)  # Locate feature/HP/DA artifacts
                 fs_ga, fs_pca, fs_rfe = artifacts.get("ga"), artifacts.get("pca"), artifacts.get("rfe")  # Unpack feature artifacts
                 fs_available = bool(fs_ga or fs_rfe or fs_pca)  # True when at least one artifact exists
