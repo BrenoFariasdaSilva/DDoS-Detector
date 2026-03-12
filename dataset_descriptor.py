@@ -1513,6 +1513,45 @@ def save_tsne_3d_plot(X_emb, labels, output_path, title):
         raise  # Re-raise to preserve original failure semantics
 
 
+def generate_and_save_tsne_embeddings(X, labels, base, output_dir, perplexity, n_iter, random_state):
+    """
+    Compute 2D and 3D t-SNE embeddings for the scaled feature matrix and save both as PNG scatter plots.
+
+    :param X: Scaled 2D NumPy array of feature values to embed.
+    :param labels: Optional array-like of class labels used for per-class coloring in the plots.
+    :param base: Base filename string derived from the source dataset file for output naming.
+    :param output_dir: Directory path where the PNG output files are written.
+    :param perplexity: t-SNE perplexity parameter controlling the effective local neighborhood size.
+    :param n_iter: Number of optimization iterations for the t-SNE algorithm.
+    :param random_state: Integer random seed for reproducible t-SNE results.
+    :return: Tuple of (out_name_2d, out_name_3d) filename strings for the two saved PNG outputs.
+    """
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Computing 2D t-SNE embedding for: {BackgroundColors.CYAN}{base}{Style.RESET_ALL}"
+    )  # Announce 2D t-SNE computation start
+    X_emb_2d = initialize_and_fit_tsne(X, n_components=2, perplexity=perplexity, n_iter=n_iter, random_state=random_state)  # Compute the 2D t-SNE embedding
+    out_name_2d = f"TSNE_2D_{base}.png"  # Build the 2D output PNG filename
+    out_path_2d = os.path.join(output_dir, out_name_2d)  # Construct the full absolute path for the 2D PNG
+    save_tsne_plot(X_emb_2d, labels, out_path_2d, f"t-SNE 2D: {base}")  # Create and save the 2D scatter plot
+    verbose_output(
+        f"{BackgroundColors.GREEN}Saved 2D t-SNE plot to: {BackgroundColors.CYAN}{out_path_2d}{Style.RESET_ALL}"
+    )  # Confirm successful 2D plot save
+
+    verbose_output(
+        f"{BackgroundColors.GREEN}Computing 3D t-SNE embedding for: {BackgroundColors.CYAN}{base}{Style.RESET_ALL}"
+    )  # Announce 3D t-SNE computation start
+    X_emb_3d = initialize_and_fit_tsne(X, n_components=3, perplexity=perplexity, n_iter=n_iter, random_state=random_state)  # Compute the 3D t-SNE embedding
+    out_name_3d = f"TSNE_3D_{base}.png"  # Build the 3D output PNG filename
+    out_path_3d = os.path.join(output_dir, out_name_3d)  # Construct the full absolute path for the 3D PNG
+    save_tsne_3d_plot(X_emb_3d, labels, out_path_3d, f"t-SNE 3D: {base}")  # Create and save the 3D scatter plot
+    verbose_output(
+        f"{BackgroundColors.GREEN}Saved 3D t-SNE plot to: {BackgroundColors.CYAN}{out_path_3d}{Style.RESET_ALL}"
+    )  # Confirm successful 3D plot save
+
+    return out_name_2d, out_name_3d  # Return both saved PNG filenames to the caller
+
+
 def resolve_tsne_output_directory(filepath, output_dir, config):
     """
     Resolve the t-SNE output directory from an explicit path or from the configuration, and create it.
@@ -1591,27 +1630,7 @@ def generate_tsne_plot(
 
             base = os.path.splitext(os.path.basename(filepath))[0]  # Base filename
             
-            verbose_output(
-                f"{BackgroundColors.GREEN}Computing 2D t-SNE embedding for: {BackgroundColors.CYAN}{base}{Style.RESET_ALL}"
-            )  # Output 2D t-SNE message
-            X_emb_2d = initialize_and_fit_tsne(X, n_components=2, perplexity=perplexity, n_iter=n_iter, random_state=random_state)  # Compute 2D t-SNE embedding
-            out_name_2d = f"TSNE_2D_{base}.png"  # 2D output PNG name
-            out_path_2d = os.path.join(output_dir, out_name_2d)  # 2D absolute path
-            save_tsne_plot(X_emb_2d, labels, out_path_2d, f"t-SNE 2D: {base}")  # Create and save 2D plot
-            verbose_output(
-                f"{BackgroundColors.GREEN}Saved 2D t-SNE plot to: {BackgroundColors.CYAN}{out_path_2d}{Style.RESET_ALL}"
-            )  # Output success message
-            
-            verbose_output(
-                f"{BackgroundColors.GREEN}Computing 3D t-SNE embedding for: {BackgroundColors.CYAN}{base}{Style.RESET_ALL}"
-            )  # Output 3D t-SNE message
-            X_emb_3d = initialize_and_fit_tsne(X, n_components=3, perplexity=perplexity, n_iter=n_iter, random_state=random_state)  # Compute 3D t-SNE embedding
-            out_name_3d = f"TSNE_3D_{base}.png"  # 3D output PNG name
-            out_path_3d = os.path.join(output_dir, out_name_3d)  # 3D absolute path
-            save_tsne_3d_plot(X_emb_3d, labels, out_path_3d, f"t-SNE 3D: {base}")  # Create and save 3D plot
-            verbose_output(
-                f"{BackgroundColors.GREEN}Saved 3D t-SNE plot to: {BackgroundColors.CYAN}{out_path_3d}{Style.RESET_ALL}"
-            )  # Output success message
+            out_name_2d, out_name_3d = generate_and_save_tsne_embeddings(X, labels, base, output_dir, perplexity, n_iter, random_state)  # Compute and save 2D and 3D t-SNE embeddings as PNG plots
 
             try:  # Try to delete DataFrame to free memory
                 del numeric_df  # Free numeric DataFrame
