@@ -6745,6 +6745,113 @@ def generate_ratio_comparison_report(results_original, all_ratio_results):
         raise
 
 
+def load_and_validate_augmented_data(file, df_original_cleaned):
+    """
+    Locates, loads, preprocesses, and validates augmented data for the given file.
+
+    :param file: Original file path used to locate the augmented counterpart
+    :param df_original_cleaned: Cleaned original dataframe for validation reference
+    :return: Cleaned augmented dataframe, or None if loading or validation fails
+    """
+
+    try:
+        augmented_file = find_data_augmentation_file(file)  # Look for augmented data file using wgangp.py naming convention
+
+        if augmented_file is None:  # If no augmented file found at expected path
+            print(
+                f"\n{BackgroundColors.YELLOW}No augmented data found for this file. Skipping augmentation comparison.{Style.RESET_ALL}"
+            )  # Print warning message about missing augmented file
+            return None  # Signal caller that no augmented data is available
+
+        df_augmented = load_dataset(augmented_file)  # Load the augmented dataset from the discovered file
+
+        if df_augmented is None:  # If augmented dataset failed to load from disk
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Failed to load augmented dataset from {BackgroundColors.CYAN}{augmented_file}{BackgroundColors.YELLOW}. Skipping.{Style.RESET_ALL}"
+            )  # Print warning message about load failure
+            return None  # Signal caller that loading failed
+
+        df_augmented_cleaned = preprocess_dataframe(df_augmented)  # Preprocess the augmented dataframe with same pipeline as original
+
+        if not validate_augmented_dataframe(df_original_cleaned, df_augmented_cleaned, file):  # Validate augmented data is compatible with original
+            return None  # Signal caller that validation failed
+
+        return df_augmented_cleaned  # Return the cleaned and validated augmented dataframe
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def run_single_ratio_experiment(file, df_original_cleaned, df_augmented_cleaned, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, ratio, ratio_idx, total_ratios, config=None):
+    """
+    Executes a single ratio-based augmentation experiment by sampling, visualizing, and evaluating.
+
+    :param file: Original file path
+    :param df_original_cleaned: Cleaned original dataframe
+    :param df_augmented_cleaned: Cleaned augmented dataframe to sample from
+    :param feature_names: List of feature names
+    :param ga_selected_features: Features selected by genetic algorithm
+    :param pca_n_components: Number of PCA components
+    :param rfe_selected_features: Features selected by RFE
+    :param base_models: Dictionary of base models
+    :param hp_params_map: Hyperparameters mapping
+    :param ratio: Current augmentation ratio (float between 0 and 1)
+    :param ratio_idx: Current ratio index (1-based) for progress display
+    :param total_ratios: Total number of ratios being evaluated
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Results list from evaluate_on_dataset, or None if sampling fails
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        ratio_pct = int(ratio * 100)  # Convert float ratio to integer percentage for display
+        experiment_id = generate_experiment_id(file, "original_plus_augmented", ratio)  # Generate unique experiment ID for this ratio
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx}/{total_ratios}] Evaluating Original + Augmented@{ratio_pct}%{Style.RESET_ALL}"
+        )  # Print progress indicator for current ratio experiment
+
+        df_sampled = sample_augmented_by_ratio(df_augmented_cleaned, df_original_cleaned, ratio)  # Sample augmented rows at the current ratio
+
+        if df_sampled is None or df_sampled.empty:  # If sampling returned no valid data
+            print(
+                f"{BackgroundColors.YELLOW}Warning: Could not sample augmented data at ratio {ratio}. Skipping this ratio.{Style.RESET_ALL}"
+            )  # Print warning about sampling failure
+            return None  # Signal caller to skip this ratio
+
+        data_source_label = f"Original+Augmented@{ratio_pct}%"  # Build descriptive data source label for CSV traceability
+
+        print(
+            f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
+        )  # Print sampled dataset size for transparency
+
+        generate_augmentation_tsne_visualization(
+            file, df_original_cleaned, df_sampled, ratio, "original_plus_augmented"
+        )  # Generate t-SNE visualization for this augmentation ratio
+
+        results_ratio = evaluate_on_dataset(
+            file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
+            rfe_selected_features, base_models, data_source_label=data_source_label,
+            hyperparams_map=hp_params_map, experiment_id=experiment_id,
+            experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+            execution_mode_str="binary", attack_types_combined=None,
+            df_augmented_for_training=df_sampled
+        )  # Evaluate all classifiers with augmented data in training only (test remains original-only)
+
+        send_telegram_message(
+            TELEGRAM_BOT, f"Completed augmentation ratio {ratio_pct}% for {os.path.basename(file)}"
+        )  # Send Telegram notification for ratio completion
+
+        return results_ratio  # Return the evaluation results for this ratio
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, results_original, config=None):
     """
     Handles complete augmented data evaluation workflow with ratio-based experiments.
@@ -6772,26 +6879,12 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
             f"{BackgroundColors.GREEN}Processing augmented data evaluation for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
         )  # Output the verbose message
 
-        augmented_file = find_data_augmentation_file(file)  # Look for augmented data file using wgangp.py naming convention
+        df_augmented_cleaned = load_and_validate_augmented_data(file, df_original_cleaned)  # Load, preprocess, and validate augmented data
 
-        if augmented_file is None:  # If no augmented file found at expected path
-            print(
-                f"\n{BackgroundColors.YELLOW}No augmented data found for this file. Skipping augmentation comparison.{Style.RESET_ALL}"
-            )  # Print warning message about missing augmented file
-            return  # Exit function early when no augmented file exists
+        if df_augmented_cleaned is None:  # If augmented data could not be loaded or validated
+            return  # Exit function early when no valid augmented data is available
 
-        df_augmented = load_dataset(augmented_file)  # Load the augmented dataset from the discovered file
-
-        if df_augmented is None:  # If augmented dataset failed to load from disk
-            print(
-                f"{BackgroundColors.YELLOW}Warning: Failed to load augmented dataset from {BackgroundColors.CYAN}{augmented_file}{BackgroundColors.YELLOW}. Skipping.{Style.RESET_ALL}"
-            )  # Print warning message about load failure
-            return  # Exit function early on load failure
-
-        df_augmented_cleaned = preprocess_dataframe(df_augmented)  # Preprocess the augmented dataframe with same pipeline as original
-
-        if not validate_augmented_dataframe(df_original_cleaned, df_augmented_cleaned, file):  # Validate augmented data is compatible with original
-            return  # Exit function early if augmented data fails validation checks
+        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Retrieve the list of ratios to evaluate
 
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
@@ -6800,7 +6893,7 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}RATIO-BASED DATA AUGMENTATION EXPERIMENTS{Style.RESET_ALL}"
         )  # Print header for the ratio-based experiments section
         print(
-            f"{BackgroundColors.GREEN}Ratios to evaluate: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])]}{Style.RESET_ALL}"
+            f"{BackgroundColors.GREEN}Ratios to evaluate: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in augmentation_ratios]}{Style.RESET_ALL}"
         )  # Print the list of ratios that will be evaluated
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
@@ -6808,46 +6901,15 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
 
         all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
 
-        for ratio_idx, ratio in enumerate(config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]), start=1):  # Iterate over each augmentation ratio
-            ratio_pct = int(ratio * 100)  # Convert float ratio to integer percentage for display
-            experiment_id = generate_experiment_id(file, "original_plus_augmented", ratio)  # Generate unique experiment ID for this ratio
+        for ratio_idx, ratio in enumerate(augmentation_ratios, start=1):  # Iterate over each augmentation ratio
+            results_ratio = run_single_ratio_experiment(
+                file, df_original_cleaned, df_augmented_cleaned, feature_names,
+                ga_selected_features, pca_n_components, rfe_selected_features,
+                base_models, hp_params_map, ratio, ratio_idx, len(augmentation_ratios), config
+            )  # Execute the experiment for this specific ratio
 
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx}/{len(config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]))}] Evaluating Original + Augmented@{ratio_pct}%{Style.RESET_ALL}"
-            )  # Print progress indicator for current ratio experiment
-
-            df_sampled = sample_augmented_by_ratio(df_augmented_cleaned, df_original_cleaned, ratio)  # Sample augmented rows at the current ratio
-
-            if df_sampled is None or df_sampled.empty:  # If sampling returned no valid data
-                print(
-                    f"{BackgroundColors.YELLOW}Warning: Could not sample augmented data at ratio {ratio}. Skipping this ratio.{Style.RESET_ALL}"
-                )  # Print warning about sampling failure
-                continue  # Skip to the next ratio in the loop
-
-            data_source_label = f"Original+Augmented@{ratio_pct}%"  # Build descriptive data source label for CSV traceability
-
-            print(
-                f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
-            )  # Print sampled dataset size for transparency
-
-            generate_augmentation_tsne_visualization(
-                file, df_original_cleaned, df_sampled, ratio, "original_plus_augmented"
-            )  # Generate t-SNE visualization for this augmentation ratio
-
-            results_ratio = evaluate_on_dataset(
-                file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
-                rfe_selected_features, base_models, data_source_label=data_source_label,
-                hyperparams_map=hp_params_map, experiment_id=experiment_id,
-                experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
-                execution_mode_str="binary", attack_types_combined=None,
-                df_augmented_for_training=df_sampled
-            )  # Evaluate all classifiers with augmented data in training only (test remains original-only)
-
-            all_ratio_results[ratio] = results_ratio  # Store the results for this ratio in the results dictionary
-
-            send_telegram_message(
-                TELEGRAM_BOT, f"Completed augmentation ratio {ratio_pct}% for {os.path.basename(file)}"
-            )  # Send Telegram notification for ratio completion
+            if results_ratio is not None:  # If the ratio experiment produced valid results
+                all_ratio_results[ratio] = results_ratio  # Store the results for this ratio in the results dictionary
 
         if not all_ratio_results:  # If no ratio experiments produced valid results
             print(
