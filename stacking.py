@@ -6609,6 +6609,38 @@ def print_dataset_evaluation_header(data_source_label):
         raise
 
 
+def setup_feature_set_names(name, X_train_subset, subset_feature_names_list):
+    """
+    Determine the list of feature names for the given feature set, generating PCA names or generic labels when needed.
+
+    :param name: Name of the current feature set.
+    :param X_train_subset: Training feature array used to determine the number of features.
+    :param subset_feature_names_list: Pre-computed feature names list, or None/empty for generic generation.
+    :return: List of feature name strings for the current subset.
+    """
+
+    if name == "PCA Components":  # IF THE FEATURE SET IS PCA COMPONENTS
+        return [f"PC{i+1}" for i in range(X_train_subset.shape[1])]  # GENERATE PCA COMPONENT NAMES
+    return (
+        subset_feature_names_list if subset_feature_names_list else [f"feature_{i}" for i in range(X_train_subset.shape[1])]
+    )  # USE ACTUAL FEATURE NAMES OR GENERATE GENERIC ONES
+
+
+def convert_subset_to_dataframes(X_train_subset, X_test_subset, subset_feature_names):
+    """
+    Convert training and test feature arrays to DataFrames using the provided feature name list.
+
+    :param X_train_subset: Training feature array to wrap in a DataFrame.
+    :param X_test_subset: Test feature array to wrap in a DataFrame.
+    :param subset_feature_names: List of column names to assign to both DataFrames.
+    :return: Tuple of (X_train_df, X_test_df) DataFrames with named columns.
+    """
+
+    X_train_df = pd.DataFrame(X_train_subset, columns=subset_feature_names)  # CONVERT TRAINING FEATURES TO DATAFRAME
+    X_test_df = pd.DataFrame(X_test_subset, columns=subset_feature_names)  # CONVERT TEST FEATURES TO DATAFRAME
+    return X_train_df, X_test_df  # RETURN DATAFRAMES WITH NAMED COLUMNS
+
+
 def evaluate_on_dataset(
     file,
     df,
@@ -6691,21 +6723,9 @@ def evaluate_on_dataset(
                 f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating models on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}"
             )  # Output evaluation status
 
-            if name == "PCA Components":  # If the feature set is PCA Components
-                subset_feature_names = [
-                    f"PC{i+1}" for i in range(X_train_subset.shape[1])
-                ]  # Generate PCA component names
-            else:  # For other feature sets
-                subset_feature_names = (
-                    subset_feature_names_list if subset_feature_names_list else [f"feature_{i}" for i in range(X_train_subset.shape[1])]
-                )  # Use actual feature names or generate generic ones
+            subset_feature_names = setup_feature_set_names(name, X_train_subset, subset_feature_names_list)  # DETERMINE FEATURE NAMES FOR THIS SUBSET
 
-            X_train_df = pd.DataFrame(
-                X_train_subset, columns=subset_feature_names
-            )  # Convert training features to DataFrame
-            X_test_df = pd.DataFrame(
-                X_test_subset, columns=subset_feature_names
-            )  # Convert test features to DataFrame
+            X_train_df, X_test_df = convert_subset_to_dataframes(X_train_subset, X_test_subset, subset_feature_names)  # CONVERT FEATURE ARRAYS TO DATAFRAMES WITH NAMED COLUMNS
 
             individual_results, current_combination = run_individual_classifiers_for_feature_set(
                 name, individual_models, X_train_df, y_train, X_test_df, y_test,
