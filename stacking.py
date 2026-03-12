@@ -4067,6 +4067,69 @@ def generate_permutation_importance(model, X_test, y_test, feature_names, output
         raise
 
 
+def extract_tree_based_importance(model, feature_names, output_dir, model_name, dataset_name, config=None):
+    """
+    Extracts and plots feature importances from tree-based models using the feature_importances_ attribute.
+
+    :param model: Trained tree-based model with a feature_importances_ attribute
+    :param feature_names: List of feature names corresponding to model input columns
+    :param output_dir: Directory path where the importance bar plot will be saved
+    :param model_name: Name of the model used in plot titles and file names
+    :param dataset_name: Name of the dataset used in plot titles and file names
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Dictionary with key 'model_importance' mapping feature names to importance scores
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Extracting built-in feature importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+            config=config
+        )  # Log tree-based importance extraction start
+
+        os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists before writing
+
+        importances = model.feature_importances_  # Read raw importance scores from the model
+        sorted_indices = np.argsort(importances)[::-1]  # Sort indices from highest to lowest importance
+        sorted_features = [feature_names[i] for i in sorted_indices]  # Reorder feature names by descending importance
+        sorted_importances = importances[sorted_indices]  # Reorder importance values by descending importance
+
+        importance_dict = dict(zip(sorted_features, sorted_importances.tolist()))  # Build feature-name-to-score mapping
+
+        try:  # Attempt to generate the importance bar plot
+            explainer_config = config.get("explainability", {})  # Read explainability section from config
+            max_display = explainer_config.get("max_display_features", 20)  # Maximum features shown in the plot
+            display_count = min(max_display, len(sorted_features))  # Clamp display count to available features
+
+            plt.figure(figsize=(10, max(6, display_count * 0.3)))  # Create figure sized relative to feature count
+            y_pos = np.arange(display_count)  # Compute bar Y-axis positions
+            plt.barh(y_pos, sorted_importances[:display_count], align='center', alpha=0.7, color='forestgreen')  # Draw horizontal bars
+            plt.yticks(y_pos, sorted_features[:display_count])  # Label Y-axis with feature names
+            plt.xlabel('Feature Importance', fontsize=12)  # Label X-axis
+            plt.ylabel('Features', fontsize=12)  # Label Y-axis
+            plt.title(f'Model Feature Importance - {model_name}\n{dataset_name}', fontsize=14)  # Set descriptive title
+            plt.grid(axis='x', alpha=0.3)  # Add subtle X-axis grid lines
+            plt.tight_layout()  # Adjust figure padding
+            importance_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_feature_importance.png")  # Construct output file path
+            ensure_figure_min_4k_and_save(fig=plt.gcf(), path=importance_plot_path, dpi=300, bbox_inches='tight')  # Save plot with minimum 4K resolution
+            plt.close()  # Release figure resources
+        except Exception:  # If plot generation fails
+            plt.close()  # Close figure to avoid resource leak
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Model feature importance saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
+            config=config
+        )  # Log successful extraction and plot save
+
+        return {"model_importance": importance_dict}  # Return the importance dictionary
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def extract_model_feature_importance(model, feature_names, output_dir, model_name, dataset_name, config=None):
     """
     Extract built-in feature importance from model if supported.
@@ -4088,46 +4151,7 @@ def extract_model_feature_importance(model, feature_names, output_dir, model_nam
             model_type = model.__class__.__name__  # Get model class name
 
             if hasattr(model, 'feature_importances_'):  # If model has built-in feature importance
-                verbose_output(
-                    f"{BackgroundColors.GREEN}Extracting built-in feature importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
-                    config=config
-                )  # Log extraction start
-
-                os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
-
-                importances = model.feature_importances_  # Get feature importances
-                sorted_indices = np.argsort(importances)[::-1]  # Sort indices by descending importance
-                sorted_features = [feature_names[i] for i in sorted_indices]  # Get sorted feature names
-                sorted_importances = importances[sorted_indices]  # Get sorted importances
-
-                importance_dict = dict(zip(sorted_features, sorted_importances.tolist()))  # Create importance dict
-
-                try:  # Try to create bar plot
-                    explainer_config = config.get("explainability", {})  # Get explainability config
-                    max_display = explainer_config.get("max_display_features", 20)  # Max features to display
-                    display_count = min(max_display, len(sorted_features))  # Number of features to display
-
-                    plt.figure(figsize=(10, max(6, display_count * 0.3)))  # Create figure with dynamic height
-                    y_pos = np.arange(display_count)  # Y positions for bars
-                    plt.barh(y_pos, sorted_importances[:display_count], align='center', alpha=0.7, color='forestgreen')  # Create horizontal bar plot
-                    plt.yticks(y_pos, sorted_features[:display_count])  # Set Y-axis labels
-                    plt.xlabel('Feature Importance', fontsize=12)  # Set X-axis label
-                    plt.ylabel('Features', fontsize=12)  # Set Y-axis label
-                    plt.title(f'Model Feature Importance - {model_name}\n{dataset_name}', fontsize=14)  # Set title
-                    plt.grid(axis='x', alpha=0.3)  # Add X-axis grid
-                    plt.tight_layout()  # Adjust layout
-                    importance_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_feature_importance.png")  # Build plot path
-                    ensure_figure_min_4k_and_save(fig=plt.gcf(), path=importance_plot_path, dpi=300, bbox_inches='tight')  # Save plot ensuring >=4k pixels
-                    plt.close()  # Close plot
-                except Exception:  # If plot fails
-                    plt.close()  # Close plot
-
-                verbose_output(
-                    f"{BackgroundColors.GREEN}Model feature importance saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
-                    config=config
-                )  # Log extraction completion
-
-                return {"model_importance": importance_dict}  # Return feature importance results
+                return extract_tree_based_importance(model, feature_names, output_dir, model_name, dataset_name, config=config)  # Delegate to tree-based importance extractor
 
             elif hasattr(model, 'coef_'):  # If linear model with coefficients
                 verbose_output(
