@@ -3800,6 +3800,178 @@ def build_ga_run_result_dict(best_ind, metrics_with_iteration_time, best_feature
         raise  # Re-raise to preserve original failure semantics
 
 
+def execute_ga_setup_and_loop(
+    feature_count,
+    pop_size,
+    shared_pool,
+    X_train,
+    y_train,
+    n_generations,
+    cxpb,
+    mutpb,
+    progress_bar,
+    dataset_name,
+    csv_path,
+    max_pop,
+    run,
+    runs,
+    progress_state,
+):
+    """
+    Set up the DEAP genetic algorithm components and run the full generation loop.
+
+    Calls setup_genetic_algorithm to create the toolbox, population, and Hall of Fame,
+    then delegates to run_genetic_algorithm_loop to execute all configured generations.
+
+    :param feature_count: Number of features in the dataset (individual genome length).
+    :param pop_size: Population size for this GA run.
+    :param shared_pool: Active multiprocessing pool for parallel fitness evaluation.
+    :param X_train: Training feature matrix.
+    :param y_train: Training target labels.
+    :param n_generations: Number of generations to evolve.
+    :param cxpb: Crossover probability.
+    :param mutpb: Mutation probability.
+    :param progress_bar: Optional tqdm progress bar instance.
+    :param dataset_name: Dataset name forwarded to the progress bar and GA loop.
+    :param csv_path: CSV path forwarded to the GA loop for output directory resolution.
+    :param max_pop: Maximum population size forwarded to the progress bar.
+    :param run: Current run index (1-based) forwarded to the loop.
+    :param runs: Total number of runs forwarded to the loop.
+    :param progress_state: Progress-tracking dict forwarded to the loop.
+    :return: Tuple of (best_ind, gens_ran, history_data).
+    """
+
+    try:
+        toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size, pool=shared_pool)  # Setup GA components, reusing shared pool
+        best_ind, gens_ran, history_data = run_genetic_algorithm_loop(
+            toolbox=toolbox,
+            population=population,
+            hof=hof,
+            X_train=X_train,
+            y_train=y_train,
+            n_generations=n_generations,
+            show_progress=False,
+            progress_bar=progress_bar,
+            dataset_name=dataset_name,
+            csv_path=csv_path,
+            pop_size=pop_size,
+            max_pop=max_pop,
+            cxpb=cxpb,
+            mutpb=mutpb,
+            run=run,
+            runs=runs,
+            progress_state=progress_state,
+        )  # Run GA loop and get generations actually run and comprehensive history data
+
+        return best_ind, gens_ran, history_data  # Return best individual, generation count, and history
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def finalize_iteration_progress(
+    progress_state,
+    n_generations,
+    pop_size,
+    gens_ran,
+    folds,
+    progress_bar,
+    dataset_name,
+    csv_path,
+    max_pop,
+    run,
+    runs,
+):
+    """
+    Adjust the progress state for early stopping and trigger a final progress bar refresh.
+
+    Subtracts skipped fitness evaluations from the progress total via adjust_progress_for_early_stop,
+    then calls update_progress_bar to display the updated iteration count.
+
+    :param progress_state: Mutable progress-tracking dict (mutated in-place).
+    :param n_generations: Configured total generations for the run.
+    :param pop_size: Population size used for this run.
+    :param gens_ran: Number of generations actually executed.
+    :param folds: Number of CV folds per evaluation.
+    :param progress_bar: Optional tqdm progress bar instance to refresh; skipped when None.
+    :param dataset_name: Dataset name forwarded to the progress bar description.
+    :param csv_path: CSV path forwarded to the progress bar description.
+    :param max_pop: Maximum population size forwarded to the progress bar description.
+    :param run: Current run index forwarded to the progress bar description.
+    :param runs: Total number of runs forwarded to the progress bar description.
+    :return: None
+    """
+
+    try:
+        adjust_progress_for_early_stop(
+            progress_state, n_generations, pop_size, gens_ran, folds
+        )  # Subtract skipped evaluations from progress total when the GA stopped early
+        (
+            update_progress_bar(
+                progress_bar,
+                dataset_name,
+                csv_path,
+                pop_size=pop_size,
+                max_pop=max_pop,
+                n_generations=n_generations,
+                run=run,
+                runs=runs,
+                progress_state=progress_state,
+            )
+            if progress_bar
+            else None
+        )  # Refresh progress bar after early-stop adjustment
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def extract_selected_features(best_ind, feature_names):
+    """
+    Extract the feature names that were selected by the best GA individual.
+
+    Iterates over the binary genome of best_ind in parallel with feature_names,
+    returning only the features whose corresponding bit is 1.
+
+    :param best_ind: Binary-coded GA individual where 1 indicates feature selected.
+    :param feature_names: List of feature names aligned with the individual's genome.
+    :return: List of feature names whose corresponding gene bit is 1.
+    """
+
+    try:
+        return [
+            f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1
+        ]  # Collect feature names corresponding to active (1) genes in the individual
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def cache_iteration_result_if_resumable(output_dir, state_id, result):
+    """
+    Persist the completed iteration result and clean up intermediate state files when resume-progress is enabled.
+
+    Writes the final run result dict via save_run_result and removes the generation-level
+    checkpoint via cleanup_state_for_id.  All failures are silently swallowed to prevent
+    caching errors from aborting GA execution.
+
+    :param output_dir: Directory where result and checkpoint files are stored.
+    :param state_id: Deterministic run identifier used in file names.
+    :param result: Completed run result dict to persist.
+    :return: None
+    """
+
+    try:  # Try to save run result
+        if CONFIG["execution"]["resume_progress"] and state_id is not None:  # If resume is enabled and state_id exists
+            save_run_result(output_dir, state_id, result)  # Save the run result
+            cleanup_state_for_id(output_dir, state_id)  # Cleanup state files
+    except Exception:  # On any saving error
+        pass  # Do nothing
+
+
 def run_single_ga_iteration(
     X_train,
     y_train,
@@ -3871,54 +4043,23 @@ def run_single_ga_iteration(
         if cached:  # If cached result found
             return cached  # Return cached result immediately
 
-        toolbox, population, hof = setup_genetic_algorithm(feature_count, pop_size, pool=shared_pool)  # Setup GA components, reusing shared pool
-        best_ind, gens_ran, history_data = run_genetic_algorithm_loop(
-            toolbox=toolbox,
-            population=population,
-            hof=hof,
-            X_train=X_train,
-            y_train=y_train,
-            n_generations=n_generations,
-            show_progress=False,
-            progress_bar=progress_bar,
-            dataset_name=dataset_name,
-            csv_path=csv_path,
-            pop_size=pop_size,
-            max_pop=max_pop,
-            cxpb=cxpb,
-            mutpb=mutpb,
-            run=run,
-            runs=runs,
-            progress_state=progress_state,
-        )  # Run GA loop and get generations actually run and comprehensive history data
+        best_ind, gens_ran, history_data = execute_ga_setup_and_loop(
+            feature_count, pop_size, shared_pool,
+            X_train, y_train, n_generations, cxpb, mutpb,
+            progress_bar, dataset_name, csv_path, max_pop, run, runs, progress_state,
+        )  # Set up GA components and run the full generation loop
 
         if best_ind is None:  # If GA failed
             return None  # Exit early
 
         metrics = evaluate_individual_with_test(best_ind, X_train, y_train, X_test, y_test)  # Evaluate best individual with full test metrics
 
-        adjust_progress_for_early_stop(
-            progress_state, n_generations, pop_size, gens_ran, folds
-        )  # Update progress_state in helper
-        (
-            update_progress_bar(
-                progress_bar,
-                dataset_name,
-                csv_path,
-                pop_size=pop_size,
-                max_pop=max_pop,
-                n_generations=n_generations,
-                run=run,
-                runs=runs,
-                progress_state=progress_state,
-            )
-            if progress_bar
-            else None
-        )  # Update progress bar
+        finalize_iteration_progress(
+            progress_state, n_generations, pop_size, gens_ran, folds,
+            progress_bar, dataset_name, csv_path, max_pop, run, runs,
+        )  # Adjust progress for early stopping and refresh progress bar
 
-        best_features = [
-            f for f, bit in zip(feature_names if feature_names is not None else [], best_ind) if bit == 1
-        ]  # Extract best features
+        best_features = extract_selected_features(best_ind, feature_names)  # Extract names of features selected by the best individual
 
         iteration_elapsed_time = time.perf_counter() - iteration_start_time  # Calculate total iteration time
         metrics_with_iteration_time = metrics + (iteration_elapsed_time,)  # Add total iteration time as 7th element
@@ -3927,12 +4068,7 @@ def run_single_ga_iteration(
 
         result = build_ga_run_result_dict(best_ind, metrics_with_iteration_time, best_features, history_data, gens_ran)  # Build standardised result dictionary for this GA iteration
 
-        try:  # Try to save run result
-            if CONFIG["execution"]["resume_progress"] and state_id is not None:  # If resume is enabled and state_id exists
-                save_run_result(output_dir, state_id, result)  # Save the run result
-                cleanup_state_for_id(output_dir, state_id)  # Cleanup state files
-        except Exception:  # On any saving error
-            pass  # Do nothing
+        cache_iteration_result_if_resumable(output_dir, state_id, result)  # Persist result and clean up checkpoint files when resume-progress is enabled
 
         return result  # Return results
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
