@@ -2148,11 +2148,11 @@ def log_resource_information(X_train, y_train):
     :return: None
     """
 
-    _, available_memory_gb, data_size_gb = compute_safe_n_jobs(X_train, y_train)  # GET MEMORY STATS FOR LOGGING
-    n_jobs_display = get_n_jobs_display()  # GET READABLE CORE COUNT
+    _, available_memory_gb, data_size_gb = compute_safe_n_jobs(X_train, y_train)  # Get memory stats for logging
+    n_jobs_display = get_n_jobs_display()  # Get readable core count
     verbose_output(
         f"{BackgroundColors.GREEN}Processing combinations sequentially with {BackgroundColors.CYAN}{n_jobs_display}{BackgroundColors.GREEN} per model (Available RAM: {BackgroundColors.CYAN}{available_memory_gb:.1f}GB{BackgroundColors.GREEN}, Dataset: {BackgroundColors.CYAN}{data_size_gb:.2f}GB{BackgroundColors.GREEN}){Style.RESET_ALL}"
-    )  # LOG RESOURCES
+    )  # Log resources
 
 
 def expand_parameter_grid(param_grid):
@@ -2163,11 +2163,11 @@ def expand_parameter_grid(param_grid):
     :return: Tuple of (keys, param_combinations, total_combinations) where keys is the ordered parameter name list, param_combinations is the full Cartesian product list, and total_combinations is its length.
     """
 
-    keys = list(param_grid.keys())  # PARAMETER NAMES
-    values = [v if isinstance(v, (list, tuple)) else [v] for v in param_grid.values()]  # ENSURE EACH VALUE IS ITERABLE
-    param_combinations = list(product(*values))  # CARTESIAN PRODUCT OF HYPERPARAMETER VALUES
-    total_combinations = len(param_combinations)  # TOTAL COMBINATIONS COUNT
-    return keys, param_combinations, total_combinations  # RETURN EXPANDED GRID COMPONENTS
+    keys = list(param_grid.keys())  # Parameter names
+    values = [v if isinstance(v, (list, tuple)) else [v] for v in param_grid.values()]  # Ensure each value is iterable
+    param_combinations = list(product(*values))  # Cartesian product of hyperparameter values
+    total_combinations = len(param_combinations)  # Total combinations count
+    return keys, param_combinations, total_combinations  # Return expanded grid components
 
 
 def initialize_grid_search_state(global_counter_start):
@@ -2245,7 +2245,7 @@ def manual_grid_search(
         if not param_grid:  # No hyperparameters to optimize — return a full tuple matching the caller's unpack
             return None, -float("inf"), 0.0, [], global_counter_start
 
-        keys, param_combinations, total_combinations = expand_parameter_grid(param_grid)  # EXPAND PARAM GRID INTO ORDERED LIST OF ALL COMBINATIONS
+        keys, param_combinations, total_combinations = expand_parameter_grid(param_grid)  # Expand param grid into ordered list of all combinations
 
         cache_dict = load_cache_results(csv_path) if csv_path else {}  # Load cache
         
@@ -2265,7 +2265,7 @@ def manual_grid_search(
 
         report_combination_search_progress(cached_count, combinations_to_test, model_name)  # Print cached count and remaining combinations to test
 
-        log_resource_information(X_train, y_train)  # LOG AVAILABLE RAM, DATASET SIZE, AND CORE COUNT BEFORE EVALUATION
+        log_resource_information(X_train, y_train)  # Log available ram, dataset size, and core count before evaluation
 
         best_params, best_score, best_elapsed, all_results, global_counter = run_parallel_evaluation(
             model_name,
@@ -2765,7 +2765,7 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """
     try:
         def row_style(row):  # Define row-wise styling function
-            bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # white/light-gray alternation
+            bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # White/light-gray alternation
             return [f"background-color: {bg};" for _ in row.index]  # Return style per cell preserving order
 
         styled = df.style.apply(row_style, axis=1)  # Apply zebra styling row-wise to preserve column order
@@ -2955,7 +2955,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Hyperparameters optimization runner")  # Create CLI argument parser
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output (overrides config)")  # Verbose flag
-    parser.add_argument("--n_jobs", type=int, help="Number of parallel jobs (overrides config)")  # n_jobs override
+    parser.add_argument("--n_jobs", type=int, help="Number of parallel jobs (overrides config)")  # N_jobs override
     parser.add_argument("--skip_train_if_model_exists", action="store_true", help="Skip training if model exists (overrides config)")  # Skip-training flag
     parser.add_argument("--results_dir", type=str, help="Results directory (overrides config)")  # Results directory override
     parser.add_argument("--results_filename", type=str, help="Results CSV filename (overrides config)")  # Results filename override
