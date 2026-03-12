@@ -1291,6 +1291,31 @@ def get_thundersvm_estimator():
         raise
 
 
+def filter_and_log_enabled_models(all_models):
+    """
+    Filter the full model dictionary to only the models listed in ENABLED_MODELS, log disabled and enabled names, and return the filtered subset.
+
+    :param all_models: Dictionary mapping model name strings to (model_instance, param_grid) tuples for all available classifiers.
+    :return: Filtered dictionary containing only the models whose names appear in ENABLED_MODELS, or an empty dict when none are enabled.
+    """
+
+    enabled_models = {model_name: model_config for model_name, model_config in all_models.items() if model_name in ENABLED_MODELS}  # Keep only models explicitly listed in ENABLED_MODELS
+    if not enabled_models:  # Return empty dict with an error message when no enabled models remain after filtering
+        print(
+            f"{BackgroundColors.RED}Error: No models enabled in ENABLED_MODELS configuration. Please enable at least one model.{Style.RESET_ALL}"
+        )  # Report the configuration error to the terminal
+        return {}  # Return empty dict to signal no models are available
+    disabled_models = [name for name in all_models.keys() if name not in ENABLED_MODELS]  # Compute the list of model names excluded by the ENABLED_MODELS filter
+    if disabled_models:  # Log disabled models only when at least one was excluded
+        print(
+            f"{BackgroundColors.YELLOW}Disabled models: {BackgroundColors.CYAN}{', '.join(disabled_models)}{Style.RESET_ALL}"
+        )  # Print the list of disabled model names for operator awareness
+    print(
+        f"{BackgroundColors.GREEN}Enabled models ({len(enabled_models)}): {BackgroundColors.CYAN}{', '.join(enabled_models.keys())}{Style.RESET_ALL}"
+    )  # Print the count and names of enabled models for operator confirmation
+    return enabled_models  # Return the filtered subset of enabled model configurations
+
+
 def build_all_models_config():
     """
     Build and return the full dictionary of all available model instances paired with their hyperparameter grids.
@@ -1409,25 +1434,7 @@ def get_models_and_param_grids():
         all_models = build_all_models_config()  # Build the full dictionary of all available model instances and their hyperparameter grids
 
 
-        enabled_models = {model_name: model_config for model_name, model_config in all_models.items() if model_name in ENABLED_MODELS}  # Filter enabled models
-
-        if not enabled_models:  # If no models are enabled
-            print(
-                f"{BackgroundColors.RED}Error: No models enabled in ENABLED_MODELS configuration. Please enable at least one model.{Style.RESET_ALL}"
-            )  # Print error message
-            return {}  # Return empty dict
-
-        disabled_models = [name for name in all_models.keys() if name not in ENABLED_MODELS]  # List of disabled models
-        if disabled_models:  # If there are disabled models
-            print(
-                f"{BackgroundColors.YELLOW}Disabled models: {BackgroundColors.CYAN}{', '.join(disabled_models)}{Style.RESET_ALL}"
-            )  # Print list of disabled models
-
-        print(
-            f"{BackgroundColors.GREEN}Enabled models ({len(enabled_models)}): {BackgroundColors.CYAN}{', '.join(enabled_models.keys())}{Style.RESET_ALL}"
-        )  # Print list of enabled models
-
-        return enabled_models  # Return enabled models and their parameter grids
+        return filter_and_log_enabled_models(all_models)  # Filter to enabled models, log names, and return the subset
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
