@@ -113,9 +113,6 @@ RUN_FUNCTIONS = {"Play Sound": True}
 # Functions Definitions:
 
 
-# setup_global_exception_hook() will be called from main() after configuration
-
-
 def verbose_output(true_string="", false_string=""):
     """
     Output a message if the VERBOSE constant is set to True.
