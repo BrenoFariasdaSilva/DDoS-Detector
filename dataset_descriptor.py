@@ -2518,48 +2518,11 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
 
             info = get_dataset_file_info(filepath, df=df_current, low_memory=low_memory)  # Extract metadata using the already-loaded DataFrame to avoid a second full read
             if info:  # If info was successfully retrieved
-                relative_path = os.path.relpath(filepath, base_dir)  # Get path relative to base_dir
-                info["Dataset Name"] = relative_path.replace(
-                    "\\", "/"
-                )  # Use relative path for Dataset Name and normalize slashes
-
-                common_list, extras = get_file_common_and_extras(
-                    headers_map, filepath, common_features
-                )  # Get common and extra features for this file
-
-                info["Headers Match All Files"] = (
-                    "Yes" if headers_match_all else "No"
-                )  # Indicate if headers match all files
-                info["Common Features (in all files)"] = (
-                    ", ".join(common_list) if common_list else "None"
-                )  # Join common features into a string
-                info["Extra Features (not in all files)"] = (
-                    ", ".join(extras) if extras else "None"
-                )  # Join extra features into a string
-
-                tsne_out_subdir = cfg.get("paths", {}).get("data_separability_subdir", "Data_Separability")
-                tsne_file = generate_tsne_plot(
-                    filepath,
-                    df=df_current,
-                    low_memory=low_memory,
-                    sample_size=2000,
-                    output_dir=os.path.join(os.path.dirname(os.path.abspath(filepath)), tsne_out_subdir),
-                    config=cfg,
-                )  # Generate t-SNE plot using the already-loaded DataFrame to avoid rereading from disk
-                info["t-SNE Plot"] = tsne_file if tsne_file else "None"  # Add t-SNE plot filename or "None"
+                enrich_file_info_with_metadata(info, filepath, base_dir, headers_map, common_features, headers_match_all, cfg, low_memory, df_current)  # Populate Dataset Name, Headers Match, Common/Extra Features, and t-SNE Plot fields in place
 
                 report_rows.append(info)  # Add the info to the report rows
-                try:  # Collect preprocessing metrics for this file when available
-                    metrics_row = collect_preprocessing_metrics(
-                        filepath,  # File path being processed
-                        info.get("original_num_rows", 0),  # Original rows captured earlier
-                        info.get("rows_after_preprocessing", 0),  # Rows after preprocessing captured earlier
-                        info.get("original_num_features", 0),  # Original features captured earlier
-                        info.get("features_after_preprocessing", 0),  # Features after preprocessing captured earlier
-                    )  # Create metrics row dict
-                    preprocessing_metrics.append(metrics_row)  # Append metrics row to list for this directory
-                except Exception as _pm:  # If metrics collection fails
-                    print(f"{BackgroundColors.YELLOW}Warning: failed to collect preprocessing metrics for {file_basename}: {_pm}{Style.RESET_ALL}")  # Warn without breaking the progress bar
+
+                append_preprocessing_metrics_safe(filepath, info, preprocessing_metrics, file_basename)  # Collect and append preprocessing metrics with error-safe handling
 
             try:  # Attempt to release dataset memory to minimize peak RAM consumption
                 del df_current  # Delete the current dataset reference to allow garbage collection
