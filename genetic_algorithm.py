@@ -2719,6 +2719,236 @@ def check_telegram_progress_milestone(gen, n_generations, telegram_enabled, show
         raise  # Re-raise to preserve original failure semantics
 
 
+def setup_ga_loop_state(toolbox, population, X_train, y_train, csv_path, pop_size, n_generations, cxpb, mutpb, run):
+    """
+    Register the GA fitness evaluator, read early-stop and fold configuration, resolve the output
+    directory, compute a deterministic state ID, optionally restore a generation checkpoint, and
+    initialise the seven per-generation tracking history lists.
+
+    :param toolbox: DEAP toolbox whose ``evaluate`` attribute will be registered in-place.
+    :param population: Current population list; mutated in-place when a checkpoint is restored.
+    :param X_train: Training feature matrix forwarded to the fitness evaluator partial.
+    :param y_train: Training target labels forwarded to the fitness evaluator partial.
+    :param csv_path: CSV dataset path used to resolve the output directory and state ID.
+    :param pop_size: Population size incorporated into the deterministic state ID.
+    :param n_generations: Total generation count incorporated into the state ID.
+    :param cxpb: Crossover probability incorporated into the state ID.
+    :param mutpb: Mutation probability incorporated into the state ID.
+    :param run: Run index (1-based) incorporated into the state ID.
+    :return: Tuple of (folds, early_stop_gens, output_dir, state_id, start_gen,
+                       fitness_history, best_features_history, avg_f1_history,
+                       avg_features_history, pareto_size_history, hypervolume_history,
+                       diversity_history).
+    """
+
+    try:
+        fitness_func = partial(
+            evaluate_individual, X_train=X_train, y_train=y_train
+        )  # Partial function for evaluation
+        toolbox.register("evaluate", partial(ga_fitness, fitness_func=fitness_func))  # Register the global fitness function
+
+        early_stop_gens = CONFIG.get("early_stop", {}).get("generations", 10)  # Read configured early-stop patience from config
+        folds = CONFIG.get("cross_validation", {}).get("n_folds", 10)  # Read configured number of CV folds from config
+
+        output_dir = resolve_ga_output_dir(csv_path)  # Resolve canonical GA output directory from configuration
+        state_id = compute_state_id(
+            csv_path or "", pop_size or 0, n_generations, cxpb, mutpb, run or 0, folds, test_frac=None
+        )  # Deterministic state id for resume/caching
+        start_gen = 1  # Starting generation index (overridden if checkpoint found)
+
+        start_gen, loaded_history = load_and_apply_generation_state(
+            toolbox, population, output_dir, state_id, run=run
+        )  # Load and apply saved generation state if available, updating start generation and history
+
+        fitness_history, best_features_history, avg_f1_history, avg_features_history, pareto_size_history, hypervolume_history, diversity_history = initialize_ga_history_lists(loaded_history)  # Initialize seven per-generation history lists from loaded state (or empty)
+
+        return (
+            folds,
+            early_stop_gens,
+            output_dir,
+            state_id,
+            start_gen,
+            fitness_history,
+            best_features_history,
+            avg_f1_history,
+            avg_features_history,
+            pareto_size_history,
+            hypervolume_history,
+            diversity_history,
+        )  # Return all initialised loop state values for use in the main GA loop
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def build_generation_iteration_params(start_gen, n_generations, show_progress):
+    """
+    Build the generation iteration range and resolve Telegram progress notification settings.
+
+    Creates either a tqdm-wrapped or plain range for the generation loop, then reads the
+    Telegram configuration to determine whether progress milestone messages are enabled and
+    at what percentage intervals they should be sent.
+
+    :param start_gen: First generation index (1 for a fresh run, higher when resuming).
+    :param n_generations: Total number of generations to execute.
+    :param show_progress: Whether to wrap the range in a tqdm progress bar.
+    :return: Tuple of (gen_range, telegram_enabled, telegram_progress_pct, last_telegram_block).
+    """
+
+    try:
+        gen_range = (
+            tqdm(range(start_gen, n_generations + 1), desc=f"{BackgroundColors.GREEN}Generations{Style.RESET_ALL}")
+            if show_progress
+            else range(start_gen, n_generations + 1)
+        )  # Create generation range with progress bar if show_progress is enabled, otherwise use plain range
+        telegram_cfg = CONFIG.get("telegram", {}) if isinstance(CONFIG, dict) else {}  # Read Telegram progress notification settings from config
+        telegram_enabled = bool(telegram_cfg.get("enabled", True))  # Read Telegram enabled flag from config
+        try:  # Try to parse Telegram progress percentage threshold
+            telegram_progress_pct = int(telegram_cfg.get("progress_pct", 10))  # Integer percent between notifications
+        except Exception:  # If parsing fails
+            telegram_progress_pct = 10  # Fallback to 10% intervals
+        last_telegram_block = -1  # Track last percentage block notified so we don't repeat
+
+        return gen_range, telegram_enabled, telegram_progress_pct, last_telegram_block  # Return generation range and Telegram config values
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def apply_offspring_progress_update(
+    progress_state,
+    n_evaluated,
+    folds,
+    progress_bar,
+    dataset_name,
+    csv_path,
+    pop_size,
+    max_pop,
+    gen,
+    n_generations,
+    run,
+    runs,
+):
+    """
+    Increment the iteration counter in progress_state and refresh the progress bar after offspring evaluation.
+
+    Atomically advances ``progress_state["current_it"]`` by ``n_evaluated * folds`` to account
+    for the fitness evaluations just completed, then triggers a progress bar refresh.  All errors
+    are silently swallowed so that progress tracking never interrupts GA execution.
+
+    :param progress_state: Mutable progress-tracking dict (mutated in-place); skipped when None.
+    :param n_evaluated: Number of offspring whose fitness was evaluated in this generation step.
+    :param folds: Number of CV folds per evaluation; multiplier for the iteration counter.
+    :param progress_bar: Optional tqdm progress bar instance to refresh; skipped when None.
+    :param dataset_name: Dataset name forwarded to the progress bar description.
+    :param csv_path: CSV path forwarded to the progress bar description.
+    :param pop_size: Current population size forwarded to the progress bar description.
+    :param max_pop: Maximum population size forwarded to the progress bar description.
+    :param gen: Current generation index forwarded to the progress bar description.
+    :param n_generations: Total generation count forwarded to the progress bar description.
+    :param run: Current run index forwarded to the progress bar description.
+    :param runs: Total number of runs forwarded to the progress bar description.
+    :return: None
+    """
+
+    if not (progress_state and isinstance(progress_state, dict)):  # Only proceed when a valid progress state dict was provided
+        return  # Skip update if no valid progress state
+
+    try:  # Try to update progress state
+        progress_state["current_it"] = int(progress_state.get("current_it", 0)) + n_evaluated * folds  # Increment iteration counter by evaluations performed
+        (
+            update_progress_bar(
+                progress_bar,
+                dataset_name or "",
+                csv_path or "",
+                pop_size=pop_size,
+                max_pop=max_pop,
+                gen=gen,
+                n_generations=n_generations,
+                run=run,
+                runs=runs,
+                progress_state=progress_state,
+            )
+            if progress_bar
+            else None
+        )  # Refresh progress bar with updated state if provided
+    except Exception:  # Silently ignore progress update errors
+        pass  # Do nothing
+
+
+def enforce_hof_elitism(population, hof):
+    """
+    Ensure the best Hall-of-Fame individual survives into the current population.
+
+    When NSGA-II selection discards the all-time best individual, this function reinserts it
+    in place of the last (worst-ranked) individual, preventing elite solutions from being
+    accidentally lost during multi-objective selection.
+
+    :param population: Current generation population list (mutated in-place when needed).
+    :param hof: DEAP HallOfFame or similar container; its first element is the all-time best.
+    :return: None
+    """
+
+    try:
+        if hof and len(hof) > 0:  # If hall of fame has a best individual
+            if hof[0] not in population:  # If the best individual is not in the new population
+                population[-1] = hof[0]  # Replace the worst individual with the hall-of-fame best
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def persist_generation_state_if_needed(
+    output_dir,
+    state_id,
+    gen,
+    n_generations,
+    population,
+    hof,
+    fitness_history,
+    best_features_history,
+    avg_f1_history,
+    avg_features_history,
+    pareto_size_history,
+    hypervolume_history,
+    diversity_history,
+):
+    """
+    Checkpoint the current generation state to disk when resume-progress is enabled.
+
+    Writes a generation-level checkpoint file at the configured save interval or on the final
+    generation so that interrupted runs can be resumed from the last saved state.  All failures
+    are silently swallowed to prevent checkpoint I/O from interrupting the genetic algorithm.
+
+    :param output_dir: Directory where checkpoint files are written.
+    :param state_id: Deterministic run identifier used to name the checkpoint file.
+    :param gen: Current generation index being checkpointed.
+    :param n_generations: Total generation count; triggers an unconditional save on the final gen.
+    :param population: Current population list included in the checkpoint.
+    :param hof: Hall of Fame; its best individual is persisted alongside the population.
+    :param fitness_history: Per-generation best F1-score history list.
+    :param best_features_history: Per-generation best feature count history list.
+    :param avg_f1_history: Per-generation population average F1-score history list.
+    :param avg_features_history: Per-generation population average feature count history list.
+    :param pareto_size_history: Per-generation Pareto front size history list.
+    :param hypervolume_history: Per-generation hypervolume history list.
+    :param diversity_history: Per-generation population diversity history list.
+    :return: None
+    """
+
+    try:  # Persist per-generation progress so runs can be resumed (every N gens to reduce I/O)
+        if CONFIG["execution"]["resume_progress"] and state_id is not None and (gen % CONFIG["execution"]["progress_save_interval"] == 0 or gen == n_generations):  # Use configured interval
+            current_history_data = build_ga_history_data_dict(fitness_history, best_features_history, avg_f1_history, avg_features_history, pareto_size_history, hypervolume_history, diversity_history)  # Build consolidated history for state persistence
+            save_generation_state(
+                output_dir, state_id, gen, population, hof[0] if hof and len(hof) > 0 else None, current_history_data
+            )  # Write checkpoint to disk
+    except Exception:  # If saving fails
+        pass  # Do nothing
+
+
 def run_genetic_algorithm_loop(
     toolbox,
     population,
@@ -2766,43 +2996,31 @@ def run_genetic_algorithm_loop(
             f"{BackgroundColors.GREEN}Running Genetic Algorithm for {n_generations} generations.{Style.RESET_ALL}"
         )  # Output the verbose message
 
-        fitness_func = partial(
-            evaluate_individual, X_train=X_train, y_train=y_train
-        )  # Partial function for evaluation
-        toolbox.register("evaluate", partial(ga_fitness, fitness_func=fitness_func))  # Register the global fitness function
+        (
+            folds,
+            early_stop_gens,
+            output_dir,
+            state_id,
+            start_gen,
+            fitness_history,
+            best_features_history,
+            avg_f1_history,
+            avg_features_history,
+            pareto_size_history,
+            hypervolume_history,
+            diversity_history,
+        ) = setup_ga_loop_state(
+            toolbox, population, X_train, y_train, csv_path, pop_size, n_generations, cxpb, mutpb, run
+        )  # Register fitness function, read config, resolve output dir, load checkpoint, init history lists
+
+        gen_range, telegram_enabled, telegram_progress_pct, last_telegram_block = build_generation_iteration_params(
+            start_gen, n_generations, show_progress
+        )  # Build generation range (tqdm or plain) and read Telegram notification settings
 
         global GA_GENERATIONS_COMPLETED  # To track completed generations
         best_fitness = None  # Track the best fitness value
         gens_without_improvement = 0  # Counter for generations with no improvement
-        early_stop_gens = CONFIG.get("early_stop", {}).get("generations", 10)  # Use configured constant
-
-        folds = CONFIG.get("cross_validation", {}).get("n_folds", 10)  # Use configured constant for CV folds
-
-        output_dir = resolve_ga_output_dir(csv_path)  # Resolve canonical GA output directory from configuration
-        state_id = compute_state_id(
-            csv_path or "", pop_size or 0, n_generations, cxpb, mutpb, run or 0, folds, test_frac=None
-        )  # Deterministic state id for resume/caching
-        start_gen = 1  # Starting generation index
-
-        start_gen, loaded_history = load_and_apply_generation_state(
-            toolbox, population, output_dir, state_id, run=run
-        )  # Load and apply saved generation state if available, updating start generation and history
-
-        fitness_history, best_features_history, avg_f1_history, avg_features_history, pareto_size_history, hypervolume_history, diversity_history = initialize_ga_history_lists(loaded_history)  # Initialize seven per-generation history lists from loaded state (or empty)
-
-        gen_range = (
-            tqdm(range(start_gen, n_generations + 1), desc=f"{BackgroundColors.GREEN}Generations{Style.RESET_ALL}")
-            if show_progress
-            else range(start_gen, n_generations + 1)
-        )  # Create generation range with progress bar if show_progress is enabled, otherwise use plain range
         gens_ran = 0  # Track how many generations were actually executed
-        telegram_cfg = CONFIG.get("telegram", {}) if isinstance(CONFIG, dict) else {}  # Read Telegram progress notification settings from config
-        telegram_enabled = bool(telegram_cfg.get("enabled", True))  # Read Telegram enabled flag from config
-        try:  # Try to parse Telegram progress percentage threshold
-            telegram_progress_pct = int(telegram_cfg.get("progress_pct", 10))  # Integer percent between notifications
-        except Exception:  # If parsing fails
-            telegram_progress_pct = 10  # Fallback to 10% intervals
-        last_telegram_block = -1  # Track last percentage block notified so we don't repeat
 
         for gen in gen_range:  # Loop for the specified number of generations
             (
@@ -2824,34 +3042,15 @@ def run_genetic_algorithm_loop(
 
             offspring, n_evaluated = create_and_evaluate_offspring(population, toolbox, cxpb, mutpb)  # Apply crossover, mutation, and evaluate offspring fitness
 
-            if progress_state and isinstance(progress_state, dict):  # Update progress state if provided
-                try:  # Try to update progress state
-                    progress_state["current_it"] = int(progress_state.get("current_it", 0)) + n_evaluated * folds
-                    (
-                        update_progress_bar(
-                            progress_bar,
-                            dataset_name or "",
-                            csv_path or "",
-                            pop_size=pop_size,
-                            max_pop=max_pop,
-                            gen=gen,
-                            n_generations=n_generations,
-                            run=run,
-                            runs=runs,
-                            progress_state=progress_state,
-                        )
-                        if progress_bar
-                        else None
-                    )  # Update progress bar if provided
-                except Exception:  # Silently ignore progress update errors
-                    pass  # Do nothing
+            apply_offspring_progress_update(
+                progress_state, n_evaluated, folds, progress_bar,
+                dataset_name, csv_path, pop_size, max_pop, gen, n_generations, run, runs,
+            )  # Increment progress_state iteration counter and refresh progress bar after evaluation
 
             population[:] = toolbox.select(offspring, k=len(population))  # Select the next generation population using NSGA-II multi-objective selection
             hof.update(population)  # Update the Hall of Fame
 
-            if hof and len(hof) > 0:  # If hall of fame has a best individual
-                if hof[0] not in population:  # If the best individual is not in the new population
-                    population[-1] = hof[0]  # Replace the worst individual with the hall-of-fame best
+            enforce_hof_elitism(population, hof)  # Ensure best Hall-of-Fame individual survives into the new population
 
             current_best_fitness_f1 = (
                 hof[0].fitness.values[0] if hof and hof[0].fitness.values else None
@@ -2899,14 +3098,11 @@ def run_genetic_algorithm_loop(
                 GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
             gens_ran = gen if gens_ran == 0 else gens_ran  # Ensure gens_ran is set correctly if no early stopping occurred
 
-            try:  # Persist per-generation progress so runs can be resumed (every N gens to reduce I/O)
-                if CONFIG["execution"]["resume_progress"] and state_id is not None and (gen % CONFIG["execution"]["progress_save_interval"] == 0 or gen == n_generations):  # Use configured interval
-                    current_history_data = build_ga_history_data_dict(fitness_history, best_features_history, avg_f1_history, avg_features_history, pareto_size_history, hypervolume_history, diversity_history)  # Build consolidated history for state persistence
-                    save_generation_state(
-                        output_dir, state_id, gen, population, hof[0] if hof and len(hof) > 0 else None, current_history_data
-                    )
-            except Exception:  # If saving fails
-                pass  # Do nothing
+            persist_generation_state_if_needed(
+                output_dir, state_id, gen, n_generations, population, hof,
+                fitness_history, best_features_history, avg_f1_history,
+                avg_features_history, pareto_size_history, hypervolume_history, diversity_history,
+            )  # Checkpoint generation state to disk at configured intervals to enable resume
 
         history_data = build_ga_history_data_dict(fitness_history, best_features_history, avg_f1_history, avg_features_history, pareto_size_history, hypervolume_history, diversity_history)  # Build consolidated history dictionary for plotting
 
