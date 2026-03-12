@@ -735,6 +735,29 @@ def initialize_rfe_estimator(estimator_name, random_state=42):
         raise
 
 
+def train_rfe_estimator(model, X_train_selected, y_train):
+    """
+    Fit the estimator on the selected training features and measure training time.
+
+    :param model: Classifier to train.
+    :param X_train_selected: Training feature array with only RFE-selected columns.
+    :param y_train: Training target array.
+    :return: Tuple of (model, training_time_s).
+    """
+
+    try:
+        train_start = time.perf_counter()  # Start perf_counter immediately before model.fit (training window)
+        model.fit(X_train_selected, y_train)  # Fit the model on selected features (training)
+        train_end = time.perf_counter()  # End perf_counter immediately after model.fit
+        training_time_s = round(train_end - train_start, 6)  # Compute training time rounded to 6 decimals
+
+        return model, training_time_s  # Return the trained model and its training time
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42, estimator_name="random_forest"):
     """
     Computes performance metrics using the RFE-selected features.
@@ -757,10 +780,7 @@ def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state
 
         model = initialize_rfe_estimator(estimator_name, random_state)  # Initialize the classifier estimator for this RFE run
 
-        train_start = time.perf_counter()  # Start perf_counter immediately before model.fit (training window)
-        model.fit(X_train_selected, y_train)  # Fit the model on selected features (training)
-        train_end = time.perf_counter()  # End perf_counter immediately after model.fit
-        training_time_s = round(train_end - train_start, 6)  # Compute training time rounded to 6 decimals
+        model, training_time_s = train_rfe_estimator(model, X_train_selected, y_train)  # Fit the estimator and measure training time
 
         test_start = time.perf_counter()  # Start perf_counter immediately before prediction (testing window)
         y_pred = model.predict(X_test_selected)  # Predict on selected test features (testing)
