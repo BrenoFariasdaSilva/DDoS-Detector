@@ -1241,6 +1241,115 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
         raise  # Propagate exceptions to caller
 
 
+def build_result_row(r: Dict[str, Any], csv_path: str, cols: list) -> Dict[str, Optional[Any]]:
+    """
+    Build a single results row dictionary from a run result dict, CSV path and column list.
+
+    :param r: Run result dictionary from a single RFE run.
+    :param csv_path: Path to the original CSV dataset file.
+    :param cols: List of column names for the results CSV.
+    :return: Dict mapping column names to their formatted values.
+    """
+
+    try:
+        data: Dict[str, Optional[Any]] = {c: None for c in cols}  # Initialize all columns to None
+        ts = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M_%S")  # Generate current timestamp string
+        data["timestamp"] = ts  # Assign timestamp to result row
+        data["tool"] = "RFE"  # Assign tool identifier
+
+        model_obj = r.get("model") or r.get("estimator") or ""  # Extract model from result dict
+        try:  # Safely resolve model name string
+            model_repr = model_obj if isinstance(model_obj, str) else getattr(model_obj, "__class__", type(model_obj)).__name__  # Get class name if not already string
+        except Exception:  # On resolution failure
+            model_repr = str(model_obj)  # Fallback to string representation
+
+        if isinstance(model_repr, str) and "random" in model_repr.lower() and "forest" in model_repr.lower():  # Verify if model is random forest
+            data["model"] = "Random Forest"  # Use friendly display name
+        else:  # Non-random-forest model
+            data["model"] = model_repr  # Use raw representation
+
+        try:  # Safely compute relative dataset path
+            data["dataset"] = os.path.relpath(csv_path)  # Resolve relative path for portability
+        except Exception:  # On relpath failure (e.g., different drives)
+            data["dataset"] = csv_path  # Fallback to absolute path
+
+        hyper = r.get("hyperparameters") or r.get("params") or {}  # Extract hyperparameters from result
+        try:  # Safely serialize hyperparameters to JSON
+            data["hyperparameters"] = json.dumps(hyper, sort_keys=True, ensure_ascii=False)  # Serialize sorted JSON
+        except Exception:  # On serialization failure
+            data["hyperparameters"] = str(hyper)  # Fallback to string
+
+        cv_method = r.get("cv_method") or r.get("cv")  # Extract CV method string
+        if not cv_method:  # Verify if CV method string was missing
+            n_splits = r.get("cv_n_splits") or r.get("n_splits")  # Attempt to reconstruct from n_splits
+            if n_splits:  # Verify if n_splits is available
+                cv_method = f"StratifiedKFold(n_splits={n_splits})"  # Reconstruct CV method string
+        data["cv_method"] = cv_method  # Assign CV method
+
+        data["train_test_split"] = r.get("train_test_split") or f"test_size={r.get('test_size', 0.2)}"  # Assign train/test split description
+        data["scaling"] = r.get("scaling") or r.get("scaler") or r.get("preprocessing") or "standard"  # Assign scaling method
+
+        metric_map = {  # Mapping of result CSV columns to (section, key) lookups
+            "cv_accuracy": ("cv", "accuracy"),
+            "cv_precision": ("cv", "precision"),
+            "cv_recall": ("cv", "recall"),
+            "cv_f1_score": ("cv", "f1_score"),
+            "test_accuracy": ("test", "accuracy"),
+            "test_precision": ("test", "precision"),
+            "test_recall": ("test", "recall"),
+            "test_f1_score": ("test", "f1_score"),
+            "test_fpr": ("test", "fpr"),
+            "test_fnr": ("test", "fnr"),
+        }
+
+        for col, (section, key) in metric_map.items():  # Iterate over each metric column
+            val = r.get(col)  # Attempt direct lookup first
+            if val is None:  # Verify if direct lookup failed
+                sec = r.get(section)  # Attempt nested section lookup
+                if isinstance(sec, dict):  # Verify the section is a dict
+                    val = sec.get(key)  # Extract metric from nested section
+
+            if val is not None:  # Verify value was found
+                try:  # Safely truncate to 4 decimal places
+                    data[col] = truncate_value(float(val))  # Format as truncated float string
+                except Exception:  # On conversion failure
+                    data[col] = val  # Preserve raw value
+
+        feature_extraction_time = r.get("feature_extraction_time_s")  # Read feature extraction time if present
+        try:  # Safely convert feature extraction time
+            data["feature_extraction_time_s"] = round(float(feature_extraction_time), 6) if feature_extraction_time is not None else None  # Store as float rounded to 6 decimals
+        except Exception:  # On conversion failure
+            data["feature_extraction_time_s"] = None  # Leave as None
+
+        training_time = r.get("training_time_s")  # Read training time from result dict
+        try:  # Safely convert training time
+            data["training_time_s"] = round(float(training_time), 6) if training_time is not None else None  # Store as float rounded to 6 decimals
+        except Exception:  # On conversion failure
+            data["training_time_s"] = None  # On error leave as None
+
+        testing_time = r.get("testing_time_s")  # Read testing time from result dict
+        try:  # Safely convert testing time
+            data["testing_time_s"] = round(float(testing_time), 6) if testing_time is not None else None  # Store as float rounded to 6 decimals
+        except Exception:  # On conversion failure
+            data["testing_time_s"] = None  # On error leave as None
+
+        try:  # Safely serialize top features list
+            data["top_features"] = json.dumps(r.get("top_features") or [], ensure_ascii=False)  # Serialize features to JSON array
+        except Exception:  # On serialization failure
+            data["top_features"] = str(r.get("top_features") or [])  # Fallback to string representation
+
+        try:  # Safely serialize RFE ranking dict
+            data["rfe_ranking"] = json.dumps(r.get("rfe_ranking") or {}, sort_keys=True, ensure_ascii=False)  # Serialize sorted JSON object
+        except Exception:  # On serialization failure
+            data["rfe_ranking"] = str(r.get("rfe_ranking") or {})  # Fallback to string representation
+
+        return data  # Return the completed result row dict
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def save_rfe_results(csv_path, run_results):
     """
     Saves results from RFE run to a structured CSV file.
@@ -1257,96 +1366,7 @@ def save_rfe_results(csv_path, run_results):
         rows = []
         for r in runs:
             cols = get_results_csv_columns(CONFIG if CONFIG else None)
-            data: Dict[str, Optional[Any]] = {c: None for c in cols}
-            ts = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
-            data["timestamp"] = ts
-            data["tool"] = "RFE"
-            model_obj = r.get("model") or r.get("estimator") or ""
-            try:
-                model_repr = model_obj if isinstance(model_obj, str) else getattr(model_obj, "__class__", type(model_obj)).__name__
-            except Exception:
-                model_repr = str(model_obj)
-
-            if isinstance(model_repr, str) and "random" in model_repr.lower() and "forest" in model_repr.lower():
-                data["model"] = "Random Forest"
-            else:
-                data["model"] = model_repr
-            
-            try:
-                data["dataset"] = os.path.relpath(csv_path)
-            except Exception:
-                data["dataset"] = csv_path
-
-            hyper = r.get("hyperparameters") or r.get("params") or {}
-            try:
-                data["hyperparameters"] = json.dumps(hyper, sort_keys=True, ensure_ascii=False)
-            except Exception:
-                data["hyperparameters"] = str(hyper)
-
-            cv_method = r.get("cv_method") or r.get("cv")
-            if not cv_method:
-                n_splits = r.get("cv_n_splits") or r.get("n_splits")
-                if n_splits:
-                    cv_method = f"StratifiedKFold(n_splits={n_splits})"
-            data["cv_method"] = cv_method
-
-            data["train_test_split"] = r.get("train_test_split") or f"test_size={r.get('test_size', 0.2)}"
-            data["scaling"] = r.get("scaling") or r.get("scaler") or r.get("preprocessing") or "standard"
-
-            metric_map = {
-                "cv_accuracy": ("cv", "accuracy"),
-                "cv_precision": ("cv", "precision"),
-                "cv_recall": ("cv", "recall"),
-                "cv_f1_score": ("cv", "f1_score"),
-                "test_accuracy": ("test", "accuracy"),
-                "test_precision": ("test", "precision"),
-                "test_recall": ("test", "recall"),
-                "test_f1_score": ("test", "f1_score"),
-                "test_fpr": ("test", "fpr"),
-                "test_fnr": ("test", "fnr"),
-            }
-
-            for col, (section, key) in metric_map.items():
-                val = r.get(col)
-                if val is None:
-                    sec = r.get(section)
-                    if isinstance(sec, dict):
-                        val = sec.get(key)
-
-                if val is not None:
-                    try:
-                        data[col] = truncate_value(float(val))
-                    except Exception:
-                        data[col] = val
-
-            feature_extraction_time = r.get("feature_extraction_time_s")  # Read feature extraction time if present
-            try:
-                data["feature_extraction_time_s"] = round(float(feature_extraction_time), 6) if feature_extraction_time is not None else None
-            except Exception:
-                data["feature_extraction_time_s"] = None
-
-            training_time = r.get("training_time_s")  # Read training time from result dict
-            try:
-                data["training_time_s"] = round(float(training_time), 6) if training_time is not None else None  # Store as float rounded to 6 decimals
-            except Exception:
-                data["training_time_s"] = None  # On error leave as None
-
-            testing_time = r.get("testing_time_s")  # Read testing time from result dict
-            try:
-                data["testing_time_s"] = round(float(testing_time), 6) if testing_time is not None else None  # Store as float rounded to 6 decimals
-            except Exception:
-                data["testing_time_s"] = None  # On error leave as None
-
-            try:
-                data["top_features"] = json.dumps(r.get("top_features") or [], ensure_ascii=False)
-            except Exception:
-                data["top_features"] = str(r.get("top_features") or [])
-
-            try:
-                data["rfe_ranking"] = json.dumps(r.get("rfe_ranking") or {}, sort_keys=True, ensure_ascii=False)
-            except Exception:
-                data["rfe_ranking"] = str(r.get("rfe_ranking") or {})
-
+            data = build_result_row(r, csv_path, cols)  # Build the complete row dict for this result
             rows.append(data)
 
         cols = get_results_csv_columns(CONFIG if CONFIG else None)
