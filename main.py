@@ -1825,6 +1825,40 @@ def resolve_dataset_label_col_interactively(train_df, dataset_name):
         raise
 
 
+def run_baseline_evaluation_for_dataset(train_df, test_df, split_required, label_col, dataset_dir, dataset_name, use_cv):
+    """
+    Split the dataset without feature selection and train all models to collect baseline performance scores.
+
+    :param train_df: Training DataFrame used for splitting.
+    :param test_df: Testing DataFrame used for splitting.
+    :param split_required: Boolean indicating whether an explicit train/test split must be performed.
+    :param label_col: Name of the label column for stratified splitting.
+    :param dataset_dir: Directory of the dataset used as the results output path.
+    :param dataset_name: Dataset name string passed to training for logging and output naming.
+    :param use_cv: Boolean flag indicating whether cross-validation should be used instead of a fixed split.
+    :return: List of per-model metric dictionaries produced by the baseline evaluation run.
+    """
+
+    verbose_output(f"{BackgroundColors.GREEN}Running baseline (without feature selection)...{Style.RESET_ALL}")  # Announce baseline evaluation start
+    X_train_base, X_test_base, y_train_base, y_test_base, feature_names_base = split_data(
+        train_df, test_df, split_required, label_col=label_col, selected_features=None
+    )  # Split dataset without feature selection to obtain full-feature training partitions
+    verbose_output(f"{BackgroundColors.GREEN}Training baseline models...{Style.RESET_ALL}")  # Announce baseline model training start
+    _, baseline_scores = train_and_evaluate_models(
+        X_train_base,
+        X_test_base,
+        y_train_base,
+        y_test_base,
+        dataset_dir,
+        dataset_name,
+        use_cv=use_cv,
+        selected_features=None,
+        features_file=None,
+        return_metrics_only=True,
+    )  # Train and evaluate all models on full-feature data to produce baseline metric scores
+    return baseline_scores  # Return per-model baseline metric dictionaries to the caller
+
+
 def main(use_cv=False, extract_features=True, compare_feature_selection=None):
     """
     Main function to run the machine learning pipeline on multiple datasets.
@@ -1895,25 +1929,9 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
             if label_col is None:  # If user provided empty input for the label column
                 continue  # Skip this dataset
 
-            if compare_feature_selection and features_to_use is not None:  # Run baseline if needed
-                verbose_output(f"{BackgroundColors.GREEN}Running baseline (without feature selection)...{Style.RESET_ALL}")
-                X_train_base, X_test_base, y_train_base, y_test_base, feature_names_base = split_data(
-                    train_df, test_df, split_required, label_col=label_col, selected_features=None
-                )  # Split without Feature Selection
-                verbose_output(f"{BackgroundColors.GREEN}Training baseline models...{Style.RESET_ALL}")
-                _, baseline_scores = train_and_evaluate_models(
-                    X_train_base,
-                    X_test_base,
-                    y_train_base,
-                    y_test_base,
-                    dataset_dir,
-                    dataset_name,
-                    use_cv=use_cv,
-                    selected_features=None,
-                    features_file=None,
-                    return_metrics_only=True,
-                )  # Train baseline
-                baseline_metrics.extend(baseline_scores)  # Store baseline metrics
+            if compare_feature_selection and features_to_use is not None:  # Run baseline without feature selection when comparison is enabled
+                baseline_scores = run_baseline_evaluation_for_dataset(train_df, test_df, split_required, label_col, dataset_dir, dataset_name, use_cv)  # Produce baseline scores
+                baseline_metrics.extend(baseline_scores)  # Accumulate baseline scores across all datasets
 
             verbose_output(f"{BackgroundColors.GREEN}Preparing data with feature selection...{Style.RESET_ALL}")
             X_train, X_test, y_train, y_test, feature_names = split_data(
