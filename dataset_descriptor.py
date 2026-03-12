@@ -265,7 +265,7 @@ def init_runtime(config: dict):
         "results_dir": os.path.join(".", config.get("paths", {}).get("dataset_description_subdir", "Dataset_Description")),
         "results_filename_suffix": config.get("dataset_descriptor", {}).get("csv_output_suffix", "_description"),
         "ignore_files": list(config.get("paths", {}).get("ignore_files", []) or []),
-        "ignore_dirs": list(config.get("paths", {}).get("ignore_dirs", []) or []),
+        "ignore_dirs": list(config.get("execution", {}).get("ignore_dirs", []) or []),
     }
     return runtime
 
@@ -478,7 +478,7 @@ def collect_matching_files(
 
         cfg = config or get_default_config()
         resolved_ignore_files = ignore_files if ignore_files is not None else list(cfg.get("paths", {}).get("ignore_files", []) or [])
-        resolved_ignore_dirs = ignore_dirs if ignore_dirs is not None else list(cfg.get("paths", {}).get("ignore_dirs", ["Cache", "Data_Separability", "Dataset_Description", "Feature_Analysis"]) or ["Cache", "Data_Separability", "Dataset_Description", "Feature_Analysis"])
+        resolved_ignore_dirs = ignore_dirs if ignore_dirs is not None else list(cfg.get("execution", {}).get("ignore_dirs", ["Cache", "Data_Separability", "Dataset_Description", "Feature_Analysis"]) or ["Cache", "Data_Separability", "Dataset_Description", "Feature_Analysis"])
 
         normalized_ignore_files: set[str] = {os.path.normcase(f) for f in (resolved_ignore_files or [])}  # Create normalized set of ignored filenames for fast membership checks
         normalized_ignore_dirs: set[str] = {os.path.normcase(d) for d in (resolved_ignore_dirs or [])}  # Create normalized set of ignored directory names for fast membership checks
