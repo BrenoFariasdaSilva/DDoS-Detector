@@ -3480,6 +3480,52 @@ def generate_multi_objective_convergence_plot(generations, best_f1_history, best
         raise  # Re-raise to preserve original failure semantics
 
 
+def generate_metric_convergence_plot_safe(
+    generations,
+    history_list,
+    ylabel,
+    title,
+    filename,
+    plot_output_dir,
+    marker,
+    color,
+    markersize,
+    saved_plots,
+):
+    """
+    Generate a single convergence plot and append its path to saved_plots if successful.
+
+    Guards the save_single_convergence_plot call with a try/except so that a single plot
+    failure never aborts the remaining convergence plots.  When the history list is empty
+    or None the function returns immediately without attempting any I/O.
+
+    :param generations: Full list of generation indices for the x-axis.
+    :param history_list: Per-generation metric values; plotted up to len(history_list) points.
+    :param ylabel: Y-axis label string for the convergence plot.
+    :param title: Full plot title string (may span multiple lines with newlines).
+    :param filename: Output PNG filename placed inside plot_output_dir.
+    :param plot_output_dir: Directory where the PNG file will be written.
+    :param marker: Matplotlib marker style string (e.g. "o", "s", "^").
+    :param color: Matplotlib colour string or hex code for the plot line.
+    :param markersize: Size of the plot markers in points.
+    :param saved_plots: Mutable list; the saved file path is appended to it on success.
+    :return: None
+    """
+
+    if not history_list:  # Skip if history list is empty or None
+        return  # Nothing to plot; return immediately
+
+    try:  # Try to create convergence plot
+        saved_plots.append(save_single_convergence_plot(
+            generations[: len(history_list)], history_list,
+            ylabel,
+            title,
+            filename, plot_output_dir, marker, color, markersize,
+        ))  # Generate, save, and record the convergence plot path
+    except Exception:  # If plotting fails
+        plt.close()  # Close plot to free memory
+
+
 def generate_individual_convergence_plots(history_data, generations, base_dataset_name, run, pop_size, plot_output_dir):
     """
     Generate all individual convergence plots from per-generation history data.
@@ -3506,82 +3552,47 @@ def generate_individual_convergence_plots(history_data, generations, base_datase
         hypervolume_history = history_data.get("hypervolume", [])  # Hypervolume per generation
         diversity_history = history_data.get("diversity", [])  # Diversity per generation
 
-        if best_f1_history:  # If best F1 history exists
-            try:  # Try to create convergence plot for best F1-score
-                saved_plots.append(save_single_convergence_plot(
-                    generations[: len(best_f1_history)], best_f1_history,
-                    "Best F1-Score",
-                    f"Best F1-Score Convergence\n{base_dataset_name} (run={run}, pop={pop_size})",
-                    "01_best_f1_convergence.png", plot_output_dir, "o", "#1f77b4", 4,
-                ))  # Generate and save the best F1-score convergence plot
-            except Exception:  # If plotting fails
-                plt.close()  # Close plot to free memory
+        generate_metric_convergence_plot_safe(
+            generations, best_f1_history, "Best F1-Score",
+            f"Best F1-Score Convergence\n{base_dataset_name} (run={run}, pop={pop_size})",
+            "01_best_f1_convergence.png", plot_output_dir, "o", "#1f77b4", 4, saved_plots,
+        )  # Generate best F1-score convergence plot if history available
 
-        if best_features_history:  # If best features history exists
-            try:  # Try to create convergence plot for feature count evolution
-                saved_plots.append(save_single_convergence_plot(
-                    generations[: len(best_features_history)], best_features_history,
-                    "Number of Selected Features",
-                    f"Feature Count Evolution\n{base_dataset_name} (run={run}, pop={pop_size})",
-                    "02_feature_count_evolution.png", plot_output_dir, "s", "#ff7f0e", 4,
-                ))  # Generate and save the feature count evolution plot
-            except Exception:  # If plotting fails
-                plt.close()  # Close plot to free memory
+        generate_metric_convergence_plot_safe(
+            generations, best_features_history, "Number of Selected Features",
+            f"Feature Count Evolution\n{base_dataset_name} (run={run}, pop={pop_size})",
+            "02_feature_count_evolution.png", plot_output_dir, "s", "#ff7f0e", 4, saved_plots,
+        )  # Generate feature count evolution plot if history available
 
-        if pareto_size_history:  # If Pareto size history exists
-            try:  # Try to create convergence plot for Pareto front size
-                saved_plots.append(save_single_convergence_plot(
-                    generations[: len(pareto_size_history)], pareto_size_history,
-                    "Pareto Front Size",
-                    f"Pareto Front Size Evolution\n{base_dataset_name} (run={run}, pop={pop_size})",
-                    "03_pareto_front_size.png", plot_output_dir, "^", "#2ca02c", 4,
-                ))  # Generate and save the Pareto front size evolution plot
-            except Exception:  # If plotting fails
-                plt.close()  # Close plot to free memory
+        generate_metric_convergence_plot_safe(
+            generations, pareto_size_history, "Pareto Front Size",
+            f"Pareto Front Size Evolution\n{base_dataset_name} (run={run}, pop={pop_size})",
+            "03_pareto_front_size.png", plot_output_dir, "^", "#2ca02c", 4, saved_plots,
+        )  # Generate Pareto front size evolution plot if history available
 
-        if avg_f1_history:  # If average F1 history exists
-            try:  # Try to create convergence plot for population average F1-score
-                saved_plots.append(save_single_convergence_plot(
-                    generations[: len(avg_f1_history)], avg_f1_history,
-                    "Population Average F1-Score",
-                    f"Population Average F1-Score\n{base_dataset_name} (run={run}, pop={pop_size})",
-                    "04_avg_f1_evolution.png", plot_output_dir, "d", "#d62728", 4,
-                ))  # Generate and save the population average F1-score plot
-            except Exception:  # If plotting fails
-                plt.close()  # Close plot to free memory
+        generate_metric_convergence_plot_safe(
+            generations, avg_f1_history, "Population Average F1-Score",
+            f"Population Average F1-Score\n{base_dataset_name} (run={run}, pop={pop_size})",
+            "04_avg_f1_evolution.png", plot_output_dir, "d", "#d62728", 4, saved_plots,
+        )  # Generate population average F1-score plot if history available
 
-        if avg_features_history:  # If average features history exists
-            try:  # Try to create convergence plot for population average feature count
-                saved_plots.append(save_single_convergence_plot(
-                    generations[: len(avg_features_history)], avg_features_history,
-                    "Population Average Feature Count",
-                    f"Population Average Feature Count\n{base_dataset_name} (run={run}, pop={pop_size})",
-                    "05_avg_feature_count_evolution.png", plot_output_dir, "v", "#9467bd", 4,
-                ))  # Generate and save the population average feature count plot
-            except Exception:  # If plotting fails
-                plt.close()  # Close plot to free memory
+        generate_metric_convergence_plot_safe(
+            generations, avg_features_history, "Population Average Feature Count",
+            f"Population Average Feature Count\n{base_dataset_name} (run={run}, pop={pop_size})",
+            "05_avg_feature_count_evolution.png", plot_output_dir, "v", "#9467bd", 4, saved_plots,
+        )  # Generate population average feature count plot if history available
 
-        if hypervolume_history:  # If hypervolume history exists
-            try:  # Try to create convergence plot for hypervolume evolution
-                saved_plots.append(save_single_convergence_plot(
-                    generations[: len(hypervolume_history)], hypervolume_history,
-                    "Hypervolume",
-                    f"Hypervolume Evolution (Pareto Quality)\n{base_dataset_name} (run={run}, pop={pop_size})",
-                    "06_hypervolume_evolution.png", plot_output_dir, "*", "#8c564b", 6,
-                ))  # Generate and save the hypervolume evolution plot
-            except Exception:  # If plotting fails
-                plt.close()  # Close plot to free memory
+        generate_metric_convergence_plot_safe(
+            generations, hypervolume_history, "Hypervolume",
+            f"Hypervolume Evolution (Pareto Quality)\n{base_dataset_name} (run={run}, pop={pop_size})",
+            "06_hypervolume_evolution.png", plot_output_dir, "*", "#8c564b", 6, saved_plots,
+        )  # Generate hypervolume evolution plot if history available
 
-        if diversity_history:  # If diversity history exists
-            try:  # Try to create convergence plot for population diversity
-                saved_plots.append(save_single_convergence_plot(
-                    generations[: len(diversity_history)], diversity_history,
-                    "Population Diversity (Avg Hamming Distance)",
-                    f"Population Diversity Evolution\n{base_dataset_name} (run={run}, pop={pop_size})",
-                    "07_diversity_evolution.png", plot_output_dir, "p", "#e377c2", 4,
-                ))  # Generate and save the population diversity evolution plot
-            except Exception:  # If plotting fails
-                plt.close()  # Close plot to free memory
+        generate_metric_convergence_plot_safe(
+            generations, diversity_history, "Population Diversity (Avg Hamming Distance)",
+            f"Population Diversity Evolution\n{base_dataset_name} (run={run}, pop={pop_size})",
+            "07_diversity_evolution.png", plot_output_dir, "p", "#e377c2", 4, saved_plots,
+        )  # Generate population diversity evolution plot if history available
 
         if best_f1_history and best_features_history:  # If both histories exist
             plot_path = generate_multi_objective_convergence_plot(generations, best_f1_history, best_features_history, base_dataset_name, run, pop_size, plot_output_dir)  # Generate dual-axis multi-objective convergence plot
