@@ -2949,6 +2949,22 @@ def persist_generation_state_if_needed(
         pass  # Do nothing
 
 
+def update_population_selection_and_hof(population, offspring, toolbox, hof):
+    """
+    Select the next generation from offspring, update the Hall of Fame, and enforce HOF elitism.
+
+    :param population: Current population list modified in-place to become the next generation.
+    :param offspring: Evaluated offspring candidates produced in the current generation.
+    :param toolbox: DEAP toolbox with the NSGA-II 'select' function registered.
+    :param hof: Hall of Fame instance updated with the best individual from the new population.
+    :return: None
+    """
+
+    population[:] = toolbox.select(offspring, k=len(population))  # Replace population with NSGA-II-selected next generation in-place
+    hof.update(population)  # Update the Hall of Fame with potentially new best individual from the current generation
+    enforce_hof_elitism(population, hof)  # Guarantee the best Hall-of-Fame individual is present in the new population
+
+
 def run_genetic_algorithm_loop(
     toolbox,
     population,
@@ -3047,10 +3063,7 @@ def run_genetic_algorithm_loop(
                 dataset_name, csv_path, pop_size, max_pop, gen, n_generations, run, runs,
             )  # Increment progress_state iteration counter and refresh progress bar after evaluation
 
-            population[:] = toolbox.select(offspring, k=len(population))  # Select the next generation population using NSGA-II multi-objective selection
-            hof.update(population)  # Update the Hall of Fame
-
-            enforce_hof_elitism(population, hof)  # Ensure best Hall-of-Fame individual survives into the new population
+            update_population_selection_and_hof(population, offspring, toolbox, hof)  # Select next generation, update HOF, and enforce elitism in one step
 
             current_best_fitness_f1 = (
                 hof[0].fitness.values[0] if hof and hof[0].fitness.values else None
