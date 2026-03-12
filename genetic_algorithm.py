@@ -3168,28 +3168,13 @@ def run_genetic_algorithm_loop(
                 else None
             )  # Update progress bar if provided
 
-            offspring, n_evaluated = create_and_evaluate_offspring(population, toolbox, cxpb, mutpb)  # Apply crossover, mutation, and evaluate offspring fitness
-
-            apply_offspring_progress_update(
-                progress_state, n_evaluated, folds, progress_bar,
+            current_best_fitness_f1, current_best_num_features = evolve_population_one_generation(
+                population, toolbox, hof, cxpb, mutpb,
+                progress_state, folds, progress_bar,
                 dataset_name, csv_path, pop_size, max_pop, gen, n_generations, run, runs,
-            )  # Increment progress_state iteration counter and refresh progress bar after evaluation
-
-            update_population_selection_and_hof(population, offspring, toolbox, hof)  # Select next generation, update HOF, and enforce elitism in one step
-
-            current_best_fitness_f1, current_best_num_features = compute_current_best_fitness_values(hof)  # Extract F1-score and feature count from the leading HOF individual
-            update_generation_histories(
-                population,
-                current_best_fitness_f1,
-                current_best_num_features,
-                fitness_history,
-                best_features_history,
-                avg_f1_history,
-                avg_features_history,
-                pareto_size_history,
-                hypervolume_history,
-                diversity_history,
-            )  # Append all per-generation metrics to their respective history lists
+                fitness_history, best_features_history, avg_f1_history, avg_features_history,
+                pareto_size_history, hypervolume_history, diversity_history,
+            )  # Apply crossover, mutation, evaluation, selection, HOF update, and history recording for one generation
 
             best_fitness, gens_without_improvement, should_stop = check_ga_early_stop(
                 current_best_fitness_f1, best_fitness, gens_without_improvement, early_stop_gens, gen
