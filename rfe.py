@@ -2098,6 +2098,37 @@ def resolve_rfe_run_params(n_features_to_select: Optional[int], step: Optional[i
         raise
 
 
+def extract_numeric_features(X: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """
+    Extract numeric feature columns from a DataFrame, attempting coercion for non-numeric columns.
+
+    :param X: Feature DataFrame.
+    :return: DataFrame containing only numeric features, or None if no numeric features are found.
+    """
+
+    try:
+        X_numeric = X.select_dtypes(include=["number"]).copy()  # Select only numeric columns
+
+        if X_numeric.shape[1] == 0:  # Verify if no numeric columns were detected
+            coerced_cols = {}  # Dictionary to hold coerced numeric columns
+            for col in X.columns:  # Iterate through all columns
+                coerced = pd.to_numeric(X[col], errors="coerce")  # Attempt to coerce to numeric
+                if coerced.notna().sum() > 0:  # Verify if any values were successfully coerced
+                    coerced_cols[col] = coerced  # Add to coerced columns
+
+            if coerced_cols:  # Verify if any columns were successfully coerced
+                X_numeric = pd.DataFrame(coerced_cols, index=X.index)  # Create DataFrame from coerced columns
+            else:  # No columns could be coerced
+                print(f"{BackgroundColors.RED}No numeric features found after preprocessing. Cannot run RFE.{Style.RESET_ALL}")  # Log failure to find numeric features
+                return None  # Return None to signal failure
+
+        return X_numeric  # Return the numeric feature DataFrame
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def run_rfe(csv_path, n_features_to_select=None, step=None, estimator_name=None, random_state=None):
     """
     Runs Recursive Feature Elimination on the provided dataset, prints the single
@@ -2135,18 +2166,9 @@ def run_rfe(csv_path, n_features_to_select=None, step=None, estimator_name=None,
         if X is None or y is None:  # If feature or target extraction failed
             return  # Exit the function
 
-        X_numeric = X.select_dtypes(include=["number"]).copy()  # Select only numeric features
-        if X_numeric.shape[1] == 0:  # If no numeric features found
-            coerced_cols = {}  # Dictionary to hold coerced numeric columns
-            for col in X.columns:  # Iterate through all columns
-                coerced = pd.to_numeric(X[col], errors="coerce")  # Attempt to coerce to numeric
-                if coerced.notna().sum() > 0:  # If any values were successfully coerced
-                    coerced_cols[col] = coerced  # Add to coerced columns
-            if coerced_cols:  # If any columns were successfully coerced
-                X_numeric = pd.DataFrame(coerced_cols, index=X.index)  # Create DataFrame from coerced columns
-            else:  # If no columns could be coerced
-                print(f"{BackgroundColors.RED}No numeric features found after preprocessing. Cannot run RFE.{Style.RESET_ALL}")
-                return  # Exit the function
+        X_numeric = extract_numeric_features(X)  # Extract numeric features, applying coercion if needed
+        if X_numeric is None:  # Verify if numeric feature extraction failed
+            return  # Exit the function
 
         feature_columns = X_numeric.columns  # Get the feature column names
 
