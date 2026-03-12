@@ -3722,6 +3722,30 @@ def sample_shap_test_data(X_test, y_test, max_samples, random_state):
         raise
 
 
+def select_shap_explainer(model, X_test_sampled, random_state):
+    """
+    Selects and instantiates the appropriate SHAP explainer based on model type.
+
+    :param model: Trained model object for which to build the explainer
+    :param X_test_sampled: Sampled test features used for KernelExplainer background data
+    :param random_state: Random seed used for KernelExplainer background sampling
+    :return: Instantiated SHAP explainer object
+    """
+
+    try:
+        model_type = model.__class__.__name__  # Get model class name for branch selection
+        if model_type in ["RandomForestClassifier", "GradientBoostingClassifier", "XGBClassifier", "LightGBMClassifier", "ExtraTreesClassifier"]:  # Tree-based models
+            return shap.TreeExplainer(model)  # Use TreeExplainer for tree-based models
+        elif model_type in ["LogisticRegression", "LinearSVC", "SGDClassifier"]:  # Linear models
+            return shap.LinearExplainer(model, X_test_sampled)  # Use LinearExplainer for linear models
+        else:  # Other models that require a fallback explainer
+            return shap.KernelExplainer(model.predict_proba, shap.sample(X_test_sampled, 50, random_state=random_state))  # Use KernelExplainer as fallback
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config=None):
     """
     Generate SHAP explanations for a trained model.
@@ -3757,14 +3781,7 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
 
             X_test_sampled, y_test_sampled = sample_shap_test_data(X_test, y_test, max_samples, random_state)  # Sample test data for SHAP computation
 
-            model_type = model.__class__.__name__  # Get model class name
-
-            if model_type in ["RandomForestClassifier", "GradientBoostingClassifier", "XGBClassifier", "LightGBMClassifier", "ExtraTreesClassifier"]:  # Tree-based models
-                explainer = shap.TreeExplainer(model)  # Use TreeExplainer for tree-based models
-            elif model_type in ["LogisticRegression", "LinearSVC", "SGDClassifier"]:  # Linear models
-                explainer = shap.LinearExplainer(model, X_test_sampled)  # Use LinearExplainer for linear models
-            else:  # Other models
-                explainer = shap.KernelExplainer(model.predict_proba, shap.sample(X_test_sampled, 50, random_state=random_state))  # Use KernelExplainer as fallback
+            explainer = select_shap_explainer(model, X_test_sampled, random_state)  # Select the appropriate SHAP explainer based on model type
 
             shap_values = explainer.shap_values(X_test_sampled)  # Compute SHAP values
 
