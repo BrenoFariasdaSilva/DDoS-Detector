@@ -2254,11 +2254,7 @@ def manual_grid_search(
 
         cache_dict = load_cache_results(csv_path) if csv_path else {}  # Load cache
         
-        best_score = -float("inf")  # Initialize best score sentinel
-        best_params = None  # Placeholder for best params
-        best_elapsed = 0.0  # Elapsed time for best params
-        all_results = []  # List to collect results
-        global_counter = global_counter_start  # Start global counter
+        best_score, best_params, best_elapsed, all_results, global_counter = initialize_grid_search_state(global_counter_start)  # Initialize grid search bookkeeping state
         
         combinations_to_test, best_score, best_params, best_elapsed, all_results, global_counter, cached_count = process_cached_combinations(
             model_name,
@@ -2272,10 +2268,7 @@ def manual_grid_search(
             global_counter,
         )
 
-        if cached_count > 0:  # Report cached count
-            print(f"{BackgroundColors.GREEN}Found {BackgroundColors.CYAN}{cached_count}{BackgroundColors.GREEN} cached results for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Testing {BackgroundColors.CYAN}{len(combinations_to_test)}{BackgroundColors.GREEN} remaining combinations.{Style.RESET_ALL}")
-        else:
-            print(f"{BackgroundColors.GREEN}Testing {BackgroundColors.CYAN}{len(combinations_to_test)}{BackgroundColors.GREEN} combinations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}")
+        report_combination_search_progress(cached_count, combinations_to_test, model_name)  # Print cached count and remaining combinations to test
 
         log_resource_information(X_train, y_train)  # LOG AVAILABLE RAM, DATASET SIZE, AND CORE COUNT BEFORE EVALUATION
 
