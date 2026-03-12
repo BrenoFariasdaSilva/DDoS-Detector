@@ -2288,7 +2288,7 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
 
         progress = tqdm(
             sorted_matching_files,
-            desc="Processing files",
+            desc=f"{BackgroundColors.GREEN}Processing files{Style.RESET_ALL}",
             unit="file",
             ncols=100,
         )  # Create a single in-place progress bar instance
