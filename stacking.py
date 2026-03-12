@@ -7355,6 +7355,44 @@ def save_multiclass_results_to_csv(reference_file, results_list, config=None):
         raise
 
 
+def save_multiclass_augmentation_comparison(results_original, all_ratio_results, feature_analysis_dir, config=None):
+    """
+    Generates a ratio comparison report and saves it to a CSV file in the feature analysis directory.
+
+    :param results_original: Results dictionary from the original-data-only evaluation
+    :param all_ratio_results: Dictionary mapping augmentation ratio floats to their evaluation result dicts
+    :param feature_analysis_dir: Path object pointing to the Feature_Analysis output directory
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        if not all_ratio_results:  # If no ratio experiments produced results
+            print(
+                f"{BackgroundColors.YELLOW}No augmentation ratio experiments completed successfully for multi-class.{Style.RESET_ALL}"
+            )  # Print warning about no completed experiments
+            return  # Exit early since there is nothing to compare
+
+        comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate comparison report across all evaluated augmentation ratios
+
+        augmentation_comparison_filename = config.get("stacking", {}).get("augmentation_comparison_filename", "Data_Augmentation_Comparison_Results.csv")  # Get base comparison filename from config
+        multiclass_comparison_filename = augmentation_comparison_filename.replace(".csv", "_MultiClass.csv")  # Build multi-class-specific comparison filename
+        multiclass_comparison_path = feature_analysis_dir / multiclass_comparison_filename  # Construct full output path inside Feature_Analysis directory
+
+        save_augmentation_comparison_results(str(multiclass_comparison_path), comparison_results, config=config)  # Save comparison results to the CSV file
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Multi-class data augmentation ratio-based comparison complete!{Style.RESET_ALL}"
+        )  # Print success message indicating comparison report has been saved
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def run_multiclass_augmentation_ratio_experiment(reference_file, combined_multiclass_df, combined_augmented_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, attack_types_list, ratio, ratio_idx, total_steps, dataset_name, config=None):
     """
     Runs a single ratio-based augmentation experiment for multi-class evaluation and returns the results.
@@ -7548,23 +7586,7 @@ def process_multiclass_augmentation_testing(reference_file, original_files_list,
                 continue  # Skip to the next ratio
             all_ratio_results[ratio] = results_ratio  # Store the results for this ratio
 
-        if not all_ratio_results:  # If no ratio experiments succeeded
-            print(
-                f"{BackgroundColors.YELLOW}No augmentation ratio experiments completed successfully for multi-class.{Style.RESET_ALL}"
-            )  # Print warning about no completed experiments
-            return  # Exit function early
-
-        comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate the comparison report across all ratios
-
-        augmentation_comparison_filename = config.get("stacking", {}).get("augmentation_comparison_filename", "Data_Augmentation_Comparison_Results.csv")  # Get comparison filename from config
-        multiclass_comparison_filename = augmentation_comparison_filename.replace(".csv", "_MultiClass.csv")  # Build multi-class comparison filename
-        multiclass_comparison_path = feature_analysis_dir / multiclass_comparison_filename  # Build comparison file path
-
-        save_augmentation_comparison_results(str(multiclass_comparison_path), comparison_results, config=config)  # Save comparison results to CSV file
-
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Multi-class data augmentation ratio-based comparison complete!{Style.RESET_ALL}"
-        )  # Print success message indicating all ratio experiments are done
+        save_multiclass_augmentation_comparison(results_original, all_ratio_results, feature_analysis_dir, config=config)  # Generate comparison report and save results to CSV
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
