@@ -1125,6 +1125,39 @@ def extract_attack_label_from_path(file_path):
         raise  # Re-raise to preserve original failure semantics
 
 
+def compute_common_features_across_files(processed_files_with_labels, config):
+    """
+    Compute the intersection of feature columns across all processed files and determine the common target column name.
+
+    :param processed_files_with_labels: List of tuples (file_path, df_clean, target_col, feat_cols, attack_label).
+    :param config: Configuration dictionary passed through for verbose output.
+    :return: Tuple of (common_features_list, target_col_name) on success, or None when no common features exist.
+    """
+
+    common_features = None  # INITIALIZE COMMON FEATURES SET
+    target_col_name = None  # INITIALIZE TARGET COLUMN NAME
+
+    for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # ITERATE OVER PROCESSED FILES
+        if target_col_name is None:  # IF TARGET NOT YET SET
+            target_col_name = this_target  # SET TARGET COLUMN NAME
+
+        if common_features is None:  # IF COMMON FEATURES NOT YET INITIALIZED
+            common_features = set(feat_cols)  # INITIALIZE WITH FIRST FILE'S FEATURES
+        else:  # IF COMMON FEATURES ALREADY INITIALIZED
+            common_features = common_features.intersection(set(feat_cols))  # INTERSECT WITH CURRENT FILE'S FEATURES
+
+    if not common_features:  # IF NO COMMON FEATURES FOUND
+        print(f"{BackgroundColors.RED}No common features found across files for multi-class combination.{Style.RESET_ALL}")  # PRINT ERROR
+        return None  # SIGNAL FAILURE TO CALLER
+
+    common_features_list = sorted(list(common_features))  # CONVERT TO SORTED LIST
+    verbose_output(
+        f"{BackgroundColors.GREEN}Common features for multi-class: {BackgroundColors.CYAN}{len(common_features_list)} features{Style.RESET_ALL}",
+        config=config
+    )  # OUTPUT COMMON FEATURES COUNT
+    return common_features_list, target_col_name  # RETURN COMMON FEATURES AND TARGET COLUMN NAME
+
+
 def process_files_and_extract_labels(files_list, config):
     """
     Process each dataset file, extract its attack type label, and accumulate results into a list suitable for multi-class combination.
@@ -1188,28 +1221,10 @@ def combine_files_for_multiclass(files_list, config=None):
             return (None, None, None)  # RETURN FAILURE TUPLE
         processed_files_with_labels, attack_types_set = process_result  # UNPACK PROCESSED DATA AND ATTACK TYPES SET
         
-        common_features = None  # Initialize common features set
-        target_col_name = None  # Initialize target column name
-        
-        for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # Iterate over processed files
-            if target_col_name is None:  # If target not yet set
-                target_col_name = this_target  # Set target column name
-            
-            if common_features is None:  # If common features not yet initialized
-                common_features = set(feat_cols)  # Initialize with first file's features
-            else:  # If common features already initialized
-                common_features = common_features.intersection(set(feat_cols))  # Intersect with current file's features
-        
-        if not common_features:  # If no common features found
-            print(f"{BackgroundColors.RED}No common features found across files for multi-class combination.{Style.RESET_ALL}")  # Print error
-            return (None, None, None)  # Return None tuple
-        
-        common_features_list = sorted(list(common_features))  # Convert to sorted list
-        
-        verbose_output(
-            f"{BackgroundColors.GREEN}Common features for multi-class: {BackgroundColors.CYAN}{len(common_features_list)} features{Style.RESET_ALL}",
-            config=config
-        )  # Output common features count
+        feature_result = compute_common_features_across_files(processed_files_with_labels, config)  # COMPUTE COMMON FEATURES ACROSS ALL FILES
+        if feature_result is None:  # IF NO COMMON FEATURES FOUND
+            return (None, None, None)  # RETURN FAILURE TUPLE
+        common_features_list, target_col_name = feature_result  # UNPACK COMMON FEATURES AND TARGET COLUMN NAME
         
         combined_parts = []  # Initialize list to accumulate dataframe parts
         
