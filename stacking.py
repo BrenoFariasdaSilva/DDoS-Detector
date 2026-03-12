@@ -7355,6 +7355,81 @@ def save_multiclass_results_to_csv(reference_file, results_list, config=None):
         raise
 
 
+def run_multiclass_augmentation_ratio_experiment(reference_file, combined_multiclass_df, combined_augmented_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, attack_types_list, ratio, ratio_idx, total_steps, dataset_name, config=None):
+    """
+    Runs a single ratio-based augmentation experiment for multi-class evaluation and returns the results.
+
+    :param reference_file: Reference file path used for t-SNE visualization and experiment ID generation
+    :param combined_multiclass_df: Combined original multi-class DataFrame with all attack types
+    :param combined_augmented_df: Combined augmented DataFrame used as the augmentation source
+    :param feature_names: List of feature column names for the dataset
+    :param ga_selected_features: List of features selected by the genetic algorithm
+    :param pca_n_components: Number of PCA components or None if PCA is disabled
+    :param rfe_selected_features: List of features selected by RFE or None if disabled
+    :param base_models: Dictionary mapping model names to model objects
+    :param hp_params_map: Dictionary mapping model names to hyperparameter dicts
+    :param attack_types_list: List of unique attack type labels for multi-class classification
+    :param ratio: Augmentation ratio float between 0 and 1
+    :param ratio_idx: 1-based index of this ratio in the augmentation schedule
+    :param total_steps: Total number of evaluation steps for progress display
+    :param dataset_name: Name of the dataset for Telegram notification messages
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Results dictionary from evaluate_on_dataset, or None if sampling failed
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        ratio_pct = int(ratio * 100)  # Convert ratio float to integer percentage for display
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx + 1}/{total_steps}] Evaluating with {ratio_pct}% augmented data (Multi-Class){Style.RESET_ALL}"
+        )  # Print experiment step progress for this ratio
+
+        df_sampled = sample_augmented_by_ratio(combined_augmented_df, combined_multiclass_df, ratio)  # Sample augmented data proportionally to the requested ratio
+
+        if df_sampled is None:  # If sampling failed for this ratio
+            print(
+                f"{BackgroundColors.YELLOW}Failed to sample augmented data at ratio {ratio_pct}%. Skipping.{Style.RESET_ALL}"
+            )  # Print warning about sampling failure
+            return None  # Signal caller to skip this ratio
+
+        data_source_label = f"Original+Augmented@{ratio_pct}%_MultiClass"  # Build data source label for result traceability
+        experiment_id = generate_experiment_id(reference_file, "multiclass_original_plus_augmented", ratio)  # Generate unique experiment ID for this run
+
+        print(
+            f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
+        )  # Print sampled dataset size for transparency
+
+        generate_augmentation_tsne_visualization(
+            reference_file, combined_multiclass_df, df_sampled, ratio, "original_plus_augmented"
+        )  # Generate t-SNE visualization comparing original and augmented distributions
+
+        send_telegram_message(
+            TELEGRAM_BOT, f"Starting multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
+        )  # Send Telegram notification for ratio experiment start
+
+        results_ratio = evaluate_on_dataset(
+            reference_file, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components,
+            rfe_selected_features, base_models, data_source_label=data_source_label,
+            hyperparams_map=hp_params_map, experiment_id=experiment_id,
+            experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+            execution_mode_str="multi-class", attack_types_combined=attack_types_list,
+            df_augmented_for_training=df_sampled
+        )  # Evaluate all classifiers with augmented training data using original-only test set
+
+        send_telegram_message(
+            TELEGRAM_BOT, f"Completed multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
+        )  # Send Telegram notification for ratio experiment completion
+
+        return results_ratio  # Return evaluation results for this ratio
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def print_multiclass_augmentation_header(augmentation_ratios):
     """
     Prints the formatted header block announcing ratio-based data augmentation experiments for multi-class mode.
@@ -7464,49 +7539,14 @@ def process_multiclass_augmentation_testing(reference_file, original_files_list,
         all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
 
         for ratio_idx, ratio in enumerate(augmentation_ratios, start=1):  # Iterate over each augmentation ratio
-            ratio_pct = int(ratio * 100)  # Convert ratio to percentage for display
-
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx + 1}/{total_steps}] Evaluating with {ratio_pct}% augmented data (Multi-Class){Style.RESET_ALL}"
-            )  # Print experiment step progress
-
-            df_sampled = sample_augmented_by_ratio(combined_augmented_df, combined_multiclass_df, ratio)  # Sample augmented data proportionally
-
-            if df_sampled is None:  # If sampling failed
-                print(
-                    f"{BackgroundColors.YELLOW}Failed to sample augmented data at ratio {ratio_pct}%. Skipping.{Style.RESET_ALL}"
-                )  # Print warning about sampling failure
-                continue  # Skip to next ratio
-
-            data_source_label = f"Original+Augmented@{ratio_pct}%_MultiClass"  # Build data source label for this experiment
-            experiment_id = generate_experiment_id(reference_file, "multiclass_original_plus_augmented", ratio)  # Generate unique experiment ID
-
-            print(
-                f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
-            )  # Print sampled dataset size for transparency
-
-            generate_augmentation_tsne_visualization(
-                reference_file, combined_multiclass_df, df_sampled, ratio, "original_plus_augmented"
-            )  # Generate t-SNE visualization for multi-class augmented experiment
-
-            send_telegram_message(
-                TELEGRAM_BOT, f"Starting multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
-            )  # Send Telegram notification for ratio start
-
-            results_ratio = evaluate_on_dataset(
-                reference_file, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components,
-                rfe_selected_features, base_models, data_source_label=data_source_label,
-                hyperparams_map=hp_params_map, experiment_id=experiment_id,
-                experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
-                execution_mode_str="multi-class", attack_types_combined=attack_types_list,
-                df_augmented_for_training=df_sampled
-            )  # Evaluate all classifiers with augmented data in training only (test remains original-only)
-
-            all_ratio_results[ratio] = results_ratio  # Store the results for this ratio in the results dictionary
-
-            send_telegram_message(
-                TELEGRAM_BOT, f"Completed multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
-            )  # Send completion notification for ratio
+            results_ratio = run_multiclass_augmentation_ratio_experiment(
+                reference_file, combined_multiclass_df, combined_augmented_df, feature_names,
+                ga_selected_features, pca_n_components, rfe_selected_features, base_models,
+                hp_params_map, attack_types_list, ratio, ratio_idx, total_steps, dataset_name, config=config,
+            )  # Run evaluation for this ratio and retrieve results or None if sampling failed
+            if results_ratio is None:  # If this ratio experiment failed at the sampling stage
+                continue  # Skip to the next ratio
+            all_ratio_results[ratio] = results_ratio  # Store the results for this ratio
 
         if not all_ratio_results:  # If no ratio experiments succeeded
             print(
