@@ -7053,6 +7053,231 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
         raise
 
 
+def annotate_results_with_combination_flags(results_list, feature_selection_enabled, hyperparameters_enabled, data_augmentation_enabled=False):
+    """
+    Annotate result entries with combination flags for FS, HP, and DA.
+
+    :param results_list: List of result dictionaries to annotate
+    :param feature_selection_enabled: Whether feature selection was enabled
+    :param hyperparameters_enabled: Whether hyperparameters were enabled
+    :param data_augmentation_enabled: Whether data augmentation was enabled
+    :return: None (modifies results_list in place)
+    """
+
+    try:
+        for row in results_list:  # For each result row in the list
+            row["feature_selection_enabled"] = feature_selection_enabled  # Mark feature selection status
+            row["hyperparameters_enabled"] = hyperparameters_enabled  # Mark hyperparameters status
+            row["data_augmentation_enabled"] = data_augmentation_enabled  # Mark data augmentation status
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def save_results_with_optional_suffix(file, results_list, suffix, base_filename_key, fallback_filename, use_stacking_subdir=False, config=None):
+    """
+    Save results to CSV with optional suffix-based filename.
+
+    :param file: File path for determining output directory
+    :param results_list: List of result dictionaries to save
+    :param suffix: Combination suffix string
+    :param base_filename_key: Config key for base filename
+    :param fallback_filename: Default filename if config key not found
+    :param use_stacking_subdir: Whether to use Stacking subdirectory
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        use_suffix = config.get("stacking", {}).get("use_suffix_filenames", False)  # Check if suffix filenames wanted
+        if use_suffix:  # If suffix-based files desired
+            base = config.get("stacking", {}).get(base_filename_key, fallback_filename)  # Get base filename from config
+            out_name = base.replace('.csv', f"{suffix}.csv")  # Compose suffixed filename
+            if use_stacking_subdir:  # If Stacking subdirectory should be used
+                out_path = Path(file).parent / "Feature_Analysis" / "Stacking" / out_name  # Build path with Stacking subdir
+            else:  # Without Stacking subdirectory
+                out_path = Path(file).parent / "Feature_Analysis" / out_name  # Build path without Stacking subdir
+            save_stacking_results(str(out_path), results_list, config=config)  # Save suffixed CSV
+        else:  # Default single CSV with extra columns
+            save_stacking_results(file, results_list, config=config)  # Save to default location
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def orchestrate_binary_combination(file, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, data_augmentation_enabled, suffix, config=None):
+    """
+    Orchestrate evaluation for a single binary combination of FS/HP/DA flags.
+
+    :param file: Path to the dataset file
+    :param ga_sel: GA selected features or None
+    :param pca_n: PCA components or None
+    :param rfe_sel: RFE selected features or None
+    :param base_models: Dictionary of base models
+    :param hp_params_map: Hyperparameters mapping
+    :param hyperparameters_enabled: Whether hyperparameters were enabled
+    :param feature_selection_enabled: Whether feature selection was enabled
+    :param data_augmentation_enabled: Whether data augmentation was enabled
+    :param suffix: Combination suffix string
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: True if evaluation succeeded, False otherwise
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        df_original, feature_names = load_and_preprocess_dataset(file, None, config=config)  # Load original dataset
+        if df_original is None:  # If loading failed
+            print(f"{BackgroundColors.YELLOW}Skipping file {file} (failed to load).{Style.RESET_ALL}")  # Warn about load failure
+            return False  # Signal failure
+
+        try:  # Protect the evaluation call
+            results = evaluate_on_dataset(
+                file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models,
+                data_source_label="Original",
+                hyperparams_map=hp_params_map if hyperparameters_enabled else {},
+                experiment_id=generate_experiment_id(file, "original_only"),
+                experiment_mode="original_only", augmentation_ratio=None,
+                execution_mode_str="binary", attack_types_combined=None,
+                df_augmented_for_training=None,
+            )  # Evaluate original-only binary classification
+        except Exception as e:  # If evaluation fails
+            print(f"{BackgroundColors.RED}Evaluation failed for {file} combo {suffix}: {e}{Style.RESET_ALL}")  # Log error
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
+            return False  # Signal failure
+
+        results_list = list(results.values())  # Convert results dict to list
+        annotate_results_with_combination_flags(results_list, feature_selection_enabled, hyperparameters_enabled, False)  # Annotate results with flags
+        save_results_with_optional_suffix(
+            file, results_list, suffix, "results_filename", "Stacking_Classifiers_Results.csv",
+            use_stacking_subdir=True, config=config,
+        )  # Save results with optional suffix
+
+        if data_augmentation_enabled:  # If DA requested and available
+            try:  # Protect augmentation processing
+                process_augmented_data_evaluation(
+                    file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models,
+                    hp_params_map if hyperparameters_enabled else {}, results, config=config,
+                )  # Process augmented evaluations
+            except Exception as e:  # If augmentation fails
+                print(f"{BackgroundColors.YELLOW}Augmentation processing failed for {file} combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
+                send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
+                return False  # Signal failure
+
+        return True  # Signal success
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def orchestrate_multiclass_combination(files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, data_augmentation_enabled, suffix, config=None):
+    """
+    Orchestrate evaluation for a single multi-class combination of FS/HP/DA flags.
+
+    :param files_to_process: List of files to process
+    :param ga_sel: GA selected features or None
+    :param pca_n: PCA components or None
+    :param rfe_sel: RFE selected features or None
+    :param base_models: Dictionary of base models
+    :param hp_params_map: Hyperparameters mapping
+    :param hyperparameters_enabled: Whether hyperparameters were enabled
+    :param feature_selection_enabled: Whether feature selection was enabled
+    :param data_augmentation_enabled: Whether data augmentation was enabled
+    :param suffix: Combination suffix string
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: "break" to abort mode loop, "continue" to skip combination, or None on success
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        try:  # Protect multiclass orchestration steps
+            combined_df, attack_types, target_col = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for multiclass
+        except Exception as e:  # If combining fails
+            print(f"{BackgroundColors.RED}Failed to combine files for multi-class: {e}{Style.RESET_ALL}")  # Error message
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
+            return "break"  # Signal to break out of combination loop
+
+        if combined_df is None:  # If no combined DF produced
+            print(f"{BackgroundColors.YELLOW}No multi-class dataset available. Skipping multi-class orchestration.{Style.RESET_ALL}")  # Warn
+            return "break"  # Signal to break out of combination loop
+
+        feature_names = [c for c in combined_df.columns if c != 'attack_type']  # Extract feature names excluding target
+
+        try:  # Protect evaluation
+            results = evaluate_on_dataset(
+                "multiclass_combined", combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,
+                data_source_label="Original_MultiClass",
+                hyperparams_map=hp_params_map if hyperparameters_enabled else {},
+                experiment_id=generate_experiment_id("multiclass_combined", "multiclass_original_only"),
+                experiment_mode="original_only", augmentation_ratio=None,
+                execution_mode_str="multi-class", attack_types_combined=attack_types,
+                df_augmented_for_training=None,
+            )  # Evaluate multi-class original dataset
+        except Exception as e:  # If evaluation fails
+            print(f"{BackgroundColors.RED}Multi-class evaluation failed for combo {suffix}: {e}{Style.RESET_ALL}")  # Error
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
+            return "continue"  # Signal to continue with next combination
+
+        results_list = list(results.values())  # Convert results dict to list
+        annotate_results_with_combination_flags(results_list, feature_selection_enabled, hyperparameters_enabled, False)  # Annotate results
+        save_results_with_optional_suffix(
+            files_to_process[0], results_list, suffix, "multiclass_results_filename",
+            "Stacking_Classifiers_MultiClass_Results.csv", use_stacking_subdir=False, config=config,
+        )  # Save multi-class results with optional suffix
+
+        if data_augmentation_enabled:  # If augmentation requested
+            try:  # Protect augmentation orchestration
+                augmented_files_list = load_augmented_files_for_multiclass(files_to_process, config=config)  # Load augmented files per-file
+                if not augmented_files_list:  # If none found
+                    print(f"{BackgroundColors.YELLOW}No augmented files found for multi-class combo {suffix}. Skipping augmentation.{Style.RESET_ALL}")  # Warn
+                else:  # Have augmented files to process
+                    combined_aug_df, _, _ = combine_files_for_multiclass(augmented_files_list, config=config)  # Combine augmented files
+                    if combined_aug_df is None:  # If combine failed
+                        print(f"{BackgroundColors.YELLOW}Failed to combine augmented files for multi-class combo {suffix}. Skipping.{Style.RESET_ALL}")  # Warn
+                    else:  # Proceed with ratio experiments
+                        for ratio in config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]):  # For each augmentation ratio
+                            df_sampled = sample_augmented_by_ratio(combined_aug_df, combined_df, ratio)  # Sample augmented data
+                            if df_sampled is None:  # If sampling failed
+                                print(f"{BackgroundColors.YELLOW}Sampling failed for ratio {ratio} in combo {suffix}. Skipping ratio.{Style.RESET_ALL}")  # Warn
+                                continue  # Next ratio
+                            try:  # Evaluate with augmented training data
+                                res = evaluate_on_dataset(
+                                    "multiclass_combined", combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,
+                                    data_source_label=f"Original+Augmented@{int(ratio*100)}%_MultiClass",
+                                    hyperparams_map=hp_params_map if hyperparameters_enabled else {},
+                                    experiment_id=generate_experiment_id("multiclass_combined", "multiclass_original_plus_augmented", ratio),
+                                    experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+                                    execution_mode_str="multi-class", attack_types_combined=attack_types,
+                                    df_augmented_for_training=df_sampled,
+                                )  # Evaluate augmented multi-class combination
+                            except Exception as e:  # If evaluation failed
+                                print(f"{BackgroundColors.YELLOW}Augmented evaluation failed for ratio {ratio} combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
+                                send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
+                                continue  # Next ratio
+                            res_list = list(res.values())  # Convert augmented results to list
+                            annotate_results_with_combination_flags(res_list, feature_selection_enabled, hyperparameters_enabled, True)  # Annotate with DA enabled
+                            save_stacking_results(files_to_process[0], res_list, config=config)  # Save augmented results
+            except Exception as e:  # Catch augmentation orchestration errors
+                print(f"{BackgroundColors.YELLOW}Multi-class augmentation orchestration failed for combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
+                send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
+                return "continue"  # Signal to continue with next combination
+
+        return None  # Signal success (no flow control change needed)
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     """
     Orchestrate all 8 combinations of Feature Selection (FS), Hyperparameter
@@ -7107,168 +7332,21 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     rfe_sel = fs_rfe if feature_selection_enabled else None  # RFE features or None
 
                     if mode == "binary":  # Binary evaluation per-file
-                        df_original, feature_names = load_and_preprocess_dataset(file, None, config=config)  # Load original
-                        if df_original is None:  # If loading failed
-                            print(f"{BackgroundColors.YELLOW}Skipping file {file} (failed to load).{Style.RESET_ALL}")  # Warn
+                        if not orchestrate_binary_combination(
+                            file, ga_sel, pca_n, rfe_sel, base_models, hp_params_map,
+                            hyperparameters_enabled, feature_selection_enabled, data_augmentation_enabled, suffix, config=config,
+                        ):  # If binary combination evaluation failed
                             continue  # Skip to next combination
 
-                        try:  # Protect the evaluation call
-                            results = evaluate_on_dataset(
-                                file,
-                                df_original,
-                                feature_names,
-                                ga_sel,
-                                pca_n,
-                                rfe_sel,
-                                base_models,
-                                data_source_label="Original",
-                                hyperparams_map=hp_params_map if hyperparameters_enabled else {},
-                                experiment_id=generate_experiment_id(file, "original_only"),
-                                experiment_mode="original_only",
-                                augmentation_ratio=None,
-                                execution_mode_str="binary",
-                                attack_types_combined=None,
-                                df_augmented_for_training=None,
-                            )  # Evaluate original-only
-                        except Exception as e:  # If evaluation fails
-                            print(f"{BackgroundColors.RED}Evaluation failed for {file} combo {suffix}: {e}{Style.RESET_ALL}")  # Log error
-                            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
-                            continue  # Continue with remaining combinations
-
-                        results_list = list(results.values())  # Convert to list
-                        for row in results_list:  # For each result row
-                            row["feature_selection_enabled"] = feature_selection_enabled  # Mark FS status
-                            row["hyperparameters_enabled"] = hyperparameters_enabled  # Mark HP status
-                            row["data_augmentation_enabled"] = False  # Original-only -> DA disabled for this row
-
-                        use_suffix = config.get("stacking", {}).get("use_suffix_filenames", False)  # Optional config
-                        if use_suffix:  # If suffix-based files desired
-                            base = config.get("stacking", {}).get("results_filename", "Stacking_Classifiers_Results.csv")  # Base filename
-                            out_name = base.replace('.csv', f"{suffix}.csv")  # Compose suffixed filename
-                            out_path = Path(file).parent / "Feature_Analysis" / "Stacking" / out_name  # Output path
-                            save_stacking_results(str(out_path), results_list, config=config)  # Save suffixed CSV
-                        else:  # Default single CSV with extra columns
-                            save_stacking_results(file, results_list, config=config)  # Save to default location
-
-                        if data_augmentation_enabled:  # If DA requested and available
-                            try:  # Protect augmentation processing
-                                process_augmented_data_evaluation(
-                                    file,
-                                    df_original,
-                                    feature_names,
-                                    ga_sel,
-                                    pca_n,
-                                    rfe_sel,
-                                    base_models,
-                                    hp_params_map if hyperparameters_enabled else {},
-                                    results,
-                                    config=config,
-                                )  # Process augmented evaluations
-                            except Exception as e:  # If augmentation fails
-                                print(f"{BackgroundColors.YELLOW}Augmentation processing failed for {file} combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
-                                send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
-                                continue  # Continue with remaining combinations
-
                     elif mode == "multi-class":  # Multi-class orchestration
-                        try:  # Protect multiclass orchestration steps
-                            combined_df, attack_types, target_col = combine_files_for_multiclass(files_to_process, config=config)  # Combine files
-                        except Exception as e:  # If combining fails
-                            print(f"{BackgroundColors.RED}Failed to combine files for multi-class: {e}{Style.RESET_ALL}")  # Error
-                            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
+                        signal = orchestrate_multiclass_combination(
+                            files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map,
+                            hyperparameters_enabled, feature_selection_enabled, data_augmentation_enabled, suffix, config=config,
+                        )  # Orchestrate multi-class combination evaluation
+                        if signal == "break":  # If combination cannot proceed for this mode
                             break  # Abort multi-class for this file list
-
-                        if combined_df is None:  # If no combined DF
-                            print(f"{BackgroundColors.YELLOW}No multi-class dataset available. Skipping multi-class orchestration.{Style.RESET_ALL}")  # Warn
-                            break  # No multiclass
-
-                        feature_names = [c for c in combined_df.columns if c != 'attack_type']  # Extract feature names
-
-                        try:  # Protect evaluation
-                            results = evaluate_on_dataset(
-                                "multiclass_combined",
-                                combined_df,
-                                feature_names,
-                                ga_sel,
-                                pca_n,
-                                rfe_sel,
-                                base_models,
-                                data_source_label="Original_MultiClass",
-                                hyperparams_map=hp_params_map if hyperparameters_enabled else {},
-                                experiment_id=generate_experiment_id("multiclass_combined", "multiclass_original_only"),
-                                experiment_mode="original_only",
-                                augmentation_ratio=None,
-                                execution_mode_str="multi-class",
-                                attack_types_combined=attack_types,
-                                df_augmented_for_training=None,
-                            )  # Evaluate multi-class original
-                        except Exception as e:  # If evaluation fails
-                            print(f"{BackgroundColors.RED}Multi-class evaluation failed for combo {suffix}: {e}{Style.RESET_ALL}")  # Error
-                            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
+                        elif signal == "continue":  # If combination should skip to next
                             continue  # Continue with next combination
-
-                        results_list = list(results.values())  # Convert to list
-                        for row in results_list:  # Annotate each row
-                            row["feature_selection_enabled"] = feature_selection_enabled  # FS flag
-                            row["hyperparameters_enabled"] = hyperparameters_enabled  # HP flag
-                            row["data_augmentation_enabled"] = False  # Original-only row
-
-                        use_suffix = config.get("stacking", {}).get("use_suffix_filenames", False)  # Read config
-                        if use_suffix:  # If suffix files wanted
-                            base = config.get("stacking", {}).get("multiclass_results_filename", "Stacking_Classifiers_MultiClass_Results.csv")  # Base
-                            out_name = base.replace('.csv', f"{suffix}.csv")  # Compose out name
-                            out_path = Path(files_to_process[0]).parent / "Feature_Analysis" / out_name  # Output path
-                            save_stacking_results(str(out_path), results_list, config=config)  # Save suffixed
-                        else:  # Default path
-                            save_stacking_results(files_to_process[0], results_list, config=config)  # Save to default
-
-                        if data_augmentation_enabled:  # If requested
-                            try:  # Protect augmentation
-                                augmented_files_list = load_augmented_files_for_multiclass(files_to_process, config=config)  # Load augmented per-file
-                                if not augmented_files_list:  # If none found
-                                    print(f"{BackgroundColors.YELLOW}No augmented files found for multi-class combo {suffix}. Skipping augmentation.{Style.RESET_ALL}")  # Warn
-                                else:  # Have augmented files
-                                    combined_aug_df, _, _ = combine_files_for_multiclass(augmented_files_list, config=config)  # Combine augmented files
-                                    if combined_aug_df is None:  # If combine failed
-                                        print(f"{BackgroundColors.YELLOW}Failed to combine augmented files for multi-class combo {suffix}. Skipping.{Style.RESET_ALL}")  # Warn
-                                    else:  # Proceed with ratio experiments
-                                        for ratio in config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]):  # For each ratio
-                                            df_sampled = sample_augmented_by_ratio(combined_aug_df, combined_df, ratio)  # Sample
-                                            if df_sampled is None:  # If sampling failed
-                                                print(f"{BackgroundColors.YELLOW}Sampling failed for ratio {ratio} in combo {suffix}. Skipping ratio.{Style.RESET_ALL}")  # Warn
-                                                continue  # Next ratio
-                                            try:  # Evaluate with augmented training data
-                                                res = evaluate_on_dataset(
-                                                    "multiclass_combined",
-                                                    combined_df,
-                                                    feature_names,
-                                                    ga_sel,
-                                                    pca_n,
-                                                    rfe_sel,
-                                                    base_models,
-                                                    data_source_label=f"Original+Augmented@{int(ratio*100)}%_MultiClass",
-                                                    hyperparams_map=hp_params_map if hyperparameters_enabled else {},
-                                                    experiment_id=generate_experiment_id("multiclass_combined", "multiclass_original_plus_augmented", ratio),
-                                                    experiment_mode="original_plus_augmented",
-                                                    augmentation_ratio=ratio,
-                                                    execution_mode_str="multi-class",
-                                                    attack_types_combined=attack_types,
-                                                    df_augmented_for_training=df_sampled,
-                                                )  # Evaluate
-                                            except Exception as e:  # If evaluation failed
-                                                print(f"{BackgroundColors.YELLOW}Augmented evaluation failed for ratio {ratio} combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
-                                                send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
-                                                continue  # Next ratio
-                                            # Annotate and save augmented results
-                                            res_list = list(res.values())  # To list
-                                            for row in res_list:  # Add flags
-                                                row["feature_selection_enabled"] = feature_selection_enabled  # FS flag
-                                                row["hyperparameters_enabled"] = hyperparameters_enabled  # HP flag
-                                                row["data_augmentation_enabled"] = True  # DA flag for augmented rows
-                                            save_stacking_results(files_to_process[0], res_list, config=config)  # Save augmented results
-                            except Exception as e:  # Catch augmentation orchestration errors
-                                print(f"{BackgroundColors.YELLOW}Multi-class augmentation orchestration failed for combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
-                                send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
-                                continue  # Continue combinations
 
                     else:  # Unknown mode (shouldn't happen)
                         print(f"{BackgroundColors.YELLOW}Unknown execution mode: {mode}{Style.RESET_ALL}")  # Warn
