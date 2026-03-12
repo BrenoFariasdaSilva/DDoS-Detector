@@ -1784,6 +1784,47 @@ def load_and_merge_feature_files(feature_files, extract_features):
         raise
 
 
+def resolve_dataset_label_col_interactively(train_df, dataset_name):
+    """
+    Detect the label column from the training DataFrame, prompting interactively when auto-detection fails.
+
+    :param train_df: Training DataFrame whose columns are inspected for the label column.
+    :param dataset_name: Dataset display name used in prompt and error messages.
+    :return: Detected or user-supplied label column name, or None when the user provides an empty input.
+    """
+
+    try:
+        label_col = detect_label_column(train_df.columns)  # Attempt automatic detection from column names
+
+        if label_col is None:  # If auto-detection returned no result
+            print(f"{BackgroundColors.RED}No label column detected in {dataset_name}.{Style.RESET_ALL}")  # Warn about failed detection
+            print(
+                f"{BackgroundColors.RED}Available columns: {BackgroundColors.CYAN}{list(train_df.columns)}{BackgroundColors.RED}...{Style.RESET_ALL}"
+            )  # Show column listing to assist the user
+            print(
+                f"{BackgroundColors.RED}Total columns: {BackgroundColors.CYAN}{len(train_df.columns)}{Style.RESET_ALL}"
+            )  # Show total column count for context
+
+            label_col = input(
+                f"{BackgroundColors.GREEN}Please enter the label column name for {dataset_name}: {Style.RESET_ALL}"
+            ).strip()  # Prompt user to supply the label column name
+
+            if label_col == "":  # Verify if user opted to skip by providing empty input
+                return None  # Return None to signal the caller to skip this dataset
+
+            while label_col not in train_df.columns:  # Repeat prompt until a valid column name is entered
+                print(f"{BackgroundColors.RED}Invalid label column name. Please try again.{Style.RESET_ALL}")  # Warn about invalid column
+                label_col = input(
+                    f"{BackgroundColors.GREEN}Please enter the label column name for {dataset_name}: {Style.RESET_ALL}"
+                ).strip()  # Ask user to re-enter the column name
+
+        return label_col  # Return the resolved label column name
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def main(use_cv=False, extract_features=True, compare_feature_selection=None):
     """
     Main function to run the machine learning pipeline on multiple datasets.
@@ -1849,25 +1890,10 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
                 training_file_path, testing_file_path
             )  # Load and preprocess dataset
 
-            label_col = detect_label_column(train_df.columns)  # Detect label column automatically
-            if label_col is None:  # If not detected
-                print(f"{BackgroundColors.RED}No label column detected in {dataset_name}.{Style.RESET_ALL}")
-                print(
-                    f"{BackgroundColors.RED}Available columns: {BackgroundColors.CYAN}{list(train_df.columns)}{BackgroundColors.RED}...{Style.RESET_ALL}"
-                )
-                print(
-                    f"{BackgroundColors.RED}Total columns: {BackgroundColors.CYAN}{len(train_df.columns)}{Style.RESET_ALL}"
-                )
-                label_col = input(
-                    f"{BackgroundColors.GREEN}Please enter the label column name for {dataset_name}: {Style.RESET_ALL}"
-                ).strip()  # Ask user for label column
-                if label_col == "":  # Skip if empty input
-                    continue  # Skip dataset
-                while label_col not in train_df.columns:  # Validate column name
-                    print(f"{BackgroundColors.RED}Invalid label column name. Please try again.{Style.RESET_ALL}")
-                    label_col = input(
-                        f"{BackgroundColors.GREEN}Please enter the label column name for {dataset_name}: {Style.RESET_ALL}"
-                    ).strip()  # Ask again
+            label_col = resolve_dataset_label_col_interactively(train_df, dataset_name)  # Detect or prompt for the label column name
+
+            if label_col is None:  # If user provided empty input for the label column
+                continue  # Skip this dataset
 
             if compare_feature_selection and features_to_use is not None:  # Run baseline if needed
                 verbose_output(f"{BackgroundColors.GREEN}Running baseline (without feature selection)...{Style.RESET_ALL}")
