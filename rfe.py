@@ -1957,6 +1957,40 @@ def run_cv_fold_loop(X_train_scaled: np.ndarray, y_train_array: np.ndarray, n_sp
         raise
 
 
+def aggregate_cv_fold_results(fold_metrics: list, fold_rankings: list, fold_supports: list, feature_columns, n_splits: int) -> Tuple[np.ndarray, Dict[str, float], list, list]:
+    """
+    Aggregate per-fold metrics, rankings, and support masks into mean metrics and majority-vote top features.
+
+    :param fold_metrics: List of per-fold metric tuples.
+    :param fold_rankings: List of per-fold ranking arrays.
+    :param fold_supports: List of per-fold support mask arrays.
+    :param feature_columns: Feature column names.
+    :param n_splits: Number of CV folds executed.
+    :return: Tuple of (mean_metrics, avg_rfe_ranking, top_features, sorted_rfe_ranking).
+    """
+
+    try:
+        metrics_arr = np.array(fold_metrics)  # Convert list of tuples to numpy array
+        mean_metrics = metrics_arr.mean(axis=0)  # Compute mean metric values across folds
+
+        rankings_arr = np.vstack(fold_rankings)  # Shape: (n_folds, n_features) stack rankings
+        mean_rankings = rankings_arr.mean(axis=0)  # Mean ranking per feature
+        avg_rfe_ranking = {f: float(r) for f, r in zip(feature_columns, mean_rankings)}  # Map feature->avg rank
+
+        supports_arr = np.vstack(fold_supports)  # Shape: (n_folds, n_features) stack support masks
+        support_counts = supports_arr.sum(axis=0)  # Count how many folds selected each feature
+        majority_threshold = (n_splits // 2) + 1  # Require strict majority to consider a feature selected
+        top_features = [f for f, c in zip(feature_columns, support_counts) if c >= majority_threshold]  # Select majority-chosen features
+
+        sorted_rfe_ranking = sorted(avg_rfe_ranking.items(), key=lambda x: x[1])  # Sort averaged rankings ascending
+
+        return mean_metrics, avg_rfe_ranking, top_features, sorted_rfe_ranking  # Return aggregated results
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n_features_to_select=None, step=1, estimator_name="random_forest", random_state=42):
     """
     Handles RFE with stratified cross-validation.
@@ -1981,19 +2015,9 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n
             X_train_scaled, y_train_array, n_splits, n_features_to_select, step, estimator_name, random_state, csv_path, scaling_time_s
         )  # Execute the stratified K-fold loop and collect per-fold results
 
-        metrics_arr = np.array(fold_metrics)  # Convert list of tuples to numpy array
-        mean_metrics = metrics_arr.mean(axis=0)  # Compute mean metric values across folds
-
-        rankings_arr = np.vstack(fold_rankings)  # Shape: (n_folds, n_features) stack rankings
-        mean_rankings = rankings_arr.mean(axis=0)  # Mean ranking per feature
-        avg_rfe_ranking = {f: float(r) for f, r in zip(feature_columns, mean_rankings)}  # Map feature->avg rank
-
-        supports_arr = np.vstack(fold_supports)  # Shape: (n_folds, n_features) stack support masks
-        support_counts = supports_arr.sum(axis=0)  # Count how many folds selected each feature
-        majority_threshold = (n_splits // 2) + 1  # Require strict majority to consider a feature selected
-        top_features = [f for f, c in zip(feature_columns, support_counts) if c >= majority_threshold]  # Select majority-chosen features
-
-        sorted_rfe_ranking = sorted(avg_rfe_ranking.items(), key=lambda x: x[1])  # Sort averaged rankings ascending
+        mean_metrics, avg_rfe_ranking, top_features, sorted_rfe_ranking = aggregate_cv_fold_results(
+            fold_metrics, fold_rankings, fold_supports, feature_columns, n_splits
+        )  # Aggregate per-fold metrics, rankings, and support masks into final results
 
         final_model, scaler_full, top_features, loaded_hyperparams = get_final_model(csv_path, X_train_df, y_train_array, top_features, feature_columns)
 
