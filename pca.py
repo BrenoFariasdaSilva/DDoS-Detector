@@ -135,59 +135,66 @@ def get_default_config() -> dict:
 
     This function centralizes all defaults so that configuration precedence
     (CLI > config.yaml > defaults) can be implemented reliably.
+
+    :return: Default configuration dictionary for PCA analysis.
     """
 
-    return {
-        "pca": {
-            "execution": {
-                "verbose": False,
-                "skip_train_if_model_exists": False,
-                "dataset_path": None,
-            },
-            "model": {
-                "estimator": "RandomForestClassifier",
-                "random_state": 42,
-            },
-            "dimensionality": {
-                "n_components": 8,
-                "n_components_list": [8, 16, 32, 64],
-            },
-            "preprocessing": {"scale_data": True, "remove_zero_variance": True},
-            "cross_validation": {"n_folds": 10},
-            "multiprocessing": {"n_jobs": -1, "cpu_processes": 1},
-            "caching": {"enabled": True, "pickle_protocol": 4},
-            "export": {
-                "results_dir": "Feature_Analysis/PCA",
-                "results_filename": "PCA_Results.csv",
-                "results_csv_columns": [
-                    "timestamp",
-                    "tool",
-                    "model",
-                    "dataset",
-                    "hyperparameters",
-                    "cv_method",
-                    "train_test_split",
-                    "scaling",
-                    "n_components",
-                    "explained_variance",
-                    "cv_accuracy",
-                    "cv_precision",
-                    "cv_recall",
-                    "cv_f1_score",
-                    "test_accuracy",
-                    "test_precision",
-                    "test_recall",
-                    "test_f1_score",
-                    "test_fpr",
-                    "test_fnr",
-                    "feature_extraction_time_s",
-                    "training_time_s",
-                    "testing_time_s",
-                    "hardware",
-                ]
-            },
+    try:
+        return {
+            "pca": {
+                "execution": {
+                    "verbose": False,
+                    "skip_train_if_model_exists": False,
+                    "dataset_path": None,
+                },
+                "model": {
+                    "estimator": "RandomForestClassifier",
+                    "random_state": 42,
+                },
+                "dimensionality": {
+                    "n_components": 8,
+                    "n_components_list": [8, 16, 32, 64],
+                },
+                "preprocessing": {"scale_data": True, "remove_zero_variance": True},
+                "cross_validation": {"n_folds": 10},
+                "multiprocessing": {"n_jobs": -1, "cpu_processes": 1},
+                "caching": {"enabled": True, "pickle_protocol": 4},
+                "export": {
+                    "results_dir": "Feature_Analysis/PCA",
+                    "results_filename": "PCA_Results.csv",
+                    "results_csv_columns": [
+                        "timestamp",
+                        "tool",
+                        "model",
+                        "dataset",
+                        "hyperparameters",
+                        "cv_method",
+                        "train_test_split",
+                        "scaling",
+                        "n_components",
+                        "explained_variance",
+                        "cv_accuracy",
+                        "cv_precision",
+                        "cv_recall",
+                        "cv_f1_score",
+                        "test_accuracy",
+                        "test_precision",
+                        "test_recall",
+                        "test_f1_score",
+                        "test_fpr",
+                        "test_fnr",
+                        "feature_extraction_time_s",
+                        "training_time_s",
+                        "testing_time_s",
+                        "hardware",
+                    ]
+                },
+            }
         }
-    }
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def load_config_file(path: str) -> dict:
@@ -196,18 +203,26 @@ def load_config_file(path: str) -> dict:
 
     Raises FileNotFoundError or yaml.YAMLError on parse errors so callers
     can handle validation explicitly.
+
+    :param path: Absolute or relative path to the YAML configuration file.
+    :return: Dictionary loaded from the YAML file, or an empty dict if path is falsy.
     """
 
-    if not path:
-        return {}
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"Config file not found: {path}")
-    with p.open("r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh) or {}
-    if not isinstance(data, dict):
-        raise ValueError("Configuration file must contain a YAML mapping at top level")
-    return data
+    try:
+        if not path:  # Return empty dict when no path is provided
+            return {}  # Empty config for absent path
+        p = Path(path)  # Build Path object from the string path
+        if not p.exists():  # Verify the file exists before attempting to load it
+            raise FileNotFoundError(f"Config file not found: {path}")  # Raise descriptive error for missing config
+        with p.open("r", encoding="utf-8") as fh:  # Open the config file with UTF-8 encoding
+            data = yaml.safe_load(fh) or {}  # Parse YAML and default to empty dict if file is empty
+        if not isinstance(data, dict):  # Validate that the top-level structure is a mapping
+            raise ValueError("Configuration file must contain a YAML mapping at top level")  # Raise on invalid structure
+        return data  # Return the parsed config dict
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def parse_cli_args() -> dict:
@@ -215,48 +230,64 @@ def parse_cli_args() -> dict:
     Parse CLI arguments and return a plain dict of values. This is executed
     only when requested (e.g., inside `get_config()` or `main()`), never at
     import time.
+
+    :return: Dictionary of parsed argument names mapped to their values.
     """
 
-    parser = argparse.ArgumentParser(description="PCA Feature Extraction & Evaluation Tool")
-    parser.add_argument("--config", type=str, default=None, help="Path to config.yaml (overrides auto-detection)")
-    parser.add_argument("--dataset_path", type=str, default=None, help="Path to the CSV dataset file")
-    parser.add_argument("--n_components", type=int, default=None, help="Single number of PCA components to test (overrides n_components_list)")
-    parser.add_argument("--n_components_list", type=str, default=None, help="Comma-separated list of PCA component counts to test")
-    parser.add_argument("--random_state", type=int, default=None, help="Random seed for reproducibility (overrides config)")
-    parser.add_argument("--scale_data", dest="scale_data", action="store_true", default=None, help="Enable scaling (overrides config)")
-    parser.add_argument("--no-scale_data", dest="scale_data", action="store_false", help="Disable scaling (overrides config)")
-    parser.add_argument("--remove_zero_variance", dest="remove_zero_variance", action="store_true", default=None, help="Remove zero-variance features (overrides config)")
-    parser.add_argument("--no-remove_zero_variance", dest="remove_zero_variance", action="store_false", help="Do not remove zero-variance features (overrides config)")
-    parser.add_argument("--max_workers", type=int, default=None, help="Number of parallel workers (overrides config)")
-    parser.add_argument("--n_folds", type=int, default=None, help="Number of CV folds (overrides config.cross_validation.n_folds)")
-    parser.add_argument("--n_jobs", type=int, default=None, help="Number of parallel jobs for estimators/CV (-1 uses all cores)")
-    parser.add_argument("--cpu_processes", type=int, default=None, help="Number of CPU processes for multiprocessing (overrides config.multiprocessing.cpu_processes)")
-    parser.add_argument("--caching_enabled", type=lambda s: str(s).lower() in ("1", "true", "yes", "y"), default=None, help="Enable/disable caching (true/false). Overrides config.caching.enabled")
-    parser.add_argument("--pickle_protocol", type=int, default=None, help="Pickle protocol (0-5) to use when caching")
-    parser.add_argument("--verbose", action="store_true", default=None, help="Enable verbose output (overrides config)")
-    parser.add_argument("--skip_train_if_model_exists", action="store_true", default=None, help="Skip training if exported model exists (overrides config)")
-    parser.add_argument("--results_dir", type=str, default=None, help="Override results directory for PCA exports (overrides config.pca.export.results_dir)")
-    parser.add_argument("--results_filename", type=str, default=None, help="Override results filename for PCA exports (overrides config.pca.export.results_filename)")
+    try:
+        parser = argparse.ArgumentParser(description="PCA Feature Extraction & Evaluation Tool")  # Initialize argument parser with description
+        parser.add_argument("--config", type=str, default=None, help="Path to config.yaml (overrides auto-detection)")  # Config file path override
+        parser.add_argument("--dataset_path", type=str, default=None, help="Path to the CSV dataset file")  # Dataset file path argument
+        parser.add_argument("--n_components", type=int, default=None, help="Single number of PCA components to test (overrides n_components_list)")  # Single n_components override
+        parser.add_argument("--n_components_list", type=str, default=None, help="Comma-separated list of PCA component counts to test")  # Comma-separated n_components list
+        parser.add_argument("--random_state", type=int, default=None, help="Random seed for reproducibility (overrides config)")  # Random state override
+        parser.add_argument("--scale_data", dest="scale_data", action="store_true", default=None, help="Enable scaling (overrides config)")  # Enable scaling flag
+        parser.add_argument("--no-scale_data", dest="scale_data", action="store_false", help="Disable scaling (overrides config)")  # Disable scaling flag
+        parser.add_argument("--remove_zero_variance", dest="remove_zero_variance", action="store_true", default=None, help="Remove zero-variance features (overrides config)")  # Enable zero-variance removal
+        parser.add_argument("--no-remove_zero_variance", dest="remove_zero_variance", action="store_false", help="Do not remove zero-variance features (overrides config)")  # Disable zero-variance removal
+        parser.add_argument("--max_workers", type=int, default=None, help="Number of parallel workers (overrides config)")  # Max workers override
+        parser.add_argument("--n_folds", type=int, default=None, help="Number of CV folds (overrides config.cross_validation.n_folds)")  # CV folds override
+        parser.add_argument("--n_jobs", type=int, default=None, help="Number of parallel jobs for estimators/CV (-1 uses all cores)")  # n_jobs override
+        parser.add_argument("--cpu_processes", type=int, default=None, help="Number of CPU processes for multiprocessing (overrides config.multiprocessing.cpu_processes)")  # CPU processes override
+        parser.add_argument("--caching_enabled", type=lambda s: str(s).lower() in ("1", "true", "yes", "y"), default=None, help="Enable/disable caching (true/false). Overrides config.caching.enabled")  # Caching enabled flag
+        parser.add_argument("--pickle_protocol", type=int, default=None, help="Pickle protocol (0-5) to use when caching")  # Pickle protocol override
+        parser.add_argument("--verbose", action="store_true", default=None, help="Enable verbose output (overrides config)")  # Verbose output flag
+        parser.add_argument("--skip_train_if_model_exists", action="store_true", default=None, help="Skip training if exported model exists (overrides config)")  # Skip training flag
+        parser.add_argument("--results_dir", type=str, default=None, help="Override results directory for PCA exports (overrides config.pca.export.results_dir)")  # Results directory override
+        parser.add_argument("--results_filename", type=str, default=None, help="Override results filename for PCA exports (overrides config.pca.export.results_filename)")  # Results filename override
 
-    args = parser.parse_args()
-    return vars(args)
+        args = parser.parse_args()  # Parse all CLI arguments
+        return vars(args)  # Return parsed arguments as a plain dictionary
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def deep_merge_dicts(base: dict, override: dict) -> dict:
     """
     Recursively merge two dictionaries with `override` taking precedence.
     Returns a new merged dictionary.
+
+    :param base: Base dictionary to merge into.
+    :param override: Override dictionary whose values take precedence over base.
+    :return: New dictionary with all keys from base overridden by values from override.
     """
 
-    if not isinstance(base, dict):
-        return override
-    result = dict(base)
-    for k, v in (override or {}).items():
-        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
-            result[k] = deep_merge_dicts(result[k], v)
-        else:
-            result[k] = v
-    return result
+    try:
+        if not isinstance(base, dict):  # If base is not a dict, override replaces it entirely
+            return override  # Return override directly when base is not a mapping
+        result = dict(base)  # Create a shallow copy of the base dictionary
+        for k, v in (override or {}).items():  # Iterate all override key-value pairs
+            if k in result and isinstance(result[k], dict) and isinstance(v, dict):  # Recurse when both values are dicts
+                result[k] = deep_merge_dicts(result[k], v)  # Recursively merge nested dicts
+            else:  # For non-dict values, override takes priority
+                result[k] = v  # Assign override value directly
+        return result  # Return the merged dictionary
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def validate_config_structure(config: dict) -> None:
@@ -265,33 +296,41 @@ def validate_config_structure(config: dict) -> None:
 
     This enforces the required pca.export.results_csv_columns presence and
     performs light type/range checks.
+
+    :param config: Merged configuration dictionary to validate.
+    :return: None
     """
 
-    if not isinstance(config, dict):
-        raise ValueError("Configuration must be a mapping/dict")
-    if "pca" in config and isinstance(config.get("pca"), dict):
-        pca_cfg = config.get("pca")  # Use the 'pca' section if it exists and is a dict
-    else:
-        pca_cfg = config  # Allow top-level keys if 'pca' section is missing, but still require 'export' subsection
+    try:
+        if not isinstance(config, dict):  # Validate that config is a dictionary
+            raise ValueError("Configuration must be a mapping/dict")  # Raise on non-dict input
+        if "pca" in config and isinstance(config.get("pca"), dict):  # Verify 'pca' section exists and is a dict
+            pca_cfg = config.get("pca")  # Use the 'pca' section if it exists and is a dict
+        else:  # Allow top-level keys if 'pca' section is missing, but still require 'export' subsection
+            pca_cfg = config  # Treat config itself as the pca config when 'pca' key is absent
 
-    if not isinstance(pca_cfg, dict):
-        raise ValueError("Missing or invalid 'pca' configuration section")
+        if not isinstance(pca_cfg, dict):  # Validate that pca_cfg resolves to a dict
+            raise ValueError("Missing or invalid 'pca' configuration section")  # Raise on invalid structure
 
-    export_cfg = pca_cfg.get("export")
-    if not isinstance(export_cfg, dict):
-        raise ValueError("Missing 'pca.export' configuration section")
+        export_cfg = pca_cfg.get("export")  # Retrieve the export subsection
+        if not isinstance(export_cfg, dict):  # Validate that export subsection exists and is a dict
+            raise ValueError("Missing 'pca.export' configuration section")  # Raise on missing export section
 
-    cols = export_cfg.get("results_csv_columns")
-    if not isinstance(cols, list) or not cols:
-        raise ValueError("'pca.export.results_csv_columns' must be a non-empty list defining the CSV header")
+        cols = export_cfg.get("results_csv_columns")  # Retrieve the CSV column header list
+        if not isinstance(cols, list) or not cols:  # Validate that columns list is a non-empty list
+            raise ValueError("'pca.export.results_csv_columns' must be a non-empty list defining the CSV header")  # Raise on invalid or empty columns
 
-    n_folds = (pca_cfg.get("cross_validation") or {}).get("n_folds")
-    if not isinstance(n_folds, int) or n_folds < 2:
-        raise ValueError("'pca.cross_validation.n_folds' must be an integer >= 2")
+        n_folds = (pca_cfg.get("cross_validation") or {}).get("n_folds")  # Retrieve n_folds from cross_validation section
+        if not isinstance(n_folds, int) or n_folds < 2:  # Validate n_folds is an integer >= 2
+            raise ValueError("'pca.cross_validation.n_folds' must be an integer >= 2")  # Raise on invalid n_folds
 
-    n_components = (pca_cfg.get("dimensionality") or {}).get("n_components")
-    if not isinstance(n_components, int) or n_components <= 0:
-        raise ValueError("'pca.dimensionality.n_components' must be an integer > 0")
+        n_components = (pca_cfg.get("dimensionality") or {}).get("n_components")  # Retrieve n_components from dimensionality section
+        if not isinstance(n_components, int) or n_components <= 0:  # Validate n_components is a positive integer
+            raise ValueError("'pca.dimensionality.n_components' must be an integer > 0")  # Raise on invalid n_components
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def resolve_config_file_path(cli_config_arg) -> str | None:
@@ -302,18 +341,23 @@ def resolve_config_file_path(cli_config_arg) -> str | None:
     :return: Resolved config file path string, or None if not found.
     """
 
-    if cli_config_arg:  # Use CLI-provided path when available
-        return cli_config_arg  # Return the CLI-specified config path directly
+    try:
+        if cli_config_arg:  # Use CLI-provided path when available
+            return cli_config_arg  # Return the CLI-specified config path directly
 
-    candidate = Path(__file__).parent / "config.yaml"  # Auto-detect config.yaml in script directory
-    candidate_example = Path(__file__).parent / "config.yaml.example"  # Check for example config file as fallback
+        candidate = Path(__file__).parent / "config.yaml"  # Auto-detect config.yaml in script directory
+        candidate_example = Path(__file__).parent / "config.yaml.example"  # Check for example config file as fallback
 
-    if candidate.exists():  # Verify if the primary config file exists
-        return str(candidate)  # Return the primary config file path
-    elif candidate_example.exists():  # Verify if the example config file exists
-        return str(candidate_example)  # Return the example config file path
+        if candidate.exists():  # Verify if the primary config file exists
+            return str(candidate)  # Return the primary config file path
+        elif candidate_example.exists():  # Verify if the example config file exists
+            return str(candidate_example)  # Return the example config file path
 
-    return None  # Return None when neither config file is found
+        return None  # Return None when neither config file is found
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def build_execution_overrides(cli: dict) -> dict:
@@ -324,16 +368,21 @@ def build_execution_overrides(cli: dict) -> dict:
     :return: Nested override dict for the execution section or empty dict.
     """
 
-    exec_ov = {}  # Collect execution-related override values
+    try:
+        exec_ov = {}  # Collect execution-related override values
 
-    if cli.get("verbose") is not None:  # Verify if verbose was specified via CLI
-        exec_ov.setdefault("execution", {})["verbose"] = bool(cli.get("verbose"))  # Store boolean verbose override
-    if cli.get("skip_train_if_model_exists") is not None:  # Verify if skip flag was specified
-        exec_ov.setdefault("execution", {})["skip_train_if_model_exists"] = bool(cli.get("skip_train_if_model_exists"))  # Store boolean skip override
-    if cli.get("dataset_path") is not None:  # Verify if dataset path was specified
-        exec_ov.setdefault("execution", {})["dataset_path"] = cli.get("dataset_path")  # Store dataset path override
+        if cli.get("verbose") is not None:  # Verify if verbose was specified via CLI
+            exec_ov.setdefault("execution", {})["verbose"] = bool(cli.get("verbose"))  # Store boolean verbose override
+        if cli.get("skip_train_if_model_exists") is not None:  # Verify if skip flag was specified
+            exec_ov.setdefault("execution", {})["skip_train_if_model_exists"] = bool(cli.get("skip_train_if_model_exists"))  # Store boolean skip override
+        if cli.get("dataset_path") is not None:  # Verify if dataset path was specified
+            exec_ov.setdefault("execution", {})["dataset_path"] = cli.get("dataset_path")  # Store dataset path override
 
-    return exec_ov  # Return the collected execution overrides
+        return exec_ov  # Return the collected execution overrides
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def build_model_overrides(cli: dict) -> dict:
@@ -344,18 +393,23 @@ def build_model_overrides(cli: dict) -> dict:
     :return: Nested override dict for the model section or empty dict.
     """
 
-    model_ov = {}  # Collect model-related override values
-    raw_random_state: Any = cli.get("random_state")  # Retrieve raw CLI value for random_state (may be None)
+    try:
+        model_ov = {}  # Collect model-related override values
+        raw_random_state: Any = cli.get("random_state")  # Retrieve raw CLI value for random_state (may be None)
 
-    if raw_random_state is not None:  # Only process when CLI provided to preserve original behavior
-        if not isinstance(raw_random_state, (int, str)):  # Validate acceptable input types
-            raise TypeError("--random_state must be an int or string convertible to int")  # Raise on invalid type
-        try:
-            model_ov.setdefault("model", {})["random_state"] = int(raw_random_state)  # Safely convert to int
-        except Exception as e:
-            raise ValueError(f"Invalid --random_state value: {raw_random_state}") from e  # Raise with context
+        if raw_random_state is not None:  # Only process when CLI provided to preserve original behavior
+            if not isinstance(raw_random_state, (int, str)):  # Validate acceptable input types
+                raise TypeError("--random_state must be an int or string convertible to int")  # Raise on invalid type
+            try:
+                model_ov.setdefault("model", {})["random_state"] = int(raw_random_state)  # Safely convert to int
+            except Exception as e:
+                raise ValueError(f"Invalid --random_state value: {raw_random_state}") from e  # Raise with context
 
-    return model_ov  # Return the collected model overrides
+        return model_ov  # Return the collected model overrides
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def build_export_overrides(cli: dict) -> dict:
@@ -366,14 +420,19 @@ def build_export_overrides(cli: dict) -> dict:
     :return: Nested override dict for the export section or empty dict.
     """
 
-    export_ov = {}  # Collect export-related override values
+    try:
+        export_ov = {}  # Collect export-related override values
 
-    if cli.get("results_dir") is not None:  # Verify if results_dir was overridden via CLI
-        export_ov.setdefault("export", {})["results_dir"] = cli.get("results_dir")  # Store results_dir override
-    if cli.get("results_filename") is not None:  # Verify if results_filename was overridden via CLI
-        export_ov.setdefault("export", {})["results_filename"] = cli.get("results_filename")  # Store results_filename override
+        if cli.get("results_dir") is not None:  # Verify if results_dir was overridden via CLI
+            export_ov.setdefault("export", {})["results_dir"] = cli.get("results_dir")  # Store results_dir override
+        if cli.get("results_filename") is not None:  # Verify if results_filename was overridden via CLI
+            export_ov.setdefault("export", {})["results_filename"] = cli.get("results_filename")  # Store results_filename override
 
-    return export_ov  # Return the collected export overrides
+        return export_ov  # Return the collected export overrides
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def build_dimensionality_overrides(cli: dict) -> dict:
@@ -384,40 +443,45 @@ def build_dimensionality_overrides(cli: dict) -> dict:
     :return: Nested override dict for the dimensionality section or empty dict.
     """
 
-    dim_ov = {}  # Collect dimensionality-related override values
+    try:
+        dim_ov = {}  # Collect dimensionality-related override values
 
-    if cli.get("n_components") is not None:  # Verify if n_components was specified
-        raw_ncomp: Any = cli.get("n_components")  # Retrieve raw CLI value for n_components (may be str/int)
-        if raw_ncomp is None:  # Defensive guard; preserve original conditional logic
-            pass  # No-op when raw_ncomp unexpectedly None (keeps original semantics)
-        else:
-            if not isinstance(raw_ncomp, (int, str)):  # Ensure convertible types
-                raise TypeError("--n_components must be an int or string convertible to int")  # Raise on invalid type
-            try:
-                validated_ncomp: int = int(raw_ncomp)  # Convert to int after validation
-            except Exception as e:
-                raise ValueError(f"Invalid --n_components value: {raw_ncomp}") from e  # Raise with context
-            dim_ov.setdefault("dimensionality", {})["n_components"] = validated_ncomp  # Store validated int
-            dim_ov.setdefault("dimensionality", {})["n_components_list"] = [validated_ncomp]  # Store single-item list
-    elif cli.get("n_components_list") is not None:  # Verify if n_components_list was specified instead
-        try:
-            raw_list: Any = cli.get("n_components_list")  # Retrieve raw CLI value for n_components_list
-            if not isinstance(raw_list, str):  # Ensure it is a comma-separated string as expected
-                raise TypeError("--n_components_list must be a comma-separated string of integers")  # Raise on wrong type
-            parts = []  # Prepare list to collect validated ints
-            for x in raw_list.split(","):  # Iterate substrings to validate and convert each
-                s = x.strip()  # Strip whitespace from the substring
-                if not s:  # Skip empty substrings
-                    continue  # Continue to next substring
+        if cli.get("n_components") is not None:  # Verify if n_components was specified
+            raw_ncomp: Any = cli.get("n_components")  # Retrieve raw CLI value for n_components (may be str/int)
+            if raw_ncomp is None:  # Defensive guard; preserve original conditional logic
+                pass  # No-op when raw_ncomp unexpectedly None (keeps original semantics)
+            else:
+                if not isinstance(raw_ncomp, (int, str)):  # Ensure convertible types
+                    raise TypeError("--n_components must be an int or string convertible to int")  # Raise on invalid type
                 try:
-                    parts.append(int(s))  # Convert validated substring to int and append
+                    validated_ncomp: int = int(raw_ncomp)  # Convert to int after validation
                 except Exception as e:
-                    raise ValueError(f"Invalid integer in --n_components_list: {s}") from e  # Raise on bad value
-        except Exception:
-            raise ValueError("--n_components_list must be a comma-separated list of integers")  # Raise on parse failure
-        dim_ov.setdefault("dimensionality", {})["n_components_list"] = parts  # Store validated list
+                    raise ValueError(f"Invalid --n_components value: {raw_ncomp}") from e  # Raise with context
+                dim_ov.setdefault("dimensionality", {})["n_components"] = validated_ncomp  # Store validated int
+                dim_ov.setdefault("dimensionality", {})["n_components_list"] = [validated_ncomp]  # Store single-item list
+        elif cli.get("n_components_list") is not None:  # Verify if n_components_list was specified instead
+            try:
+                raw_list: Any = cli.get("n_components_list")  # Retrieve raw CLI value for n_components_list
+                if not isinstance(raw_list, str):  # Ensure it is a comma-separated string as expected
+                    raise TypeError("--n_components_list must be a comma-separated string of integers")  # Raise on wrong type
+                parts = []  # Prepare list to collect validated ints
+                for x in raw_list.split(","):  # Iterate substrings to validate and convert each
+                    s = x.strip()  # Strip whitespace from the substring
+                    if not s:  # Skip empty substrings
+                        continue  # Continue to next substring
+                    try:
+                        parts.append(int(s))  # Convert validated substring to int and append
+                    except Exception as e:
+                        raise ValueError(f"Invalid integer in --n_components_list: {s}") from e  # Raise on bad value
+            except Exception:
+                raise ValueError("--n_components_list must be a comma-separated list of integers")  # Raise on parse failure
+            dim_ov.setdefault("dimensionality", {})["n_components_list"] = parts  # Store validated list
 
-    return dim_ov  # Return the collected dimensionality overrides
+        return dim_ov  # Return the collected dimensionality overrides
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def build_preprocessing_overrides(cli: dict) -> dict:
@@ -428,14 +492,19 @@ def build_preprocessing_overrides(cli: dict) -> dict:
     :return: Nested override dict for the preprocessing section or empty dict.
     """
 
-    prep_ov = {}  # Collect preprocessing-related override values
+    try:
+        prep_ov = {}  # Collect preprocessing-related override values
 
-    if cli.get("scale_data") is not None:  # Verify if scale_data was specified via CLI
-        prep_ov.setdefault("preprocessing", {})["scale_data"] = bool(cli.get("scale_data"))  # Store boolean scale_data override
-    if cli.get("remove_zero_variance") is not None:  # Verify if remove_zero_variance was specified
-        prep_ov.setdefault("preprocessing", {})["remove_zero_variance"] = bool(cli.get("remove_zero_variance"))  # Store boolean override
+        if cli.get("scale_data") is not None:  # Verify if scale_data was specified via CLI
+            prep_ov.setdefault("preprocessing", {})["scale_data"] = bool(cli.get("scale_data"))  # Store boolean scale_data override
+        if cli.get("remove_zero_variance") is not None:  # Verify if remove_zero_variance was specified
+            prep_ov.setdefault("preprocessing", {})["remove_zero_variance"] = bool(cli.get("remove_zero_variance"))  # Store boolean override
 
-    return prep_ov  # Return the collected preprocessing overrides
+        return prep_ov  # Return the collected preprocessing overrides
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def build_cv_overrides(cli: dict) -> dict:
@@ -446,18 +515,23 @@ def build_cv_overrides(cli: dict) -> dict:
     :return: Nested override dict for the cross_validation section or empty dict.
     """
 
-    cv_ov = {}  # Collect cross-validation-related override values
-    raw_n_folds: Any = cli.get("n_folds")  # Retrieve raw CLI value for n_folds
+    try:
+        cv_ov = {}  # Collect cross-validation-related override values
+        raw_n_folds: Any = cli.get("n_folds")  # Retrieve raw CLI value for n_folds
 
-    if raw_n_folds is not None:  # Only process when provided
-        if not isinstance(raw_n_folds, (int, str)):  # Validate expected input types
-            raise TypeError("--n_folds must be an int or string convertible to int")  # Raise on invalid type
-        try:
-            cv_ov.setdefault("cross_validation", {})["n_folds"] = int(raw_n_folds)  # Safely convert to int
-        except Exception as e:
-            raise ValueError(f"Invalid --n_folds value: {raw_n_folds}") from e  # Raise with context
+        if raw_n_folds is not None:  # Only process when provided
+            if not isinstance(raw_n_folds, (int, str)):  # Validate expected input types
+                raise TypeError("--n_folds must be an int or string convertible to int")  # Raise on invalid type
+            try:
+                cv_ov.setdefault("cross_validation", {})["n_folds"] = int(raw_n_folds)  # Safely convert to int
+            except Exception as e:
+                raise ValueError(f"Invalid --n_folds value: {raw_n_folds}") from e  # Raise with context
 
-    return cv_ov  # Return the collected cross-validation overrides
+        return cv_ov  # Return the collected cross-validation overrides
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def build_multiprocessing_overrides(cli: dict) -> dict:
@@ -468,28 +542,33 @@ def build_multiprocessing_overrides(cli: dict) -> dict:
     :return: Nested override dict for the multiprocessing section or empty dict.
     """
 
-    multi_ov = {}  # Collect multiprocessing-related override values
-    raw_n_jobs: Any = cli.get("n_jobs")  # Retrieve raw CLI value for n_jobs
+    try:
+        multi_ov = {}  # Collect multiprocessing-related override values
+        raw_n_jobs: Any = cli.get("n_jobs")  # Retrieve raw CLI value for n_jobs
 
-    if raw_n_jobs is not None:  # Only process when provided
-        if not isinstance(raw_n_jobs, (int, str)):  # Validate acceptable types
-            raise TypeError("--n_jobs must be an int or string convertible to int")  # Raise on invalid type
-        try:
-            multi_ov.setdefault("multiprocessing", {})["n_jobs"] = int(raw_n_jobs)  # Convert to int safely
-        except Exception as e:
-            raise ValueError(f"Invalid --n_jobs value: {raw_n_jobs}") from e  # Raise with context
+        if raw_n_jobs is not None:  # Only process when provided
+            if not isinstance(raw_n_jobs, (int, str)):  # Validate acceptable types
+                raise TypeError("--n_jobs must be an int or string convertible to int")  # Raise on invalid type
+            try:
+                multi_ov.setdefault("multiprocessing", {})["n_jobs"] = int(raw_n_jobs)  # Convert to int safely
+            except Exception as e:
+                raise ValueError(f"Invalid --n_jobs value: {raw_n_jobs}") from e  # Raise with context
 
-    raw_cpu_processes: Any = cli.get("cpu_processes")  # Retrieve raw CLI value for cpu_processes
+        raw_cpu_processes: Any = cli.get("cpu_processes")  # Retrieve raw CLI value for cpu_processes
 
-    if raw_cpu_processes is not None:  # Only process when provided
-        if not isinstance(raw_cpu_processes, (int, str)):  # Validate acceptable types
-            raise TypeError("--cpu_processes must be an int or string convertible to int")  # Raise on invalid type
-        try:
-            multi_ov.setdefault("multiprocessing", {})["cpu_processes"] = int(raw_cpu_processes)  # Convert to int safely
-        except Exception as e:
-            raise ValueError(f"Invalid --cpu_processes value: {raw_cpu_processes}") from e  # Raise with context
+        if raw_cpu_processes is not None:  # Only process when provided
+            if not isinstance(raw_cpu_processes, (int, str)):  # Validate acceptable types
+                raise TypeError("--cpu_processes must be an int or string convertible to int")  # Raise on invalid type
+            try:
+                multi_ov.setdefault("multiprocessing", {})["cpu_processes"] = int(raw_cpu_processes)  # Convert to int safely
+            except Exception as e:
+                raise ValueError(f"Invalid --cpu_processes value: {raw_cpu_processes}") from e  # Raise with context
 
-    return multi_ov  # Return the collected multiprocessing overrides
+        return multi_ov  # Return the collected multiprocessing overrides
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def build_caching_overrides(cli: dict) -> dict:
@@ -500,22 +579,27 @@ def build_caching_overrides(cli: dict) -> dict:
     :return: Nested override dict for the caching section or empty dict.
     """
 
-    cache_ov = {}  # Collect caching-related override values
+    try:
+        cache_ov = {}  # Collect caching-related override values
 
-    if cli.get("caching_enabled") is not None:  # Verify if caching_enabled was provided
-        cache_ov.setdefault("caching", {})["enabled"] = bool(cli.get("caching_enabled"))  # Store boolean caching override
+        if cli.get("caching_enabled") is not None:  # Verify if caching_enabled was provided
+            cache_ov.setdefault("caching", {})["enabled"] = bool(cli.get("caching_enabled"))  # Store boolean caching override
 
-    raw_pickle_protocol: Any = cli.get("pickle_protocol")  # Retrieve raw CLI value for pickle_protocol
+        raw_pickle_protocol: Any = cli.get("pickle_protocol")  # Retrieve raw CLI value for pickle_protocol
 
-    if raw_pickle_protocol is not None:  # Only process when provided
-        if not isinstance(raw_pickle_protocol, (int, str)):  # Validate types
-            raise TypeError("--pickle_protocol must be an int or string convertible to int")  # Raise on invalid type
-        try:
-            cache_ov.setdefault("caching", {})["pickle_protocol"] = int(raw_pickle_protocol)  # Safely convert to int
-        except Exception as e:
-            raise ValueError(f"Invalid --pickle_protocol value: {raw_pickle_protocol}") from e  # Raise with context
+        if raw_pickle_protocol is not None:  # Only process when provided
+            if not isinstance(raw_pickle_protocol, (int, str)):  # Validate types
+                raise TypeError("--pickle_protocol must be an int or string convertible to int")  # Raise on invalid type
+            try:
+                cache_ov.setdefault("caching", {})["pickle_protocol"] = int(raw_pickle_protocol)  # Safely convert to int
+            except Exception as e:
+                raise ValueError(f"Invalid --pickle_protocol value: {raw_pickle_protocol}") from e  # Raise with context
 
-    return cache_ov  # Return the collected caching overrides
+        return cache_ov  # Return the collected caching overrides
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def build_sources_map(file_cfg: dict, pca_overrides: dict) -> dict:
@@ -527,17 +611,22 @@ def build_sources_map(file_cfg: dict, pca_overrides: dict) -> dict:
     :return: Dict mapping each pca config section to its origin ('cli', 'config', or 'default').
     """
 
-    sources = {"pca": {}}  # Initialize the sources map with the pca key
+    try:
+        sources = {"pca": {}}  # Initialize the sources map with the pca key
 
-    for top in ("execution", "model", "dimensionality", "preprocessing", "cross_validation", "multiprocessing", "caching", "export"):  # Iterate all tracked config sections
-        src = "default"  # Start with default as the baseline origin
-        if isinstance(file_cfg, dict) and file_cfg.get("pca", {}).get(top) is not None:  # Verify if section is present in file config
-            src = "config"  # Mark as config-sourced when found in file
-        if pca_overrides.get("pca", {}).get(top) is not None:  # Verify if section was overridden via CLI
-            src = "cli"  # Mark as cli-sourced when CLI override exists
-        sources["pca"][top] = src  # Store the origin label for this section
+        for top in ("execution", "model", "dimensionality", "preprocessing", "cross_validation", "multiprocessing", "caching", "export"):  # Iterate all tracked config sections
+            src = "default"  # Start with default as the baseline origin
+            if isinstance(file_cfg, dict) and file_cfg.get("pca", {}).get(top) is not None:  # Verify if section is present in file config
+                src = "config"  # Mark as config-sourced when found in file
+            if pca_overrides.get("pca", {}).get(top) is not None:  # Verify if section was overridden via CLI
+                src = "cli"  # Mark as cli-sourced when CLI override exists
+            sources["pca"][top] = src  # Store the origin label for this section
 
-    return sources  # Return the completed sources map
+        return sources  # Return the completed sources map
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def get_config() -> tuple:
@@ -546,65 +635,72 @@ def get_config() -> tuple:
 
     Returns (config_dict, sources_dict) where sources_dict maps top-level keys
     to the origin ('cli'|'config'|'default').
+
+    :return: Tuple of (config_dict, sources_dict) with merged configuration and origin map.
     """
 
-    cli = parse_cli_args()  # Parse all CLI arguments into a flat dictionary
+    try:
+        cli = parse_cli_args()  # Parse all CLI arguments into a flat dictionary
 
-    cfg_path = resolve_config_file_path(cli.get("config"))  # Resolve configuration file path from CLI or auto-detection
+        cfg_path = resolve_config_file_path(cli.get("config"))  # Resolve configuration file path from CLI or auto-detection
 
-    file_cfg = {}  # Initialize file config as empty
-    if cfg_path:  # Verify if a config file path was resolved
-        try:
-            file_cfg = load_config_file(cfg_path)  # Load and parse the YAML config file
-        except Exception as e:
-            raise  # Re-raise loading errors for caller to handle
+        file_cfg = {}  # Initialize file config as empty
+        if cfg_path:  # Verify if a config file path was resolved
+            try:
+                file_cfg = load_config_file(cfg_path)  # Load and parse the YAML config file
+            except Exception as e:
+                raise  # Re-raise loading errors for caller to handle
 
-    defaults = get_default_config()  # Retrieve the complete set of default configuration values
+        defaults = get_default_config()  # Retrieve the complete set of default configuration values
 
-    merged = deep_merge_dicts(defaults, file_cfg)  # Merge defaults with file config, file taking precedence
+        merged = deep_merge_dicts(defaults, file_cfg)  # Merge defaults with file config, file taking precedence
 
-    pca_overrides = {}  # Prepare dict to collect CLI overrides for PCA section
-    pca_overrides.setdefault("pca", {})  # Ensure top-level 'pca' mapping exists in overrides
+        pca_overrides = {}  # Prepare dict to collect CLI overrides for PCA section
+        pca_overrides.setdefault("pca", {})  # Ensure top-level 'pca' mapping exists in overrides
 
-    exec_ov = build_execution_overrides(cli)  # Build execution section overrides from CLI
-    if exec_ov:  # Only update when overrides are present
-        pca_overrides["pca"].update(exec_ov)  # Merge execution overrides into pca_overrides
+        exec_ov = build_execution_overrides(cli)  # Build execution section overrides from CLI
+        if exec_ov:  # Only update when overrides are present
+            pca_overrides["pca"].update(exec_ov)  # Merge execution overrides into pca_overrides
 
-    model_ov = build_model_overrides(cli)  # Build model section overrides from CLI
-    if model_ov:  # Only update when overrides are present
-        pca_overrides["pca"].update(model_ov)  # Merge model overrides into pca_overrides
+        model_ov = build_model_overrides(cli)  # Build model section overrides from CLI
+        if model_ov:  # Only update when overrides are present
+            pca_overrides["pca"].update(model_ov)  # Merge model overrides into pca_overrides
 
-    export_ov = build_export_overrides(cli)  # Build export section overrides from CLI
-    if export_ov:  # Only update when overrides are present
-        pca_overrides["pca"].update(export_ov)  # Merge export overrides into pca_overrides
+        export_ov = build_export_overrides(cli)  # Build export section overrides from CLI
+        if export_ov:  # Only update when overrides are present
+            pca_overrides["pca"].update(export_ov)  # Merge export overrides into pca_overrides
 
-    dim_ov = build_dimensionality_overrides(cli)  # Build dimensionality section overrides from CLI
-    if dim_ov:  # Only update when overrides are present
-        pca_overrides["pca"].update(dim_ov)  # Merge dimensionality overrides into pca_overrides
+        dim_ov = build_dimensionality_overrides(cli)  # Build dimensionality section overrides from CLI
+        if dim_ov:  # Only update when overrides are present
+            pca_overrides["pca"].update(dim_ov)  # Merge dimensionality overrides into pca_overrides
 
-    prep_ov = build_preprocessing_overrides(cli)  # Build preprocessing section overrides from CLI
-    if prep_ov:  # Only update when overrides are present
-        pca_overrides["pca"].update(prep_ov)  # Merge preprocessing overrides into pca_overrides
+        prep_ov = build_preprocessing_overrides(cli)  # Build preprocessing section overrides from CLI
+        if prep_ov:  # Only update when overrides are present
+            pca_overrides["pca"].update(prep_ov)  # Merge preprocessing overrides into pca_overrides
 
-    cv_ov = build_cv_overrides(cli)  # Build cross-validation section overrides from CLI
-    if cv_ov:  # Only update when overrides are present
-        pca_overrides["pca"].update(cv_ov)  # Merge cross-validation overrides into pca_overrides
+        cv_ov = build_cv_overrides(cli)  # Build cross-validation section overrides from CLI
+        if cv_ov:  # Only update when overrides are present
+            pca_overrides["pca"].update(cv_ov)  # Merge cross-validation overrides into pca_overrides
 
-    multi_ov = build_multiprocessing_overrides(cli)  # Build multiprocessing section overrides from CLI
-    if multi_ov:  # Only update when overrides are present
-        pca_overrides["pca"].update(multi_ov)  # Merge multiprocessing overrides into pca_overrides
+        multi_ov = build_multiprocessing_overrides(cli)  # Build multiprocessing section overrides from CLI
+        if multi_ov:  # Only update when overrides are present
+            pca_overrides["pca"].update(multi_ov)  # Merge multiprocessing overrides into pca_overrides
 
-    cache_ov = build_caching_overrides(cli)  # Build caching section overrides from CLI
-    if cache_ov:  # Only update when overrides are present
-        pca_overrides["pca"].update(cache_ov)  # Merge caching overrides into pca_overrides
+        cache_ov = build_caching_overrides(cli)  # Build caching section overrides from CLI
+        if cache_ov:  # Only update when overrides are present
+            pca_overrides["pca"].update(cache_ov)  # Merge caching overrides into pca_overrides
 
-    final = deep_merge_dicts(merged, pca_overrides)  # Merge merged config with CLI overrides
+        final = deep_merge_dicts(merged, pca_overrides)  # Merge merged config with CLI overrides
 
-    validate_config_structure(final.get("pca", {}))  # Validate the final merged config structure before use
+        validate_config_structure(final.get("pca", {}))  # Validate the final merged config structure before use
 
-    sources = build_sources_map(file_cfg, pca_overrides)  # Build the origin map for all config sections
+        sources = build_sources_map(file_cfg, pca_overrides)  # Build the origin map for all config sections
 
-    return final, sources  # Return the final config dict and sources map
+        return final, sources  # Return the final config dict and sources map
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def verbose_output(true_string="", false_string=""):
@@ -768,13 +864,13 @@ def preprocess_dataframe(df, remove_zero_variance=True):
                 f"{BackgroundColors.GREEN}Preprocessing DataFrame: "
                 f"{BackgroundColors.CYAN}normalizing and sanitizing column names, removing NaN/infinite rows, and dropping zero-variance numeric features"
                 f"{BackgroundColors.GREEN}.{Style.RESET_ALL}"
-            )
+            )  # Log preprocessing start with zero-variance removal enabled
         else:  # If remove_zero_variance is set to False
             verbose_output(
                 f"{BackgroundColors.GREEN}Preprocessing DataFrame: "
                 f"{BackgroundColors.CYAN}normalizing and sanitizing column names and removing NaN/infinite rows"
                 f"{BackgroundColors.GREEN}.{Style.RESET_ALL}"
-            )
+            )  # Log preprocessing start without zero-variance removal
 
         if df is None:  # If the DataFrame is None
             return df  # Return None
@@ -817,9 +913,9 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, scale_data=True):
             X, y, test_size=test_size, random_state=random_state, stratify=stratify_param  # Split args
         )  # End split
 
-        scaler = None
-        scaling_time = 0.0
-        if scale_data:
+        scaler = None  # Initialize scaler to None before optional scaling step
+        scaling_time = 0.0  # Initialize scaling time accumulator to zero
+        if scale_data:  # Apply feature scaling only when scale_data flag is enabled
             start_scaling = time.perf_counter()  # Start high-resolution scaling timer
             scaler = StandardScaler()  # Create scaler instance
             X_train = scaler.fit_transform(X_train_df)  # Fit scaler and transform train
@@ -830,8 +926,8 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, scale_data=True):
             except Exception:  # Preserve prior silent-failure behavior if attribute cannot be set
                 pass  # No-op on failure
         else:
-            X_train = X_train_df.values if hasattr(X_train_df, "values") else np.asarray(X_train_df)
-            X_test = X_test_df.values if hasattr(X_test_df, "values") else np.asarray(X_test_df)
+            X_train = X_train_df.values if hasattr(X_train_df, "values") else np.asarray(X_train_df)  # Convert training DataFrame to numpy array without scaling
+            X_test = X_test_df.values if hasattr(X_test_df, "values") else np.asarray(X_test_df)  # Convert testing DataFrame to numpy array without scaling
 
         return X_train, X_test, y_train, y_test, scaler  # Return the split data and optional scaler
     except Exception as e:
@@ -849,13 +945,18 @@ def validate_pca_n_components(n_components: int, n_features: int) -> None:
     :return: None
     """
 
-    if n_components <= 0:  # Verify n_components is positive
-        raise ValueError(f"n_components must be positive, got {n_components}")  # Raise on invalid value
+    try:
+        if n_components <= 0:  # Verify n_components is positive
+            raise ValueError(f"n_components must be positive, got {n_components}")  # Raise on invalid value
 
-    if n_components > n_features:  # Verify n_components does not exceed feature count
-        raise ValueError(  # Raise descriptive error
-            f"n_components ({n_components}) cannot be greater than number of features ({n_features})"
-        )  # End raise
+        if n_components > n_features:  # Verify n_components does not exceed feature count
+            raise ValueError(  # Raise descriptive error
+                f"n_components ({n_components}) cannot be greater than number of features ({n_features})"
+            )  # End raise
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def fit_transform_pca(X_train, X_test, n_components: int, scaling_time: float, random_state: int) -> tuple:
@@ -870,18 +971,23 @@ def fit_transform_pca(X_train, X_test, n_components: int, scaling_time: float, r
     :return: Tuple of (X_train_pca, X_test_pca, pca, feature_extraction_time_s, explained_variance).
     """
 
-    pca = PCA(n_components=n_components, random_state=random_state)  # Initialize PCA with requested components
+    try:
+        pca = PCA(n_components=n_components, random_state=random_state)  # Initialize PCA with requested components
 
-    start_pca = time.perf_counter()  # Start PCA timer (feature extraction part)
-    X_train_pca = pca.fit_transform(X_train)  # Fit PCA on training data and transform
-    X_test_pca = pca.transform(X_test)  # Transform test data using the fitted PCA
-    pca_time = round(time.perf_counter() - start_pca, 6)  # End PCA timer and round
+        start_pca = time.perf_counter()  # Start PCA timer (feature extraction part)
+        X_train_pca = pca.fit_transform(X_train)  # Fit PCA on training data and transform
+        X_test_pca = pca.transform(X_test)  # Transform test data using the fitted PCA
+        pca_time = round(time.perf_counter() - start_pca, 6)  # End PCA timer and round
 
-    feature_extraction_time_s = round((scaling_time or 0.0) + pca_time, 6)  # Sum scaling and PCA times
+        feature_extraction_time_s = round((scaling_time or 0.0) + pca_time, 6)  # Sum scaling and PCA times
 
-    explained_variance = pca.explained_variance_ratio_.sum()  # Total explained variance ratio
+        explained_variance = pca.explained_variance_ratio_.sum()  # Total explained variance ratio
 
-    return X_train_pca, X_test_pca, pca, feature_extraction_time_s, explained_variance  # Return all PCA results
+        return X_train_pca, X_test_pca, pca, feature_extraction_time_s, explained_variance  # Return all PCA results
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def build_rf_classifier(random_state: int, workers: int) -> RandomForestClassifier:
@@ -893,14 +999,19 @@ def build_rf_classifier(random_state: int, workers: int) -> RandomForestClassifi
     :return: Configured RandomForestClassifier instance.
     """
 
-    global N_JOBS
-    rf_n_jobs = N_JOBS if (N_JOBS is not None) else (-1 if workers == 1 else 1)  # Determine n_jobs from globals or workers arg
+    try:
+        global N_JOBS
+        rf_n_jobs = N_JOBS if (N_JOBS is not None) else (-1 if workers == 1 else 1)  # Determine n_jobs from globals or workers arg
 
-    model = RandomForestClassifier(  # Build the classifier with validated parameters
-        n_estimators=100, random_state=random_state, n_jobs=rf_n_jobs
-    )  # End RandomForestClassifier
+        model = RandomForestClassifier(  # Build the classifier with validated parameters
+            n_estimators=100, random_state=random_state, n_jobs=rf_n_jobs
+        )  # End RandomForestClassifier
 
-    return model  # Return the configured classifier
+        return model  # Return the configured classifier
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def run_cv_folds(model: RandomForestClassifier, X_train_pca, y_train, skf: StratifiedKFold, n_components: int, n_folds: int) -> tuple:
@@ -916,42 +1027,47 @@ def run_cv_folds(model: RandomForestClassifier, X_train_pca, y_train, skf: Strat
     :return: Tuple of (cv_accs, cv_precs, cv_recs, cv_f1s, total_training_time, total_testing_time).
     """
 
-    cv_accs, cv_precs, cv_recs, cv_f1s = [], [], [], []  # Initialize per-fold metric accumulators
-    total_training_time = 0.0  # Accumulator for all model.fit durations
-    total_testing_time = 0.0  # Accumulator for all prediction+metric durations
+    try:
+        cv_accs, cv_precs, cv_recs, cv_f1s = [], [], [], []  # Initialize per-fold metric accumulators
+        total_training_time = 0.0  # Accumulator for all model.fit durations
+        total_testing_time = 0.0  # Accumulator for all prediction+metric durations
 
-    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_train_pca, y_train), start=1):  # Loop folds
-        send_telegram_message(TELEGRAM_BOT, f"Starting CV fold {fold_idx}/{n_folds} for n_components={n_components}")  # Notify
-        X_train_fold = X_train_pca[train_idx]  # Training data for this fold
-        X_val_fold = X_train_pca[val_idx]  # Validation data for this fold
-        y_train_fold = (  # Support both Series and ndarray
-            y_train.iloc[train_idx] if isinstance(y_train, pd.Series) else y_train[train_idx]
-        )  # End y_train_fold
-        y_val_fold = (  # Support both Series and ndarray for validation
-            y_train.iloc[val_idx] if isinstance(y_train, pd.Series) else y_train[val_idx]
-        )  # End y_val_fold
+        for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_train_pca, y_train), start=1):  # Loop folds
+            send_telegram_message(TELEGRAM_BOT, f"Starting CV fold {fold_idx}/{n_folds} for n_components={n_components}")  # Notify
+            X_train_fold = X_train_pca[train_idx]  # Training data for this fold
+            X_val_fold = X_train_pca[val_idx]  # Validation data for this fold
+            y_train_fold = (  # Support both Series and ndarray
+                y_train.iloc[train_idx] if isinstance(y_train, pd.Series) else y_train[train_idx]
+            )  # End y_train_fold
+            y_val_fold = (  # Support both Series and ndarray for validation
+                y_train.iloc[val_idx] if isinstance(y_train, pd.Series) else y_train[val_idx]
+            )  # End y_val_fold
 
-        start_fit = time.perf_counter()  # Start timer immediately before model.fit for this fold
-        model.fit(X_train_fold, y_train_fold)  # Fit model on training fold
-        fit_elapsed = round(time.perf_counter() - start_fit, 6)  # Stop timer immediately after fit and round
-        total_training_time += fit_elapsed  # Accumulate training durations
+            start_fit = time.perf_counter()  # Start timer immediately before model.fit for this fold
+            model.fit(X_train_fold, y_train_fold)  # Fit model on training fold
+            fit_elapsed = round(time.perf_counter() - start_fit, 6)  # Stop timer immediately after fit and round
+            total_training_time += fit_elapsed  # Accumulate training durations
 
-        start_pred = time.perf_counter()  # Start timer immediately before prediction+metrics for this fold
-        y_pred_fold = model.predict(X_val_fold)  # Predict on validation fold
-        cv_accs.append(accuracy_score(y_val_fold, y_pred_fold))  # Calculate and store accuracy
-        cv_precs.append(
-            precision_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
-        )  # Calculate and store precision
-        cv_recs.append(
-            recall_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
-        )  # Calculate and store recall
-        f1_fold = f1_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)  # Compute F1
-        cv_f1s.append(f1_fold)  # Store F1
-        pred_elapsed = round(time.perf_counter() - start_pred, 6)  # Stop timer after prediction+metrics and round
-        total_testing_time += pred_elapsed  # Accumulate testing durations for CV
-        send_telegram_message(TELEGRAM_BOT, f"Finished CV fold {fold_idx}/{n_folds} for n_components={n_components} with F1: {truncate_value(f1_fold)}")  # Notify fold completion
+            start_pred = time.perf_counter()  # Start timer immediately before prediction+metrics for this fold
+            y_pred_fold = model.predict(X_val_fold)  # Predict on validation fold
+            cv_accs.append(accuracy_score(y_val_fold, y_pred_fold))  # Calculate and store accuracy
+            cv_precs.append(
+                precision_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
+            )  # Calculate and store precision
+            cv_recs.append(
+                recall_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
+            )  # Calculate and store recall
+            f1_fold = f1_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)  # Compute F1
+            cv_f1s.append(f1_fold)  # Store F1
+            pred_elapsed = round(time.perf_counter() - start_pred, 6)  # Stop timer after prediction+metrics and round
+            total_testing_time += pred_elapsed  # Accumulate testing durations for CV
+            send_telegram_message(TELEGRAM_BOT, f"Finished CV fold {fold_idx}/{n_folds} for n_components={n_components} with F1: {truncate_value(f1_fold)}")  # Notify fold completion
 
-    return cv_accs, cv_precs, cv_recs, cv_f1s, total_training_time, total_testing_time  # Return all accumulated CV metrics
+        return cv_accs, cv_precs, cv_recs, cv_f1s, total_training_time, total_testing_time  # Return all accumulated CV metrics
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def compute_test_metrics(model: RandomForestClassifier, X_train_pca, y_train, X_test_pca, y_test) -> tuple:
@@ -966,28 +1082,33 @@ def compute_test_metrics(model: RandomForestClassifier, X_train_pca, y_train, X_
     :return: Tuple of (acc, prec, rec, f1, fpr, fnr, final_fit_elapsed, test_pred_elapsed).
     """
 
-    start_final_fit = time.perf_counter()  # Start timer immediately before final model.fit
-    model.fit(X_train_pca, y_train)  # Fit model on full training data
-    final_fit_elapsed = round(time.perf_counter() - start_final_fit, 6)  # Stop timer immediately after final fit and round
+    try:
+        start_final_fit = time.perf_counter()  # Start timer immediately before final model.fit
+        model.fit(X_train_pca, y_train)  # Fit model on full training data
+        final_fit_elapsed = round(time.perf_counter() - start_final_fit, 6)  # Stop timer immediately after final fit and round
 
-    start_test = time.perf_counter()  # Start timer immediately before test prediction+metrics
-    y_pred = model.predict(X_test_pca)  # Predict on test data
+        start_test = time.perf_counter()  # Start timer immediately before test prediction+metrics
+        y_pred = model.predict(X_test_pca)  # Predict on test data
 
-    acc = accuracy_score(y_test, y_pred)  # Calculate test accuracy
-    prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test precision
-    rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test recall
-    f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test f1
+        acc = accuracy_score(y_test, y_pred)  # Calculate test accuracy
+        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test precision
+        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test recall
+        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test f1
 
-    fpr, fnr = 0, 0  # Initialize FPR and FNR
-    unique_classes = np.unique(y_test)  # Get unique classes in the test set
-    if len(unique_classes) == 2:  # If binary classification
-        tn, fp, fn, tp = confusion_matrix(y_test, y_pred, labels=unique_classes).ravel()  # Get confusion matrix
-        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # Compute FPR
-        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # Compute FNR
+        fpr, fnr = 0, 0  # Initialize FPR and FNR
+        unique_classes = np.unique(y_test)  # Get unique classes in the test set
+        if len(unique_classes) == 2:  # If binary classification
+            tn, fp, fn, tp = confusion_matrix(y_test, y_pred, labels=unique_classes).ravel()  # Get confusion matrix
+            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # Compute FPR
+            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # Compute FNR
 
-    test_pred_elapsed = round(time.perf_counter() - start_test, 6)  # Stop timer after test prediction+metrics and round
+        test_pred_elapsed = round(time.perf_counter() - start_test, 6)  # Stop timer after test prediction+metrics and round
 
-    return acc, prec, rec, f1, fpr, fnr, final_fit_elapsed, test_pred_elapsed  # Return all test evaluation metrics
+        return acc, prec, rec, f1, fpr, fnr, final_fit_elapsed, test_pred_elapsed  # Return all test evaluation metrics
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_folds=10, workers=1, scaling_time=0.0, random_state=42):
@@ -1089,41 +1210,41 @@ def print_pca_results(results):
     try:
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}PCA Results (n_components={results['n_components']}):{Style.RESET_ALL}"
-        )
+        )  # Print PCA results header with n_components
         print(
             f"  {BackgroundColors.GREEN}Explained Variance Ratio: {BackgroundColors.CYAN}{truncate_value(results['explained_variance'])} ({truncate_value(results['explained_variance']*100)}%){Style.RESET_ALL}"
-        )
+        )  # Print explained variance ratio
         print(
             f"\n  {BackgroundColors.BOLD}{BackgroundColors.GREEN}10-Fold Cross-Validation Metrics (Training Set):{Style.RESET_ALL}"
-        )
+        )  # Print cross-validation section header
         print(
             f"  {BackgroundColors.GREEN}CV Accuracy: {BackgroundColors.CYAN}{truncate_value(results['cv_accuracy'])}{Style.RESET_ALL}"
-        )
+        )  # Print CV accuracy
         print(
             f"  {BackgroundColors.GREEN}CV Precision: {BackgroundColors.CYAN}{truncate_value(results['cv_precision'])}{Style.RESET_ALL}"
-        )
-        print(f"  {BackgroundColors.GREEN}CV Recall: {BackgroundColors.CYAN}{truncate_value(results['cv_recall'])}{Style.RESET_ALL}")
+        )  # Print CV precision
+        print(f"  {BackgroundColors.GREEN}CV Recall: {BackgroundColors.CYAN}{truncate_value(results['cv_recall'])}{Style.RESET_ALL}")  # Print CV recall
         print(
             f"  {BackgroundColors.GREEN}CV F1-Score: {BackgroundColors.CYAN}{truncate_value(results['cv_f1_score'])}{Style.RESET_ALL}"
-        )
-        print(f"\n  {BackgroundColors.BOLD}{BackgroundColors.GREEN}Test Set Metrics:{Style.RESET_ALL}")
+        )  # Print CV F1-score
+        print(f"\n  {BackgroundColors.BOLD}{BackgroundColors.GREEN}Test Set Metrics:{Style.RESET_ALL}")  # Print test set section header
         print(
             f"  {BackgroundColors.GREEN}Test Accuracy: {BackgroundColors.CYAN}{truncate_value(results['test_accuracy'])}{Style.RESET_ALL}"
-        )
+        )  # Print test accuracy
         print(
             f"  {BackgroundColors.GREEN}Test Precision: {BackgroundColors.CYAN}{truncate_value(results['test_precision'])}{Style.RESET_ALL}"
-        )
+        )  # Print test precision
         print(
             f"  {BackgroundColors.GREEN}Test Recall: {BackgroundColors.CYAN}{truncate_value(results['test_recall'])}{Style.RESET_ALL}"
-        )
+        )  # Print test recall
         print(
             f"  {BackgroundColors.GREEN}Test F1-Score: {BackgroundColors.CYAN}{truncate_value(results['test_f1_score'])}{Style.RESET_ALL}"
-        )
-        print(f"  {BackgroundColors.GREEN}Test FPR: {BackgroundColors.CYAN}{truncate_value(results['test_fpr'])}{Style.RESET_ALL}")
-        print(f"  {BackgroundColors.GREEN}Test FNR: {BackgroundColors.CYAN}{truncate_value(results['test_fnr'])}{Style.RESET_ALL}")
+        )  # Print test F1-score
+        print(f"  {BackgroundColors.GREEN}Test FPR: {BackgroundColors.CYAN}{truncate_value(results['test_fpr'])}{Style.RESET_ALL}")  # Print test false positive rate
+        print(f"  {BackgroundColors.GREEN}Test FNR: {BackgroundColors.CYAN}{truncate_value(results['test_fnr'])}{Style.RESET_ALL}")  # Print test false negative rate
         print(
             f"  {BackgroundColors.GREEN}Training Time: {BackgroundColors.CYAN}{int(round(results['training_time_s']))}s  Testing Time: {BackgroundColors.CYAN}{int(round(results['testing_time_s']))}s{Style.RESET_ALL}"
-        )
+        )  # Print training and testing elapsed times
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -1249,8 +1370,13 @@ def row_style_for_zebra(row):
     :return: List[str] of CSS style strings for each cell
     """
 
-    bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # White for even rows, light gray for odd rows
-    return [f"background-color: {bg};" for _ in row.index]  # Return style for every column in the row
+    try:
+        bg = "white" if (row.name % 2) == 0 else "#f2f2f2"  # White for even rows, light gray for odd rows
+        return [f"background-color: {bg};" for _ in row.index]  # Return style for every column in the row
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
@@ -1307,8 +1433,10 @@ def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str
             raise PermissionError(f"Directory not writable: {parent}")  # Raise on non-writable directory
         styled = apply_zebra_style(df)  # Create styled DataFrame with zebra stripes
         export_dataframe_image(styled, out_p)  # Export styled DataFrame to PNG
-    except Exception:
-        raise  # Propagate any exception (no silent failures)
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visualizable: bool = True):
@@ -1330,8 +1458,10 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
         if is_visualizable:  # Only generate image when flagged as visualizable
             png_path = csv_p.with_suffix('.png')  # Construct PNG path by replacing extension
             generate_table_image_from_dataframe(df, png_path)  # Generate PNG from in-memory DataFrame
-    except Exception:
-        raise  # Propagate exceptions to caller
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
         
 def resolve_pca_output_dir(cfg: Any, csv_path: str) -> tuple:
@@ -1446,30 +1576,35 @@ def merge_or_create_results_df(csv_output: str, comparison_df: pd.DataFrame, hea
     :return: Merged and sorted DataFrame ready for saving.
     """
 
-    if os.path.exists(csv_output):  # Verify if a pre-existing CSV file was found
-        try:
-            df_existing = pd.read_csv(csv_output, dtype=str)  # Read existing CSV with all columns as strings
-            if "timestamp" not in df_existing.columns:  # Verify if timestamp column is missing
-                mtime = os.path.getmtime(csv_output)  # Get file modification time as fallback timestamp
-                back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")  # Format modification time
-                df_existing["timestamp"] = back_ts  # Assign fallback timestamp to all existing rows
-            for c in header:  # Iterate expected header columns
-                if c not in df_existing.columns:  # Verify if column is missing from existing data
-                    df_existing[c] = None  # Add missing column with None values
-
-            df_combined = pd.concat([df_existing[header], comparison_df], ignore_index=True, sort=False)  # Concatenate existing and new rows
+    try:
+        if os.path.exists(csv_output):  # Verify if a pre-existing CSV file was found
             try:
-                df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")  # Parse timestamps for sorting
-                df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)  # Sort by parsed timestamp descending
-                df_combined = df_combined.drop(columns=["timestamp_dt"])  # Remove temporary sorting column
+                df_existing = pd.read_csv(csv_output, dtype=str)  # Read existing CSV with all columns as strings
+                if "timestamp" not in df_existing.columns:  # Verify if timestamp column is missing
+                    mtime = os.path.getmtime(csv_output)  # Get file modification time as fallback timestamp
+                    back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")  # Format modification time
+                    df_existing["timestamp"] = back_ts  # Assign fallback timestamp to all existing rows
+                for c in header:  # Iterate expected header columns
+                    if c not in df_existing.columns:  # Verify if column is missing from existing data
+                        df_existing[c] = None  # Add missing column with None values
+
+                df_combined = pd.concat([df_existing[header], comparison_df], ignore_index=True, sort=False)  # Concatenate existing and new rows
+                try:
+                    df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")  # Parse timestamps for sorting
+                    df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)  # Sort by parsed timestamp descending
+                    df_combined = df_combined.drop(columns=["timestamp_dt"])  # Remove temporary sorting column
+                except Exception:
+                    df_combined = df_combined.sort_values(by="timestamp", ascending=False)  # Fallback sort by raw timestamp string
+
+                return df_combined.reset_index(drop=True)  # Reset index after merge and sorting
             except Exception:
-                df_combined = df_combined.sort_values(by="timestamp", ascending=False)  # Fallback sort by raw timestamp string
+                return comparison_df  # Return new rows only when existing CSV read fails
 
-            return df_combined.reset_index(drop=True)  # Reset index after merge and sorting
-        except Exception:
-            return comparison_df  # Return new rows only when existing CSV read fails
-
-    return comparison_df  # Return new rows only when no prior CSV exists
+        return comparison_df  # Return new rows only when no prior CSV exists
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def resolve_pickle_protocol(cfg: dict) -> int:
@@ -1480,24 +1615,29 @@ def resolve_pickle_protocol(cfg: dict) -> int:
     :return: Validated integer pickle protocol value.
     """
 
-    if PICKLE_PROTOCOL is not None:  # Verify if global PICKLE_PROTOCOL was explicitly set
-        return int(PICKLE_PROTOCOL)  # Return the explicitly configured global protocol
-
-    cache_cfg: Any = (cfg or {}).get("caching")  # Safely retrieve 'caching' mapping from cfg
-
-    if cache_cfg is None:  # Verify if caching section is missing
-        return 4  # Return the default pickle protocol fallback
-
-    raw_proto: Any = cache_cfg.get("pickle_protocol")  # Raw value from config (may be None)
-
-    if raw_proto is None:  # Verify if protocol is unspecified in config
-        return 4  # Return the default pickle protocol fallback
-    if not isinstance(raw_proto, (int, str)):  # Validate acceptable types
-        raise TypeError("cfg['caching']['pickle_protocol'] must be int or string convertible to int")  # Raise on invalid type
     try:
-        return int(raw_proto)  # Convert validated value to int and return
+        if PICKLE_PROTOCOL is not None:  # Verify if global PICKLE_PROTOCOL was explicitly set
+            return int(PICKLE_PROTOCOL)  # Return the explicitly configured global protocol
+
+        cache_cfg: Any = (cfg or {}).get("caching")  # Safely retrieve 'caching' mapping from cfg
+
+        if cache_cfg is None:  # Verify if caching section is missing
+            return 4  # Return the default pickle protocol fallback
+
+        raw_proto: Any = cache_cfg.get("pickle_protocol")  # Raw value from config (may be None)
+
+        if raw_proto is None:  # Verify if protocol is unspecified in config
+            return 4  # Return the default pickle protocol fallback
+        if not isinstance(raw_proto, (int, str)):  # Validate acceptable types
+            raise TypeError("cfg['caching']['pickle_protocol'] must be int or string convertible to int")  # Raise on invalid type
+        try:
+            return int(raw_proto)  # Convert validated value to int and return
+        except Exception as e:
+            raise ValueError(f"Invalid pickle_protocol value in config: {raw_proto}") from e  # Raise with context
     except Exception as e:
-        raise ValueError(f"Invalid pickle_protocol value in config: {raw_proto}") from e  # Raise with context
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def save_pca_model_artifacts(all_results: list, models_dir: str, base_name: str, timestamp: str, cfg: Any) -> None:
@@ -1512,41 +1652,46 @@ def save_pca_model_artifacts(all_results: list, models_dir: str, base_name: str,
     :return: None
     """
 
-    os.makedirs(models_dir, exist_ok=True)  # Ensure the models directory exists before saving
+    try:
+        os.makedirs(models_dir, exist_ok=True)  # Ensure the models directory exists before saving
 
-    for results in all_results:  # Iterate over each PCA configuration result
-        n_comp = results["n_components"]  # Retrieve the number of components for filename construction
+        for results in all_results:  # Iterate over each PCA configuration result
+            n_comp = results["n_components"]  # Retrieve the number of components for filename construction
 
-        pca_obj = results.get("pca_object")  # Retrieve the PCA object if present
-        if pca_obj:  # Only save when a PCA object exists
-            pca_file = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}.pkl"  # Build the PCA artifact filename
-            try:
-                proto = resolve_pickle_protocol(cfg)  # Resolve pickle protocol from config
-                with open(pca_file, "wb") as f:  # Open file for binary write
-                    pickle.dump(pca_obj, f, protocol=int(proto))  # Dump PCA object using validated protocol
-                verbose_output(f"{BackgroundColors.GREEN}PCA object saved to {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")  # Log successful PCA save
-            except Exception as e:
-                print(f"{BackgroundColors.RED}Failed to save PCA object: {e}{Style.RESET_ALL}")  # Log PCA save failure
+            pca_obj = results.get("pca_object")  # Retrieve the PCA object if present
+            if pca_obj:  # Only save when a PCA object exists
+                pca_file = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}.pkl"  # Build the PCA artifact filename
+                try:
+                    proto = resolve_pickle_protocol(cfg)  # Resolve pickle protocol from config
+                    with open(pca_file, "wb") as f:  # Open file for binary write
+                        pickle.dump(pca_obj, f, protocol=int(proto))  # Dump PCA object using validated protocol
+                    verbose_output(f"{BackgroundColors.GREEN}PCA object saved to {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")  # Log successful PCA save
+                except Exception as e:
+                    print(f"{BackgroundColors.RED}Failed to save PCA object: {e}{Style.RESET_ALL}")  # Log PCA save failure
 
-        scaler = results.get("scaler")  # Retrieve the scaler if present
-        if scaler is not None:  # Only save when a scaler exists
-            scaler_path = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}-scaler.joblib"  # Build the scaler artifact filename
-            try:
-                proto = resolve_pickle_protocol(cfg)  # Resolve pickle protocol from config
-                dump(scaler, scaler_path, protocol=int(proto))  # Dump scaler using validated protocol
-                verbose_output(f"{BackgroundColors.GREEN}Scaler saved to {BackgroundColors.CYAN}{scaler_path}{Style.RESET_ALL}")  # Log successful scaler save
-            except Exception as e:
-                print(f"{BackgroundColors.RED}Failed to save scaler: {e}{Style.RESET_ALL}")  # Log scaler save failure
+            scaler = results.get("scaler")  # Retrieve the scaler if present
+            if scaler is not None:  # Only save when a scaler exists
+                scaler_path = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}-scaler.joblib"  # Build the scaler artifact filename
+                try:
+                    proto = resolve_pickle_protocol(cfg)  # Resolve pickle protocol from config
+                    dump(scaler, scaler_path, protocol=int(proto))  # Dump scaler using validated protocol
+                    verbose_output(f"{BackgroundColors.GREEN}Scaler saved to {BackgroundColors.CYAN}{scaler_path}{Style.RESET_ALL}")  # Log successful scaler save
+                except Exception as e:
+                    print(f"{BackgroundColors.RED}Failed to save scaler: {e}{Style.RESET_ALL}")  # Log scaler save failure
 
-        clf = results.get("trained_classifier")  # Retrieve the trained classifier if present
-        if clf is not None:  # Only save when a classifier exists
-            model_path = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}-model.joblib"  # Build the classifier artifact filename
-            try:
-                proto = resolve_pickle_protocol(cfg)  # Resolve pickle protocol from config
-                dump(clf, model_path, protocol=int(proto))  # Dump classifier with validated protocol
-                verbose_output(f"{BackgroundColors.GREEN}Trained classifier saved to {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}")  # Log successful classifier save
-            except Exception as e:
-                print(f"{BackgroundColors.RED}Failed to save classifier: {e}{Style.RESET_ALL}")  # Log classifier save failure
+            clf = results.get("trained_classifier")  # Retrieve the trained classifier if present
+            if clf is not None:  # Only save when a classifier exists
+                model_path = f"{models_dir}/PCA-{base_name}-{n_comp}c-{timestamp}-model.joblib"  # Build the classifier artifact filename
+                try:
+                    proto = resolve_pickle_protocol(cfg)  # Resolve pickle protocol from config
+                    dump(clf, model_path, protocol=int(proto))  # Dump classifier with validated protocol
+                    verbose_output(f"{BackgroundColors.GREEN}Trained classifier saved to {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}")  # Log successful classifier save
+                except Exception as e:
+                    print(f"{BackgroundColors.RED}Failed to save classifier: {e}{Style.RESET_ALL}")  # Log classifier save failure
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def save_pca_results(csv_path, all_results, cfg=None):
@@ -1614,19 +1759,24 @@ def should_skip_existing_models(n_components_list: list, models_dir: str, base_n
     :return: True if at least one matching model exists and training should be skipped, False otherwise.
     """
 
-    found = False  # Initialize found flag to False before scanning
+    try:
+        found = False  # Initialize found flag to False before scanning
 
-    for n_comp in n_components_list:  # Iterate over each component count to scan for matching models
-        pattern = f"{models_dir}/PCA-{base_name}-{n_comp}c-*-model.joblib"  # Build glob pattern for this n_components value
-        matches = glob.glob(pattern)  # Search for matching model files in models directory
-        if matches:  # Verify if any matching model files were found
-            print(f"{BackgroundColors.GREEN}Found exported model for n_components={n_comp}, skipping training.{Style.RESET_ALL}")  # Log the found model
-            found = True  # Mark that at least one model was found
+        for n_comp in n_components_list:  # Iterate over each component count to scan for matching models
+            pattern = f"{models_dir}/PCA-{base_name}-{n_comp}c-*-model.joblib"  # Build glob pattern for this n_components value
+            matches = glob.glob(pattern)  # Search for matching model files in models directory
+            if matches:  # Verify if any matching model files were found
+                print(f"{BackgroundColors.GREEN}Found exported model for n_components={n_comp}, skipping training.{Style.RESET_ALL}")  # Log the found model
+                found = True  # Mark that at least one model was found
 
-    if found:  # Verify if any model was found across all component counts
-        print(f"{BackgroundColors.GREEN}SKIP_TRAIN_IF_MODEL_EXISTS: At least one model exists, skipping retraining for all configs.{Style.RESET_ALL}")  # Log the skip decision
+        if found:  # Verify if any model was found across all component counts
+            print(f"{BackgroundColors.GREEN}SKIP_TRAIN_IF_MODEL_EXISTS: At least one model exists, skipping retraining for all configs.{Style.RESET_ALL}")  # Log the skip decision
 
-    return found  # Return whether any matching exported model was found
+        return found  # Return whether any matching exported model was found
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def load_and_prepare_pca_dataset(csv_path: str, remove_zero_variance: bool) -> tuple | None:
@@ -1638,15 +1788,20 @@ def load_and_prepare_pca_dataset(csv_path: str, remove_zero_variance: bool) -> t
     :return: Tuple of (X, y) as DataFrame and Series, or None if loading fails.
     """
 
-    df = load_dataset(csv_path)  # Load the raw dataset from CSV
-    if df is None:  # Verify if dataset loading failed
-        return None  # Return None to signal failure
+    try:
+        df = load_dataset(csv_path)  # Load the raw dataset from CSV
+        if df is None:  # Verify if dataset loading failed
+            return None  # Return None to signal failure
 
-    cleaned_df = preprocess_dataframe(df, remove_zero_variance=remove_zero_variance)  # Preprocess the DataFrame
-    X = cleaned_df.select_dtypes(include=["number"]).iloc[:, :-1]  # Select numeric features (all columns except last)
-    y = cleaned_df.iloc[:, -1]  # Select target variable (last column)
+        cleaned_df = preprocess_dataframe(df, remove_zero_variance=remove_zero_variance)  # Preprocess the DataFrame
+        X = cleaned_df.select_dtypes(include=["number"]).iloc[:, :-1]  # Select numeric features (all columns except last)
+        y = cleaned_df.iloc[:, -1]  # Select target variable (last column)
 
-    return X, y  # Return the feature matrix and target vector
+        return X, y  # Return the feature matrix and target vector
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def validate_and_filter_components(n_components_list: list, n_features: int) -> list:
@@ -1658,11 +1813,16 @@ def validate_and_filter_components(n_components_list: list, n_features: int) -> 
     :return: Filtered list of valid component counts.
     """
 
-    n_components_list = [n for n in n_components_list if n > 0]  # Filter out non-positive component counts
-    max_components = min(n_features, max(n_components_list)) if n_components_list else 0  # Maximum valid components
-    n_components_list = [n for n in n_components_list if n <= max_components]  # Filter valid component counts
+    try:
+        n_components_list = [n for n in n_components_list if n > 0]  # Filter out non-positive component counts
+        max_components = min(n_features, max(n_components_list)) if n_components_list else 0  # Maximum valid components
+        n_components_list = [n for n in n_components_list if n <= max_components]  # Filter valid component counts
 
-    return n_components_list  # Return the filtered list of valid component counts
+        return n_components_list  # Return the filtered list of valid component counts
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def print_pca_configuration(n_components_list: list) -> None:
@@ -1673,16 +1833,21 @@ def print_pca_configuration(n_components_list: list) -> None:
     :return: None
     """
 
-    print(f"\n{BackgroundColors.CYAN}PCA Configuration:{Style.RESET_ALL}")  # Print configuration section header
-    print(
-        f"  {BackgroundColors.GREEN}• Testing components: {BackgroundColors.CYAN}{n_components_list}{Style.RESET_ALL}"
-    )  # Print the list of components to be tested
-    cv_display = CROSS_N_FOLDS if CROSS_N_FOLDS is not None else cfg.get("cross_validation", {}).get("n_folds", 10)  # Determine CV folds display value
-    print(
-        f"  {BackgroundColors.GREEN}• Evaluation: {BackgroundColors.CYAN}{cv_display}-Fold Stratified Cross-Validation{Style.RESET_ALL}"
-    )  # Print the CV method description
-    print(f"  {BackgroundColors.GREEN}• Model: {BackgroundColors.CYAN}Random Forest (100 estimators){Style.RESET_ALL}")  # Print model description
-    print(f"  {BackgroundColors.GREEN}• Split: {BackgroundColors.CYAN}80/20 (train/test){Style.RESET_ALL}\n")  # Print split description
+    try:
+        print(f"\n{BackgroundColors.CYAN}PCA Configuration:{Style.RESET_ALL}")  # Print configuration section header
+        print(
+            f"  {BackgroundColors.GREEN}• Testing components: {BackgroundColors.CYAN}{n_components_list}{Style.RESET_ALL}"
+        )  # Print the list of components to be tested
+        cv_display = CROSS_N_FOLDS if CROSS_N_FOLDS is not None else cfg.get("cross_validation", {}).get("n_folds", 10)  # Determine CV folds display value
+        print(
+            f"  {BackgroundColors.GREEN}• Evaluation: {BackgroundColors.CYAN}{cv_display}-Fold Stratified Cross-Validation{Style.RESET_ALL}"
+        )  # Print the CV method description
+        print(f"  {BackgroundColors.GREEN}• Model: {BackgroundColors.CYAN}Random Forest (100 estimators){Style.RESET_ALL}")  # Print model description
+        print(f"  {BackgroundColors.GREEN}• Split: {BackgroundColors.CYAN}80/20 (train/test){Style.RESET_ALL}\n")  # Print split description
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def execute_pca_parallel(X_train, y_train, X_test, y_test, n_components_list: list, scaler, max_workers, random_state: int) -> tuple:
@@ -1820,18 +1985,23 @@ def print_best_pca_configuration(all_results: list) -> None:
     :return: None
     """
 
-    best_result = max(all_results, key=lambda x: x["cv_f1_score"])  # Find the best configuration based on CV F1-Score
+    try:
+        best_result = max(all_results, key=lambda x: x["cv_f1_score"])  # Find the best configuration based on CV F1-Score
 
-    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Best Configuration:{Style.RESET_ALL}")  # Print best config header
-    print(
-        f"  {BackgroundColors.GREEN}n_components = {BackgroundColors.CYAN}{best_result['n_components']}{Style.RESET_ALL}"
-    )  # Print best n_components
-    print(
-        f"  {BackgroundColors.GREEN}CV F1-Score = {BackgroundColors.CYAN}{truncate_value(best_result['cv_f1_score'])}{Style.RESET_ALL}"
-    )  # Print best CV F1-Score
-    print(
-        f"  {BackgroundColors.GREEN}Explained Variance = {BackgroundColors.CYAN}{truncate_value(best_result['explained_variance'])}{Style.RESET_ALL}"
-    )  # Print best explained variance
+        print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Best Configuration:{Style.RESET_ALL}")  # Print best config header
+        print(
+            f"  {BackgroundColors.GREEN}n_components = {BackgroundColors.CYAN}{best_result['n_components']}{Style.RESET_ALL}"
+        )  # Print best n_components
+        print(
+            f"  {BackgroundColors.GREEN}CV F1-Score = {BackgroundColors.CYAN}{truncate_value(best_result['cv_f1_score'])}{Style.RESET_ALL}"
+        )  # Print best CV F1-Score
+        print(
+            f"  {BackgroundColors.GREEN}Explained Variance = {BackgroundColors.CYAN}{truncate_value(best_result['explained_variance'])}{Style.RESET_ALL}"
+        )  # Print best explained variance
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=True, max_workers=None, random_state=42, scale_data=True, remove_zero_variance=True):
