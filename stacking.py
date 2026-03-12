@@ -243,6 +243,101 @@ def parse_cli_args():
         raise  # Re-raise to preserve original failure semantics
 
 
+def get_default_stacking_config():
+    """
+    Return default stacking pipeline configuration section.
+
+    :return: Dictionary containing default stacking configuration values
+    """
+
+    try:
+        return {
+            "results_dir": "Stacking",  # Output subdirectory name for stacking results
+            "results_filename": "Stacking_Classifiers_Results.csv",  # Binary results CSV filename
+            "multiclass_results_filename": "Stacking_Classifiers_MultiClass_Results.csv",  # Multi-class results CSV filename
+            "augmentation_comparison_filename": "Data_Augmentation_Comparison_Results.csv",  # Augmentation comparison CSV filename
+            "data_augmentation_suffix": "_data_augmented",  # File suffix for augmented data files
+            "augmentation_ratios": [0.10, 0.25, 0.50, 0.75, 1.00],  # Ratios of augmented data to sample
+            "hyperparameters_filename": "Hyperparameter_Optimization_Results.csv",  # Hyperparameter results CSV filename
+            "cache_prefix": "Cache_",  # Prefix for cached model files
+            "model_export_base": "Feature_Analysis/Stacking/Models/",  # Base directory for model exports
+            "results_csv_columns": [
+                "model", "dataset", "execution_mode", "attack_types_combined", "feature_set", "classifier_type", "model_name",
+                "data_source", "experiment_id", "experiment_mode", "augmentation_ratio",
+                "n_features", "n_samples_train", "n_samples_test", "accuracy",
+                "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s",
+                "cv_method", "top_features", "rfe_ranking", "hyperparameters",
+                "features_list", "Hardware",
+            ],  # Column names for results CSV export
+            "top_n_features_heatmap": 15,  # Number of top features to show in heatmap
+            "match_filenames_to_process": [""],  # Filename patterns to match for processing
+            "ignore_files": ["Stacking_Classifiers_Results.csv"],  # Files to ignore during processing
+            "ignore_dirs": [
+                "Classifiers", "Classifiers_Hyperparameters", "Dataset_Description",
+                "Data_Separability", "Feature_Analysis",
+            ],  # Directories to ignore during processing
+        }  # Return default stacking configuration
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def get_default_models_config():
+    """
+    Return default model hyperparameters configuration section.
+
+    :return: Dictionary containing default model configuration values
+    """
+
+    try:
+        return {
+            "random_forest": {"n_estimators": 100, "random_state": 42},  # Random Forest default parameters
+            "svm": {"kernel": "rbf", "probability": True, "random_state": 42},  # SVM default parameters
+            "xgboost": {"eval_metric": "mlogloss", "random_state": 42},  # XGBoost default parameters
+            "logistic_regression": {"max_iter": 1000, "random_state": 42},  # Logistic Regression default parameters
+            "knn": {"n_neighbors": 5},  # KNN default parameters
+            "gradient_boosting": {"random_state": 42},  # Gradient Boosting default parameters
+            "lightgbm": {"force_row_wise": True, "min_gain_to_split": 0.01, "random_state": 42, "verbosity": -1},  # LightGBM default parameters
+            "mlp": {"hidden_layer_sizes": (100,), "max_iter": 500, "random_state": 42},  # MLP Neural Net default parameters
+            "stacking_meta": {"n_estimators": 50, "random_state": 42},  # Stacking meta-estimator default parameters
+        }  # Return default models configuration
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def get_default_explainability_config():
+    """
+    Return default explainability configuration section.
+
+    :return: Dictionary containing default explainability configuration values
+    """
+
+    try:
+        return {
+            "enabled": True,  # Whether explainability pipeline is enabled
+            "shap": True,  # Enable SHAP explanations
+            "lime": True,  # Enable LIME explanations
+            "permutation_importance": True,  # Enable permutation importance analysis
+            "feature_importance": True,  # Enable feature importance extraction
+            "pdp": False,  # Disable partial dependence plots by default
+            "ice": False,  # Disable individual conditional expectation by default
+            "surrogate": False,  # Disable surrogate model explanations by default
+            "max_display_features": 20,  # Maximum features to display in explainability outputs
+            "lime_num_samples": 1000,  # Number of perturbation samples for LIME
+            "lime_num_features": 10,  # Number of features to show in LIME explanations
+            "shap_max_samples": 100,  # Maximum samples for SHAP computation
+            "random_state": 42,  # Random state for reproducibility
+            "output_subdir": "explainability",  # Subdirectory for explainability outputs
+        }  # Return default explainability configuration
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def get_default_config():
     """
     Return default configuration dictionary for stacking pipeline.
@@ -275,32 +370,7 @@ def get_default_config():
                 ],
             },
         },
-        "stacking": {
-            "results_dir": "Stacking",
-            "results_filename": "Stacking_Classifiers_Results.csv",
-            "multiclass_results_filename": "Stacking_Classifiers_MultiClass_Results.csv",
-            "augmentation_comparison_filename": "Data_Augmentation_Comparison_Results.csv",
-            "data_augmentation_suffix": "_data_augmented",
-            "augmentation_ratios": [0.10, 0.25, 0.50, 0.75, 1.00],
-            "hyperparameters_filename": "Hyperparameter_Optimization_Results.csv",
-            "cache_prefix": "Cache_",
-            "model_export_base": "Feature_Analysis/Stacking/Models/",
-            "results_csv_columns": [
-                "model", "dataset", "execution_mode", "attack_types_combined", "feature_set", "classifier_type", "model_name",
-                "data_source", "experiment_id", "experiment_mode", "augmentation_ratio",
-                "n_features", "n_samples_train", "n_samples_test", "accuracy",
-                "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s",
-                "cv_method", "top_features", "rfe_ranking", "hyperparameters",
-                "features_list", "Hardware",
-            ],
-            "top_n_features_heatmap": 15,
-            "match_filenames_to_process": [""],
-            "ignore_files": ["Stacking_Classifiers_Results.csv"],
-            "ignore_dirs": [
-                "Classifiers", "Classifiers_Hyperparameters", "Dataset_Description",
-                "Data_Separability", "Feature_Analysis",
-            ],
-        },
+        "stacking": get_default_stacking_config(),  # Stacking pipeline configuration section
         "evaluation": {
             "n_jobs": -1,
             "threads_limit": 2,
@@ -308,17 +378,7 @@ def get_default_config():
             "random_state": 42,
             "ram_threshold_gb": 128,
         },
-        "models": {
-            "random_forest": {"n_estimators": 100, "random_state": 42},
-            "svm": {"kernel": "rbf", "probability": True, "random_state": 42},
-            "xgboost": {"eval_metric": "mlogloss", "random_state": 42},
-            "logistic_regression": {"max_iter": 1000, "random_state": 42},
-            "knn": {"n_neighbors": 5},
-            "gradient_boosting": {"random_state": 42},
-            "lightgbm": {"force_row_wise": True, "min_gain_to_split": 0.01, "random_state": 42, "verbosity": -1},
-            "mlp": {"hidden_layer_sizes": (100,), "max_iter": 500, "random_state": 42},
-            "stacking_meta": {"n_estimators": 50, "random_state": 42},
-        },
+        "models": get_default_models_config(),  # Model hyperparameters configuration section
         "automl": {
             "enabled": False,
             "n_trials": 50,
@@ -360,22 +420,7 @@ def get_default_config():
             "enabled": True,
             "verify_env": True,
         },
-        "explainability": {
-            "enabled": True,
-            "shap": True,
-            "lime": True,
-            "permutation_importance": True,
-            "feature_importance": True,
-            "pdp": False,
-            "ice": False,
-            "surrogate": False,
-            "max_display_features": 20,
-            "lime_num_samples": 1000,
-            "lime_num_features": 10,
-            "shap_max_samples": 100,
-            "random_state": 42,
-            "output_subdir": "explainability",
-        },
+        "explainability": get_default_explainability_config(),  # Explainability configuration section
     }  # Return default configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
