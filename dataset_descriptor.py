@@ -2320,6 +2320,35 @@ def generate_csv_and_image(df, csv_path, config: dict | None = None):
         raise
 
 
+def finalize_and_write_report(report_rows, preprocessing_metrics, base_dir, output_filename, config):
+    """
+    Number report rows, write the report CSV, generate the preprocessing summary, and return the success flag.
+
+    :param report_rows: List of per-file info dicts accumulated during the processing loop.
+    :param preprocessing_metrics: List of per-file preprocessing metric dicts for summary generation.
+    :param base_dir: Absolute base directory used as the output root for report and summary files.
+    :param output_filename: Resolved output filename string ending with ".csv".
+    :param config: Optional configuration dictionary forwarded to write_report and save_preprocessing_summary_csv.
+    :return: True when the report was written successfully, False when no report rows were available.
+    """
+
+    if not report_rows:  # Return False immediately when the processing loop produced no data rows
+        return False  # Signal failure to the caller when no rows were collected
+    for i, row in enumerate(report_rows, start=1):  # Assign sequential row numbers starting at 1
+        row["#"] = i  # Embed the counter directly into each row dict before writing
+    write_report(report_rows, base_dir, output_filename, config=config)  # Persist all numbered rows as the main report CSV
+    try:  # Generate the preprocessing summary separately to avoid aborting the main report on failure
+        if preprocessing_metrics:  # Only generate a summary when per-file metrics were successfully collected
+            pre_df = build_preprocessing_summary_dataframe(preprocessing_metrics)  # Build a DataFrame from the accumulated metrics list
+            out_path = save_preprocessing_summary_csv(pre_df, base_dir, config=config)  # Save the summary CSV to the results directory
+            print(f"{BackgroundColors.GREEN}Saved preprocessing summary to {BackgroundColors.CYAN}{out_path}{Style.RESET_ALL}")  # Inform the user of the saved summary path
+            if os.environ.get("DD_DESCRIPTOR_VERBOSE", "False").lower() in ("1", "true", "yes"):  # Print table only in verbose mode
+                print_preprocessing_summary_table(pre_df)  # Print the summary table to the terminal when verbose output is enabled
+    except Exception as _ps:  # Warn and continue when summary generation fails to preserve the main report
+        print(f"{BackgroundColors.YELLOW}Warning: failed to generate preprocessing summary: {_ps}{Style.RESET_ALL}")  # Warn without aborting
+    return True  # Return True to signal that the main report was written successfully
+
+
 def resolve_output_filename(output_filename, cfg):
     """
     Resolve the output filename for the dataset report CSV, applying config defaults and ensuring a .csv extension.
@@ -2467,23 +2496,7 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
                 pass  # Continue without cleanup on delete failure
             gc.collect()  # Force garbage collection to reclaim memory released by deleting the dataset
 
-        if report_rows:  # If there are report rows to write
-            for i, row in enumerate(report_rows, start=1):  # For each report row
-                row["#"] = i  # Add the counter value
-
-            write_report(report_rows, base_dir, output_filename, config=config)
-            try:  # After writing main report, handle preprocessing summary generation if metrics collected
-                if preprocessing_metrics:  # Only proceed when metrics were collected
-                    pre_df = build_preprocessing_summary_dataframe(preprocessing_metrics)  # Build DataFrame from metrics list
-                    out_path = save_preprocessing_summary_csv(pre_df, base_dir, config=config)  # Save CSV to results dir and get path
-                    print(f"{BackgroundColors.GREEN}Saved preprocessing summary to {BackgroundColors.CYAN}{out_path}{Style.RESET_ALL}")  # Inform user of saved path
-                    if os.environ.get("DD_DESCRIPTOR_VERBOSE", "False").lower() in ("1", "true", "yes"):
-                        print_preprocessing_summary_table(pre_df)
-            except Exception as _ps:  # If summary generation fails, warn but do not abort
-                print(f"{BackgroundColors.YELLOW}Warning: failed to generate preprocessing summary: {_ps}{Style.RESET_ALL}")  # Warn and continue
-            return True  # Return True indicating success
-        else:  # If no report rows were generated
-            return False  # Return False indicating failure
+        return finalize_and_write_report(report_rows, preprocessing_metrics, base_dir, output_filename, config)  # Number rows, write report, generate preprocessing summary, and return success flag
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
