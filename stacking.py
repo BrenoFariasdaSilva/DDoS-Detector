@@ -3695,6 +3695,33 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
         raise
 
 
+def sample_shap_test_data(X_test, y_test, max_samples, random_state):
+    """
+    Samples test data for SHAP computation when the test set exceeds the maximum sample size.
+
+    :param X_test: Test features array to sample from
+    :param y_test: Test labels array or Series to sample from
+    :param max_samples: Maximum number of samples to use for SHAP computation
+    :param random_state: Random seed for reproducible sampling
+    :return: Tuple (X_test_sampled, y_test_sampled) with sampled or full test data
+    """
+
+    try:
+        if len(X_test) > max_samples:  # If test set exceeds the sample limit
+            np.random.seed(random_state)  # Set random seed for reproducible sampling
+            sample_indices = np.random.choice(len(X_test), size=max_samples, replace=False)  # Draw random sample indices
+            X_test_sampled = X_test[sample_indices]  # Slice test features to sampled indices
+            y_test_sampled = y_test.iloc[sample_indices] if hasattr(y_test, 'iloc') else y_test[sample_indices]  # Slice test labels using iloc for Series or index for arrays
+        else:  # Test set is within the sample limit
+            X_test_sampled = X_test  # Use full test features without sampling
+            y_test_sampled = y_test  # Use full test labels without sampling
+        return (X_test_sampled, y_test_sampled)  # Return the sampled or full test data tuple
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config=None):
     """
     Generate SHAP explanations for a trained model.
@@ -3728,14 +3755,7 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
 
             os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
-            if len(X_test) > max_samples:  # If test set is large
-                np.random.seed(random_state)  # Set random seed for reproducibility
-                sample_indices = np.random.choice(len(X_test), size=max_samples, replace=False)  # Sample indices
-                X_test_sampled = X_test[sample_indices]  # Sample test features
-                y_test_sampled = y_test.iloc[sample_indices] if hasattr(y_test, 'iloc') else y_test[sample_indices]  # Sample test labels
-            else:  # If test set is small
-                X_test_sampled = X_test  # Use full test set
-                y_test_sampled = y_test  # Use full test labels
+            X_test_sampled, y_test_sampled = sample_shap_test_data(X_test, y_test, max_samples, random_state)  # Sample test data for SHAP computation
 
             model_type = model.__class__.__name__  # Get model class name
 
