@@ -1694,7 +1694,7 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
         verbose_output(
             f"{BackgroundColors.GREEN}Extracting dataset information from: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
         )  # Output start message for dataset info extraction
-        tqdm.write(f"{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Log dataset processing start without breaking the active progress bar
+        verbose_output(f"{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Log dataset processing start without breaking the active progress bar
         send_telegram_message(TELEGRAM_BOT, [f"Starting processing dataset: {os.path.basename(filepath)}"])  # Send Telegram notification indicating start of processing for dataset
 
         if df is None:
@@ -2294,11 +2294,13 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
         )  # Create a single in-place progress bar instance
         for idx, filepath in enumerate(progress, 1):  # Process each matching file
             file_basename = os.path.basename(filepath)  # Get the base filename
-            progress.set_description(f"Processing {file_basename[:40]}")  # Update progress bar description with current filename using plain text to avoid width miscalculation
+            filename_short = file_basename[:40]  # Truncate filename to a safe length to prevent width overflow and wrapping
+            colored_desc = f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{filename_short}{Style.RESET_ALL}"  # Compose colored description using BackgroundColors while keeping length bounded
+            progress.set_description(colored_desc)  # Update progress bar description with colored, truncated filename for inline display
 
             df_current = load_dataset(filepath, low_memory)  # Load one dataset at a time to minimize peak RAM usage
             if df_current is None:  # Verify that the dataset was loaded successfully
-                tqdm.write(f"{BackgroundColors.YELLOW}Warning: failed to load {filepath}; skipping.{Style.RESET_ALL}")  # Warn about the skipped file without breaking the progress bar
+                print(f"{BackgroundColors.YELLOW}Warning: failed to load {filepath}; skipping.{Style.RESET_ALL}")  # Warn about the skipped file without breaking the progress bar
                 continue  # Skip to the next file without accumulating a None entry
 
             info = get_dataset_file_info(filepath, df=df_current, low_memory=low_memory)  # Extract metadata using the already-loaded DataFrame to avoid a second full read
@@ -2344,7 +2346,7 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
                     )  # Create metrics row dict
                     preprocessing_metrics.append(metrics_row)  # Append metrics row to list for this directory
                 except Exception as _pm:  # If metrics collection fails
-                    tqdm.write(f"{BackgroundColors.YELLOW}Warning: failed to collect preprocessing metrics for {file_basename}: {_pm}{Style.RESET_ALL}")  # Warn without breaking the progress bar
+                    print(f"{BackgroundColors.YELLOW}Warning: failed to collect preprocessing metrics for {file_basename}: {_pm}{Style.RESET_ALL}")  # Warn without breaking the progress bar
 
             try:  # Attempt to release dataset memory to minimize peak RAM consumption
                 del df_current  # Delete the current dataset reference to allow garbage collection
