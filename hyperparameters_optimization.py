@@ -1393,6 +1393,24 @@ def build_logistic_regression_config():
     )  # Return the instantiated model and its hyperparameter grid as a tuple
 
 
+def build_knn_config():
+    """
+    Build the K-Nearest Neighbors classifier instance and hyperparameter search grid.
+
+    :return: Tuple of (KNeighborsClassifier instance, param_grid dict) for hyperparameter optimization.
+    """
+
+    return (
+        KNeighborsClassifier(n_jobs=N_JOBS),  # K-Nearest Neighbors classifier
+        {
+            "n_neighbors": [3, 5, 7, 9, 11],  # Number of neighbors to use
+            "weights": ["uniform", "distance"],  # Weight function used in prediction
+            "metric": ["euclidean", "manhattan", "minkowski"],  # Distance metric
+            "p": [1, 2],  # Power parameter for the Minkowski metric
+        },
+    )  # Return the instantiated model and its hyperparameter grid as a tuple
+
+
 def build_all_models_config():
     """
     Build and return the full dictionary of all available model instances paired with their hyperparameter grids.
