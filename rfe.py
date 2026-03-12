@@ -1995,14 +1995,18 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n
     """
     Handles RFE with stratified cross-validation.
 
-    :param csv_path: Path to the CSV dataset file
-    :param X_numeric: Numeric features DataFrame
-    :param y_array: Target array
-    :param feature_columns: Feature column names
-    :param hyperparameters: Hyperparameters dict
-    :return: None
+    :param csv_path: Path to the CSV dataset file.
+    :param X_numeric: Numeric features DataFrame.
+    :param y_array: Target array.
+    :param feature_columns: Feature column names.
+    :param hyperparameters: Hyperparameters dict.
+    :param n_features_to_select: Number of features to select via RFE (or None for all).
+    :param step: Number of features to remove at each RFE step.
+    :param estimator_name: Name of the estimator to use for RFE.
+    :param random_state: Random seed for reproducibility.
+    :return: None.
     """
-    
+
     try:
         verbose_output(f"{BackgroundColors.GREEN}Starting RFE with Stratified K-Fold Cross-Validation...{Style.RESET_ALL}")
 
