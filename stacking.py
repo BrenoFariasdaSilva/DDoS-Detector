@@ -5893,6 +5893,44 @@ def export_automl_pipeline_artifacts(model_study, stacking_study, stacking_confi
         raise
 
 
+def run_automl_model_search_and_eval(X_train_scaled, y_train_arr, X_test_scaled, y_test_arr, file):
+    """
+    Executes AutoML phase 1 model search, instantiates the best model, and evaluates it on the test set.
+
+    :param X_train_scaled: Scaled training feature matrix
+    :param y_train_arr: Training target labels as numpy array
+    :param X_test_scaled: Scaled test feature matrix
+    :param y_test_arr: Test target labels as numpy array
+    :param file: Path to the dataset file for logging context
+    :return: Tuple (best_model_name, best_params, model_study, best_individual_model, individual_metrics) or None if search fails
+    """
+
+    try:
+        best_model_name, best_params, model_study = run_automl_model_search(X_train_scaled, y_train_arr, file)  # Run Optuna-based model search to find best model and hyperparameters
+
+        if best_model_name is None:  # If model search found no valid model
+            print(
+                f"{BackgroundColors.RED}AutoML pipeline aborted: model search failed.{Style.RESET_ALL}"
+            )  # Output failure message to terminal
+            return None  # Signal caller to abort pipeline
+
+        best_individual_model = create_model_from_params(best_model_name, best_params)  # Instantiate best model using found parameters
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating AutoML best individual model on test set...{Style.RESET_ALL}"
+        )  # Output evaluation start message
+
+        individual_metrics = evaluate_automl_model_on_test(
+            best_individual_model, best_model_name, X_train_scaled, y_train_arr, X_test_scaled, y_test_arr
+        )  # Evaluate the instantiated best individual model on the held-out test set
+
+        return (best_model_name, best_params, model_study, best_individual_model, individual_metrics)  # Return all search and evaluation artifacts
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def prepare_automl_training_data(df, config=None):
     """
     Extracts features and target from DataFrame, validates class count, scales and splits data for AutoML.
@@ -5979,25 +6017,11 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
 
         send_telegram_message(TELEGRAM_BOT, f"Starting AutoML pipeline for {os.path.basename(file)}")  # Notify via Telegram
 
-        best_model_name, best_params, model_study = run_automl_model_search(
-            X_train_scaled, y_train_arr, file
-        )  # Phase 1: Run model search
+        search_result = run_automl_model_search_and_eval(X_train_scaled, y_train_arr, X_test_scaled, y_test_arr, file)  # Run model search and evaluate the best individual model
+        if search_result is None:  # If model search or evaluation failed
+            return None  # Abort pipeline
 
-        if best_model_name is None:  # If model search failed
-            print(
-                f"{BackgroundColors.RED}AutoML pipeline aborted: model search failed.{Style.RESET_ALL}"
-            )  # Output failure message
-            return None  # Return None
-
-        best_individual_model = create_model_from_params(best_model_name, best_params)  # Create best individual model
-
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating AutoML best individual model on test set...{Style.RESET_ALL}"
-        )  # Output evaluation message
-
-        individual_metrics = evaluate_automl_model_on_test(
-            best_individual_model, best_model_name, X_train_scaled, y_train_arr, X_test_scaled, y_test_arr
-        )  # Evaluate best individual model on test set
+        best_model_name, best_params, model_study, best_individual_model, individual_metrics = search_result  # Unpack search and evaluation results
 
         stacking_config, stacking_metrics, stacking_study = run_automl_stacking_phase(
             X_train_scaled, y_train_arr, X_test_scaled, y_test_arr, model_study, file, config=config
