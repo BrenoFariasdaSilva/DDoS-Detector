@@ -7419,6 +7419,173 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                 continue  # Continue with next file
 
 
+def execute_both_mode_pipeline(files_to_process, local_dataset_name, config=None):
+    """
+    Execute both binary and multi-class classification pipelines sequentially.
+
+    :param files_to_process: List of file paths to process
+    :param local_dataset_name: Name of the dataset being processed
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        verbose_output(
+            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: BOTH (Binary + Multi-Class){Style.RESET_ALL}",
+            config=config
+        )  # Output execution mode
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+        )  # Print separator line
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}BOTH MODE: Running Binary and Multi-Class pipelines sequentially{Style.RESET_ALL}"
+        )  # Print mode header
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+        )  # Print closing separator
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[STEP 1/2] Executing BINARY Classification Pipeline{Style.RESET_ALL}\n"
+        )  # Print binary step header
+
+        combined_df, combined_file_for_features, files_for_binary = combine_dataset_if_needed(files_to_process, config=config)  # Combine dataset files if needed
+
+        for file in files_for_binary:  # For each file to process in binary mode
+            orchestrate_all_combinations(file, dataset_name=local_dataset_name, config=config)  # Orchestrate all combinations for binary mode
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Binary pipeline complete{Style.RESET_ALL}\n"
+        )  # Print binary completion message
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[STEP 2/2] Executing MULTI-CLASS Classification Pipeline{Style.RESET_ALL}\n"
+        )  # Print multi-class step header
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+        )  # Print separator line
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}MULTI-CLASS CLASSIFICATION MODE{Style.RESET_ALL}"
+        )  # Print mode header
+        print(
+            f"{BackgroundColors.GREEN}Combining {BackgroundColors.CYAN}{len(files_to_process)}{BackgroundColors.GREEN} files into single multi-class dataset{Style.RESET_ALL}"
+        )  # Print files count
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+        )  # Print closing separator
+
+        combined_multiclass_df, attack_types_list, target_col_name = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for multi-class
+
+        if combined_multiclass_df is None:  # If combination failed
+            print(
+                f"{BackgroundColors.RED}Failed to create multi-class dataset. Skipping multi-class evaluation.{Style.RESET_ALL}"
+            )  # Print error about combination failure
+        else:  # If combination succeeded
+            process_multiclass_evaluation(
+                files_to_process, combined_multiclass_df, attack_types_list, local_dataset_name, config=config
+            )  # Process multi-class evaluation workflow
+
+            print(
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Multi-class pipeline complete{Style.RESET_ALL}\n"
+            )  # Print multi-class completion message
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+        )  # Print final separator
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ BOTH MODE COMPLETE: Binary and Multi-Class pipelines finished{Style.RESET_ALL}"
+        )  # Print both mode completion message
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+        )  # Print final separator
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def execute_multiclass_mode_pipeline(files_to_process, local_dataset_name, config=None):
+    """
+    Execute multi-class classification pipeline only.
+
+    :param files_to_process: List of file paths to process
+    :param local_dataset_name: Name of the dataset being processed
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        verbose_output(
+            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: MULTI-CLASS{Style.RESET_ALL}",
+            config=config
+        )  # Output execution mode
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
+        )  # Print separator line
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}MULTI-CLASS CLASSIFICATION MODE{Style.RESET_ALL}"
+        )  # Print mode header
+        print(
+            f"{BackgroundColors.GREEN}Combining {BackgroundColors.CYAN}{len(files_to_process)}{BackgroundColors.GREEN} files into single multi-class dataset{Style.RESET_ALL}"
+        )  # Print files count
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
+        )  # Print closing separator
+
+        combined_multiclass_df, attack_types_list, target_col_name = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for multi-class
+
+        if combined_multiclass_df is None:  # If combination failed
+            print(
+                f"{BackgroundColors.RED}Failed to create multi-class dataset. Skipping multi-class evaluation.{Style.RESET_ALL}"
+            )  # Print error about combination failure
+            return  # Exit function early
+
+        process_multiclass_evaluation(
+            files_to_process, combined_multiclass_df, attack_types_list, local_dataset_name, config=config
+        )  # Process multi-class evaluation workflow
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def execute_binary_mode_pipeline(files_to_process, local_dataset_name, config=None):
+    """
+    Execute binary classification pipeline only.
+
+    :param files_to_process: List of file paths to process
+    :param local_dataset_name: Name of the dataset being processed
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        verbose_output(
+            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: BINARY{Style.RESET_ALL}",
+            config=config
+        )  # Output execution mode
+
+        combined_df, combined_file_for_features, files_to_process = combine_dataset_if_needed(files_to_process, config=config)  # Combine dataset files if needed
+
+        for file in files_to_process:  # For each file to process
+            orchestrate_all_combinations(file, dataset_name=local_dataset_name, config=config)  # Orchestrate all combinations for binary mode
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def process_files_in_path(input_path, dataset_name, config=None):
     """
     Processes all files in a given input path including file discovery and dataset combination.
@@ -7453,117 +7620,11 @@ def process_files_in_path(input_path, dataset_name, config=None):
         local_dataset_name = dataset_name or get_dataset_name(input_path)  # Use provided dataset name or infer from path
 
         if execution_mode == "both":  # If BOTH execution modes are enabled (run binary first, then multi-class)
-            verbose_output(
-                f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: BOTH (Binary + Multi-Class){Style.RESET_ALL}",
-                config=config
-            )  # Output execution mode
-            
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
-            )  # Print separator line
-            print(
-                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}BOTH MODE: Running Binary and Multi-Class pipelines sequentially{Style.RESET_ALL}"
-            )  # Print mode header
-            print(
-                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
-            )  # Print closing separator
-            
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[STEP 1/2] Executing BINARY Classification Pipeline{Style.RESET_ALL}\n"
-            )  # Print binary step header
-            
-            combined_df, combined_file_for_features, files_for_binary = combine_dataset_if_needed(files_to_process, config=config)  # Combine dataset files if needed
-
-            for file in files_for_binary:  # For each file to process in binary mode
-                orchestrate_all_combinations(file, dataset_name=local_dataset_name, config=config)  # Orchestrate all combinations for binary mode
-            
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Binary pipeline complete{Style.RESET_ALL}\n"
-            )  # Print binary completion message
-            
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[STEP 2/2] Executing MULTI-CLASS Classification Pipeline{Style.RESET_ALL}\n"
-            )  # Print multi-class step header
-            
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
-            )  # Print separator line
-            print(
-                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}MULTI-CLASS CLASSIFICATION MODE{Style.RESET_ALL}"
-            )  # Print mode header
-            print(
-                f"{BackgroundColors.GREEN}Combining {BackgroundColors.CYAN}{len(files_to_process)}{BackgroundColors.GREEN} files into single multi-class dataset{Style.RESET_ALL}"
-            )  # Print files count
-            print(
-                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
-            )  # Print closing separator
-
-            combined_multiclass_df, attack_types_list, target_col_name = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for multi-class
-            
-            if combined_multiclass_df is None:  # If combination failed
-                print(
-                    f"{BackgroundColors.RED}Failed to create multi-class dataset. Skipping multi-class evaluation.{Style.RESET_ALL}"
-                )  # Print error
-            else:  # If combination succeeded
-                process_multiclass_evaluation(
-                    files_to_process, combined_multiclass_df, attack_types_list, local_dataset_name, config=config
-                )  # Process multi-class evaluation workflow
-                
-                print(
-                    f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Multi-class pipeline complete{Style.RESET_ALL}\n"
-                )  # Print multi-class completion message
-            
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
-            )  # Print final separator
-            print(
-                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ BOTH MODE COMPLETE: Binary and Multi-Class pipelines finished{Style.RESET_ALL}"
-            )  # Print both mode completion message
-            print(
-                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
-            )  # Print final separator
-            
+            execute_both_mode_pipeline(files_to_process, local_dataset_name, config=config)  # Run binary + multi-class pipelines sequentially
         elif execution_mode == "multi-class":  # If multi-class execution mode is enabled
-            verbose_output(
-                f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: MULTI-CLASS{Style.RESET_ALL}",
-                config=config
-            )  # Output execution mode
-            
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
-            )  # Print separator line
-            print(
-                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}MULTI-CLASS CLASSIFICATION MODE{Style.RESET_ALL}"
-            )  # Print mode header
-            print(
-                f"{BackgroundColors.GREEN}Combining {BackgroundColors.CYAN}{len(files_to_process)}{BackgroundColors.GREEN} files into single multi-class dataset{Style.RESET_ALL}"
-            )  # Print files count
-            print(
-                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
-            )  # Print closing separator
-
-            combined_multiclass_df, attack_types_list, target_col_name = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for multi-class
-            
-            if combined_multiclass_df is None:  # If combination failed
-                print(
-                    f"{BackgroundColors.RED}Failed to create multi-class dataset. Skipping multi-class evaluation.{Style.RESET_ALL}"
-                )  # Print error
-                return  # Exit function
-            
-            process_multiclass_evaluation(
-                files_to_process, combined_multiclass_df, attack_types_list, local_dataset_name, config=config
-            )  # Process multi-class evaluation workflow
-            
+            execute_multiclass_mode_pipeline(files_to_process, local_dataset_name, config=config)  # Run multi-class pipeline only
         else:  # If binary execution mode (default)
-            verbose_output(
-                f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}Execution Mode: BINARY{Style.RESET_ALL}",
-                config=config
-            )  # Output execution mode
-            
-            combined_df, combined_file_for_features, files_to_process = combine_dataset_if_needed(files_to_process, config=config)  # Combine dataset files if needed
-
-            for file in files_to_process:  # For each file to process
-                orchestrate_all_combinations(file, dataset_name=local_dataset_name, config=config)  # Orchestrate all combinations for binary mode
+            execute_binary_mode_pipeline(files_to_process, local_dataset_name, config=config)  # Run binary pipeline only
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
