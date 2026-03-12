@@ -560,6 +560,33 @@ def clean_invalid_feature_values(X, y):
         raise
 
 
+def fit_or_transform_scaler(X_encoded, scaler):
+    """
+    Fit a new StandardScaler or apply an existing one to the encoded feature DataFrame.
+
+    :param X_encoded: One-hot encoded feature DataFrame to be scaled.
+    :param scaler: Pre-fitted scaler to reuse, or None to fit a new one.
+    :return: Tuple (X_scaled, scaler) where X_scaled is a DataFrame and scaler is the fitted scaler.
+    """
+
+    try:
+        if scaler is None:  # If no pre-fitted scaler provided, create and fit a new one
+            scaler = StandardScaler()  # Initialize new StandardScaler instance
+            X_scaled_array = scaler.fit_transform(X_encoded)  # Fit and transform in one step
+        else:  # If a pre-fitted scaler is provided, use it directly
+            X_scaled_array = scaler.transform(X_encoded)  # Transform using the existing fitted scaler
+
+        X_scaled = pd.DataFrame(
+            X_scaled_array, columns=X_encoded.columns, index=X_encoded.index
+        )  # Reconstruct DataFrame preserving column names and index after scaling
+
+        return X_scaled, scaler  # Return scaled DataFrame and the fitted scaler object
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label_encoder=None, selected_features=None):
     """
     Applies one-hot encoding and scaling to features.
@@ -606,15 +633,7 @@ def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label
             X_encoded = X_encoded.reindex(columns=ref_columns, fill_value=0)  # Reindex to match reference columns
             verbose_output(f"{BackgroundColors.GREEN}Reindexed features to match reference columns.{Style.RESET_ALL}")
 
-        if scaler is None:  # If scaler is not provided, fit a new one
-            scaler = StandardScaler()  # Initialize StandardScaler
-            X_scaled_array = scaler.fit_transform(X_encoded)  # Fit and transform the data
-        else:  # If scaler is provided, use it to transform
-            X_scaled_array = scaler.transform(X_encoded)  # Transform the data with existing scaler
-
-        X_scaled = pd.DataFrame(
-            X_scaled_array, columns=X_encoded.columns, index=X_encoded.index
-        )  # Create DataFrame from scaled array
+        X_scaled, scaler = fit_or_transform_scaler(X_encoded, scaler)  # Fit new scaler or transform using existing one
 
         if not pd.api.types.is_numeric_dtype(y):  # If labels are not numeric
             if label_encoder is None:  # If label encoder is not provided, fit a new one
