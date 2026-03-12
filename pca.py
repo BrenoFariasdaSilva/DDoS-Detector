@@ -710,87 +710,195 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, scale_data=True):
         raise
 
 
+def validate_pca_n_components(n_components: int, n_features: int) -> None:
+    """
+    Validate that n_components is a positive integer not exceeding the number of features.
+
+    :param n_components: Number of principal components to validate.
+    :param n_features: Number of available features in the training data.
+    :return: None
+    """
+
+    if n_components <= 0:  # Verify n_components is positive
+        raise ValueError(f"n_components must be positive, got {n_components}")  # Raise on invalid value
+
+    if n_components > n_features:  # Verify n_components does not exceed feature count
+        raise ValueError(  # Raise descriptive error
+            f"n_components ({n_components}) cannot be greater than number of features ({n_features})"
+        )  # End raise
+
+
+def fit_transform_pca(X_train, X_test, n_components: int, scaling_time: float, random_state: int) -> tuple:
+    """
+    Fit PCA on training data and transform both training and test sets.
+
+    :param X_train: Scaled training feature array.
+    :param X_test: Scaled test feature array.
+    :param n_components: Number of principal components to retain.
+    :param scaling_time: Elapsed scaling time to include in feature extraction timing.
+    :param random_state: Random seed for PCA reproducibility.
+    :return: Tuple of (X_train_pca, X_test_pca, pca, feature_extraction_time_s, explained_variance).
+    """
+
+    pca = PCA(n_components=n_components, random_state=random_state)  # Initialize PCA with requested components
+
+    start_pca = time.perf_counter()  # Start PCA timer (feature extraction part)
+    X_train_pca = pca.fit_transform(X_train)  # Fit PCA on training data and transform
+    X_test_pca = pca.transform(X_test)  # Transform test data using the fitted PCA
+    pca_time = round(time.perf_counter() - start_pca, 6)  # End PCA timer and round
+
+    feature_extraction_time_s = round((scaling_time or 0.0) + pca_time, 6)  # Sum scaling and PCA times
+
+    explained_variance = pca.explained_variance_ratio_.sum()  # Total explained variance ratio
+
+    return X_train_pca, X_test_pca, pca, feature_extraction_time_s, explained_variance  # Return all PCA results
+
+
+def build_rf_classifier(random_state: int, workers: int) -> RandomForestClassifier:
+    """
+    Build and return a RandomForestClassifier with configured jobs and random state.
+
+    :param random_state: Random seed for the classifier.
+    :param workers: Number of parallel workers to determine n_jobs setting.
+    :return: Configured RandomForestClassifier instance.
+    """
+
+    global N_JOBS
+    rf_n_jobs = N_JOBS if (N_JOBS is not None) else (-1 if workers == 1 else 1)  # Determine n_jobs from globals or workers arg
+
+    model = RandomForestClassifier(  # Build the classifier with validated parameters
+        n_estimators=100, random_state=random_state, n_jobs=rf_n_jobs
+    )  # End RandomForestClassifier
+
+    return model  # Return the configured classifier
+
+
+def run_cv_folds(model: RandomForestClassifier, X_train_pca, y_train, skf: StratifiedKFold, n_components: int, n_folds: int) -> tuple:
+    """
+    Execute stratified cross-validation folds and accumulate per-fold metrics.
+
+    :param model: Configured RandomForestClassifier instance.
+    :param X_train_pca: PCA-transformed training feature array.
+    :param y_train: Training target array or Series.
+    :param skf: Configured StratifiedKFold splitter.
+    :param n_components: Number of PCA components used for Telegram notifications.
+    :param n_folds: Total number of CV folds used in Telegram notifications.
+    :return: Tuple of (cv_accs, cv_precs, cv_recs, cv_f1s, total_training_time, total_testing_time).
+    """
+
+    cv_accs, cv_precs, cv_recs, cv_f1s = [], [], [], []  # Initialize per-fold metric accumulators
+    total_training_time = 0.0  # Accumulator for all model.fit durations
+    total_testing_time = 0.0  # Accumulator for all prediction+metric durations
+
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_train_pca, y_train), start=1):  # Loop folds
+        send_telegram_message(TELEGRAM_BOT, f"Starting CV fold {fold_idx}/{n_folds} for n_components={n_components}")  # Notify
+        X_train_fold = X_train_pca[train_idx]  # Training data for this fold
+        X_val_fold = X_train_pca[val_idx]  # Validation data for this fold
+        y_train_fold = (  # Support both Series and ndarray
+            y_train.iloc[train_idx] if isinstance(y_train, pd.Series) else y_train[train_idx]
+        )  # End y_train_fold
+        y_val_fold = (  # Support both Series and ndarray for validation
+            y_train.iloc[val_idx] if isinstance(y_train, pd.Series) else y_train[val_idx]
+        )  # End y_val_fold
+
+        start_fit = time.perf_counter()  # Start timer immediately before model.fit for this fold
+        model.fit(X_train_fold, y_train_fold)  # Fit model on training fold
+        fit_elapsed = round(time.perf_counter() - start_fit, 6)  # Stop timer immediately after fit and round
+        total_training_time += fit_elapsed  # Accumulate training durations
+
+        start_pred = time.perf_counter()  # Start timer immediately before prediction+metrics for this fold
+        y_pred_fold = model.predict(X_val_fold)  # Predict on validation fold
+        cv_accs.append(accuracy_score(y_val_fold, y_pred_fold))  # Calculate and store accuracy
+        cv_precs.append(
+            precision_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
+        )  # Calculate and store precision
+        cv_recs.append(
+            recall_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
+        )  # Calculate and store recall
+        f1_fold = f1_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)  # Compute F1
+        cv_f1s.append(f1_fold)  # Store F1
+        pred_elapsed = round(time.perf_counter() - start_pred, 6)  # Stop timer after prediction+metrics and round
+        total_testing_time += pred_elapsed  # Accumulate testing durations for CV
+        send_telegram_message(TELEGRAM_BOT, f"Finished CV fold {fold_idx}/{n_folds} for n_components={n_components} with F1: {truncate_value(f1_fold)}")  # Notify fold completion
+
+    return cv_accs, cv_precs, cv_recs, cv_f1s, total_training_time, total_testing_time  # Return all accumulated CV metrics
+
+
+def compute_test_metrics(model: RandomForestClassifier, X_train_pca, y_train, X_test_pca, y_test) -> tuple:
+    """
+    Fit the model on the full training set and evaluate on the test set.
+
+    :param model: Configured RandomForestClassifier instance.
+    :param X_train_pca: PCA-transformed full training feature array.
+    :param y_train: Full training target array or Series.
+    :param X_test_pca: PCA-transformed test feature array.
+    :param y_test: Test target array or Series.
+    :return: Tuple of (acc, prec, rec, f1, fpr, fnr, final_fit_elapsed, test_pred_elapsed).
+    """
+
+    start_final_fit = time.perf_counter()  # Start timer immediately before final model.fit
+    model.fit(X_train_pca, y_train)  # Fit model on full training data
+    final_fit_elapsed = round(time.perf_counter() - start_final_fit, 6)  # Stop timer immediately after final fit and round
+
+    start_test = time.perf_counter()  # Start timer immediately before test prediction+metrics
+    y_pred = model.predict(X_test_pca)  # Predict on test data
+
+    acc = accuracy_score(y_test, y_pred)  # Calculate test accuracy
+    prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test precision
+    rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test recall
+    f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test f1
+
+    fpr, fnr = 0, 0  # Initialize FPR and FNR
+    unique_classes = np.unique(y_test)  # Get unique classes in the test set
+    if len(unique_classes) == 2:  # If binary classification
+        tn, fp, fn, tp = confusion_matrix(y_test, y_pred, labels=unique_classes).ravel()  # Get confusion matrix
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # Compute FPR
+        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # Compute FNR
+
+    test_pred_elapsed = round(time.perf_counter() - start_test, 6)  # Stop timer after test prediction+metrics and round
+
+    return acc, prec, rec, f1, fpr, fnr, final_fit_elapsed, test_pred_elapsed  # Return all test evaluation metrics
+
+
 def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_folds=10, workers=1, scaling_time=0.0, random_state=42):
     """
-    Applies PCA transformation and evaluates performance using 10-fold Stratified Cross-Validation
+    Applies PCA transformation and evaluates performance using 10-fold Stratified Cross-Validation.
 
-    :param X_train: Training features (scaled)
-    :param y_train: Training target
-    :param X_test: Testing features (scaled)
-    :param y_test: Testing target
-    :param n_components: Number of principal components to keep
-    :param cv_folds: Number of cross-validation folds (default: 10)
-    :return: Dictionary containing metrics, explained variance, and PCA object
+    :param X_train: Training features (scaled).
+    :param y_train: Training target.
+    :param X_test: Testing features (scaled).
+    :param y_test: Testing target.
+    :param n_components: Number of principal components to keep.
+    :param cv_folds: Number of cross-validation folds (default: 10).
+    :param workers: Number of parallel workers for job configuration.
+    :param scaling_time: Elapsed scaling time included in feature extraction timing.
+    :param random_state: Random seed for reproducibility.
+    :return: Dictionary containing metrics, explained variance, and PCA object.
     """
-    
+
     try:
-        if n_components <= 0:  # Validate n_components
-            raise ValueError(f"n_components must be positive, got {n_components}")  # Raise on invalid
-        if n_components > X_train.shape[1]:  # Validate n_components against number of features
-            raise ValueError(  # Raise descriptive error
-                f"n_components ({n_components}) cannot be greater than number of features ({X_train.shape[1]})"
-            )  # End raise
+        validate_pca_n_components(n_components, X_train.shape[1])  # Validate n_components before proceeding
 
         send_telegram_message(TELEGRAM_BOT, f"Starting PCA training for n_components={n_components}")  # Notify
 
         if random_state is None:
-            random_state = 42
-        pca = PCA(n_components=n_components, random_state=random_state)  # Initialize PCA
+            random_state = 42  # Fall back to default random state when None
 
-        start_pca = time.perf_counter()  # Start PCA timer (feature extraction part)
-        X_train_pca = pca.fit_transform(X_train)  # Fit PCA on training data and transform
-        X_test_pca = pca.transform(X_test)  # Transform test data using the fitted PCA
-        pca_time = round(time.perf_counter() - start_pca, 6)  # End PCA timer and round
-        feature_extraction_time_s = round((scaling_time or 0.0) + pca_time, 6)  # Sum scaling and PCA times
+        X_train_pca, X_test_pca, pca, feature_extraction_time_s, explained_variance = fit_transform_pca(
+            X_train, X_test, n_components, scaling_time, random_state
+        )  # Fit and transform PCA on training and test data
 
-        explained_variance = pca.explained_variance_ratio_.sum()  # Total explained variance ratio
+        model = build_rf_classifier(random_state, workers)  # Initialize RF classifier with job configuration
 
-        global N_JOBS
-        rf_n_jobs = N_JOBS if (N_JOBS is not None) else (-1 if workers == 1 else 1)
-        model = RandomForestClassifier(
-            n_estimators=100, random_state=random_state, n_jobs=rf_n_jobs
-        )
+        if not isinstance(cv_folds, int) or cv_folds < 2:  # Verify cv_folds is a valid integer >= 2
+            raise ValueError(f"cv_folds must be integer >= 2, got {cv_folds}")  # Raise on invalid cv_folds
+        if cv_folds > len(X_train):  # Verify cv_folds does not exceed sample count
+            raise ValueError(f"cv_folds ({cv_folds}) cannot exceed number of training samples ({len(X_train)})")  # Raise on too many folds
+        skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)  # Initialize stratified splitter
 
-        if not isinstance(cv_folds, int) or cv_folds < 2:
-            raise ValueError(f"cv_folds must be integer >= 2, got {cv_folds}")
-        if cv_folds > len(X_train):
-            raise ValueError(f"cv_folds ({cv_folds}) cannot exceed number of training samples ({len(X_train)})")
-        skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
-
-        cv_accs, cv_precs, cv_recs, cv_f1s = [], [], [], []  # Lists to store CV metrics
-        total_training_time = 0.0  # Accumulator for all model.fit durations
-        total_testing_time = 0.0  # Accumulator for all prediction+metric durations
-
-        for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_train_pca, y_train), start=1):  # Loop folds
-            send_telegram_message(TELEGRAM_BOT, f"Starting CV fold {fold_idx}/{cv_folds} for n_components={n_components}")  # Notify
-            X_train_fold = X_train_pca[train_idx]  # Training data for this fold
-            X_val_fold = X_train_pca[val_idx]  # Validation data for this fold
-            y_train_fold = (  # Support both Series and ndarray
-                y_train.iloc[train_idx] if isinstance(y_train, pd.Series) else y_train[train_idx]
-            )  # End y_train_fold
-            y_val_fold = (  # Support both Series and ndarray for validation
-                y_train.iloc[val_idx] if isinstance(y_train, pd.Series) else y_train[val_idx]
-            )  # End y_val_fold
-
-            start_fit = time.perf_counter()  # Start timer immediately before model.fit for this fold
-            model.fit(X_train_fold, y_train_fold)  # Fit model on training fold
-            fit_elapsed = round(time.perf_counter() - start_fit, 6)  # Stop timer immediately after fit and round
-            total_training_time += fit_elapsed  # Accumulate training durations
-
-            start_pred = time.perf_counter()  # Start timer immediately before prediction+metrics for this fold
-            y_pred_fold = model.predict(X_val_fold)  # Predict on validation fold
-            cv_accs.append(accuracy_score(y_val_fold, y_pred_fold))  # Calculate and store accuracy
-            cv_precs.append(
-                precision_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
-            )  # Calculate and store precision
-            cv_recs.append(
-                recall_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
-            )  # Calculate and store recall
-            f1_fold = f1_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)  # Compute F1
-            cv_f1s.append(f1_fold)  # Store F1
-            pred_elapsed = round(time.perf_counter() - start_pred, 6)  # Stop timer after prediction+metrics and round
-            total_testing_time += pred_elapsed  # Accumulate testing durations for CV
-            send_telegram_message(TELEGRAM_BOT, f"Finished CV fold {fold_idx}/{cv_folds} for n_components={n_components} with F1: {truncate_value(f1_fold)}")  # Notify fold completion
+        cv_accs, cv_precs, cv_recs, cv_f1s, total_training_time, total_testing_time = run_cv_folds(
+            model, X_train_pca, y_train, skf, n_components, cv_folds
+        )  # Run all CV folds and collect per-fold metrics
 
         cv_acc_mean = np.mean(cv_accs)  # Mean CV accuracy
         cv_prec_mean = np.mean(cv_precs)  # Mean CV precision
@@ -799,24 +907,11 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
 
         send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} with CV F1: {truncate_value(cv_f1_mean)}")  # Notify completion
 
-        start_final_fit = time.perf_counter()  # Start timer immediately before final model.fit
-        model.fit(X_train_pca, y_train)  # Fit model on full training data
-        final_fit_elapsed = round(time.perf_counter() - start_final_fit, 6)  # Stop timer immediately after final fit and round
-        total_training_time += final_fit_elapsed  # Add final fit duration to training total
+        acc, prec, rec, f1, fpr, fnr, final_fit_elapsed, test_pred_elapsed = compute_test_metrics(
+            model, X_train_pca, y_train, X_test_pca, y_test
+        )  # Evaluate on the held-out test set
 
-        start_test = time.perf_counter()  # Start timer immediately before test prediction+metrics
-        y_pred = model.predict(X_test_pca)  # Predict on test data
-        acc = accuracy_score(y_test, y_pred)  # Calculate test accuracy
-        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test precision
-        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test recall
-        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test f1
-        fpr, fnr = 0, 0  # Initialize FPR and FNR
-        unique_classes = np.unique(y_test)  # Get unique classes in the test set
-        if len(unique_classes) == 2:  # If binary classification
-            tn, fp, fn, tp = confusion_matrix(y_test, y_pred, labels=unique_classes).ravel()  # Get confusion matrix
-            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # Compute FPR
-            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # Compute FNR
-        test_pred_elapsed = round(time.perf_counter() - start_test, 6)  # Stop timer after test prediction+metrics and round
+        total_training_time += final_fit_elapsed  # Add final fit duration to training total
         total_testing_time += test_pred_elapsed  # Add test prediction duration to testing total
 
         scaler_export = StandardScaler().fit(np.vstack([X_train, X_test]))  # Create scaler for export
