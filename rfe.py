@@ -146,50 +146,55 @@ def get_default_config() -> Dict[str, Any]:
     :return: Dict with default configuration values.
     """
     
-    return {
-        "rfe": {
-            "execution": {
-                "verbose": False,
-                "skip_train_if_model_exists": False,
-                "dataset_path": None,
-            },
-            "model": {"estimator": "random_forest", "random_state": 42},
-            "selection": {"n_features_to_select": 10, "step": 1},
-            "cross_validation": {"n_folds": 10},
-            "multiprocessing": {"n_jobs": -1, "cpu_processes": 1},
-            "caching": {"enabled": True, "pickle_protocol": 4},
-            "export": {
-                "results_dir": "Feature_Analysis/RFE",
-                "results_filename": "RFE_Results.csv",
-                "results_csv_columns": [
-                    "timestamp",
-                    "tool",
-                    "model",
-                    "dataset",
-                    "hyperparameters",
-                    "cv_method",
-                    "train_test_split",
-                    "scaling",
-                    "cv_accuracy",
-                    "cv_precision",
-                    "cv_recall",
-                    "cv_f1_score",
-                    "test_accuracy",
-                    "test_precision",
-                    "test_recall",
-                    "test_f1_score",
-                    "test_fpr",
-                    "test_fnr",
-                    "feature_extraction_time_s",
-                    "training_time_s",
-                    "testing_time_s",
-                    "hardware",
-                    "top_features",
-                    "rfe_ranking",
-                ]
-            },
+    try:
+        return {
+            "rfe": {
+                "execution": {
+                    "verbose": False,
+                    "skip_train_if_model_exists": False,
+                    "dataset_path": None,
+                },
+                "model": {"estimator": "random_forest", "random_state": 42},
+                "selection": {"n_features_to_select": 10, "step": 1},
+                "cross_validation": {"n_folds": 10},
+                "multiprocessing": {"n_jobs": -1, "cpu_processes": 1},
+                "caching": {"enabled": True, "pickle_protocol": 4},
+                "export": {
+                    "results_dir": "Feature_Analysis/RFE",
+                    "results_filename": "RFE_Results.csv",
+                    "results_csv_columns": [
+                        "timestamp",
+                        "tool",
+                        "model",
+                        "dataset",
+                        "hyperparameters",
+                        "cv_method",
+                        "train_test_split",
+                        "scaling",
+                        "cv_accuracy",
+                        "cv_precision",
+                        "cv_recall",
+                        "cv_f1_score",
+                        "test_accuracy",
+                        "test_precision",
+                        "test_recall",
+                        "test_f1_score",
+                        "test_fpr",
+                        "test_fnr",
+                        "feature_extraction_time_s",
+                        "training_time_s",
+                        "testing_time_s",
+                        "hardware",
+                        "top_features",
+                        "rfe_ranking",
+                    ]
+                },
+            }
         }
-    }
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def load_config_file(path: Optional[str]) -> Dict[str, Any]:
@@ -200,23 +205,28 @@ def load_config_file(path: Optional[str]) -> Dict[str, Any]:
     :return: Dict with the loaded configuration, or empty dict if no file found
     """
     
-    candidate = None
-    if path:
-        candidate = Path(path)
-    else:
-        p = Path(__file__).parent
-        c = p / "config.yaml"
-        e = p / "config.yaml.example"
-        if c.exists():
-            candidate = c
-        elif e.exists():
-            candidate = e
+    try:
+        candidate = None  # Initialize candidate path before resolution
+        if path:  # Use the provided path if given
+            candidate = Path(path)  # Convert provided path to Path object
+        else:  # Auto-discover config file from script directory
+            p = Path(__file__).parent  # Locate the directory containing this script
+            c = p / "config.yaml"  # Build path to config.yaml
+            e = p / "config.yaml.example"  # Build path to config.yaml.example
+            if c.exists():  # Prefer config.yaml when it exists
+                candidate = c  # Assign config.yaml as candidate
+            elif e.exists():  # Fall back to config.yaml.example when present
+                candidate = e  # Assign config.yaml.example as candidate
 
-    if candidate is None or not candidate.exists():
-        return {}
+        if candidate is None or not candidate.exists():  # Return empty dict when no config file was found
+            return {}  # No config file found
 
-    with open(candidate, "r", encoding="utf-8") as fh:
-        return yaml.safe_load(fh) or {}
+        with open(candidate, "r", encoding="utf-8") as fh:  # Open the located config file for reading
+            return yaml.safe_load(fh) or {}  # Parse YAML and return dict (or empty dict if file is empty)
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def parse_cli_args() -> Dict[str, Any]:
@@ -226,24 +236,29 @@ def parse_cli_args() -> Dict[str, Any]:
     :return: Dict with the parsed command-line arguments.
     """
     
-    parser = argparse.ArgumentParser(description="Run RFE pipeline")
-    parser.add_argument("--config", type=str, default=None)
-    parser.add_argument("--dataset_path", type=str, default=None)
-    parser.add_argument("--n_features_to_select", type=int, default=None)
-    parser.add_argument("--step", type=int, default=None)
-    parser.add_argument("--estimator", type=str, default=None)
-    parser.add_argument("--random_state", type=int, default=None)
-    parser.add_argument("--n_folds", type=int, default=None)
-    parser.add_argument("--n_jobs", type=int, default=None)
-    parser.add_argument("--cpu_processes", type=int, default=None)
-    parser.add_argument("--caching_enabled", type=lambda s: str(s).lower() in ("1", "true", "yes", "y"), default=None)
-    parser.add_argument("--pickle_protocol", type=int, default=None)
-    parser.add_argument("--verbose", action="store_true")
-    parser.add_argument("--skip_train_if_model_exists", action="store_true")
-    parser.add_argument("--results_dir", type=str, default=None, help="Override results directory for RFE exports (overrides config.rfe.export.results_dir)")
-    parser.add_argument("--results_filename", type=str, default=None, help="Override results filename for RFE exports (overrides config.rfe.export.results_filename)")
-    args = parser.parse_args()
-    return vars(args)
+    try:
+        parser = argparse.ArgumentParser(description="Run RFE pipeline")  # Create the argument parser
+        parser.add_argument("--config", type=str, default=None)  # Config file path
+        parser.add_argument("--dataset_path", type=str, default=None)  # Dataset path override
+        parser.add_argument("--n_features_to_select", type=int, default=None)  # Number of features to select override
+        parser.add_argument("--step", type=int, default=None)  # RFE step override
+        parser.add_argument("--estimator", type=str, default=None)  # Estimator name override
+        parser.add_argument("--random_state", type=int, default=None)  # Random state override
+        parser.add_argument("--n_folds", type=int, default=None)  # Number of CV folds override
+        parser.add_argument("--n_jobs", type=int, default=None)  # Number of parallel jobs override
+        parser.add_argument("--cpu_processes", type=int, default=None)  # Number of CPU processes override
+        parser.add_argument("--caching_enabled", type=lambda s: str(s).lower() in ("1", "true", "yes", "y"), default=None)  # Caching enabled override
+        parser.add_argument("--pickle_protocol", type=int, default=None)  # Pickle protocol override
+        parser.add_argument("--verbose", action="store_true")  # Verbose flag
+        parser.add_argument("--skip_train_if_model_exists", action="store_true")  # Skip training flag
+        parser.add_argument("--results_dir", type=str, default=None, help="Override results directory for RFE exports (overrides config.rfe.export.results_dir)")  # Results directory override
+        parser.add_argument("--results_filename", type=str, default=None, help="Override results filename for RFE exports (overrides config.rfe.export.results_filename)")  # Results filename override
+        args = parser.parse_args()  # Parse all arguments from sys.argv
+        return vars(args)  # Return parsed arguments as a plain dict
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -255,13 +270,18 @@ def deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str
     :return: A new dictionary resulting from the deep merge of base and override
     """
     
-    result = dict(base)
-    for k, v in (override or {}).items():
-        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
-            result[k] = deep_merge_dicts(result[k], v)
-        else:
-            result[k] = v
-    return result
+    try:
+        result = dict(base)  # Start with a shallow copy of the base dictionary
+        for k, v in (override or {}).items():  # Iterate over all keys in the override dict
+            if k in result and isinstance(result[k], dict) and isinstance(v, dict):  # Recursively merge nested dicts
+                result[k] = deep_merge_dicts(result[k], v)  # Recurse into nested dict
+            else:  # Non-dict values are replaced by the override value
+                result[k] = v  # Assign override value directly
+        return result  # Return the merged dictionary
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def validate_config_structure(config: Dict[str, Any]) -> None:
@@ -272,38 +292,43 @@ def validate_config_structure(config: Dict[str, Any]) -> None:
     :return: None
     """
     
-    if not isinstance(config, dict):
-        raise ValueError("config must be a dict")
-    if "rfe" not in config or not isinstance(config["rfe"], dict):
-        raise ValueError("Missing required top-level 'rfe' section in config")
-    r = config["rfe"]
-    required = ["execution", "model", "selection", "cross_validation", "multiprocessing", "caching", "export"]
-    for key in required:
-        if key not in r or not isinstance(r[key], dict):
-            raise ValueError(f"Missing required 'rfe.{key}' section in config or wrong type")
-    cols = r["export"].get("results_csv_columns")
-    if not isinstance(cols, list) or not cols:
-        raise ValueError("rfe.export.results_csv_columns must be a non-empty list in config")
-    sel = r["selection"]
-    if sel.get("n_features_to_select") is not None:
-        if not isinstance(sel["n_features_to_select"], int) or sel["n_features_to_select"] <= 0:
-            raise ValueError("rfe.selection.n_features_to_select must be an int > 0 or null")
-    if not isinstance(sel.get("step", 1), int) or sel.get("step", 1) <= 0:
-        raise ValueError("rfe.selection.step must be an int > 0")
-    cv = r["cross_validation"].get("n_folds")
-    if not isinstance(cv, int) or cv <= 1:
-        raise ValueError("rfe.cross_validation.n_folds must be an int > 1")
-    mp = r["multiprocessing"]
-    if not isinstance(mp.get("n_jobs"), int):
-        raise ValueError("rfe.multiprocessing.n_jobs must be an integer")
-    if not isinstance(mp.get("cpu_processes"), int) or mp.get("cpu_processes") < 1:
-        raise ValueError("rfe.multiprocessing.cpu_processes must be an int >= 1")
-    cache = r["caching"]
-    if not isinstance(cache.get("enabled"), bool):
-        raise ValueError("rfe.caching.enabled must be a boolean")
-    pp = cache.get("pickle_protocol")
-    if not isinstance(pp, int) or not (0 <= pp <= 5):
-        raise ValueError("rfe.caching.pickle_protocol must be int between 0 and 5")
+    try:
+        if not isinstance(config, dict):  # Validate top-level type
+            raise ValueError("config must be a dict")  # Raise on invalid type
+        if "rfe" not in config or not isinstance(config["rfe"], dict):  # Validate rfe section exists
+            raise ValueError("Missing required top-level 'rfe' section in config")  # Raise on missing section
+        r = config["rfe"]  # Extract the rfe section
+        required = ["execution", "model", "selection", "cross_validation", "multiprocessing", "caching", "export"]  # Required sub-sections
+        for key in required:  # Iterate required sub-section names
+            if key not in r or not isinstance(r[key], dict):  # Validate each required sub-section
+                raise ValueError(f"Missing required 'rfe.{key}' section in config or wrong type")  # Raise on missing required section
+        cols = r["export"].get("results_csv_columns")  # Read the results CSV columns
+        if not isinstance(cols, list) or not cols:  # Validate columns are a non-empty list
+            raise ValueError("rfe.export.results_csv_columns must be a non-empty list in config")  # Raise on invalid columns
+        sel = r["selection"]  # Extract selection section
+        if sel.get("n_features_to_select") is not None:  # Validate n_features_to_select when provided
+            if not isinstance(sel["n_features_to_select"], int) or sel["n_features_to_select"] <= 0:  # Validate positive int
+                raise ValueError("rfe.selection.n_features_to_select must be an int > 0 or null")  # Raise on invalid value
+        if not isinstance(sel.get("step", 1), int) or sel.get("step", 1) <= 0:  # Validate step is positive int
+            raise ValueError("rfe.selection.step must be an int > 0")  # Raise on invalid step
+        cv = r["cross_validation"].get("n_folds")  # Read n_folds
+        if not isinstance(cv, int) or cv <= 1:  # Validate n_folds is int greater than 1
+            raise ValueError("rfe.cross_validation.n_folds must be an int > 1")  # Raise on invalid folds
+        mp = r["multiprocessing"]  # Extract multiprocessing section
+        if not isinstance(mp.get("n_jobs"), int):  # Validate n_jobs type
+            raise ValueError("rfe.multiprocessing.n_jobs must be an integer")  # Raise on invalid n_jobs
+        if not isinstance(mp.get("cpu_processes"), int) or mp.get("cpu_processes") < 1:  # Validate cpu_processes is positive
+            raise ValueError("rfe.multiprocessing.cpu_processes must be an int >= 1")  # Raise on invalid cpu_processes
+        cache = r["caching"]  # Extract caching section
+        if not isinstance(cache.get("enabled"), bool):  # Validate enabled is bool
+            raise ValueError("rfe.caching.enabled must be a boolean")  # Raise on invalid enabled type
+        pp = cache.get("pickle_protocol")  # Read pickle_protocol
+        if not isinstance(pp, int) or not (0 <= pp <= 5):  # Validate pickle_protocol range
+            raise ValueError("rfe.caching.pickle_protocol must be int between 0 and 5")  # Raise on invalid protocol
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
 
 
 def get_config(cli_args: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Dict[str, str]]:
