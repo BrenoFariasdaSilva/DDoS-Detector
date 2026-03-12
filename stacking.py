@@ -6757,6 +6757,170 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
         raise
 
 
+def save_multiclass_results_to_csv(reference_file, results_list, config=None):
+    """
+    Save multi-class evaluation results to the Feature_Analysis directory.
+
+    :param reference_file: Reference file path for determining output directory
+    :param results_list: List of result dictionaries to save
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Path object of the Feature_Analysis directory for reuse
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        multiclass_results_filename = config.get("stacking", {}).get("multiclass_results_filename", "Stacking_Classifiers_MultiClass_Results.csv")  # Get multi-class results filename from config
+        reference_file_path = Path(reference_file)  # Create Path object from reference file
+        feature_analysis_dir = reference_file_path.parent / "Feature_Analysis"  # Build Feature_Analysis directory path
+        os.makedirs(feature_analysis_dir, exist_ok=True)  # Ensure directory exists on disk
+        multiclass_results_path = feature_analysis_dir / multiclass_results_filename  # Build full multi-class results file path
+
+        save_stacking_results(str(multiclass_results_path), results_list, config=config)  # Save multi-class results to CSV
+
+        return feature_analysis_dir  # Return Feature_Analysis directory path for reuse
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def process_multiclass_augmentation_testing(reference_file, original_files_list, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, attack_types_list, results_original, augmentation_ratios, total_steps, feature_analysis_dir, dataset_name, config=None):
+    """
+    Process multi-class augmented data evaluation with ratio-based experiments.
+
+    :param reference_file: Reference file path for feature metadata
+    :param original_files_list: List of original file paths
+    :param combined_multiclass_df: Combined multi-class DataFrame
+    :param feature_names: List of feature column names
+    :param ga_selected_features: GA selected features
+    :param pca_n_components: Number of PCA components
+    :param rfe_selected_features: RFE selected features
+    :param base_models: Dictionary of base models
+    :param hp_params_map: Hyperparameters mapping
+    :param attack_types_list: List of unique attack type labels
+    :param results_original: Results from original data evaluation
+    :param augmentation_ratios: List of augmentation ratios to evaluate
+    :param total_steps: Total number of evaluation steps for progress display
+    :param feature_analysis_dir: Path to Feature_Analysis directory
+    :param dataset_name: Name of the dataset being processed
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Processing multi-class augmented data evaluation...{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
+
+        generate_augmentation_tsne_visualization(
+            reference_file, combined_multiclass_df, None, None, "original_only"
+        )  # Generate t-SNE visualization for original multi-class data only
+
+        augmented_files_list = load_augmented_files_for_multiclass(original_files_list, config=config)  # Load augmented files
+
+        if not augmented_files_list:  # If no augmented files found
+            print(
+                f"{BackgroundColors.YELLOW}No augmented files found for multi-class mode. Skipping augmentation testing.{Style.RESET_ALL}"
+            )  # Print warning about missing augmented files
+            return  # Exit function early
+
+        combined_augmented_df, augmented_attack_types, augmented_target_col = combine_files_for_multiclass(augmented_files_list, config=config)  # Combine augmented files
+
+        if combined_augmented_df is None:  # If augmented combination failed
+            print(
+                f"{BackgroundColors.YELLOW}Failed to combine augmented files for multi-class. Skipping augmentation testing.{Style.RESET_ALL}"
+            )  # Print warning about combination failure
+            return  # Exit function early
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
+        )  # Print separator line for visual clarity
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}RATIO-BASED DATA AUGMENTATION EXPERIMENTS (Multi-Class){Style.RESET_ALL}"
+        )  # Print header for the ratio-based experiments section
+        print(
+            f"{BackgroundColors.GREEN}Ratios to evaluate: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in augmentation_ratios]}{Style.RESET_ALL}"
+        )  # Print the list of ratios that will be evaluated
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
+        )  # Print closing separator line
+
+        all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
+
+        for ratio_idx, ratio in enumerate(augmentation_ratios, start=1):  # Iterate over each augmentation ratio
+            ratio_pct = int(ratio * 100)  # Convert ratio to percentage for display
+
+            print(
+                f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx + 1}/{total_steps}] Evaluating with {ratio_pct}% augmented data (Multi-Class){Style.RESET_ALL}"
+            )  # Print experiment step progress
+
+            df_sampled = sample_augmented_by_ratio(combined_augmented_df, combined_multiclass_df, ratio)  # Sample augmented data proportionally
+
+            if df_sampled is None:  # If sampling failed
+                print(
+                    f"{BackgroundColors.YELLOW}Failed to sample augmented data at ratio {ratio_pct}%. Skipping.{Style.RESET_ALL}"
+                )  # Print warning about sampling failure
+                continue  # Skip to next ratio
+
+            data_source_label = f"Original+Augmented@{ratio_pct}%_MultiClass"  # Build data source label for this experiment
+            experiment_id = generate_experiment_id(reference_file, "multiclass_original_plus_augmented", ratio)  # Generate unique experiment ID
+
+            print(
+                f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
+            )  # Print sampled dataset size for transparency
+
+            generate_augmentation_tsne_visualization(
+                reference_file, combined_multiclass_df, df_sampled, ratio, "original_plus_augmented"
+            )  # Generate t-SNE visualization for multi-class augmented experiment
+
+            send_telegram_message(
+                TELEGRAM_BOT, f"Starting multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
+            )  # Send Telegram notification for ratio start
+
+            results_ratio = evaluate_on_dataset(
+                reference_file, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components,
+                rfe_selected_features, base_models, data_source_label=data_source_label,
+                hyperparams_map=hp_params_map, experiment_id=experiment_id,
+                experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+                execution_mode_str="multi-class", attack_types_combined=attack_types_list,
+                df_augmented_for_training=df_sampled
+            )  # Evaluate all classifiers with augmented data in training only (test remains original-only)
+
+            all_ratio_results[ratio] = results_ratio  # Store the results for this ratio in the results dictionary
+
+            send_telegram_message(
+                TELEGRAM_BOT, f"Completed multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
+            )  # Send completion notification for ratio
+
+        if not all_ratio_results:  # If no ratio experiments succeeded
+            print(
+                f"{BackgroundColors.YELLOW}No augmentation ratio experiments completed successfully for multi-class.{Style.RESET_ALL}"
+            )  # Print warning about no completed experiments
+            return  # Exit function early
+
+        comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate the comparison report across all ratios
+
+        augmentation_comparison_filename = config.get("stacking", {}).get("augmentation_comparison_filename", "Data_Augmentation_Comparison_Results.csv")  # Get comparison filename from config
+        multiclass_comparison_filename = augmentation_comparison_filename.replace(".csv", "_MultiClass.csv")  # Build multi-class comparison filename
+        multiclass_comparison_path = feature_analysis_dir / multiclass_comparison_filename  # Build comparison file path
+
+        save_augmentation_comparison_results(str(multiclass_comparison_path), comparison_results, config=config)  # Save comparison results to CSV file
+
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Multi-class data augmentation ratio-based comparison complete!{Style.RESET_ALL}"
+        )  # Print success message indicating all ratio experiments are done
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def process_multiclass_evaluation(original_files_list, combined_multiclass_df, attack_types_list, dataset_name, config=None):
     """
     Process evaluation for multi-class classification mode with optional data augmentation.
@@ -6825,122 +6989,19 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
         )  # Evaluate on original multi-class data with execution mode tracking
         
         original_results_list = list(results_original.values())  # Convert results dict to list
-        
-        multiclass_results_filename = config.get("stacking", {}).get("multiclass_results_filename", "Stacking_Classifiers_MultiClass_Results.csv")  # Get multi-class results filename
-        reference_file_path = Path(reference_file)  # Create Path object
-        feature_analysis_dir = reference_file_path.parent / "Feature_Analysis"  # Feature_Analysis directory
-        os.makedirs(feature_analysis_dir, exist_ok=True)  # Ensure directory exists
-        multiclass_results_path = feature_analysis_dir / multiclass_results_filename  # Build multi-class results path
-        
-        save_stacking_results(str(multiclass_results_path), original_results_list, config=config)  # Save multi-class results to CSV
+        feature_analysis_dir = save_multiclass_results_to_csv(reference_file, original_results_list, config=config)  # Save multi-class results and get Feature_Analysis directory
         
         enable_automl = config.get("automl", {}).get("enabled", False)  # Get enable automl flag from config
         if enable_automl:  # If AutoML pipeline is enabled
             run_automl_pipeline(reference_file, combined_multiclass_df, feature_names, data_source_label="Original_MultiClass", config=config)  # Run AutoML pipeline for multi-class
         
         if test_data_augmentation:  # If data augmentation testing is enabled
-            verbose_output(
-                f"{BackgroundColors.GREEN}Processing multi-class augmented data evaluation...{Style.RESET_ALL}",
-                config=config
-            )  # Output the verbose message
-            
-            generate_augmentation_tsne_visualization(
-                reference_file, combined_multiclass_df, None, None, "original_only"
-            )  # Generate t-SNE visualization for original multi-class data only
-            
-            augmented_files_list = load_augmented_files_for_multiclass(original_files_list, config=config)  # Load augmented files
-            
-            if not augmented_files_list:  # If no augmented files found
-                print(
-                    f"{BackgroundColors.YELLOW}No augmented files found for multi-class mode. Skipping augmentation testing.{Style.RESET_ALL}"
-                )  # Print warning
-                return  # Exit function
-            
-            combined_augmented_df, augmented_attack_types, augmented_target_col = combine_files_for_multiclass(augmented_files_list, config=config)  # Combine augmented files
-            
-            if combined_augmented_df is None:  # If augmented combination failed
-                print(
-                    f"{BackgroundColors.YELLOW}Failed to combine augmented files for multi-class. Skipping augmentation testing.{Style.RESET_ALL}"
-                )  # Print warning
-                return  # Exit function
-            
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
-            )  # Print separator line for visual clarity
-            print(
-                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}RATIO-BASED DATA AUGMENTATION EXPERIMENTS (Multi-Class){Style.RESET_ALL}"
-            )  # Print header for the ratio-based experiments section
-            print(
-                f"{BackgroundColors.GREEN}Ratios to evaluate: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in augmentation_ratios]}{Style.RESET_ALL}"
-            )  # Print the list of ratios that will be evaluated
-            print(
-                f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
-            )  # Print closing separator line
-            
-            all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
-            
-            for ratio_idx, ratio in enumerate(augmentation_ratios, start=1):  # Iterate over each augmentation ratio
-                ratio_pct = int(ratio * 100)  # Convert ratio to percentage for display
-                
-                print(
-                    f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx + 1}/{total_steps}] Evaluating with {ratio_pct}% augmented data (Multi-Class){Style.RESET_ALL}"
-                )  # Print experiment step progress
-                
-                df_sampled = sample_augmented_by_ratio(combined_augmented_df, combined_multiclass_df, ratio)  # Sample augmented data proportionally
-                
-                if df_sampled is None:  # If sampling failed
-                    print(
-                        f"{BackgroundColors.YELLOW}Failed to sample augmented data at ratio {ratio_pct}%. Skipping.{Style.RESET_ALL}"
-                    )  # Print warning
-                    continue  # Skip to next ratio
-                
-                data_source_label = f"Original+Augmented@{ratio_pct}%_MultiClass"  # Build data source label for this experiment
-                experiment_id = generate_experiment_id(reference_file, "multiclass_original_plus_augmented", ratio)  # Generate unique experiment ID
-                
-                print(
-                    f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
-                )  # Print sampled dataset size for transparency
-                
-                generate_augmentation_tsne_visualization(
-                    reference_file, combined_multiclass_df, df_sampled, ratio, "original_plus_augmented"
-                )  # Generate t-SNE visualization for multi-class augmented experiment
-                
-                send_telegram_message(
-                    TELEGRAM_BOT, f"Starting multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
-                )  # Send Telegram notification
-                
-                results_ratio = evaluate_on_dataset(
-                    reference_file, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components,
-                    rfe_selected_features, base_models, data_source_label=data_source_label,
-                    hyperparams_map=hp_params_map, experiment_id=experiment_id,
-                    experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
-                    execution_mode_str="multi-class", attack_types_combined=attack_types_list,
-                    df_augmented_for_training=df_sampled
-                )  # Evaluate all classifiers with augmented data in training only (test remains original-only)
-                
-                all_ratio_results[ratio] = results_ratio  # Store the results for this ratio in the results dictionary
-                
-                send_telegram_message(
-                    TELEGRAM_BOT, f"Completed multi-class augmentation ratio {ratio_pct}% for {dataset_name}"
-                )  # Send completion notification
-            
-            if not all_ratio_results:  # If no ratio experiments succeeded
-                print(
-                    f"{BackgroundColors.YELLOW}No augmentation ratio experiments completed successfully for multi-class.{Style.RESET_ALL}"
-                )  # Print warning
-                return  # Exit function
-            
-            comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate the comparison report across all ratios
-            
-            augmentation_comparison_filename = config.get("stacking", {}).get("augmentation_comparison_filename", "Data_Augmentation_Comparison_Results.csv")  # Get comparison filename
-            multiclass_comparison_filename = augmentation_comparison_filename.replace(".csv", "_MultiClass.csv")  # Build multi-class comparison filename
-            multiclass_comparison_path = feature_analysis_dir / multiclass_comparison_filename  # Build comparison file path
-            
-            save_augmentation_comparison_results(str(multiclass_comparison_path), comparison_results, config=config)  # Save comparison results to CSV file
-            
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Multi-class data augmentation ratio-based comparison complete!{Style.RESET_ALL}"
-            )  # Print success message indicating all ratio experiments are done
+            process_multiclass_augmentation_testing(
+                reference_file, original_files_list, combined_multiclass_df, feature_names,
+                ga_selected_features, pca_n_components, rfe_selected_features, base_models,
+                hp_params_map, attack_types_list, results_original, augmentation_ratios,
+                total_steps, feature_analysis_dir, dataset_name, config=config,
+            )  # Process multi-class augmented data evaluation with ratio experiments
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
