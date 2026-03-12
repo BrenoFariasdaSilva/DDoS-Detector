@@ -1804,6 +1804,23 @@ def truncate_value(value):
         raise
 
 
+def build_result_entry_with_metrics(current_params, elapsed, metrics):
+    """
+    Build an OrderedDict result entry from a hyperparameter combination, execution time, and evaluation metrics.
+
+    :param current_params: Dictionary of hyperparameter names to values for this combination.
+    :param elapsed: Execution time in seconds for this combination, rounded to the nearest integer.
+    :param metrics: Optional dict of metric names to values; when None only params and time are included.
+    :return: OrderedDict with "params" (JSON string), "execution_time", and any available metric fields.
+    """
+
+    result_entry = OrderedDict([("params", json.dumps(current_params)), ("execution_time", int(round(float(elapsed))))])  # Build base result entry with serialized params and rounded execution time
+    if metrics is not None:  # Append formatted metric values when evaluation succeeded
+        formatted_metrics = {k: truncate_value(v) for k, v in metrics.items()}  # Truncate each metric value for consistent output formatting
+        result_entry.update(formatted_metrics)  # Merge truncated metrics into the result entry
+    return result_entry  # Return the fully built result entry to the caller
+
+
 def evaluate_combination_and_handle_failure(model, model_name, keys, combo, X_train, y_train, local_counter, total_combinations):
     """
     Evaluate a single hyperparameter combination and return a safe result tuple even when evaluation fails.
@@ -1907,10 +1924,7 @@ def run_parallel_evaluation(
                 except Exception:
                     pass  # Ignore update errors
 
-            result_entry = OrderedDict([("params", json.dumps(current_params)), ("execution_time", int(round(float(elapsed))))])  # Build result entry with formatted time
-            if metrics is not None:
-                formatted_metrics = {k: truncate_value(v) for k, v in metrics.items()}
-                result_entry.update(formatted_metrics)  # Include formatted metrics
+            result_entry = build_result_entry_with_metrics(current_params, elapsed, metrics)  # Build an OrderedDict result entry from params, execution time, and metrics
             all_results.append(result_entry)  # Append to list
 
             if metrics is not None and "f1_score" in metrics:  # Update best if improved
