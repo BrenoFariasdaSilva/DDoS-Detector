@@ -548,6 +548,8 @@ def build_headers_map(filepaths, low_memory=True):
             except Exception:  # If header-only read fails
                 df_tmp = load_dataset(fp, low_memory=low_memory)  # Load full dataset (slow fallback)
                 cols = df_tmp.columns.tolist() if df_tmp is not None else []  # Extract columns if dataset loaded
+                del df_tmp  # Release fallback DataFrame immediately to reclaim memory
+                gc.collect()  # Force garbage collection after releasing the full dataset
             headers[fp] = cols  # Store the resolved column list for this file
 
         return headers  # Return filepath->headers mapping
@@ -828,7 +830,7 @@ def coerce_numeric_columns(df):
             f"{BackgroundColors.GREEN}Extracting or coercing numeric columns from the DataFrame.{Style.RESET_ALL}"
         )  # Output the verbose message
 
-        numeric_df = df.select_dtypes(include=["number"]).copy()  # Select numeric columns from the DataFrame
+        numeric_df = df.select_dtypes(include=["number"])  # Select numeric columns from the DataFrame; select_dtypes returns a new object so an explicit copy is not needed
         if numeric_df.empty:  # If there are no numeric columns found
             obj_cols = df.select_dtypes(
                 include=["object", "string"]
@@ -1082,42 +1084,44 @@ def prepare_numeric_dataset_from_df(df, sample_size=5000, random_state=42):
     """
     Prepare numeric DataFrame and labels from an already-loaded DataFrame.
 
-    Mirrors `prepare_numeric_dataset` behaviour but operates on `df` to
-    avoid rereading the CSV from disk.
+    :param df: Pandas DataFrame to prepare numeric features from.
+    :param sample_size: Maximum number of rows to keep after optional downsampling.
+    :param random_state: Random seed for reproducible downsampling.
+    :return: Tuple of (numeric_df, labels) or (None, None) on failure.
     """
-    
-    try:
-        if df is None:
-            return None, None
 
-        cleaned = preprocess_dataframe(df, remove_zero_variance=False)  # Basic cleaning
-        if cleaned is None:
-            return None, None
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        if df is None:  # Verify that a valid DataFrame was provided
+            return None, None  # Abort when no DataFrame is available
 
-        numeric_df = coerce_numeric_columns(cleaned)  # Extract numeric features
-        if numeric_df is None:
-            return None, None
+        cleaned = preprocess_dataframe(df, remove_zero_variance=False)  # Apply basic cleaning without removing zero-variance columns
+        if cleaned is None:  # Verify preprocessing did not fail
+            return None, None  # Abort if preprocessing produced no valid output
 
-        numeric_df = fill_replace_and_drop(numeric_df)  # Clean numeric frame
-        if numeric_df is None:
-            return None, None
+        numeric_df = coerce_numeric_columns(cleaned)  # Extract or coerce numeric columns from cleaned DataFrame
+        if numeric_df is None:  # Verify coercion did not fail
+            return None, None  # Abort when no numeric columns could be obtained
 
-        if numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0:
-            return None, None
+        numeric_df = fill_replace_and_drop(numeric_df)  # Replace infinities, drop all-NaN columns and fill remaining NaNs
+        if numeric_df is None:  # Verify fill and drop did not fail
+            return None, None  # Abort when numeric frame became invalid after cleaning
 
-        label_col = detect_label_column(cleaned.columns)  # Detect label column
-        labels = cleaned[label_col] if label_col in cleaned.columns else None
+        if numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0:  # Verify numeric frame is not empty after all cleaning steps
+            return None, None  # Abort when no usable rows or columns remain
 
-        if numeric_df.shape[0] > sample_size:
+        label_col = detect_label_column(cleaned.columns)  # Detect label column from cleaned DataFrame columns
+        labels = cleaned[label_col] if label_col in cleaned.columns else None  # Extract labels when column is present
+
+        if numeric_df.shape[0] > sample_size:  # Verify whether downsampling is required
             numeric_df, labels = downsample_with_class_awareness(
                 numeric_df, labels, sample_size, random_state
-            )
+            )  # Downsample while preserving class distribution
 
-        return numeric_df, labels
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+        return numeric_df, labels  # Return numeric features and corresponding labels
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def scale_features(numeric_df):
@@ -1652,14 +1656,23 @@ def get_augmented_sample_count(original_csv_path, config=None) -> int:
 
         if candidate.exists() and candidate.is_file() and candidate.suffix.lower() == ".csv":
             try:
-                try:  # Attempt UTF-8 read first to prefer standard encoding
-                    df = pd.read_csv(candidate, encoding="utf-8")  # Read augmented CSV using UTF-8 encoding
+                total_rows = 0  # Initialize row counter for incremental chunk accumulation
+                try:  # Attempt chunked UTF-8 read to avoid loading the entire augmented CSV into memory
+                    for chunk in pd.read_csv(candidate, encoding="utf-8", chunksize=10000):  # Read fixed-size chunks to limit peak RAM usage per file
+                        total_rows += len(chunk)  # Accumulate row count from each individual chunk
+                        del chunk  # Release each chunk immediately after counting to free memory
                 except UnicodeDecodeError:  # Handle UTF-8 decode failures specifically
-                    try:  # Attempt Latin-1 decoding as first fallback for legacy CSVs
-                        df = pd.read_csv(candidate, encoding="latin1")  # Read augmented CSV using Latin-1 encoding
+                    total_rows = 0  # Reset counter before retrying with fallback encoding
+                    try:  # Attempt chunked Latin-1 read as first fallback for legacy CSVs
+                        for chunk in pd.read_csv(candidate, encoding="latin1", chunksize=10000):  # Read fixed-size chunks using Latin-1 encoding
+                            total_rows += len(chunk)  # Accumulate row count from each individual chunk
+                            del chunk  # Release each chunk immediately after counting to free memory
                     except UnicodeDecodeError:  # Handle Latin-1 decode failures specifically
-                        df = pd.read_csv(candidate, encoding="cp1252")  # Read augmented CSV using CP1252 encoding as final fallback
-                return int(len(df)) if len(df) > 0 else 0  # Return number of rows when read successfully
+                        total_rows = 0  # Reset counter before retrying with CP1252 encoding
+                        for chunk in pd.read_csv(candidate, encoding="cp1252", chunksize=10000):  # Read fixed-size chunks using CP1252 encoding as final fallback
+                            total_rows += len(chunk)  # Accumulate row count from each individual chunk
+                            del chunk  # Release each chunk immediately after counting to free memory
+                return int(total_rows) if total_rows > 0 else 0  # Return total accumulated row count when read successfully
             except Exception as e:
                 raise RuntimeError(f"Failed to read augmented CSV '{candidate}': {e}")
 
@@ -2270,17 +2283,8 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
         if not output_filename.lower().endswith(".csv"):  # Ensure the output filename ends with .csv
             output_filename = f"{output_filename}.csv"  # Append .csv extension if not present
 
-        file_dfs = {}  # filepath -> DataFrame (loaded once)
-        headers_map = {}  # filepath -> list(columns)
-        for fp in sorted_matching_files:
-            df = load_dataset(fp, low_memory)
-            if df is None:
-                print(f"{BackgroundColors.YELLOW}Warning: failed to load {fp}; skipping.{Style.RESET_ALL}")
-                continue
-            file_dfs[fp] = df
-            headers_map[fp] = list(df.columns)
-
-        common_features, headers_match_all = compute_common_features(headers_map)
+        headers_map = build_headers_map(sorted_matching_files, low_memory=low_memory)  # Build headers map using lightweight header-only reads to avoid loading all datasets into memory simultaneously
+        common_features, headers_match_all = compute_common_features(headers_map)  # Compute shared features and header uniformity flag from the headers-only map
 
         progress = tqdm(
             sorted_matching_files,
@@ -2293,7 +2297,13 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
             progress.set_description(
                 f"{BackgroundColors.GREEN}Processing file {BackgroundColors.CYAN}{idx}{BackgroundColors.GREEN}/{BackgroundColors.CYAN}{len(sorted_matching_files)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{file_basename[:30]}{BackgroundColors.GREEN}"
             )  # Update progress bar description (truncate long names)
-            info = get_dataset_file_info(filepath, df=file_dfs.get(filepath), low_memory=low_memory)  # Get dataset info (reuse in-memory DF)
+
+            df_current = load_dataset(filepath, low_memory)  # Load one dataset at a time to minimize peak RAM usage
+            if df_current is None:  # Verify that the dataset was loaded successfully
+                print(f"{BackgroundColors.YELLOW}Warning: failed to load {filepath}; skipping.{Style.RESET_ALL}")  # Warn about the skipped file
+                continue  # Skip to the next file without accumulating a None entry
+
+            info = get_dataset_file_info(filepath, df=df_current, low_memory=low_memory)  # Extract metadata using the already-loaded DataFrame to avoid a second full read
             if info:  # If info was successfully retrieved
                 relative_path = os.path.relpath(filepath, base_dir)  # Get path relative to base_dir
                 info["Dataset Name"] = relative_path.replace(
@@ -2317,12 +2327,12 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
                 tsne_out_subdir = cfg.get("paths", {}).get("data_separability_subdir", "Data_Separability")
                 tsne_file = generate_tsne_plot(
                     filepath,
-                    df=file_dfs.get(filepath),
+                    df=df_current,
                     low_memory=low_memory,
                     sample_size=2000,
                     output_dir=os.path.join(os.path.dirname(os.path.abspath(filepath)), tsne_out_subdir),
                     config=cfg,
-                )  # Generate t-SNE plot (uses in-memory DF when available)
+                )  # Generate t-SNE plot using the already-loaded DataFrame to avoid rereading from disk
                 info["t-SNE Plot"] = tsne_file if tsne_file else "None"  # Add t-SNE plot filename or "None"
 
                 report_rows.append(info)  # Add the info to the report rows
@@ -2337,6 +2347,12 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
                     preprocessing_metrics.append(metrics_row)  # Append metrics row to list for this directory
                 except Exception as _pm:  # If metrics collection fails
                     print(f"{BackgroundColors.YELLOW}Warning: failed to collect preprocessing metrics for {file_basename}: {_pm}{Style.RESET_ALL}")  # Warn but continue
+
+            try:  # Attempt to release dataset memory to minimize peak RAM consumption
+                del df_current  # Delete the current dataset reference to allow garbage collection
+            except Exception:  # Ignore exceptions during cleanup to prevent masking processing errors
+                pass  # Continue without cleanup on delete failure
+            gc.collect()  # Force garbage collection to reclaim memory released by deleting the dataset
 
         if report_rows:  # If there are report rows to write
             for i, row in enumerate(report_rows, start=1):  # For each report row
