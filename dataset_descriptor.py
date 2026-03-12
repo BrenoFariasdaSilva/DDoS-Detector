@@ -111,9 +111,8 @@ SOUND_FILE = "./.assets/Sounds/NotificationSound.wav"
 def get_default_config() -> dict:
     """
     Return default configuration used by dataset_descriptor.py.
-    
-    :param None
-    :return: A dictionary containing default configuration values for dataset_descriptor.py
+
+    :return: A dictionary containing default configuration values for dataset_descriptor.py.
     """
     
     return {
@@ -148,47 +147,47 @@ def get_default_config() -> dict:
 def deep_merge_dicts(base: dict, override: dict) -> dict:
     """
     Recursively merge override into base and return new dict.
-    
-    :param base: The base dictionary to merge into (not modified)
-    :param override: The dictionary with override values (not modified)
-    :return: A new dictionary resulting from deep merging override into base
+
+    :param base: The base dictionary to merge into (not modified).
+    :param override: The dictionary with override values (not modified).
+    :return: A new dictionary resulting from deep merging override into base.
     """
-    
-    result = dict(base)
-    for k, v in (override or {}).items():
-        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
-            result[k] = deep_merge_dicts(result[k], v)
-        else:
-            result[k] = v
-    return result
+
+    result = dict(base)  # Create a shallow copy of base to avoid mutation
+    for k, v in (override or {}).items():  # Iterate over override entries
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):  # Verify both values are nested dicts
+            result[k] = deep_merge_dicts(result[k], v)  # Recursively merge nested dicts
+        else:  # Non-dict values are overwritten directly
+            result[k] = v  # Set override value in result
+    return result  # Return the merged dictionary
 
 
 def load_config_file(path: str = "config.yaml") -> dict:
     """
     Load configuration from a YAML file if it exists, otherwise return an empty dict.
 
-    :param path: Path to the YAML configuration file (default: "config.yaml")
-    :return: Configuration dictionary loaded from the file, or empty dict if file doesn't exist or fails to load
+    :param path: Path to the YAML configuration file (default: "config.yaml").
+    :return: Configuration dictionary loaded from the file, or empty dict if file does not exist or fails to load.
     """
-    
-    if path and os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
-        except Exception:
-            return {}
-    return {}
+
+    if path and os.path.exists(path):  # Verify the path is non-empty and the file exists
+        try:  # Attempt to open and parse the YAML file
+            with open(path, "r", encoding="utf-8") as f:  # Open config file for reading
+                return yaml.safe_load(f) or {}  # Parse YAML safely and fallback to empty dict
+        except Exception:  # Ignore any parse or read errors and return empty dict
+            return {}  # Return empty dict on parse failure
+    return {}  # Return empty dict when file path is missing or file does not exist
 
 
 def parse_cli_args(argv=None) -> dict:
     """
     Parse CLI arguments and return a dictionary of config overrides.
 
-    :param argv: List of command-line arguments (default: None, which uses sys.argv)
-    :return: Dictionary of config overrides based on CLI arguments
+    :param argv: List of command-line arguments (default: None, which uses sys.argv).
+    :return: Dictionary of config overrides based on CLI arguments.
     """
-    
-    parser = argparse.ArgumentParser(add_help=False)
+
+    parser = argparse.ArgumentParser(add_help=False)  # Create argument parser without default help option
     parser.add_argument("--include_preprocessing_metrics", dest="include_preprocessing_metrics", action="store_true", default=None)
     parser.add_argument("--no-include_preprocessing_metrics", dest="include_preprocessing_metrics", action="store_false", default=None)
     parser.add_argument("--include_data_augmentation_info", dest="include_data_augmentation_info", action="store_true", default=None)
@@ -206,25 +205,25 @@ def parse_cli_args(argv=None) -> dict:
     parser.add_argument("--no-compute_feature_statistics", dest="compute_feature_statistics", action="store_false", default=None)
     parser.add_argument("--round_decimals", dest="round_decimals", type=int, default=None)
     parser.add_argument("--config", dest="config", default="config.yaml")
-    args, _ = parser.parse_known_args(argv)
-    return {k: v for k, v in vars(args).items() if v is not None}
+    args, _ = parser.parse_known_args(argv)  # Parse known args and discard unknown entries
+    return {k: v for k, v in vars(args).items() if v is not None}  # Return only non-None values as overrides
 
 
 def get_config(file_path: str = "config.yaml", cli_args: dict | None = None) -> dict:
     """
     Load and merge configuration with precedence CLI > config.yaml > defaults.
 
-    :param file_path: Path to the configuration YAML file (default: "config.yaml")
-    :param cli_args: Dictionary of CLI arguments that were parsed (optional)
-    :return: Merged configuration dictionary
+    :param file_path: Path to the configuration YAML file (default: "config.yaml").
+    :param cli_args: Dictionary of CLI arguments that were parsed (optional).
+    :return: Merged configuration dictionary.
     """
-    
-    defaults = get_default_config()
-    file_conf = load_config_file(file_path)
-    merged = deep_merge_dicts(defaults, file_conf)
 
-    if cli_args:
-        dd = merged.setdefault("dataset_descriptor", {})
+    defaults = get_default_config()  # Load hard-coded default configuration
+    file_conf = load_config_file(file_path)  # Load configuration from disk
+    merged = deep_merge_dicts(defaults, file_conf)  # Deep-merge file config over defaults
+
+    if cli_args:  # Apply CLI overrides when provided
+        dd = merged.setdefault("dataset_descriptor", {})  # Access or create dataset_descriptor section
         for key in [
             "include_preprocessing_metrics",
             "include_data_augmentation_info",
@@ -236,56 +235,55 @@ def get_config(file_path: str = "config.yaml", cli_args: dict | None = None) -> 
             "compute_class_distribution",
             "compute_feature_statistics",
             "round_decimals",
-        ]:
-            if key in cli_args and cli_args[key] is not None:
-                dd[key] = cli_args[key]
-        if "verbose" in cli_args and cli_args["verbose"] is not None:
-            merged.setdefault("execution", {})["verbose"] = cli_args["verbose"]
-    return merged
+        ]:  # Iterate over keys that may be overridden by CLI
+            if key in cli_args and cli_args[key] is not None:  # Verify the CLI arg key is present and non-None
+                dd[key] = cli_args[key]  # Apply the CLI override for this key
+        if "verbose" in cli_args and cli_args["verbose"] is not None:  # Verify verbose CLI arg is present and non-None
+            merged.setdefault("execution", {})["verbose"] = cli_args["verbose"]  # Apply verbose CLI override to execution section
+    return merged  # Return the fully merged configuration dictionary
 
 
 def init_runtime(config: dict):
     """
     Initialize runtime artifacts (logger) based on provided config.
 
-    :param config: The merged configuration dictionary
-    :param cli_args: The dictionary of CLI arguments that were parsed (optional)
-    :return: A dictionary containing runtime artifacts and settings
+    :param config: The merged configuration dictionary.
+    :return: A dictionary containing runtime artifacts and settings.
     """
 
-    validate_config_structure(config)
+    validate_config_structure(config)  # Validate required config keys before accessing them
 
-    logs_dir = config.get("paths", {}).get("logs_dir", "./Logs")
-    os.makedirs(logs_dir, exist_ok=True)
-    logger = Logger(os.path.join(logs_dir, f"{Path(__file__).stem}.log"), clean=True)
+    logs_dir = config.get("paths", {}).get("logs_dir", "./Logs")  # Resolve logs directory from config with default
+    os.makedirs(logs_dir, exist_ok=True)  # Create logs directory if it does not exist
+    logger = Logger(os.path.join(logs_dir, f"{Path(__file__).stem}.log"), clean=True)  # Initialize a fresh logger for this run
 
     runtime = {
-        "logger": logger,
-        "verbose": bool(config.get("execution", {}).get("verbose", False)),
-        "results_dir": os.path.join(".", config.get("paths", {}).get("dataset_description_subdir", "Dataset_Description")),
-        "results_filename_suffix": config.get("dataset_descriptor", {}).get("csv_output_suffix", "_description"),
-        "ignore_files": list(config.get("paths", {}).get("ignore_files", []) or []),
-        "ignore_dirs": list(config.get("execution", {}).get("ignore_dirs", []) or []),
-    }
-    return runtime
+        "logger": logger,  # Logger instance for output redirection
+        "verbose": bool(config.get("execution", {}).get("verbose", False)),  # Verbose flag from config
+        "results_dir": os.path.join(".", config.get("paths", {}).get("dataset_description_subdir", "Dataset_Description")),  # Results output directory
+        "results_filename_suffix": config.get("dataset_descriptor", {}).get("csv_output_suffix", "_description"),  # CSV output filename suffix
+        "ignore_files": list(config.get("paths", {}).get("ignore_files", []) or []),  # Files to ignore during scanning
+        "ignore_dirs": list(config.get("execution", {}).get("ignore_dirs", []) or []),  # Directories to ignore during scanning
+    }  # Assemble runtime dictionary with all required artifacts
+    return runtime  # Return the fully assembled runtime dictionary
 
 
 def log_config_sources(config: dict, cli_args: dict | None = None):
     """
     Log configuration values with their source (CLI/config/default).
 
-    :param config: The merged configuration dictionary
-    :param cli_args: The dictionary of CLI arguments that were
-    :return: None
+    :param config: The merged configuration dictionary.
+    :param cli_args: The dictionary of CLI arguments that were parsed (optional).
+    :return: None.
     """
-    
-    dd = config.get("dataset_descriptor", {})
-    for k, v in dd.items():
-        src = "config"
-        if cli_args and k in cli_args and cli_args[k] is not None:
-            src = "CLI"
-        elif k not in (load_config_file().get("dataset_descriptor") or {}):
-            src = "default"
+
+    dd = config.get("dataset_descriptor", {})  # Extract dataset_descriptor section from config for logging
+    for k, v in dd.items():  # Iterate over each configuration key-value pair
+        src = "config"  # Assume configuration file as the default source
+        if cli_args and k in cli_args and cli_args[k] is not None:  # Verify if key was overridden via CLI
+            src = "CLI"  # Mark source as CLI when overridden
+        elif k not in (load_config_file().get("dataset_descriptor") or {}):  # Verify if key is absent from config file
+            src = "default"  # Mark source as default when not present in config file
         print(f"{BackgroundColors.GREEN}[CONFIG] {BackgroundColors.CYAN}{k}{BackgroundColors.GREEN} = {BackgroundColors.CYAN}{v}{BackgroundColors.GREEN} (source: {BackgroundColors.CYAN}{src}{BackgroundColors.GREEN})")  # Log configuration key and value with colored output
 
 
@@ -293,60 +291,60 @@ def validate_config_structure(config: dict):
     """
     Ensure required keys exist and have correct types for dataset_descriptor.
 
-    :param config: The configuration dictionary to validate
-    :return: None, raises ValueError if validation fails
+    :param config: The configuration dictionary to validate.
+    :return: None, raises ValueError if validation fails.
     """
-    
-    if not isinstance(config, dict):
-        raise ValueError("config must be a dictionary")
-    dd = config.get("dataset_descriptor")
-    if not isinstance(dd, dict):
-        raise ValueError("config.dataset_descriptor must be a mapping")
+
+    if not isinstance(config, dict):  # Verify config is a dictionary before accessing keys
+        raise ValueError("config must be a dictionary")  # Raise when config is not a dict
+    dd = config.get("dataset_descriptor")  # Extract the dataset_descriptor section
+    if not isinstance(dd, dict):  # Verify dataset_descriptor section is a mapping
+        raise ValueError("config.dataset_descriptor must be a mapping")  # Raise when section is missing or invalid
 
     expected = {
-        "include_preprocessing_metrics": bool,
-        "include_data_augmentation_info": bool,
-        "generate_table_image": bool,
-        "table_image_format": str,
-        "csv_output_suffix": str,
-        "class_column_name": str,
-        "dropna_before_analysis": bool,
-        "compute_class_distribution": bool,
-        "compute_feature_statistics": bool,
-        "round_decimals": int,
-    }
-    
-    for key, typ in expected.items():
-        if key not in dd:
-            raise ValueError(f"Missing required config key: dataset_descriptor.{key}")
-        if not isinstance(dd[key], typ):
-            raise ValueError(f"Invalid type for dataset_descriptor.{key}: expected {typ.__name__}")
+        "include_preprocessing_metrics": bool,  # Boolean flag for preprocessing metrics
+        "include_data_augmentation_info": bool,  # Boolean flag for augmentation info
+        "generate_table_image": bool,  # Boolean flag for table image generation
+        "table_image_format": str,  # String format for table images
+        "csv_output_suffix": str,  # String suffix for CSV output files
+        "class_column_name": str,  # String name of the class column
+        "dropna_before_analysis": bool,  # Boolean flag for NaN dropping
+        "compute_class_distribution": bool,  # Boolean flag for class distribution computation
+        "compute_feature_statistics": bool,  # Boolean flag for feature statistics computation
+        "round_decimals": int,  # Integer number of decimal places for rounding
+    }  # Expected key-to-type mapping for validation
 
-    if dd["round_decimals"] < 0:
-        raise ValueError("dataset_descriptor.round_decimals must be >= 0")
+    for key, typ in expected.items():  # Iterate over required keys and their expected types
+        if key not in dd:  # Verify required key is present in the section
+            raise ValueError(f"Missing required config key: dataset_descriptor.{key}")  # Raise when key is absent
+        if not isinstance(dd[key], typ):  # Verify the value has the correct type
+            raise ValueError(f"Invalid type for dataset_descriptor.{key}: expected {typ.__name__}")  # Raise on type mismatch
+
+    if dd["round_decimals"] < 0:  # Verify round_decimals is non-negative
+        raise ValueError("dataset_descriptor.round_decimals must be >= 0")  # Raise when value is negative
 
 # Functions Definitions:
 
 
 def verbose_output(true_string="", false_string=""):
     """
-    Outputs a message if the VERBOSE constant is set to True.
+    Output a message based on whether verbose mode is enabled via environment variable.
 
-    :param true_string: The string to be outputted if the VERBOSE constant is set to True.
-    :param false_string: The string to be outputted if the VERBOSE constant is set to False.
-    :return: None
+    :param true_string: The string to be outputted if verbose mode is enabled.
+    :param false_string: The string to be outputted if verbose mode is disabled.
+    :return: None.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        verbose_flag = os.environ.get("DD_DESCRIPTOR_VERBOSE", "False").lower() in ("1", "true", "yes")
-        if verbose_flag and true_string != "":
-            print(true_string)
-        elif false_string != "":
-            print(false_string)
+        verbose_flag = os.environ.get("DD_DESCRIPTOR_VERBOSE", "False").lower() in ("1", "true", "yes")  # Resolve verbose flag from environment variable
+        if verbose_flag and true_string != "":  # Verify verbose is enabled and true_string is non-empty
+            print(true_string)  # Output the true string when verbose mode is active
+        elif false_string != "":  # Verify false_string is non-empty for non-verbose output
+            print(false_string)  # Output the false string when verbose mode is inactive
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def verify_dot_env_file():
@@ -387,10 +385,10 @@ def setup_telegram_bot():
 
         try:  # Try to initialize the Telegram bot
             TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
-            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
-            telegram_module.RUNNING_CODE = os.path.basename(__file__)
+            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"  # Set device info for Telegram notifications
+            telegram_module.RUNNING_CODE = os.path.basename(__file__)  # Set the running code name for Telegram context
         except Exception as e:
-            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")  # Report initialization failure to terminal
             TELEGRAM_BOT = None  # Set to None if initialization fails
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -411,37 +409,37 @@ def verify_filepath_exists(filepath):
             f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
         )  # Output the verbose message
 
-        if os.path.exists(filepath):  # Check if the file or folder exists at the specified path
+        if os.path.exists(filepath):  # Verify if the file or folder exists at the specified path
             return True  # Return True if it exists
 
         candidate = str(filepath).strip()  # Normalize and sanitize common mis-formatting produced by config files
 
         if (candidate.startswith("'") and candidate.endswith("'")) or (
             candidate.startswith('"') and candidate.endswith('"')
-        ):  # Handle common case where paths in config files are accidentally wrapped in quotes, which can cause os.path.exists to fail. This trims matching leading/trailing quotes if they exist.
+        ):  # Verify if the path is wrapped in quotes from a config file
             candidate = candidate[1:-1].strip()  # Remove leading/trailing quotes and whitespace
 
-        candidate_no_trail = candidate.rstrip("/\\")  # Remove trailing slashes or backslashes which can cause os.path.exists to fail on some platforms or configurations. This handles cases where a directory path is provided with an extra slash at the end.
-        if candidate_no_trail and os.path.exists(candidate_no_trail):  # Check existence of candidate without trailing slashes
+        candidate_no_trail = candidate.rstrip("/\\")  # Remove trailing slashes or backslashes
+        if candidate_no_trail and os.path.exists(candidate_no_trail):  # Verify existence of candidate without trailing slashes
             return True  # Found candidate after removing trailing slash/backslash
 
-        repo_dir = os.path.dirname(os.path.abspath(__file__))  # If candidate looks like an absolute path but does not exist, try resolving it relative to the repository/script directory or the current working directory
-        cwd = os.getcwd()  # Current working directory to attempt alternate resolution
+        repo_dir = os.path.dirname(os.path.abspath(__file__))  # Resolve repository directory for fallback path resolution
+        cwd = os.getcwd()  # Capture current working directory to attempt alternate resolution
 
-        alt = candidate.lstrip("/") if candidate.startswith("/") else candidate  # If candidate starts with a leading slash, remove it and try repo-relative and cwd-relative
+        alt = candidate.lstrip("/") if candidate.startswith("/") else candidate  # Remove leading slash from candidate for relative path construction
 
         repo_candidate = os.path.join(repo_dir, alt)  # Build repo-relative candidate path
         cwd_candidate = os.path.join(cwd, alt)  # Build cwd-relative candidate path
 
-        if os.path.exists(repo_candidate):  # Check if repo-relative candidate exists
+        if os.path.exists(repo_candidate):  # Verify if repo-relative candidate exists
             return True  # Found repo-relative path
 
-        if os.path.exists(cwd_candidate):  # Check if cwd-relative candidate exists
+        if os.path.exists(cwd_candidate):  # Verify if cwd-relative candidate exists
             return True  # Found cwd-relative path
 
-        try:  # As a last resort, try making an absolute path from candidate (handles './path')
-            abs_candidate = os.path.abspath(candidate)  # Build absolute path
-            if os.path.exists(abs_candidate):  # Check existence of absolute candidate
+        try:  # Attempt absolute path resolution as last resort
+            abs_candidate = os.path.abspath(candidate)  # Build absolute path from candidate
+            if os.path.exists(abs_candidate):  # Verify existence of absolute candidate
                 return True  # Found absolute candidate
         except Exception:  # Ignore errors when resolving absolute candidate
             pass  # Swallow resolution exceptions and continue
@@ -461,14 +459,15 @@ def collect_matching_files(
     config: dict | None = None,
 ):
     """
-    Recursively collects all files in the specified directory and subdirectories
+    Recursively collect all files in the specified directory and subdirectories
     that match the given file format and are not in the ignore list.
 
-    :param input_dir: Directory to search
-    :param file_format: File format to include (default: .csv)
-    :param ignore_files: List of filenames to ignore
-    :param ignore_dirs: List of directory names to ignore
-    :return: Sorted list of matching file paths
+    :param input_dir: Directory to search.
+    :param file_format: File format to include (default: .csv).
+    :param ignore_files: List of filenames to ignore.
+    :param ignore_dirs: List of directory names to ignore.
+    :param config: Optional configuration dictionary for ignore list resolution.
+    :return: Sorted list of matching file paths.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
@@ -1502,11 +1501,11 @@ def save_tsne_3d_plot(X_emb, labels, output_path, title):
         ax.set_xlabel(sanitize_plot_text("t-SNE 1"))  # X-axis label sanitized
         ax.set_ylabel(sanitize_plot_text("t-SNE 2"))  # Y-axis label sanitized
         cast(Any, ax).set_zlabel(sanitize_plot_text("t-SNE 3"))  # Z-axis label sanitized (cast to Any for typing)
-        plt.tight_layout()  # Adjust layout
-        try:
-            fig.savefig(output_path, dpi=300)  # Save figure to disk
-        finally:
-            plt.close(fig)
+        plt.tight_layout()  # Adjust layout to fit everything within the figure area
+        try:  # Attempt to save the figure and guarantee the figure is closed
+            fig.savefig(output_path, dpi=300)  # Save 3D t-SNE figure to disk at 300 DPI
+        finally:  # Ensure figure is always closed to free memory
+            plt.close(fig)  # Close the figure to free memory
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -1562,7 +1561,7 @@ def resolve_tsne_output_directory(filepath, output_dir, config):
     :return: Resolved absolute output directory path that is guaranteed to exist on disk.
     """
 
-    if output_dir is None:  # Use config-based default when no explicit directory was provided by the caller
+    if output_dir is None:  # Verify when no explicit directory was provided by the caller
         cfg = config or get_default_config()  # Load the default config when no external config was passed
         tsne_subdir = cfg.get("paths", {}).get("data_separability_subdir", "Data_Separability")  # Read the configured t-SNE subdirectory name with fallback
         output_dir = os.path.join(os.path.dirname(os.path.abspath(filepath)), tsne_subdir)  # Build the output path relative to the dataset's directory
@@ -1609,14 +1608,14 @@ def generate_tsne_plot(
         )  # Output start message for t-SNE generation
 
         try:  # Main try-catch block for overall failure handling
-            if df is not None:
+            if df is not None:  # Verify whether a pre-loaded DataFrame was provided by the caller
                 numeric_df, labels = prepare_numeric_dataset_from_df(
                     df, sample_size=sample_size, random_state=random_state
-                )
-            else:
+                )  # Prepare numeric DataFrame from the pre-loaded dataset
+            else:  # No pre-loaded DataFrame, load from file path
                 numeric_df, labels = prepare_numeric_dataset(
                     filepath, low_memory, sample_size, random_state
-                )  # Prepare numeric dataset
+                )  # Prepare numeric dataset from disk
             if numeric_df is None:  # Abort if preparation failed
                 return None, None  # Indicate failure
 
@@ -1650,45 +1649,38 @@ def generate_tsne_plot(
 
 def get_augmented_sample_count(original_csv_path, config=None) -> int:
     """
-    Determine the total number of augmented samples produced for a given original
-    CSV by inspecting the WGANGP output directory for that dataset.
+    Determine the total number of augmented samples produced for a given original CSV.
 
-    Detection logic:
-    - Use `config` if provided; otherwise try to load `config.yaml` next to this file.
-    - The augmented file is expected under: <original_parent>/<data_augmentation_dir>/<data_augmentation_sample_dir>/
-        with filename: <stem>{results_suffix}{suffix} where `results_suffix` defaults
-        to `_data_augmented` (per wgangp defaults).
-    - If the exact-stem file exists and is a CSV, read and return its row count.
-    - If not found, return 0 (no augmentation for this dataset).
-
-    Raises RuntimeError if the augmented CSV exists but cannot be read (corrupted).
+    :param original_csv_path: Path to the original CSV dataset file.
+    :param config: Optional configuration dictionary for resolving augmentation directory paths.
+    :return: Total number of augmented samples found, or 0 when no augmentation is present.
     """
     
-    try:
-        p = Path(original_csv_path)
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        p = Path(original_csv_path)  # Convert original CSV path to a Path object
 
-        cfg = {}
-        if config and isinstance(config, dict):
-            cfg = config
-        else:
-            cfg_path = Path(__file__).parent / "config.yaml"
-            if cfg_path.exists():
-                try:
-                    with open(cfg_path, "r", encoding="utf-8") as _f:
-                        cfg = yaml.safe_load(_f) or {}
-                except Exception:
-                    cfg = {}
+        cfg = {}  # Initialize empty config dict as base
+        if config and isinstance(config, dict):  # Verify caller-provided config is a valid dict
+            cfg = config  # Use the caller-provided config
+        else:  # Load config from disk when caller did not provide one
+            cfg_path = Path(__file__).parent / "config.yaml"  # Build path to config.yaml next to this file
+            if cfg_path.exists():  # Verify config file exists before attempting read
+                try:  # Attempt to load and parse the config file
+                    with open(cfg_path, "r", encoding="utf-8") as _f:  # Open config file for reading
+                        cfg = yaml.safe_load(_f) or {}  # Parse YAML safely with empty dict fallback
+                except Exception:  # Ignore errors when loading config to preserve fallback behavior
+                    cfg = {}  # Reset config to empty dict on read failure
 
-        data_aug_dir = cfg.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # GET AUGMENTATION BASE DIRECTORY FROM CONFIG
-        data_aug_sample_dir = cfg.get("paths", {}).get("data_augmentation_sample_dir", "Samples")  # GET AUGMENTATION SAMPLES SUBDIRECTORY FROM CONFIG
-        results_suffix = cfg.get("execution", {}).get("results_suffix", "_data_augmented")  # GET RESULTS SUFFIX FROM CONFIG
+        data_aug_dir = cfg.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Resolve augmentation base directory from config
+        data_aug_sample_dir = cfg.get("paths", {}).get("data_augmentation_sample_dir", "Samples")  # Resolve augmentation samples subdirectory from config
+        results_suffix = cfg.get("execution", {}).get("results_suffix", "_data_augmented")  # Resolve results suffix from config
 
-        aug_dir = p.parent / data_aug_dir / data_aug_sample_dir  # BUILD FULL AUGMENTATION DIRECTORY PATH USING BOTH CONFIG VARIABLES
+        aug_dir = p.parent / data_aug_dir / data_aug_sample_dir  # Build full augmentation directory path using both config variables
 
-        candidate = aug_dir / f"{p.stem}{results_suffix}{p.suffix}"  # BUILD CANDIDATE AUGMENTED CSV PATH USING FULL DIRECTORY AND STEM
+        candidate = aug_dir / f"{p.stem}{results_suffix}{p.suffix}"  # Build candidate augmented CSV path using full directory and stem
 
-        if candidate.exists() and candidate.is_file() and candidate.suffix.lower() == ".csv":
-            try:
+        if candidate.exists() and candidate.is_file() and candidate.suffix.lower() == ".csv":  # Verify augmented CSV exists, is a file, and has .csv extension
+            try:  # Attempt chunked reading to avoid loading the entire augmented CSV into memory
                 total_rows = 0  # Initialize row counter for incremental chunk accumulation
                 try:  # Attempt chunked UTF-8 read to avoid loading the entire augmented CSV into memory
                     for chunk in pd.read_csv(candidate, encoding="utf-8", chunksize=10000):  # Read fixed-size chunks to limit peak RAM usage per file
@@ -1706,21 +1698,22 @@ def get_augmented_sample_count(original_csv_path, config=None) -> int:
                             total_rows += len(chunk)  # Accumulate row count from each individual chunk
                             del chunk  # Release each chunk immediately after counting to free memory
                 return int(total_rows) if total_rows > 0 else 0  # Return total accumulated row count when read successfully
-            except Exception as e:
-                raise RuntimeError(f"Failed to read augmented CSV '{candidate}': {e}")
+            except Exception as e:  # Raise RuntimeError when augmented CSV cannot be read
+                raise RuntimeError(f"Failed to read augmented CSV '{candidate}': {e}")  # Propagate as RuntimeError with context
 
-        return 0
-    except Exception:
-        raise
+        return 0  # Return 0 when no augmented CSV was found for this dataset
+    except Exception:  # Re-raise all exceptions to preserve original failure semantics
+        raise  # Re-raise to preserve original failure semantics
 
 
 def get_dataset_file_info(filepath, df=None, low_memory=True):
     """
-    Extracts dataset information from a CSV file and returns it as a dictionary.
+    Extract dataset information from a CSV file and return it as a dictionary.
 
-    :param filepath: Path to the CSV file
-    :param low_memory: Whether to use low memory mode when loading the CSV (default: True)
-    :return: Dictionary containing dataset information
+    :param filepath: Path to the CSV file.
+    :param df: Optional pre-loaded pandas DataFrame to avoid redundant disk reads.
+    :param low_memory: Whether to use low memory mode when loading the CSV (default: True).
+    :return: Dictionary containing dataset information.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
@@ -1774,11 +1767,11 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
             "Class Distribution": class_dist_str,
         }
 
-        try:
-            aug_count = get_augmented_sample_count(filepath, None)
-        except Exception:
-            raise
-        result["data_augmentation_samples"] = int(aug_count)
+        try:  # Attempt to retrieve augmented sample count for this dataset
+            aug_count = get_augmented_sample_count(filepath, None)  # Get augmented sample count from WGANGP output directory
+        except Exception:  # Re-raise on failure to preserve original semantics
+            raise  # Re-raise to preserve original failure semantics
+        result["data_augmentation_samples"] = int(aug_count)  # Store integer augmented sample count in result dict
 
         verbose_output(f"{BackgroundColors.GREEN}Finished processing dataset: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Print message indicating completion of processing for dataset
         send_telegram_message(TELEGRAM_BOT, [f"Finished processing dataset: {os.path.basename(filepath)}"])  # Send Telegram notification indicating completion of processing for dataset
@@ -1822,12 +1815,13 @@ def get_file_common_and_extras(headers_map, filepath, common_features):
 
 def write_report(report_rows, base_dir, output_filename, config: dict | None = None):
     """
-    Writes the report rows to a CSV file.
+    Write the report rows to a CSV file.
 
-    :param report_rows: List of dictionaries containing report data
-    :param base_dir: Base directory for saving the report
-    :param output_filename: Name of the output CSV file
-    :return: None
+    :param report_rows: List of dictionaries containing report data.
+    :param base_dir: Base directory for saving the report.
+    :param output_filename: Name of the output CSV file.
+    :param config: Optional configuration dictionary for resolving output subdirectory.
+    :return: None.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
@@ -1843,7 +1837,7 @@ def write_report(report_rows, base_dir, output_filename, config: dict | None = N
         os.makedirs(results_dir, exist_ok=True)
         report_csv_path = os.path.join(results_dir, output_filename)
         generate_csv_and_image(report_df, report_csv_path, config=cfg)
-        pass  # No-op here; preprocessing summary handling is performed by the caller to avoid globals
+        pass  # No-op here; preprocessing summary is handled by the caller
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -1932,10 +1926,11 @@ def save_preprocessing_summary_csv(df, base_dir, filename="preprocessing_summary
     """
     Save the preprocessing summary DataFrame to the results directory for the given base_dir.
 
-    :param df: DataFrame produced by `build_preprocessing_summary_dataframe`
-    :param base_dir: Base directory where dataset results are stored
-    :param filename: Output CSV filename (default: preprocessing_summary.csv)
-    :return: Absolute path to saved CSV file
+    :param df: DataFrame produced by `build_preprocessing_summary_dataframe`.
+    :param base_dir: Base directory where dataset results are stored.
+    :param filename: Output CSV filename (default: preprocessing_summary.csv).
+    :param config: Optional configuration dictionary for resolving the output subdirectory.
+    :return: Absolute path to the saved CSV file.
     """
 
     try:  # Wrap function body for robust error reporting per module conventions
@@ -2006,16 +2001,16 @@ def print_preprocessing_summary_table(df):
 
 def stripe(row):
     """
-    Function to apply zebra striping to DataFrame rows for styling.
-    
-    :param row: pandas Series representing a DataFrame row
-    :return: List of CSS styles for each cell in the row to achieve zebra striping
+    Apply zebra striping to a DataFrame row for styling.
+
+    :param row: pandas Series representing a DataFrame row.
+    :return: List of CSS styles for each cell in the row to achieve zebra striping.
     """
-    
+
     return [
         "background-color: #ffffff" if row.name % 2 == 0 else "background-color: #f2f2f2"
         for _ in row
-    ]  # Return alternating colors per column in the row
+    ]  # Return alternating background colors per column based on row index parity
     
             
 def apply_zebra_style(df):
@@ -2286,9 +2281,10 @@ def generate_table_image_from_dataframe(df, output_path, config: dict | None = N
     """
     Generate a zebra-striped PNG table image from a DataFrame and save to output_path.
 
-    :param df: pandas.DataFrame to render
-    :param output_path: Path for output PNG image
-    :return: None
+    :param df: pandas.DataFrame to render.
+    :param output_path: Path for output PNG image.
+    :param config: Optional configuration dictionary (reserved for future use).
+    :return: None.
     """
 
     try:  # Wrap to preserve module's error handling conventions
@@ -2302,22 +2298,22 @@ def generate_csv_and_image(df, csv_path, config: dict | None = None):
     """
     Save a DataFrame to CSV and generate a corresponding PNG table image next to it.
 
-    :param df: pandas.DataFrame to save and render
-    :param csv_path: Full path for CSV output
-    :return: Tuple (csv_path, image_path)
+    :param df: pandas.DataFrame to save and render.
+    :param csv_path: Full path for CSV output.
+    :param config: Optional configuration dictionary for resolving image format.
+    :return: Tuple (csv_path, image_path).
     """
 
-    try:  # Wrap whole function for consistent error handling
-        # Validate inputs
-        if not isinstance(csv_path, str) or not csv_path:
-            raise ValueError("csv_path must be a non-empty string")
+    try:  # Wrap to preserve module's error handling conventions
+        if not isinstance(csv_path, str) or not csv_path:  # Verify csv_path is a non-empty string
+            raise ValueError("csv_path must be a non-empty string")  # Raise when csv_path is missing or invalid
         df.to_csv(csv_path, index=False)  # Persist DataFrame to CSV without index
-        img_ext = (config or {}).get("dataset_descriptor", {}).get("table_image_format", "png")
+        img_ext = (config or {}).get("dataset_descriptor", {}).get("table_image_format", "png")  # Resolve table image format from config with png fallback
         image_path = os.path.splitext(csv_path)[0] + f".{img_ext}"  # Build image path using configured format
         generate_table_image_from_dataframe(df, image_path, config=config)  # Generate image from DataFrame
         return csv_path, image_path  # Return both paths for caller use
     except Exception:
-        raise
+        raise  # Re-raise to preserve original failure semantics
 
 
 def finalize_and_write_report(report_rows, preprocessing_metrics, base_dir, output_filename, config):
@@ -2471,14 +2467,15 @@ def append_preprocessing_metrics_safe(filepath, info, preprocessing_metrics, fil
 
 def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename: str | None = None, config: dict | None = None):
     """
-    Generates a CSV report for the specified input path.
+    Generate a CSV report for the specified input path.
     The Dataset Name column will include subdirectories if present.
 
-    :param input_path: Directory or file path containing the dataset
-    :param file_extension: File extension to filter (default: .csv)
-    :param low_memory: Whether to use low memory mode when loading CSVs (default: True)
-    :param output_filename: Name of the CSV file to save the report
-    :return: True if the report was generated successfully, False otherwise
+    :param input_path: Directory or file path containing the dataset.
+    :param file_extension: File extension to filter (default: .csv).
+    :param low_memory: Whether to use low memory mode when loading CSVs (default: True).
+    :param output_filename: Name of the CSV file to save the report.
+    :param config: Optional configuration dictionary for resolving paths and settings.
+    :return: True if the report was generated successfully, False otherwise.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
@@ -2541,9 +2538,10 @@ def collect_group_files(paths, file_extension=".csv", config: dict | None = None
     """
     Collect all matching files for a group of paths.
 
-    :param paths: List of file or directory paths to search
-    :param file_extension: File extension to filter (default: ".csv")
-    :return: Sorted list of unique file paths
+    :param paths: List of file or directory paths to search.
+    :param file_extension: File extension to filter (default: ".csv").
+    :param config: Optional configuration dictionary passed to collect_matching_files.
+    :return: Sorted list of unique file paths.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
@@ -2699,11 +2697,12 @@ def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memo
     dataset groups and writes a CSV report named `Cross_{RESULTS_FILENAME}` by
     default into the `RESULTS_DIR`.
 
-    :param datasets_dict: dict mapping dataset group name -> list of paths
-    :param file_extension: extension to search for (default: .csv)
-    :param low_memory: passed to CSV loader when building headers
-    :param output_filename: optional filename to write; defaults to Cross_{RESULTS_FILENAME}
-    :return: True on success, False otherwise
+    :param datasets_dict: Dict mapping dataset group name -> list of paths.
+    :param file_extension: Extension to search for (default: .csv).
+    :param low_memory: Passed to CSV loader when building headers.
+    :param output_filename: Optional filename to write; defaults to Cross_{RESULTS_FILENAME}.
+    :param config: Optional configuration dictionary for resolving output paths and settings.
+    :return: True on success, False otherwise.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
@@ -2780,14 +2779,11 @@ def to_seconds(obj):
 
 def calculate_execution_time(start_time, finish_time=None):
     """
-    Calculates the execution time and returns a human-readable string.
+    Calculate the execution time and return a human-readable string.
 
-    Accepts either:
-    - Two datetimes/timedeltas: `calculate_execution_time(start, finish)`
-    - A single timedelta or numeric seconds: `calculate_execution_time(delta)`
-    - Two numeric timestamps (seconds): `calculate_execution_time(start_s, finish_s)`
-
-    Returns a string like "1h 2m 3s".
+    :param start_time: The start time or duration value (datetime, timedelta, or numeric seconds).
+    :param finish_time: Optional finish time; if None, start_time is treated as the total duration.
+    :return: Human-readable execution time string formatted as days, hours, minutes, and seconds.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
@@ -2838,10 +2834,9 @@ def calculate_execution_time(start_time, finish_time=None):
 
 def play_sound():
     """
-    Plays a sound when the program finishes and skips if the operating system is Windows.
+    Play a sound when the program finishes and skip if the operating system is Windows.
 
-    :param: None
-    :return: None
+    :return: None.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
@@ -2880,70 +2875,62 @@ def main():
     """
     Main function.
 
-    :param: None
-    :return: None
+    :return: None.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        # Parse CLI args and load configuration (no CLI parsing on import)
-        cli_args = parse_cli_args()
-        config = get_config(file_path=cli_args.get("config", "config.yaml"), cli_args=cli_args)
+        cli_args = parse_cli_args()  # Parse CLI arguments and load configuration
+        config = get_config(file_path=cli_args.get("config", "config.yaml"), cli_args=cli_args)  # Load and merge config with CLI overrides
 
-        # Initialize runtime (logger, flags) from config
-        runtime = init_runtime(config)
+        runtime = init_runtime(config)  # Initialize runtime artifacts including the logger
 
-        # Redirect stdout/stderr to logger for main runtime only
-        sys_stdout_old = sys.stdout
-        sys_stderr_old = sys.stderr
-        sys.stdout = runtime["logger"]
-        sys.stderr = runtime["logger"]
+        sys_stdout_old = sys.stdout  # Save original stdout for later restoration
+        sys_stderr_old = sys.stderr  # Save original stderr for later restoration
+        sys.stdout = runtime["logger"]  # Redirect stdout to logger for this runtime session
+        sys.stderr = runtime["logger"]  # Redirect stderr to logger for this runtime session
 
-        # Export verbosity flag for use in other functions and modules without passing runtime
-        os.environ["DD_DESCRIPTOR_VERBOSE"] = str(runtime.get("verbose", False))
+        os.environ["DD_DESCRIPTOR_VERBOSE"] = str(runtime.get("verbose", False))  # Export verbosity flag via environment for use in other functions
 
-        print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Dataset Descriptor{BackgroundColors.GREEN}!{Style.RESET_ALL}")
-        start_time = datetime.datetime.now()
+        print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Dataset Descriptor{BackgroundColors.GREEN}!{Style.RESET_ALL}")  # Print welcome message
+        start_time = datetime.datetime.now()  # Capture program start time
 
-        # Log resolved configuration for traceability
-        log_config_sources(config, cli_args)
+        log_config_sources(config, cli_args)  # Log resolved configuration values with their source
 
-        # Setup optional Telegram bot and send start message
-        setup_telegram_bot()
-        send_telegram_message(TELEGRAM_BOT, [f"Starting Dataset Descriptor at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])
+        setup_telegram_bot()  # Initialize Telegram bot for progress notifications
+        send_telegram_message(TELEGRAM_BOT, [f"Starting Dataset Descriptor at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Send start notification via Telegram
 
-        datasets = config.get("dataset_descriptor", {}).get("datasets", {}) or config.get("datasets") or {}
-        results_suffix = config.get("dataset_descriptor", {}).get("csv_output_suffix", "_description")
+        datasets = config.get("dataset_descriptor", {}).get("datasets", {}) or config.get("datasets") or {}  # Resolve datasets mapping from config
+        results_suffix = config.get("dataset_descriptor", {}).get("csv_output_suffix", "_description")  # Resolve output CSV suffix from config
 
-        for dataset_name, paths in datasets.items():
-            verbose_output(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")
-            safe_dataset_name = str(dataset_name).replace(" ", "_").replace("/", "_")
+        for dataset_name, paths in datasets.items():  # Iterate over configured dataset entries
+            verbose_output(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")  # Log dataset processing start
+            safe_dataset_name = str(dataset_name).replace(" ", "_").replace("/", "_")  # Sanitize dataset name for safe filesystem use
 
-            for dir_path in paths:
-                print(f"{BackgroundColors.GREEN}Location: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")
-                if not verify_filepath_exists(dir_path):
-                    print(f"{BackgroundColors.RED}The specified input path does not exist: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")
-                    continue
+            for dir_path in paths:  # Iterate over all configured paths for this dataset
+                print(f"{BackgroundColors.GREEN}Location: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")  # Print current directory path
+                if not verify_filepath_exists(dir_path):  # Verify the configured path exists before processing
+                    print(f"{BackgroundColors.RED}The specified input path does not exist: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")  # Report missing path to terminal
+                    continue  # Skip non-existing paths without aborting the full run
 
-                success = generate_dataset_report(dir_path, file_extension=".csv", low_memory=True, output_filename=None, config=config)
-                if not success:
-                    print(f"{BackgroundColors.RED}Failed to generate dataset report for: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")
-                else:
-                    print(f"{BackgroundColors.GREEN}Report saved for {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} -> {BackgroundColors.CYAN}{results_suffix}{Style.RESET_ALL}")
+                success = generate_dataset_report(dir_path, file_extension=".csv", low_memory=True, output_filename=None, config=config)  # Generate dataset report for this path
+                if not success:  # Verify whether report generation succeeded
+                    print(f"{BackgroundColors.RED}Failed to generate dataset report for: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")  # Report failure for this path
+                else:  # Report generation succeeded
+                    print(f"{BackgroundColors.GREEN}Report saved for {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} -> {BackgroundColors.CYAN}{results_suffix}{Style.RESET_ALL}")  # Confirm successful report save
 
-        # Cross-dataset validation when configured
-        if config.get("execution", {}).get("cross_dataset_validate", True) and len(datasets) > 1:
-            try:
-                send_telegram_message(TELEGRAM_BOT, "Starting cross-dataset validation...")
-                success = generate_cross_dataset_report(datasets, file_extension=".csv", config=config)
-                if success:
-                    print(f"{BackgroundColors.GREEN}Cross-dataset report saved -> {BackgroundColors.CYAN}Cross_{results_suffix.lstrip('_')}{Style.RESET_ALL}")
-                else:
-                    print(f"{BackgroundColors.YELLOW}No cross-dataset comparisons generated (no files found).{Style.RESET_ALL}")
-            except Exception as e:
-                print(f"{BackgroundColors.RED}Cross-dataset validation failed: {e}{Style.RESET_ALL}")
+        if config.get("execution", {}).get("cross_dataset_validate", True) and len(datasets) > 1:  # Verify cross-dataset validation is enabled and multiple datasets are configured
+            try:  # Attempt cross-dataset validation with graceful failure handling
+                send_telegram_message(TELEGRAM_BOT, "Starting cross-dataset validation...")  # Notify cross-dataset validation start via Telegram
+                success = generate_cross_dataset_report(datasets, file_extension=".csv", config=config)  # Generate pairwise cross-dataset feature compatibility report
+                if success:  # Verify whether cross-dataset report was saved
+                    print(f"{BackgroundColors.GREEN}Cross-dataset report saved -> {BackgroundColors.CYAN}Cross_{results_suffix.lstrip('_')}{Style.RESET_ALL}")  # Confirm successful cross-dataset report save
+                else:  # Cross-dataset report generation produced no output
+                    print(f"{BackgroundColors.YELLOW}No cross-dataset comparisons generated (no files found).{Style.RESET_ALL}")  # Warn when no output was produced
+            except Exception as e:  # Catch cross-dataset validation errors to avoid aborting the main run
+                print(f"{BackgroundColors.RED}Cross-dataset validation failed: {e}{Style.RESET_ALL}")  # Report cross-dataset validation failure without re-raising
 
-        sys.stdout = sys_stdout_old
-        sys.stderr = sys_stderr_old
+        sys.stdout = sys_stdout_old  # Restore original stdout after logging session
+        sys.stderr = sys_stderr_old  # Restore original stderr after logging session
 
         finish_time = datetime.datetime.now()  # Get the finish time of the program
         print(
@@ -2958,11 +2945,11 @@ def main():
             f"Dataset Descriptor finished. Execution time: {calculate_execution_time(start_time, finish_time)}",
         )  # Send Telegram message about program completion
 
-        try:
-            if config.get("execution", {}).get("play_sound", True):
-                atexit.register(play_sound)
-        except Exception:
-            pass
+        try:  # Attempt to register sound notification at exit when configured
+            if config.get("execution", {}).get("play_sound", True):  # Verify play_sound is enabled in config
+                atexit.register(play_sound)  # Register play_sound to execute when the program exits
+        except Exception:  # Ignore any errors during atexit registration to avoid crashing at exit
+            pass  # Continue silently when atexit registration fails
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
