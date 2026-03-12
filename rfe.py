@@ -1899,6 +1899,64 @@ def resolve_cv_n_splits(y_train_array: np.ndarray, n_folds: int) -> int:
         raise
 
 
+def run_cv_fold_loop(X_train_scaled: np.ndarray, y_train_array: np.ndarray, n_splits: int, n_features_to_select: Optional[int], step: int, estimator_name: str, random_state: int, csv_path: str, scaling_time_s: float) -> Tuple[list, list, list, float, float]:
+    """
+    Execute the stratified K-fold cross-validation loop and collect per-fold metrics, rankings, and timing.
+
+    :param X_train_scaled: Scaled training feature array.
+    :param y_train_array: Training target array.
+    :param n_splits: Number of CV folds to execute.
+    :param n_features_to_select: Number of features to select via RFE (or None for all).
+    :param step: Number of features to remove at each RFE step.
+    :param estimator_name: Name of the estimator to use for RFE.
+    :param random_state: Random seed for reproducibility.
+    :param csv_path: Path to the original CSV dataset file.
+    :param scaling_time_s: Pre-computed scaling time to include in feature extraction accumulator.
+    :return: Tuple of (fold_metrics, fold_rankings, fold_supports, total_elapsed, total_feature_extraction).
+    """
+
+    try:
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=int(random_state))  # Initialize stratified K-fold splitter
+
+        fold_metrics = []  # List to collect per-fold metric tuples
+        fold_rankings = []  # List to collect per-fold ranking arrays
+        fold_supports = []  # List to collect per-fold support masks
+        total_elapsed = 0.0  # Accumulator for training times across folds
+        total_feature_extraction = float(scaling_time_s)  # Accumulator for total feature extraction time (scaling + selector fits)
+
+        for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X_train_scaled, y_train_array), start=1):  # Iterate over each fold
+            verbose_output(f"{BackgroundColors.CYAN}Running fold {fold_idx}/{n_splits}{Style.RESET_ALL}")  # Optional fold progress
+
+            X_train_fold = X_train_scaled[train_idx]  # Slice training data for this fold
+            X_test_fold = X_train_scaled[test_idx]  # Slice testing data for this fold
+            y_train_fold = y_train_array[train_idx]  # Slice training labels for this fold
+            y_test_fold = y_train_array[test_idx]  # Slice testing labels for this fold
+
+            selector, model, feat_time = run_rfe_selector(
+                X_train_fold, y_train_fold, n_select=n_features_to_select or X_train_fold.shape[1], step=step, estimator_name=estimator_name, random_state=random_state
+            )  # Fit RFE on this fold's training data and get selector fit time
+
+            metrics_tuple = compute_rfe_metrics(
+                selector, X_train_fold, X_test_fold, y_train_fold, y_test_fold, random_state=random_state, estimator_name=estimator_name
+            )  # Compute metrics for this fold (returns training and testing times)
+            fold_metrics.append(metrics_tuple)  # Append per-fold metrics tuple
+            fold_rankings.append(selector.ranking_)  # Append per-fold ranking array
+            fold_supports.append(selector.support_.astype(int))  # Append per-fold support mask as integers
+            total_elapsed += metrics_tuple[6]  # Accumulate training time from this fold
+            total_feature_extraction += float(feat_time)  # Accumulate selector fit time into total feature extraction
+
+            send_telegram_message(
+                TELEGRAM_BOT,
+                f"RFE: Finished fold {fold_idx}/{n_splits} for dataset {Path(csv_path).stem} with F1: {truncate_value(metrics_tuple[3])} in {calculate_execution_time(0, metrics_tuple[6])}"
+            )  # Notify fold completion via Telegram
+
+        return fold_metrics, fold_rankings, fold_supports, total_elapsed, total_feature_extraction  # Return collected fold results and timing
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n_features_to_select=None, step=1, estimator_name="random_forest", random_state=42):
     """
     Handles RFE with stratified cross-validation.
@@ -1919,38 +1977,9 @@ def run_rfe_cv(csv_path, X_numeric, y_array, feature_columns, hyperparameters, n
         resolved_n = int(CONFIG.get("rfe", {}).get("cross_validation", {}).get("n_folds", 10))
         n_splits = resolve_cv_n_splits(y_train_array, resolved_n)  # Compute effective number of CV splits
 
-        fold_metrics = []  # List to collect per-fold metric tuples
-        fold_rankings = []  # List to collect per-fold ranking arrays
-        fold_supports = []  # List to collect per-fold support masks
-        total_elapsed = 0.0  # Accumulator for training times across folds
-        total_feature_extraction = float(scaling_time_s)  # Accumulator for total feature extraction time (scaling + selector fits)
-
-        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=int(random_state))  # Initialize stratified K-fold splitter
-        for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X_train_scaled, y_train_array), start=1):
-            verbose_output(f"{BackgroundColors.CYAN}Running fold {fold_idx}/{n_splits}{Style.RESET_ALL}")  # Optional fold progress
-
-            X_train_fold = X_train_scaled[train_idx]
-            X_test_fold = X_train_scaled[test_idx]
-            y_train_fold = y_train_array[train_idx]
-            y_test_fold = y_train_array[test_idx]
-
-            selector, model, feat_time = run_rfe_selector(
-                X_train_fold, y_train_fold, n_select=n_features_to_select or X_train_fold.shape[1], step=step, estimator_name=estimator_name, random_state=random_state
-            )  # Fit RFE on this fold's training data and get selector fit time
-
-            metrics_tuple = compute_rfe_metrics(
-                selector, X_train_fold, X_test_fold, y_train_fold, y_test_fold, random_state=random_state, estimator_name=estimator_name
-            )  # Compute metrics for this fold (returns training and testing times)
-            fold_metrics.append(metrics_tuple)  # Append per-fold metrics tuple
-            fold_rankings.append(selector.ranking_)  # Append per-fold ranking array
-            fold_supports.append(selector.support_.astype(int))  # Append per-fold support mask as integers
-            total_elapsed += metrics_tuple[6]  # Accumulate training time from this fold
-            total_feature_extraction += float(feat_time)  # Accumulate selector fit time into total feature extraction
-
-            send_telegram_message(
-                TELEGRAM_BOT,
-                f"RFE: Finished fold {fold_idx}/{n_splits} for dataset {Path(csv_path).stem} with F1: {truncate_value(metrics_tuple[3])} in {calculate_execution_time(0, metrics_tuple[6])}"
-            )
+        fold_metrics, fold_rankings, fold_supports, total_elapsed, total_feature_extraction = run_cv_fold_loop(
+            X_train_scaled, y_train_array, n_splits, n_features_to_select, step, estimator_name, random_state, csv_path, scaling_time_s
+        )  # Execute the stratified K-fold loop and collect per-fold results
 
         metrics_arr = np.array(fold_metrics)  # Convert list of tuples to numpy array
         mean_metrics = metrics_arr.mean(axis=0)  # Compute mean metric values across folds
