@@ -1339,6 +1339,23 @@ def build_random_forest_config():
     )  # Return the instantiated model and its hyperparameter grid as a tuple
 
 
+def build_svm_config():
+    """
+    Build the SVM classifier instance and hyperparameter search grid.
+
+    :return: Tuple of (SVC or ThunderSVC instance, param_grid dict) for hyperparameter optimization.
+    """
+
+    return (
+        get_thundersvm_estimator(),  # ThunderSVM (GPU preferred) or fallback to sklearn SVC
+        {
+            "C": [0.0001, 0.001, 0.1, 1, 10, 100],  # Regularization parameter
+            "kernel": ["linear", "rbf", "poly"],  # Kernel type to be used in the algorithm
+            "gamma": ["scale", "auto", 0.001, 0.01, 0.1, 1],  # Kernel coefficient
+        },
+    )  # Return the instantiated model and its hyperparameter grid as a tuple
+
+
 def build_all_models_config():
     """
     Build and return the full dictionary of all available model instances paired with their hyperparameter grids.
