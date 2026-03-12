@@ -6641,6 +6641,33 @@ def convert_subset_to_dataframes(X_train_subset, X_test_subset, subset_feature_n
     return X_train_df, X_test_df  # RETURN DATAFRAMES WITH NAMED COLUMNS
 
 
+def initialize_evaluation_run_state(base_models, feature_sets, data_source_label):
+    """
+    Build the individual model map, compute total evaluation steps, create the progress bar, and initialize result containers.
+
+    :param base_models: Dictionary of base model name to model instance pairs used for individual evaluation.
+    :param feature_sets: Ordered dictionary of feature set name to (X_train_subset, X_test_subset, feature_names) tuples.
+    :param data_source_label: String label for the current data source displayed in the progress bar description.
+    :return: Tuple of (individual_models, total_steps, progress_bar, all_results, current_combination) ready for the evaluation loop.
+    """
+
+    individual_models = {
+        k: v for k, v in base_models.items()
+    }  # Use the base models (with hyperparameters applied) for individual evaluation
+
+    total_steps = len(feature_sets) * (
+        len(individual_models) + 1
+    )  # Total steps: models + stacking per feature set
+
+    progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout)  # Progress bar for all evaluations
+
+    all_results = {}  # Dictionary to store results: (feature_set, model_name) -> result_entry
+
+    current_combination = 1  # Counter for combination index
+
+    return individual_models, total_steps, progress_bar, all_results, current_combination  # Return all initialized evaluation state variables
+
+
 def evaluate_on_dataset(
     file,
     df,
