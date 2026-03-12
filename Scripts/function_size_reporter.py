@@ -84,6 +84,7 @@ class BackgroundColors:  # Colors for the terminal
 VERBOSE = False  # Set to True to output verbose messages
 TARGET_FILE_PATH = ""  # Path to the target Python file to analyze
 OUTPUT_FILE = None  # Output path computed at runtime from TARGET_FILE_PATH
+MIN_FUNCTION_SIZE = 99  # Minimum function size in lines to include in the report (functions smaller than this are removed)
 
 # Logger Setup:
 logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Create a Logger instance
@@ -388,12 +389,33 @@ def build_report(tree: ast.Module) -> dict:
 
     avg_function_size = compute_avg_function_size(classes, top_level, nested, total_functions)  # Compute average size using helper
 
-    report = {  # Build the complete report dictionary
-        "total_functions": total_functions,  # Store the total function count
+    if MIN_FUNCTION_SIZE and int(MIN_FUNCTION_SIZE) > 0:  # Verify if a positive minimum size filter is configured
+        min_size = int(MIN_FUNCTION_SIZE)  # Normalize the configured minimum size to integer
+
+        top_level = [e for e in top_level if e.get("function_size", 0) >= min_size]  # Remove top-level entries smaller than min_size
+        top_level.sort(key=lambda e: e["function_size"], reverse=True)  # Sort remaining top-level functions by size desc
+
+        nested = [e for e in nested if e.get("function_size", 0) >= min_size]  # Remove nested entries smaller than min_size
+        nested.sort(key=lambda e: e["function_size"], reverse=True)  # Sort remaining nested functions by size desc
+
+        new_classes = {}  # Temporary mapping to store filtered class method lists
+        for class_key, methods in classes.items():  # Iterate each class and its methods list
+            filtered = [m for m in methods if m.get("function_size", 0) >= min_size]  # Keep only methods meeting threshold
+            if filtered:  # Verify the filtered list is not empty before including in final mapping
+                filtered.sort(key=lambda e: e["function_size"], reverse=True)  # Sort the filtered methods by size desc
+                new_classes[class_key] = filtered  # Store the filtered and sorted list for the class
+        classes = new_classes  # Replace original classes mapping with the filtered mapping
+
+    total_methods = sum(len(methods) for methods in classes.values())  # Compute total method count across filtered classes
+    total_functions = total_methods + len(top_level) + len(nested)  # Compute grand total across filtered categories
+    avg_function_size = compute_avg_function_size(classes, top_level, nested, total_functions)  # Recompute average for filtered set
+
+    report = {  # Build the complete report dictionary after filtering and recomputation
+        "total_functions": total_functions,  # Store the total function count after filtering
         "avg_function_size": int(math.ceil(avg_function_size)),  # Round up average function size to nearest integer
-        "classes": classes,  # Store the class methods data
-        "top-level functions": top_level,  # Store the top-level functions data
-        "nested functions": nested,  # Store the nested functions data
+        "classes": classes,  # Store the class methods data after filtering
+        "top-level functions": top_level,  # Store the top-level functions data after filtering
+        "nested functions": nested,  # Store the nested functions data after filtering
     }
 
     return report  # Return the completed report dictionary
