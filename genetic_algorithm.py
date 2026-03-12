@@ -2949,6 +2949,20 @@ def persist_generation_state_if_needed(
         pass  # Do nothing
 
 
+def update_global_generation_count(gen):
+    """
+    Thread-safely record the current generation index in the global GA_GENERATIONS_COMPLETED counter.
+
+    :param gen: Current generation index to record as the number of completed generations.
+    :return: The same gen value, suitable for direct assignment to gens_ran.
+    """
+
+    global GA_GENERATIONS_COMPLETED  # Declare intent to modify the module-level global counter
+    with global_state_lock:  # Acquire lock to prevent concurrent writes from parallel runs
+        GA_GENERATIONS_COMPLETED = int(gen)  # Update the global counter with the current generation index
+    return gen  # Return gen so callers can assign gens_ran in one expression
+
+
 def compute_current_best_fitness_values(hof):
     """
     Extract the best F1-score and feature count from the leading Hall of Fame individual.
@@ -3118,10 +3132,8 @@ def run_genetic_algorithm_loop(
                 should_send,
             )  # Send periodic updates to Telegram with multi-objective fitness values at configured percent milestones
 
-            gens_ran = gen  # Update gens_ran each generation
-            with global_state_lock:  # Thread-safe update to GA_GENERATIONS_COMPLETED
-                GA_GENERATIONS_COMPLETED = int(gen)  # Update global variable
-            gens_ran = gen if gens_ran == 0 else gens_ran  # Ensure gens_ran is set correctly if no early stopping occurred
+            gens_ran = update_global_generation_count(gen)  # Record completed generation count in gens_ran and the global counter
+            gens_ran = gen if gens_ran == 0 else gens_ran  # Preserve gens_ran when the loop did not execute any generation
 
             persist_generation_state_if_needed(
                 output_dir, state_id, gen, n_generations, population, hof,
