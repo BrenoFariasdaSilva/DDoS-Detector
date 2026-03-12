@@ -3722,6 +3722,27 @@ def sample_shap_test_data(X_test, y_test, max_samples, random_state):
         raise
 
 
+def aggregate_mean_shap_importance(shap_values_summary, feature_names):
+    """
+    Computes mean absolute SHAP values and maps them to feature names.
+
+    :param shap_values_summary: SHAP values array (2D: samples x features)
+    :param feature_names: List of feature names corresponding to the SHAP value columns
+    :return: Dictionary mapping each feature name to its mean absolute SHAP importance
+    """
+
+    try:
+        shap_array = np.array(shap_values_summary)  # Convert SHAP values to numpy array for consistent operations
+        mean_shap_values = np.mean(np.abs(shap_array), axis=0)  # Compute mean absolute SHAP value per feature across samples
+        mean_shap_list = mean_shap_values.tolist() if hasattr(mean_shap_values, 'tolist') else list(mean_shap_values)  # Convert numpy array to plain Python list
+        shap_importance = dict(zip(feature_names[:len(mean_shap_list)], mean_shap_list))  # Map feature names to their mean absolute importance values
+        return shap_importance  # Return importance dictionary for downstream use
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature_names, output_dir, dataset_name, model_name, max_display):
     """
     Saves SHAP summary and bar plots to the output directory.
@@ -3832,10 +3853,7 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
 
             save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature_names, output_dir, dataset_name, model_name, max_display)  # Save both SHAP summary and bar plots to disk
 
-            shap_array = np.array(shap_values_summary)  # Convert to numpy array for type safety
-            mean_shap_values = np.mean(np.abs(shap_array), axis=0)  # Compute mean absolute SHAP values
-            mean_shap_list = mean_shap_values.tolist() if hasattr(mean_shap_values, 'tolist') else list(mean_shap_values)  # Convert to list
-            shap_importance = dict(zip(feature_names[:len(mean_shap_list)], mean_shap_list))  # Create importance dict
+            shap_importance = aggregate_mean_shap_importance(shap_values_summary, feature_names)  # Aggregate mean absolute SHAP values into a feature importance dictionary
 
             verbose_output(
                 f"{BackgroundColors.GREEN}SHAP explanations saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
