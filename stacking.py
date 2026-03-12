@@ -4498,6 +4498,47 @@ def add_hardware_column(df, columns_order, column_name="Hardware"):
         raise
 
 
+def flatten_and_serialize_results(results_list):
+    """
+    Flattens result dictionaries, truncates numeric metrics, and JSON-serializes nested fields.
+
+    :param results_list: List of result dictionaries from classifier evaluation
+    :return: List of flattened and serialized row dictionaries ready for DataFrame construction
+    """
+
+    try:
+        flat_rows = []  # Initialize list to collect flattened rows
+        for res in results_list:  # Iterate over each result dictionary
+            row = dict(res)  # Create a mutable shallow copy of the result dictionary
+
+            for metric in ["accuracy", "precision", "recall", "f1_score", "fpr", "fnr"]:  # Iterate over numeric metric field names
+                if metric in row and row[metric] is not None:  # If metric field is present and has a value
+                    row[metric] = truncate_value(row[metric])  # Truncate to consistent decimal precision
+
+            if "features_list" in row and not isinstance(row["features_list"], str):  # If features_list is not yet a JSON string
+                row["features_list"] = json.dumps(row["features_list"])  # Serialize features list to JSON string
+            if "top_features" in row and not isinstance(row["top_features"], str):  # If top_features is not yet a JSON string
+                row["top_features"] = json.dumps(row["top_features"])  # Serialize top features to JSON string
+            if "rfe_ranking" in row and row["rfe_ranking"] is not None and not isinstance(row["rfe_ranking"], str):  # If rfe_ranking is present and not yet serialized
+                row["rfe_ranking"] = json.dumps(row["rfe_ranking"])  # Serialize RFE ranking to JSON string
+            if "hyperparameters" in row and row["hyperparameters"] is not None and not isinstance(row["hyperparameters"], str):  # If hyperparameters is present and not yet serialized
+                row["hyperparameters"] = json.dumps(row["hyperparameters"])  # Serialize hyperparameters dict to JSON string
+
+            if "feature_selection_enabled" not in row:  # If FS flag missing from row
+                row["feature_selection_enabled"] = False  # Default to False when undefined
+            if "hyperparameters_enabled" not in row:  # If HP flag missing from row
+                row["hyperparameters_enabled"] = False  # Default to False when undefined
+            if "data_augmentation_enabled" not in row:  # If DA flag missing from row
+                row["data_augmentation_enabled"] = False  # Default to False when undefined
+
+            flat_rows.append(row)  # Append the processed row to the flat list
+        return flat_rows  # Return the list of flattened and serialized rows
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def save_stacking_results(csv_path, results_list, config=None):
     """Save the stacking results to CSV file located in same dataset Feature_Analysis directory.
 
@@ -4529,37 +4570,9 @@ def save_stacking_results(csv_path, results_list, config=None):
         os.makedirs(stacking_dir, exist_ok=True)
         output_path = stacking_dir / results_filename
 
-        flat_rows = []
-        for res in results_list:
-            row = dict(res)
+        flat_rows = flatten_and_serialize_results(results_list)  # Flatten and serialize all result rows into plain dicts
 
-            for metric in ["accuracy", "precision", "recall", "f1_score", "fpr", "fnr"]:
-                if metric in row and row[metric] is not None:
-                    row[metric] = truncate_value(row[metric])
-
-            if "features_list" in row and not isinstance(row["features_list"], str):
-                row["features_list"] = json.dumps(row["features_list"])
-            if "top_features" in row and not isinstance(row["top_features"], str):
-                row["top_features"] = json.dumps(row["top_features"])
-            if "rfe_ranking" in row and row["rfe_ranking"] is not None and not isinstance(
-                row["rfe_ranking"], str
-            ):
-                row["rfe_ranking"] = json.dumps(row["rfe_ranking"])
-            if "hyperparameters" in row and row["hyperparameters"] is not None and not isinstance(
-                row["hyperparameters"], str
-            ):
-                row["hyperparameters"] = json.dumps(row["hyperparameters"])
-
-            if "feature_selection_enabled" not in row:  # Add FS flag when missing
-                row["feature_selection_enabled"] = False  # Default to False when undefined
-            if "hyperparameters_enabled" not in row:  # Add HP flag when missing
-                row["hyperparameters_enabled"] = False  # Default to False when undefined
-            if "data_augmentation_enabled" not in row:  # Add DA flag when missing
-                row["data_augmentation_enabled"] = False  # Default to False when undefined
-
-            flat_rows.append(row)
-
-        df = pd.DataFrame(flat_rows)
+        df = pd.DataFrame(flat_rows)  # Construct results DataFrame from flattened rows
 
         results_csv_columns = config.get("stacking", {}).get("results_csv_columns", [])  # Get columns from config
         column_order = list(results_csv_columns) if results_csv_columns else list(config.get("stacking", {}).get("results_csv_columns", []))  # Use config or fallback to global
