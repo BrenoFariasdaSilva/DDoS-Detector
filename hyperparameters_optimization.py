@@ -1804,6 +1804,31 @@ def truncate_value(value):
         raise
 
 
+def evaluate_combination_and_handle_failure(model, model_name, keys, combo, X_train, y_train, local_counter, total_combinations):
+    """
+    Evaluate a single hyperparameter combination and return a safe result tuple even when evaluation fails.
+
+    :param model: Cloned model instance to evaluate with the given hyperparameter combination.
+    :param model_name: Name of the model used in warning messages on failure.
+    :param keys: List of hyperparameter names corresponding to values in combo.
+    :param combo: Tuple of hyperparameter values to apply to the model for this evaluation.
+    :param X_train: Training feature matrix.
+    :param y_train: Training target vector.
+    :param local_counter: 1-based local index of this combination within the current model's grid.
+    :param total_combinations: Total number of combinations for the current model for progress display.
+    :return: Tuple of (current_params, metrics, elapsed) where metrics is None and elapsed is 0.0 on failure.
+    """
+
+    try:  # Attempt to evaluate this hyperparameter combination on the cloned model
+        current_params, metrics, elapsed = evaluate_single_combination(clone(model), model_name, keys, combo, X_train, y_train, local_counter, total_combinations)  # Run evaluation and return params, metrics, elapsed
+    except Exception as worker_err:  # Recover from per-combination failures without aborting the outer loop
+        current_params = dict(zip(keys, combo))  # Reconstruct the param dict from keys and combo for the result entry
+        metrics = None  # Mark metrics as unavailable when evaluation failed
+        elapsed = 0.0  # Report zero elapsed time for failed evaluations
+        print(f"{BackgroundColors.YELLOW}Warning: Combination {current_params} failed: {worker_err}{Style.RESET_ALL}")  # Warn about the failed combination
+    return current_params, metrics, elapsed  # Return the safe result tuple to the caller
+
+
 def run_parallel_evaluation(
     model_name,
     model,
@@ -1859,13 +1884,7 @@ def run_parallel_evaluation(
         local_counter = 0  # Start local counter
 
         for combo in combinations_to_test:  # Process each combination sequentially
-            try:  # Try to evaluate
-                current_params, metrics, elapsed = evaluate_single_combination(clone(model), model_name, keys, combo, X_train, y_train, local_counter + 1, len(combinations_to_test))  # Evaluate
-            except Exception as worker_err:  # Catch exceptions
-                current_params = dict(zip(keys, combo))  # Reconstruct params
-                metrics = None  # No metrics on failure
-                elapsed = 0.0  # No elapsed time
-                print(f"{BackgroundColors.YELLOW}Warning: Combination {current_params} failed: {worker_err}{Style.RESET_ALL}")  # Warn
+            current_params, metrics, elapsed = evaluate_combination_and_handle_failure(clone(model), model_name, keys, combo, X_train, y_train, local_counter + 1, len(combinations_to_test))  # Evaluate combination and return safe result tuple on failure
 
             global_counter += 1  # Increment global progress
             local_counter += 1  # Increment local model progress
