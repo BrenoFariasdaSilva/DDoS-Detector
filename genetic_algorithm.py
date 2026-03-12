@@ -2183,7 +2183,7 @@ def evaluate_individual(
             print(
                 f"{BackgroundColors.YELLOW}Warning: StratifiedKFold failed ({type(e).__name__}: {str(e)}), using simple holdout validation on training data only.{Style.RESET_ALL}"
             )  # Output warning message
-            return evaluate_individual_holdout(X_train_sel, y_train, estimator_cls, mask_tuple, num_features_selected)  # Delegate to holdout fallback helper
+            return evaluate_individual_holdout(X_train_sel, y_train, estimator_cls, mask_tuple, num_features_selected)  # Delegate to holdout fallback evaluation
 
         y_train_np = np.array(y_train)  # Convert y_train to numpy array for fast indexing
 
@@ -4250,7 +4250,7 @@ def compute_common_and_unique_features(comparison_rows: list, all_feature_sets: 
     :return: The input list of row dicts with two new keys appended per row: common_features and unique_features.
     """
 
-    try:  # Protect helper computation to capture and report any unexpected errors
+    try:  # Protect function computation to capture and report any unexpected errors
         if not comparison_rows:  # Verify if there are no comparison rows to process
             return comparison_rows  # Return early when no rows are present
 
@@ -5307,7 +5307,7 @@ def compute_union_features_across_runs(runs_list):
     """
     Compute the sorted union of feature names selected across multiple GA runs.
 
-    This helper centralizes the previously inlined logic that built a set of
+    This function centralizes the previously inlined logic that built a set of
     ``best_features`` from each run and returned a sorted list. It preserves
     the original behavior of swallowing exceptions and returning an empty
     list on error so callers do not need to handle failures.
@@ -5940,7 +5940,7 @@ def determine_rf_metrics(metrics_in):
     """
     Normalize a metrics tuple/sequence to the expected RF-metrics slice used
     downstream by "save_results". The consolidated CSV expects up to 12
-    metric values (cv + test metrics); this helper ensures the returned
+    metric values (cv + test metrics); this function ensures the returned
     value is either a 12-element-like slice or "None" when not available.
 
     :param metrics_in: Metrics sequence or None.
@@ -6011,7 +6011,7 @@ def prepare_output_paths_and_base(csv_path, rf_metrics, best_pop_size, n_generat
     """
     Prepare filesystem paths and base CSV row metadata for the GA run.
 
-    This helper computes train/test counts and fraction, extracts a base
+    This function computes train/test counts and fraction, extracts a base
     elapsed time from provided RF metrics, constructs the canonical base row
     used in the consolidated CSV and creates a timestamped models directory
     and filenames for the model, scaler, features and params artifacts.
@@ -7064,7 +7064,7 @@ def calculate_execution_time(start_time, finish_time=None):
 
 def row_style_for_zebra(row):
     """
-    Top-level helper to produce zebra row styles for pandas Styler.
+    Top-level function to produce zebra row styles for pandas Styler.
 
     :param row: pandas Series representing a row
     :return: List[str] of CSS style strings for each cell
@@ -7083,7 +7083,7 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """
     
     try:
-        styled = df.style.apply(row_style_for_zebra, axis=1)  # Apply zebra function row-wise using top-level helper
+        styled = df.style.apply(row_style_for_zebra, axis=1)  # Apply zebra function row-wise using top-level function
         styled = styled.set_table_attributes('style="border-collapse:collapse; width:100%;"')  # Tight table style
         styled = cast(pd.io.formats.style.Styler, cast(Any, styled).set_properties(**{"border": "1px solid #ddd", "padding": "6px"}))  # Cell padding/border (cast to Any to satisfy typing)
         return styled  # Return the styled object
