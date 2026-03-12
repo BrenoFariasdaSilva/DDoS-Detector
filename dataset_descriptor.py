@@ -2398,6 +2398,77 @@ def collect_report_input_files(input_path, file_extension, config):
     return sorted_matching_files, base_dir  # Return the collected files and resolved base directory
 
 
+def enrich_file_info_with_metadata(info, filepath, base_dir, headers_map, common_features, headers_match_all, cfg, low_memory, df_current):
+    """
+    Populate a file info dictionary with relative path, header uniformity, common/extra feature lists, and t-SNE plot path.
+
+    :param info: Mutable dictionary of dataset metadata fields populated in place by this function.
+    :param filepath: Absolute path of the dataset file being processed.
+    :param base_dir: Absolute base directory used to compute the relative path for the Dataset Name field.
+    :param headers_map: Dictionary mapping file paths to their header lists for common/extra feature computation.
+    :param common_features: Set of feature names present in every discovered file used for common/extra classification.
+    :param headers_match_all: Boolean flag indicating whether all files share identical header sets.
+    :param cfg: Configuration dictionary used to look up the t-SNE output subdirectory key.
+    :param low_memory: Boolean flag passed to the t-SNE generator to control memory usage during plot generation.
+    :param df_current: Already-loaded pandas DataFrame for the current file passed to the t-SNE generator to avoid a second disk read.
+    :return: None (modifies info in place with Dataset Name, Headers Match All Files, Common Features, Extra Features, and t-SNE Plot fields).
+    """
+
+    relative_path = os.path.relpath(filepath, base_dir)  # Get path relative to base_dir
+    info["Dataset Name"] = relative_path.replace(
+        "\\", "/"
+    )  # Use relative path for Dataset Name and normalize slashes
+
+    common_list, extras = get_file_common_and_extras(
+        headers_map, filepath, common_features
+    )  # Get common and extra features for this file
+
+    info["Headers Match All Files"] = (
+        "Yes" if headers_match_all else "No"
+    )  # Indicate if headers match all files
+    info["Common Features (in all files)"] = (
+        ", ".join(common_list) if common_list else "None"
+    )  # Join common features into a string
+    info["Extra Features (not in all files)"] = (
+        ", ".join(extras) if extras else "None"
+    )  # Join extra features into a string
+
+    tsne_out_subdir = cfg.get("paths", {}).get("data_separability_subdir", "Data_Separability")  # Read t-SNE output subdirectory name from configuration with default fallback
+    tsne_file = generate_tsne_plot(
+        filepath,
+        df=df_current,
+        low_memory=low_memory,
+        sample_size=2000,
+        output_dir=os.path.join(os.path.dirname(os.path.abspath(filepath)), tsne_out_subdir),
+        config=cfg,
+    )  # Generate t-SNE plot using the already-loaded DataFrame to avoid rereading from disk
+    info["t-SNE Plot"] = tsne_file if tsne_file else "None"  # Add t-SNE plot filename or "None"
+
+
+def append_preprocessing_metrics_safe(filepath, info, preprocessing_metrics, file_basename):
+    """
+    Collect preprocessing metrics for a processed file and append them to the metrics list, WARNING on failure.
+
+    :param filepath: Absolute path of the dataset file used as identifier in the metrics row.
+    :param info: Dataset metadata dictionary providing original and post-preprocessing row/feature counts.
+    :param preprocessing_metrics: Mutable list to which the collected metrics row dictionary is appended.
+    :param file_basename: Relative file path string used in the failure warning message for user context.
+    :return: None (appends to preprocessing_metrics in place or prints a warning on failure).
+    """
+
+    try:  # Collect preprocessing metrics for this file when available
+        metrics_row = collect_preprocessing_metrics(
+            filepath,  # File path being processed
+            info.get("original_num_rows", 0),  # Original rows captured earlier
+            info.get("rows_after_preprocessing", 0),  # Rows after preprocessing captured earlier
+            info.get("original_num_features", 0),  # Original features captured earlier
+            info.get("features_after_preprocessing", 0),  # Features after preprocessing captured earlier
+        )  # Create metrics row dict
+        preprocessing_metrics.append(metrics_row)  # Append metrics row to list for this directory
+    except Exception as _pm:  # If metrics collection fails
+        print(f"{BackgroundColors.YELLOW}Warning: failed to collect preprocessing metrics for {file_basename}: {_pm}{Style.RESET_ALL}")  # Warn without breaking the progress bar
+
+
 def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename: str | None = None, config: dict | None = None):
     """
     Generates a CSV report for the specified input path.
