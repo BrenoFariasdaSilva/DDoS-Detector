@@ -495,6 +495,42 @@ def drop_non_feature_columns(X):
         raise
 
 
+def apply_selected_features_filter(X, selected_features):
+    """
+    Filter the feature DataFrame to retain only the specified selected features.
+
+    :param X: Feature DataFrame before feature subsetting.
+    :param selected_features: List of feature names to retain, or None to keep all.
+    :return: Feature DataFrame containing only selected features.
+    """
+
+    try:
+        if selected_features is None:  # If no selected features specified, return unmodified
+            return X  # Return X unchanged when no feature subset is requested
+
+        missing_features = [f for f in selected_features if f not in X.columns]  # Identify features in selection but absent from X
+
+        if missing_features:  # If any requested features are not found in the DataFrame
+            print(
+                f"{BackgroundColors.RED}Warning: {len(missing_features)} features from selection file not found in dataset{Style.RESET_ALL}"
+            )  # Warn about missing features count
+            print(f"{BackgroundColors.RED}Missing features: {missing_features}{Style.RESET_ALL}")  # Print missing feature names
+            raise ValueError(
+                f"{BackgroundColors.RED}Some selected features not found in the DataFrame!{Style.RESET_ALL}"
+            )  # Raise when selected features are absent from the dataset
+
+        existing_features = [f for f in selected_features if f in X.columns]  # Keep only features present in X
+
+        if not existing_features:  # If the filtered list is empty after intersection
+            raise ValueError(f"{BackgroundColors.RED}No selected features found in the DataFrame!{Style.RESET_ALL}")  # Raise when no usable features survive
+
+        return X[existing_features]  # Return DataFrame restricted to existing selected features
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label_encoder=None, selected_features=None):
     """
     Applies one-hot encoding and scaling to features.
@@ -529,21 +565,7 @@ def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label
 
         X = drop_non_feature_columns(X)  # Remove known metadata and identifier columns from features
 
-        if selected_features is not None:  # If selected_features is provided
-            missing_features = [f for f in selected_features if f not in X.columns]  # Identify missing features
-            if missing_features:  # If there are missing features
-                print(
-                    f"{BackgroundColors.RED}Warning: {len(missing_features)} features from selection file not found in dataset{Style.RESET_ALL}"
-                )
-                print(f"{BackgroundColors.RED}Missing features: {missing_features}{Style.RESET_ALL}")
-                raise ValueError(
-                    f"{BackgroundColors.RED}Some selected features not found in the DataFrame!{Style.RESET_ALL}"
-                )
-
-            existing_features = [f for f in selected_features if f in X.columns]  # Keep only features that exist
-            if not existing_features:  # If no selected features exist in the DataFrame
-                raise ValueError(f"{BackgroundColors.RED}No selected features found in the DataFrame!{Style.RESET_ALL}")
-            X = X[existing_features]  # Keep only selected features that exist
+        X = apply_selected_features_filter(X, selected_features)  # Filter features to retain only selected subset
 
         X = X.replace([np.inf, -np.inf], np.nan)  # Replace infinity with NaN
         initial_rows = len(X)  # Store initial number of rows
