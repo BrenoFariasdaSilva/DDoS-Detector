@@ -2287,10 +2287,11 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
         common_features, headers_match_all = compute_common_features(headers_map)  # Compute shared features and header uniformity flag from the headers-only map
 
         progress = tqdm(
-            sorted_matching_files,
-            desc=f"{BackgroundColors.GREEN}Processing files{Style.RESET_ALL}",
-            unit="file",
-            ncols=100,
+            sorted_matching_files,  # Iterate over sorted matching files list
+            desc=f"{BackgroundColors.GREEN}Processing files{Style.RESET_ALL}",  # Description text remains green and reset styles
+            unit="file",  # Use file as unit for progress
+            ncols=100,  # Fixed progress bar width in characters
+            colour="cyan",  # Set progress bar visualization color to cyan
         )  # Create a single in-place progress bar instance
         for idx, filepath in enumerate(progress, 1):  # Process each matching file
             file_basename = os.path.basename(filepath)  # Get the base filename
