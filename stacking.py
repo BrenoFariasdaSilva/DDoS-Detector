@@ -1125,6 +1125,42 @@ def extract_attack_label_from_path(file_path):
         raise  # Re-raise to preserve original failure semantics
 
 
+def concat_files_into_multiclass_df(processed_files_with_labels, common_features_list, attack_types_set, config):
+    """
+    Align each processed file to the common feature set, assign attack type labels, concatenate into a single DataFrame, and clean infinite/NaN values.
+
+    :param processed_files_with_labels: List of tuples (file_path, df_clean, target_col, feat_cols, attack_label).
+    :param common_features_list: Sorted list of feature column names shared across all files.
+    :param attack_types_set: Set of unique attack type strings used to build the final sorted list.
+    :param config: Configuration dictionary passed through for verbose output.
+    :return: Tuple of (combined_df, attack_types_list) on success, or None when the result is empty after cleaning.
+    """
+
+    combined_parts = []  # INITIALIZE LIST TO ACCUMULATE DATAFRAME PARTS
+
+    for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # ITERATE OVER PROCESSED FILES
+        df_subset = df_clean[common_features_list].copy()  # SELECT ONLY COMMON FEATURES
+        df_subset['attack_type'] = attack_label  # ADD ATTACK TYPE COLUMN WITH THE EXTRACTED LABEL
+        combined_parts.append(df_subset)  # APPEND TO COMBINED PARTS LIST
+        verbose_output(
+            f"{BackgroundColors.GREEN}Added {BackgroundColors.CYAN}{len(df_subset)}{BackgroundColors.GREEN} samples from {BackgroundColors.CYAN}{attack_label}{Style.RESET_ALL}",
+            config=config
+        )  # OUTPUT SAMPLES ADDED MESSAGE
+
+    combined_df = pd.concat(combined_parts, ignore_index=True)  # CONCATENATE ALL PARTS INTO SINGLE DATAFRAME
+    combined_df = combined_df.replace([np.inf, -np.inf], np.nan).dropna()  # REPLACE INF WITH NAN AND DROP NA
+
+    if combined_df.empty:  # IF COMBINED DATAFRAME IS EMPTY AFTER CLEANING
+        print(f"{BackgroundColors.RED}Combined multi-class dataset is empty after cleaning.{Style.RESET_ALL}")  # PRINT ERROR
+        return None  # SIGNAL FAILURE TO CALLER
+
+    attack_types_list = sorted(list(attack_types_set))  # CONVERT ATTACK TYPES SET TO SORTED LIST
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Multi-class dataset created: {BackgroundColors.CYAN}{len(combined_df)} samples, {len(common_features_list)} features, {len(attack_types_list)} classes{Style.RESET_ALL}"
+    )  # PRINT SUMMARY OF COMBINED DATASET
+    return combined_df, attack_types_list  # RETURN COMBINED DATAFRAME AND ATTACK TYPES LIST
+
+
 def compute_common_features_across_files(processed_files_with_labels, config):
     """
     Compute the intersection of feature columns across all processed files and determine the common target column name.
@@ -1226,32 +1262,11 @@ def combine_files_for_multiclass(files_list, config=None):
             return (None, None, None)  # RETURN FAILURE TUPLE
         common_features_list, target_col_name = feature_result  # UNPACK COMMON FEATURES AND TARGET COLUMN NAME
         
-        combined_parts = []  # Initialize list to accumulate dataframe parts
-        
-        for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # Iterate over processed files
-            df_subset = df_clean[common_features_list].copy()  # Select only common features
-            df_subset['attack_type'] = attack_label  # Add attack type column with the extracted label
-            combined_parts.append(df_subset)  # Append to combined parts list
-            
-            verbose_output(
-                f"{BackgroundColors.GREEN}Added {BackgroundColors.CYAN}{len(df_subset)}{BackgroundColors.GREEN} samples from {BackgroundColors.CYAN}{attack_label}{Style.RESET_ALL}",
-                config=config
-            )  # Output samples added message
-        
-        combined_df = pd.concat(combined_parts, ignore_index=True)  # Concatenate all parts into single dataframe
-        combined_df = combined_df.replace([np.inf, -np.inf], np.nan).dropna()  # Replace inf with nan and drop na
-        
-        if combined_df.empty:  # If combined dataframe is empty after cleaning
-            print(f"{BackgroundColors.RED}Combined multi-class dataset is empty after cleaning.{Style.RESET_ALL}")  # Print error
-            return (None, None, None)  # Return None tuple
-        
-        attack_types_list = sorted(list(attack_types_set))  # Convert attack types set to sorted list
-        
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Multi-class dataset created: {BackgroundColors.CYAN}{len(combined_df)} samples, {len(common_features_list)} features, {len(attack_types_list)} classes{Style.RESET_ALL}"
-        )  # Print summary of combined dataset
-        
-        return (combined_df, attack_types_list, 'attack_type')  # Return combined dataframe, attack types list, and new target column name
+        concat_result = concat_files_into_multiclass_df(processed_files_with_labels, common_features_list, attack_types_set, config)  # CONCATENATE FILES INTO MULTICLASS DATAFRAME
+        if concat_result is None:  # IF CONCATENATION FAILED
+            return (None, None, None)  # RETURN FAILURE TUPLE
+        combined_df, attack_types_list = concat_result  # UNPACK COMBINED DATAFRAME AND ATTACK TYPES LIST
+        return (combined_df, attack_types_list, 'attack_type')  # RETURN COMBINED DATAFRAME, ATTACK TYPES LIST, AND TARGET COLUMN NAME
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
