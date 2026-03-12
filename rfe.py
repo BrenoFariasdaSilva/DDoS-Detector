@@ -758,6 +758,86 @@ def train_rfe_estimator(model, X_train_selected, y_train):
         raise
 
 
+def compute_fpr_fnr(y_test, y_pred):
+    """
+    Compute false positive rate and false negative rate for binary or multi-class classification.
+
+    :param y_test: True target labels.
+    :param y_pred: Predicted target labels.
+    :return: Tuple of (fpr, fnr) as Python floats.
+    """
+
+    try:
+        if len(np.unique(y_test)) == 2:  # Verify if binary classification
+            cm = confusion_matrix(y_test, y_pred)  # Confusion matrix for observed labels
+
+            if cm.shape == (2, 2):  # Expect 2x2 matrix for binary
+                tn, fp, fn, tp = cm.ravel()  # Unpack confusion matrix into tn, fp, fn, tp
+                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # Calculate false positive rate
+                fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # Calculate false negative rate
+            else:  # Fallback: compute rates from sums if unexpected shape
+                total = cm.sum() if cm.size > 0 else 1  # Total predictions for normalization
+                fpr = float(cm.sum() - np.trace(cm)) / float(total) if total > 0 else 0  # Approximate FPR
+                fnr = fpr  # Fallback estimate when binary layout is unexpected
+        else:  # For multi-class classification
+            cm = confusion_matrix(y_test, y_pred)  # Confusion matrix for observed labels
+            supports = cm.sum(axis=1)  # Support for each class
+            fprs = []  # List to hold per-class FPR
+            fnrs = []  # List to hold per-class FNR
+
+            for i in range(cm.shape[0]):  # Iterate over each class
+                tp = cm[i, i]  # True positives for class i
+                fn = cm[i, :].sum() - tp  # False negatives: actual i but predicted not-i
+                fp = cm[:, i].sum() - tp  # False positives: predicted i but actual not-i
+                tn = cm.sum() - (tp + fp + fn)  # True negatives: everything else
+                denom_fnr = (tp + fn) if (tp + fn) > 0 else 1  # Denominator for FNR (avoid div0)
+                denom_fpr = (fp + tn) if (fp + tn) > 0 else 1  # Denominator for FPR (avoid div0)
+                fnr_i = fn / denom_fnr  # Per-class false negative rate
+                fpr_i = fp / denom_fpr  # Per-class false positive rate
+                fprs.append((fpr_i, supports[i]))  # Store FPR with class support for weighting
+                fnrs.append((fnr_i, supports[i]))  # Store FNR with class support for weighting
+
+            total_support = float(supports.sum()) if supports.sum() > 0 else 1.0  # Total support across classes
+            fpr = float(sum(v * s for v, s in fprs) / total_support)  # Weighted average FPR across classes
+            fnr = float(sum(v * s for v, s in fnrs) / total_support)  # Weighted average FNR across classes
+
+        return float(fpr), float(fnr)  # Return FPR and FNR as Python floats
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
+def predict_and_compute_rfe_scores(model, X_test_selected, y_test):
+    """
+    Run model prediction on selected test features and compute all classification scores including timing.
+
+    :param model: Trained classifier.
+    :param X_test_selected: Test feature array with only RFE-selected columns.
+    :param y_test: True target labels.
+    :return: Tuple of (acc, prec, rec, f1, fpr, fnr, testing_time_s).
+    """
+
+    try:
+        test_start = time.perf_counter()  # Start perf_counter immediately before prediction (testing window)
+        y_pred = model.predict(X_test_selected)  # Predict on selected test features (testing)
+        acc = accuracy_score(y_test, y_pred)  # Calculate accuracy
+        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate precision
+        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate recall
+        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate F1-score
+
+        fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute false positive and false negative rates
+
+        test_end = time.perf_counter()  # End perf_counter immediately after metrics computed
+        testing_time_s = round(test_end - test_start, 6)  # Compute testing time rounded to 6 decimals
+
+        return float(acc), float(prec), float(rec), float(f1), float(fpr), float(fnr), float(testing_time_s)  # Return all classification scores
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state=42, estimator_name="random_forest"):
     """
     Computes performance metrics using the RFE-selected features.
@@ -782,44 +862,7 @@ def compute_rfe_metrics(selector, X_train, X_test, y_train, y_test, random_state
 
         model, training_time_s = train_rfe_estimator(model, X_train_selected, y_train)  # Fit the estimator and measure training time
 
-        test_start = time.perf_counter()  # Start perf_counter immediately before prediction (testing window)
-        y_pred = model.predict(X_test_selected)  # Predict on selected test features (testing)
-        acc = accuracy_score(y_test, y_pred)  # Calculate accuracy
-        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate precision
-        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate recall
-        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate F1-score
-
-        if len(np.unique(y_test)) == 2:  # If binary classification
-            cm = confusion_matrix(y_test, y_pred)  # Confusion matrix for observed labels
-            if cm.shape == (2, 2):  # Expect 2x2 matrix for binary
-                tn, fp, fn, tp = cm.ravel()  # Unpack
-                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # Calculate false positive rate
-                fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # Calculate false negative rate
-            else:  # Fallback: compute rates from sums if unexpected shape
-                total = cm.sum() if cm.size > 0 else 1
-                fpr = float(cm.sum() - np.trace(cm)) / float(total) if total > 0 else 0
-                fnr = fpr  # Fallback estimate when binary layout is unexpected
-        else:  # For multi-class classification
-            cm = confusion_matrix(y_test, y_pred)  # Confusion matrix for observed labels
-            supports = cm.sum(axis=1)  # Support for each class
-            fprs = []  # List to hold per-class FPR
-            fnrs = []  # List to hold per-class FNR
-            for i in range(cm.shape[0]):  # For each class
-                tp = cm[i, i]  # True positives for class i
-                fn = cm[i, :].sum() - tp  # False negatives: actual i but predicted not-i
-                fp = cm[:, i].sum() - tp  # False positives: predicted i but actual not-i
-                tn = cm.sum() - (tp + fp + fn)  # True negatives: everything else
-                denom_fnr = (tp + fn) if (tp + fn) > 0 else 1  # Denominator for FNR (avoid div0)
-                denom_fpr = (fp + tn) if (fp + tn) > 0 else 1  # Denominator for FPR (avoid div0)
-                fnr_i = fn / denom_fnr  # Per-class false negative rate
-                fpr_i = fp / denom_fpr  # Per-class false positive rate
-                fprs.append((fpr_i, supports[i]))  # Store FPR with class support for weighting
-                fnrs.append((fnr_i, supports[i]))  # Store FNR with class support for weighting
-            total_support = float(supports.sum()) if supports.sum() > 0 else 1.0  # Total support across classes
-            fpr = float(sum(v * s for v, s in fprs) / total_support)  # Weighted average FPR across classes
-            fnr = float(sum(v * s for v, s in fnrs) / total_support)  # Weighted average FNR across classes
-        test_end = time.perf_counter()  # End perf_counter immediately after metrics computed
-        testing_time_s = round(test_end - test_start, 6)  # Compute testing time rounded to 6 decimals
+        acc, prec, rec, f1, fpr, fnr, testing_time_s = predict_and_compute_rfe_scores(model, X_test_selected, y_test)  # Predict and compute all classification scores
 
         return (
             float(acc),  # Accuracy
