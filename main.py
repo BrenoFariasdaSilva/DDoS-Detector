@@ -587,6 +587,30 @@ def fit_or_transform_scaler(X_encoded, scaler):
         raise
 
 
+def fit_or_transform_label_encoder(y, label_encoder):
+    """
+    Fit a new LabelEncoder or apply an existing one to encode the label Series.
+
+    :param y: Label Series or array to encode.
+    :param label_encoder: Pre-fitted LabelEncoder to reuse, or None to fit a new one.
+    :return: Tuple (y_encoded, label_encoder) where y_encoded is the numeric array and label_encoder is used encoder.
+    """
+
+    try:
+        if not pd.api.types.is_numeric_dtype(y):  # Verify if labels are non-numeric and require encoding
+            if label_encoder is None:  # If no pre-fitted encoder provided, create and fit a new one
+                label_encoder = LabelEncoder()  # Initialize new LabelEncoder instance
+                y = label_encoder.fit_transform(y)  # Fit and encode labels in one step
+            else:  # If a pre-fitted encoder is provided, use it directly
+                y = label_encoder.transform(y)  # Encode labels using existing fitted encoder
+
+        return y, label_encoder  # Return encoded labels and the fitted encoder object
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label_encoder=None, selected_features=None):
     """
     Applies one-hot encoding and scaling to features.
@@ -635,12 +659,7 @@ def preprocess_features(df, label_col=None, ref_columns=None, scaler=None, label
 
         X_scaled, scaler = fit_or_transform_scaler(X_encoded, scaler)  # Fit new scaler or transform using existing one
 
-        if not pd.api.types.is_numeric_dtype(y):  # If labels are not numeric
-            if label_encoder is None:  # If label encoder is not provided, fit a new one
-                label_encoder = LabelEncoder()  # Initialize LabelEncoder
-                y = label_encoder.fit_transform(y)  # Fit and transform the labels
-            else:  # If label encoder is provided, use it to transform
-                y = label_encoder.transform(y)  # Transform the labels with existing encoder
+        y, label_encoder = fit_or_transform_label_encoder(y, label_encoder)  # Encode labels using new or existing encoder
 
         return X_scaled, y, X_encoded.columns, X_encoded, scaler, label_encoder  # Return processed data and objects
     except Exception as e:
