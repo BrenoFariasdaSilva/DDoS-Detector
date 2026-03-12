@@ -1920,6 +1920,73 @@ def resolve_dataset_entry_paths(dataset_info):
     return training_file_path, testing_file_path, feature_files, dataset_dir, dataset_name  # Return all resolved path components to the caller
 
 
+def process_single_dataset_entry(index, dataset_key, dataset_info, sorted_datasets, extract_features, compare_feature_selection, use_cv):
+    """
+    Execute the full evaluation pipeline for one dataset entry from the DATASETS mapping.
+
+    :param index: 1-based index of the current dataset in the sorted iteration used for progress display.
+    :param dataset_key: String key identifying the dataset in the DATASETS mapping.
+    :param dataset_info: Dictionary with 'train', 'test', and optionally 'features' paths for the dataset.
+    :param sorted_datasets: Full sorted list of dataset entries used to display the total dataset count.
+    :param extract_features: Boolean flag indicating whether feature files should be loaded and applied.
+    :param compare_feature_selection: Boolean flag indicating whether a baseline without feature selection should be run.
+    :param use_cv: Boolean flag indicating whether cross-validation should be used instead of a fixed split.
+    :return: Tuple of (dataset_model_scores, baseline_scores, features_to_use, features_file_used) or None when the dataset must be skipped.
+    """
+
+    training_file_path, testing_file_path, feature_files, dataset_dir, dataset_name = resolve_dataset_entry_paths(dataset_info)  # Resolve all path components from the dataset entry dictionary
+
+    print(
+        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset {BackgroundColors.CYAN}{index}/{len(sorted_datasets)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN}{Style.RESET_ALL}"
+    )  # Print formatted dataset processing header with index and name
+
+    send_telegram_message(TELEGRAM_BOT, [f"Processing dataset {index}/{len(sorted_datasets)}: {dataset_name}"])  # Send Telegram progress notification with current dataset name and index
+
+    if not verify_filepath_exists(training_file_path):  # Verify train file
+        print(f"{BackgroundColors.RED}Missing training file for {dataset_name}. Skipping.{Style.RESET_ALL}")  # Warn about missing training file before skipping
+        return None  # Signal caller to skip this dataset entry
+
+    if not verify_filepath_exists(testing_file_path):  # Verify test file
+        testing_file_path = training_file_path  # Fallback to train file when test file is missing
+
+    features_to_use = None  # Reset feature list for this dataset entry
+    features_file_used = None  # Reset last-used features file for this dataset entry
+    features_to_use, features_file_used = load_and_merge_feature_files(feature_files, extract_features)  # Load and merge features from all provided feature files
+
+    train_df, test_df, split_required = load_and_prepare_data(
+        training_file_path, testing_file_path
+    )  # Load and preprocess dataset
+
+    label_col = resolve_dataset_label_col_interactively(train_df, dataset_name)  # Detect or prompt for the label column name
+
+    if label_col is None:  # If user provided empty input for the label column
+        return None  # Signal caller to skip this dataset entry
+
+    baseline_scores = []  # Initialize baseline scores as empty list for datasets where comparison is disabled
+    if compare_feature_selection and features_to_use is not None:  # Run baseline without feature selection when comparison is enabled
+        baseline_scores = run_baseline_evaluation_for_dataset(train_df, test_df, split_required, label_col, dataset_dir, dataset_name, use_cv)  # Produce baseline scores without feature selection
+
+    verbose_output(f"{BackgroundColors.GREEN}Preparing data with feature selection...{Style.RESET_ALL}")  # Announce feature-selected data preparation start
+    X_train, X_test, y_train, y_test, feature_names = split_data(
+        train_df, test_df, split_required, label_col=label_col, selected_features=features_to_use
+    )  # Split with Feature Selection
+
+    verbose_output(f"{BackgroundColors.GREEN}Training models with feature selection...{Style.RESET_ALL}")  # Announce feature-selected model training start
+    models, dataset_model_scores = train_and_evaluate_models(
+        X_train,
+        X_test,
+        y_train,
+        y_test,
+        dataset_dir,
+        dataset_name,
+        use_cv=use_cv,
+        selected_features=features_to_use,
+        features_file=features_file_used,
+    )  # Train Feature Selection models and collect per-model evaluation scores
+
+    return dataset_model_scores, baseline_scores, features_to_use, features_file_used  # Return scores and feature metadata for accumulation by the caller
+
+
 def main(use_cv=False, extract_features=True, compare_feature_selection=None):
     """
     Main function to run the machine learning pipeline on multiple datasets.
