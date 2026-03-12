@@ -1392,14 +1392,60 @@ def resolve_results_export_path(csv_path: str) -> Tuple[str, str]:
         raise
 
 
+def load_and_merge_results_csv(run_csv_path: str, df_new: pd.DataFrame, cols: list) -> pd.DataFrame:
+    """
+    Load an existing results CSV and merge it with the new results DataFrame.
+
+    :param run_csv_path: Full path to the existing (or new) results CSV file.
+    :param df_new: New results DataFrame to merge.
+    :param cols: Ordered list of column names for the merged output.
+    :return: Merged and sorted DataFrame ready for export.
+    """
+
+    try:
+        if os.path.exists(run_csv_path):  # Verify if an existing results file is present
+            try:  # Attempt to load and merge with existing data
+                df_existing = pd.read_csv(run_csv_path, dtype=str)  # Load existing CSV with all columns as strings
+                if "timestamp" not in df_existing.columns:  # Verify if timestamp column is missing
+                    mtime = os.path.getmtime(run_csv_path)  # Get file modification time as fallback
+                    back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")  # Format modification time as timestamp
+                    df_existing["timestamp"] = back_ts  # Assign fallback timestamp to existing rows
+
+                for c in cols:  # Iterate through expected columns
+                    if c not in df_existing.columns:  # Verify if column is missing from existing data
+                        df_existing[c] = None  # Add missing column with None values
+
+                df_combined = pd.concat([df_existing[cols], df_new], ignore_index=True, sort=False)  # Concatenate existing and new results
+
+                try:  # Attempt timestamp-based sorting
+                    df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")  # Parse timestamp for sorting
+                    df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)  # Sort by timestamp descending
+                    df_combined = df_combined.drop(columns=["timestamp_dt"])  # Remove temporary sorting column
+                except Exception:  # Fallback to lexicographic sort on string timestamp
+                    df_combined = df_combined.sort_values(by="timestamp", ascending=False)  # Lexicographic fallback sort
+
+                df_out = df_combined.reset_index(drop=True)  # Reset index after sorting
+            except Exception:  # On any merge failure
+                df_out = df_new  # Fall back to only new results
+        else:  # No existing file: use only new results
+            df_out = df_new  # Assign new results directly
+
+        return df_out  # Return the merged and sorted DataFrame
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def save_rfe_results(csv_path, run_results):
     """
     Saves results from RFE run to a structured CSV file.
 
-    :param csv_path: Original CSV file path
-    :param run_results: List of dicts containing results from the current run
+    :param csv_path: Original CSV file path.
+    :param run_results: List of dicts containing results from the current run.
+    :return: Path to the saved results CSV file.
     """
-    
+
     try:
         verbose_output(f"{BackgroundColors.GREEN}Saving RFE run results to CSV...{Style.RESET_ALL}")
 
@@ -1416,32 +1462,7 @@ def save_rfe_results(csv_path, run_results):
 
         resolved_dir, run_csv_path = resolve_results_export_path(csv_path)  # Resolve destination directory and full CSV path
 
-        if os.path.exists(run_csv_path):
-            try:
-                df_existing = pd.read_csv(run_csv_path, dtype=str)
-                if "timestamp" not in df_existing.columns:
-                    mtime = os.path.getmtime(run_csv_path)
-                    back_ts = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d_%H_%M_%S")
-                    df_existing["timestamp"] = back_ts
-
-                for c in cols:
-                    if c not in df_existing.columns:
-                        df_existing[c] = None
-
-                df_combined = pd.concat([df_existing[cols], df_new], ignore_index=True, sort=False)
-
-                try:
-                    df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")
-                    df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)
-                    df_combined = df_combined.drop(columns=["timestamp_dt"])
-                except Exception:
-                    df_combined = df_combined.sort_values(by="timestamp", ascending=False)
-
-                df_out = df_combined.reset_index(drop=True)
-            except Exception:
-                df_out = df_new
-        else:
-            df_out = df_new
+        df_out = load_and_merge_results_csv(run_csv_path, df_new, cols)  # Load existing CSV and merge with new rows
 
         df_out = populate_hardware_column_and_order(df_out, CONFIG if CONFIG else None, column_name="hardware")
 
