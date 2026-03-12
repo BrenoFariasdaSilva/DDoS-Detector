@@ -165,7 +165,6 @@ def initialize_defaults() -> None:
             except Exception:  # If nested merge fails, fall back to shallow overlay
                 defaults.update(cfg)  # Overlay top-level keys with file config
         DEFAULTS = defaults  # Set the module-global DEFAULTS to the merged configuration
-        # Initialize runtime flags from DEFAULTS
         try:
             global VERBOSE  # Declare that we will assign to the module-global VERBOSE
             VERBOSE = bool(DEFAULTS.get("dataset_converter", {}).get("verbose", False))  # Set VERBOSE based on DEFAULTS, defaulting to False if not specified
@@ -235,10 +234,10 @@ def setup_telegram_bot():
 
         try:  # Try to initialize the Telegram bot
             TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
-            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
-            telegram_module.RUNNING_CODE = os.path.basename(__file__)
+            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"  # Set device info for Telegram notifications
+            telegram_module.RUNNING_CODE = os.path.basename(__file__)  # Set the running code name for Telegram context
         except Exception as e:
-            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")  # Report initialization failure to terminal
             TELEGRAM_BOT = None  # Set to None if initialization fails
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -1506,7 +1505,7 @@ def get_and_verify_dataset_files(input_directory: str, cfg: dict) -> tuple:
     """
 
     try:  # Wrap function logic to ensure production-safe monitoring
-        dataset_files, len_dataset_files = gather_dataset_files(input_directory, cfg)  # Gather dataset files and their count for processing
+        dataset_files, len_dataset_files = gather_dataset_files(input_directory)  # Gather dataset files and their count for processing
         if not dataset_files:  # If no dataset files were found
             print(f"{BackgroundColors.RED}No dataset files found in {BackgroundColors.CYAN}{input_directory}{Style.RESET_ALL}")  # Print error message when directory is empty
             return [], 0  # Return empty results to signal caller to exit early
@@ -1602,12 +1601,11 @@ def prepare_input_context(context: dict, cfg: dict) -> tuple:
     return input_directory, output_directory  # Return prepared input and output directories
 
 
-def gather_dataset_files(input_directory: str, cfg: dict) -> tuple:
+def gather_dataset_files(input_directory: str) -> tuple:
     """
     Gather dataset files from the input directory and return them with count.
 
     :param input_directory: Path to the input directory to scan for datasets.
-    :param cfg: Configuration dictionary used for fallback values.
     :return: Tuple containing (dataset_files_list, len_dataset_files).
     """
 
@@ -1645,7 +1643,7 @@ def process_single_input_file(idx: int, params: dict) -> None:
         if orig_format in formats_list:  # Verify whether native format is included in requested targets
             formats_list = [f for f in formats_list if f != orig_format]  # Remove native format to avoid rewriting original file
 
-        update_progress_description(pbar, input_path, input_directory)  # Update progress bar description using function
+        update_progress_description(pbar, input_path)  # Update progress bar description using function
 
         if not is_supported_extension(ext):  # Verify that the file has a supported extension before further work
             return  # Return early to the caller when unsupported extension
@@ -1697,13 +1695,12 @@ def compute_file_size_str(path: str) -> str:
         return "0.00 GB"  # Use default size string on error
 
 
-def update_progress_description(pbar, input_path: Optional[str], input_directory: Optional[str]) -> None:
+def update_progress_description(pbar, input_path: Optional[str]) -> None:
     """
     Update the progress bar description with the relative path of the current file.
 
     :param pbar: The tqdm progress bar instance to update.
     :param input_path: The full path of the current input file.
-    :param input_directory: The base input directory to compute a relative path.
     :return: None
     """
 
@@ -1728,10 +1725,9 @@ def update_progress_description(pbar, input_path: Optional[str], input_directory
 
 def is_supported_extension(ext: str) -> bool:
     """
-    Check whether the file extension is one of the supported dataset formats.
+    Verify whether the file extension is one of the supported dataset formats.
 
     :param ext: The file extension to evaluate (including leading dot).
-    :param: None
     :return: True when extension is supported, otherwise False.
     """
 
@@ -1850,14 +1846,11 @@ def to_seconds(obj):
 
 def calculate_execution_time(start_time, finish_time=None):
     """
-    Calculates the execution time and returns a human-readable string.
+    Calculate the execution time and return a human-readable string.
 
-    Accepts either:
-    - Two datetimes/timedeltas: `calculate_execution_time(start, finish)`
-    - A single timedelta or numeric seconds: `calculate_execution_time(delta)`
-    - Two numeric timestamps (seconds): `calculate_execution_time(start_s, finish_s)`
-
-    Returns a string like "1h 2m 3s".
+    :param start_time: The start time or duration value (datetime, timedelta, or numeric seconds).
+    :param finish_time: Optional finish time; if None, start_time is treated as the total duration.
+    :return: Human-readable execution time string formatted as days, hours, minutes, and seconds.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
@@ -1908,7 +1901,8 @@ def calculate_execution_time(start_time, finish_time=None):
 
 def play_sound():
     """
-    Plays a sound when the program finishes and skips if the operating system is Windows.
+    Play a sound when the program finishes and skip if the operating system is Windows.
+
     :return: None
     """
 
