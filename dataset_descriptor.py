@@ -881,7 +881,7 @@ def compute_initial_alloc(counts, min_per_class):
     """
     Compute initial per-class allocations capped by `min_per_class`.
 
-    This helper computes the initial allocation for each class as the
+    This function computes the initial allocation for each class as the
     minimum of the class count and the requested `min_per_class` value and
     returns the allocation mapping together with the sum of those values.
 
@@ -906,7 +906,7 @@ def allocate_with_min(initial_alloc, counts, max_samples):
     Distribute remaining capacity after satisfying per-class minima.
 
     Starting from `initial_alloc` (which already enforces per-class minima),
-    this helper distributes the remaining available capacity proportionally
+    this function distributes the remaining available capacity proportionally
     to classes that still have unused samples. It performs integer flooring
     and then distributes leftover units according to fractional remainders
     to produce a final integer allocation per class.
@@ -954,7 +954,7 @@ def proportional_alloc(counts, max_samples):
     """
     Compute a proportional allocation across classes when minima cannot be met.
 
-    This helper computes a proportional distribution of `max_samples` across
+    This function computes a proportional distribution of `max_samples` across
     classes according to their relative counts. It floors fractional values
     to integers and then distributes leftover units by descending fractional
     remainder to ensure the total sums to `max_samples` (subject to class
@@ -997,7 +997,7 @@ def sample_indices_from_alloc(labels, allocations, random_state):
     """
     Draw indices from `labels` according to `allocations` using `random_state`.
 
-    For each class in `allocations`, this helper selects the requested number
+    For each class in `allocations`, this function selects the requested number
     of indices without replacement (or all available indices if the
     allocation exceeds availability). The selection is reproducible via the
     provided `random_state`.
@@ -1153,7 +1153,7 @@ def scale_features(numeric_df):
 
 def allocate_remaining_budget(counts, allocations, remaining_budget):
     """
-    Helper function to distribute remaining budget among classes proportionally,
+    Function to distribute remaining budget among classes proportionally,
     using the fractional remainder method.
 
     :param counts: pandas Series of class counts
@@ -1973,7 +1973,7 @@ def print_preprocessing_summary_table(df):
 
 def stripe(row):
     """
-    Helper function to apply zebra striping to DataFrame rows for styling.
+    Function to apply zebra striping to DataFrame rows for styling.
     
     :param row: pandas Series representing a DataFrame row
     :return: List of CSS styles for each cell in the row to achieve zebra striping
@@ -2738,7 +2738,7 @@ def main():
         sys.stdout = runtime["logger"]
         sys.stderr = runtime["logger"]
 
-        # Export verbosity flag for helper functions that read it
+        # Export verbosity flag for use in other functions and modules without passing runtime
         os.environ["DD_DESCRIPTOR_VERBOSE"] = str(runtime.get("verbose", False))
 
         print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Dataset Descriptor{BackgroundColors.GREEN}!{Style.RESET_ALL}")
