@@ -2294,7 +2294,7 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
             colour="cyan",  # Set progress bar visualization color to cyan
         )  # Create a single in-place progress bar instance
         for idx, filepath in enumerate(progress, 1):  # Process each matching file
-            file_basename = os.path.basename(filepath)  # Get the base filename
+            file_basename = os.path.relpath(filepath, base_dir).replace("\\", "/")  # Get the file path relative to base_dir and normalize slashes
             colored_desc = f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{file_basename}{Style.RESET_ALL}"  # Compose colored description using BackgroundColors while keeping length bounded
             progress.set_description(colored_desc)  # Update progress bar description with colored, truncated filename for inline display
 
