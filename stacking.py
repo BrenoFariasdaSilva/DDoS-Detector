@@ -5893,6 +5893,40 @@ def export_automl_pipeline_artifacts(model_study, stacking_study, stacking_confi
         raise
 
 
+def prepare_automl_training_data(df, config=None):
+    """
+    Extracts features and target from DataFrame, validates class count, scales and splits data for AutoML.
+
+    :param df: Preprocessed DataFrame with numeric features and a target in the last column
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Tuple (X_train_scaled, X_test_scaled, y_train_arr, y_test_arr, scaler) or None if target has fewer than 2 classes
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        X_full = df.select_dtypes(include=np.number).iloc[:, :-1]  # Extract all numeric columns except the last as features
+        y = df.iloc[:, -1]  # Extract the last column as the target
+
+        if len(np.unique(y)) < 2:  # If target has fewer than 2 unique classes
+            print(
+                f"{BackgroundColors.RED}AutoML: Target has only one class. Skipping.{Style.RESET_ALL}"
+            )  # Output single-class error message
+            return None  # Signal caller to abort the pipeline
+
+        X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X_full, y, config=config)  # Scale features and split into train/test sets
+
+        y_train_arr = np.asarray(y_train)  # Convert training target to numpy array for model compatibility
+        y_test_arr = np.asarray(y_test)  # Convert test target to numpy array for model compatibility
+
+        return (X_train_scaled, X_test_scaled, y_train_arr, y_test_arr, scaler)  # Return prepared training data tuple
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def print_automl_pipeline_header(file):
     """
     Prints the formatted header block for the AutoML pipeline execution.
@@ -5937,19 +5971,11 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
 
         automl_start = time.time()  # Record pipeline start time
 
-        X_full = df.select_dtypes(include=np.number).iloc[:, :-1]  # Extract numeric features
-        y = df.iloc[:, -1]  # Extract target column
+        training_data = prepare_automl_training_data(df, config=config)  # Prepare scaled training and test splits, returns None for single-class targets
+        if training_data is None:  # If preparation failed due to insufficient classes
+            return None  # Abort pipeline early
 
-        if len(np.unique(y)) < 2:  # Check for at least 2 classes
-            print(
-                f"{BackgroundColors.RED}AutoML: Target has only one class. Skipping.{Style.RESET_ALL}"
-            )  # Output error
-            return None  # Return None
-
-        X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X_full, y, config=config)  # Scale and split data
-
-        y_train_arr = np.asarray(y_train)  # Convert training target to numpy array
-        y_test_arr = np.asarray(y_test)  # Convert test target to numpy array
+        X_train_scaled, X_test_scaled, y_train_arr, y_test_arr, scaler = training_data  # Unpack prepared training data tuple
 
         send_telegram_message(TELEGRAM_BOT, f"Starting AutoML pipeline for {os.path.basename(file)}")  # Notify via Telegram
 
@@ -5988,7 +6014,7 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
 
         results_list = build_automl_results_list(
             best_model_name, best_params, individual_metrics, stacking_metrics, stacking_config,
-            file, feature_names, len(y_train), len(y_test), config=config
+            file, feature_names, len(y_train_arr), len(y_test_arr), config=config
         )  # Build results list for CSV
 
         save_automl_results(file, results_list, config=config)  # Save AutoML results to CSV
