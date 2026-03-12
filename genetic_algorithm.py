@@ -3077,6 +3077,82 @@ def evolve_population_one_generation(
     return current_best_fitness_f1, current_best_num_features  # Return best F1-score and feature count from the updated HOF
 
 
+def finalize_generation_and_notify(
+    gen,
+    n_generations,
+    gens_ran,
+    last_telegram_block,
+    best_fitness,
+    current_best_fitness_f1,
+    current_best_num_features,
+    telegram_enabled,
+    show_progress,
+    telegram_progress_pct,
+    pop_size,
+    output_dir,
+    state_id,
+    population,
+    hof,
+    fitness_history,
+    best_features_history,
+    avg_f1_history,
+    avg_features_history,
+    pareto_size_history,
+    hypervolume_history,
+    diversity_history,
+):
+    """
+    Send Telegram milestone notification, update the completed generation counter, and persist GA state to disk.
+
+    :param gen: Current generation index used for notification content and persistence decisions.
+    :param n_generations: Total planned generation count used for milestone percentage calculations.
+    :param gens_ran: Accumulated count of completed generations updated by this function.
+    :param last_telegram_block: Last Telegram notification block index used to avoid duplicate messages.
+    :param best_fitness: Best F1-score observed so far included in the Telegram notification text.
+    :param current_best_fitness_f1: Best F1-score from the current generation included in the notification text.
+    :param current_best_num_features: Best feature count from the current generation included in the notification text.
+    :param telegram_enabled: Boolean flag controlling whether Telegram notifications are sent.
+    :param show_progress: Boolean flag indicating whether a tqdm progress bar is active, affecting notification logic.
+    :param telegram_progress_pct: Percentage interval used to determine Telegram notification milestones.
+    :param pop_size: Population size included in the Telegram notification message text.
+    :param output_dir: Directory path where generation checkpoint files are written.
+    :param state_id: Unique state identifier used to name generation checkpoint files.
+    :param population: Current population list passed to the persistence function.
+    :param hof: Hall of Fame instance passed to the persistence function.
+    :param fitness_history: Fitness history list passed to the persistence function.
+    :param best_features_history: Best features history list passed to the persistence function.
+    :param avg_f1_history: Average F1 history list passed to the persistence function.
+    :param avg_features_history: Average features history list passed to the persistence function.
+    :param pareto_size_history: Pareto size history list passed to the persistence function.
+    :param hypervolume_history: Hypervolume history list passed to the persistence function.
+    :param diversity_history: Diversity history list passed to the persistence function.
+    :return: Tuple of (gens_ran, last_telegram_block) with updated generation counter and notification block.
+    """
+
+    should_send, last_telegram_block = check_telegram_progress_milestone(
+        gen, n_generations, telegram_enabled, show_progress, telegram_progress_pct, last_telegram_block
+    )  # Determine whether a Telegram progress milestone notification should be sent
+
+    send_telegram_message(
+        TELEGRAM_BOT,
+        [
+            f"Pop Size {pop_size}: Generation {gen}/{n_generations}, Best F1-Score: {truncate_value(best_fitness)}, Features: {int(current_best_num_features) if current_best_num_features is not None else 'N/A'}"
+        ],
+        should_send,
+    )  # Send periodic updates to Telegram with multi-objective fitness values at configured percent milestones
+
+    gens_ran = update_global_generation_count(gen)  # Record completed generation count in gens_ran and the global counter
+    gens_ran = gen if gens_ran == 0 else gens_ran  # Preserve gens_ran when the loop did not execute any generation
+
+    persist_generation_state_if_needed(
+        output_dir, state_id, gen, n_generations, population, hof,
+        fitness_history, best_features_history, avg_f1_history,
+        avg_features_history, pareto_size_history, hypervolume_history, diversity_history,
+    )  # Checkpoint generation state to disk at configured intervals to enable resume
+
+    return gens_ran, last_telegram_block  # Return updated generation counter and last Telegram notification block
+
+
 def run_genetic_algorithm_loop(
     toolbox,
     population,
