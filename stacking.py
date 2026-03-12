@@ -6331,6 +6331,111 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
         raise
 
 
+def submit_classifier_evaluations_to_pool(executor, individual_models, current_combination, name, X_train_df, y_train, X_test_df, y_test, file, scaler, subset_feature_names, total_steps):
+    """
+    Submit each individual classifier to the thread pool executor and return the futures map alongside the updated combination counter.
+
+    :param executor: Active ThreadPoolExecutor instance to submit evaluation tasks to.
+    :param individual_models: Dictionary mapping model names to model instances.
+    :param current_combination: Current global combination counter before submission begins.
+    :param name: Name of the current feature set being evaluated.
+    :param X_train_df: Training feature DataFrame with named columns.
+    :param y_train: Training target labels.
+    :param X_test_df: Test feature DataFrame with named columns.
+    :param y_test: Test target labels.
+    :param file: Path to the dataset file used for evaluation.
+    :param scaler: Fitted scaler for dataset preprocessing.
+    :param subset_feature_names: List of feature names for the current subset.
+    :param total_steps: Total number of evaluation steps for Telegram progress messages.
+    :return: Tuple of (future_to_model, current_combination) where future_to_model maps each submitted future to its (model_name, model_class, combination_index) metadata.
+    """
+
+    future_to_model = {}  # MAP FUTURES TO (MODEL_NAME, MODEL_CLASS, COMBINATION_INDEX)
+    for model_name, model in individual_models.items():  # ITERATE OVER EACH INDIVIDUAL MODEL
+        send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - {model_name}")  # NOTIFY TELEGRAM ABOUT EVALUATION START
+        future = executor.submit(
+            evaluate_individual_classifier,
+            model,
+            model_name,
+            X_train_df.values,
+            y_train,
+            X_test_df.values,
+            y_test,
+            file,
+            scaler,
+            subset_feature_names,
+            name,
+        )  # SUBMIT EVALUATION TASK TO THREAD POOL USING NUMPY ARRAYS
+        future_to_model[future] = (model_name, model.__class__.__name__, current_combination)  # STORE FUTURE WITH METADATA
+        current_combination += 1  # ADVANCE THE GLOBAL COMBINATION COUNTER
+    return future_to_model, current_combination  # RETURN FUTURES MAP AND UPDATED COMBINATION COUNTER
+
+
+def collect_classifier_results_from_futures(future_to_model, individual_models, name, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, y_train, y_test, hyperparams_map, subset_feature_names, total_steps, progress_bar, config):
+    """
+    Collect results from completed classifier futures, build standardized result entries, and optionally run explainability for each model.
+
+    :param future_to_model: Dictionary mapping futures to (model_name, model_class, combination_index) metadata.
+    :param individual_models: Dictionary mapping model names to model instances, used for explainability retrieval.
+    :param name: Name of the current feature set being evaluated.
+    :param X_test_subset: Test feature array passed to the explainability pipeline.
+    :param X_train_n_cols: Number of training columns used for result entry metadata.
+    :param file: Path to the dataset file for result metadata and explainability output.
+    :param execution_mode_str: Execution mode string ('binary' or 'multi-class').
+    :param attack_types_combined: List of attack types for multi-class, or None for binary.
+    :param data_source_label: Label identifying the data source for result traceability.
+    :param experiment_id: Unique experiment identifier for traceability.
+    :param experiment_mode: Experiment mode string ('original_only' or 'original_plus_augmented').
+    :param augmentation_ratio: Augmentation ratio float, or None for original-only experiments.
+    :param y_train: Training target labels used to compute training set size.
+    :param y_test: Test target labels used for evaluation and size metadata.
+    :param hyperparams_map: Dictionary mapping model names to their hyperparameter dictionaries.
+    :param subset_feature_names: List of feature names for the current subset.
+    :param total_steps: Total number of evaluation steps for Telegram progress messages.
+    :param progress_bar: tqdm progress bar advanced after each completed future.
+    :param config: Configuration dictionary used for explainability settings and verbose output.
+    :return: Dictionary mapping (feature_set_name, model_name) tuples to standardized result entry dicts.
+    """
+
+    results_dict = {}  # ACCUMULATE RESULT ENTRIES FOR THIS FEATURE SET
+    for future in concurrent.futures.as_completed(future_to_model):  # PROCESS RESULTS AS FUTURES COMPLETE
+        model_name, model_class, comb_idx = future_to_model[future]  # RETRIEVE MODEL METADATA FOR THIS FUTURE
+        metrics = future.result()  # COLLECT METRICS TUPLE FROM COMPLETED EVALUATION
+        result_entry = build_classifier_result_entry(
+            model_class, file, execution_mode_str, attack_types_combined, name, "Individual",
+            model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio,
+            X_train_n_cols, len(y_train), len(y_test), metrics, subset_feature_names,
+            hyperparams_map=hyperparams_map,
+        )  # BUILD STANDARDIZED RESULT ENTRY FOR THIS INDIVIDUAL CLASSIFIER
+        results_dict[(name, model_name)] = result_entry  # STORE RESULT KEYED BY (FEATURE_SET, MODEL_NAME)
+        send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} with F1: {truncate_value(metrics[3])} in {calculate_execution_time(0, metrics[6])}")  # NOTIFY TELEGRAM ABOUT COMPLETION
+        print(
+            f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(metrics[0])}{Style.RESET_ALL}"
+        )  # OUTPUT INDIVIDUAL MODEL ACCURACY
+        progress_bar.update(1)  # ADVANCE PROGRESS BAR BY ONE STEP
+
+        if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # ONLY RUN EXPLAINABILITY ON ORIGINAL DATA
+            try:  # ATTEMPT TO RUN EXPLAINABILITY PIPELINE FOR THIS MODEL
+                trained_model = individual_models[model_name]  # RETRIEVE TRAINED MODEL OBJECT FOR EXPLAINABILITY
+                run_explainability_pipeline(
+                    trained_model,
+                    model_name,
+                    X_test_subset,
+                    y_test,
+                    subset_feature_names,
+                    file,
+                    name,
+                    execution_mode_str,
+                    config
+                )  # RUN EXPLAINABILITY PIPELINE ON ORIGINAL TEST DATA ONLY
+            except Exception as e:  # IF EXPLAINABILITY FAILS
+                verbose_output(
+                    f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
+                    config=config
+                )  # LOG ERROR BUT CONTINUE EVALUATION
+    return results_dict  # RETURN ACCUMULATED RESULT ENTRIES
+
+
 def run_individual_classifiers_for_feature_set(name, individual_models, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, hyperparams_map, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=None):
     """
     Submits all individual classifiers for a feature set to a thread pool, collects results, and runs explainability.
@@ -6364,68 +6469,15 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        results_dict = {}  # Accumulate result entries for this feature set
         progress_bar.set_description(
             f"{data_source_label} - {name} (Individual)"
         )  # Update progress bar description for individual model evaluations
 
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=config.get("evaluation", {}).get("threads_limit", 2)
-        ) as executor:  # Create a bounded thread pool for parallel model evaluation
-            future_to_model = {}  # Map futures to (model_name, model_class, combination_index)
-            for model_name, model in individual_models.items():  # Iterate over each individual model
-                send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - {model_name}")  # Notify Telegram about evaluation start
-                future = executor.submit(
-                    evaluate_individual_classifier,
-                    model,
-                    model_name,
-                    X_train_df.values,
-                    y_train,
-                    X_test_df.values,
-                    y_test,
-                    file,
-                    scaler,
-                    subset_feature_names,
-                    name,
-                )  # Submit evaluation task to thread pool using numpy arrays
-                future_to_model[future] = (model_name, model.__class__.__name__, current_combination)  # Store future with metadata
-                current_combination += 1  # Advance the global combination counter
-
-            for future in concurrent.futures.as_completed(future_to_model):  # Process results as futures complete
-                model_name, model_class, comb_idx = future_to_model[future]  # Retrieve model metadata for this future
-                metrics = future.result()  # Collect metrics tuple from completed evaluation
-                result_entry = build_classifier_result_entry(
-                    model_class, file, execution_mode_str, attack_types_combined, name, "Individual",
-                    model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio,
-                    X_train_n_cols, len(y_train), len(y_test), metrics, subset_feature_names,
-                    hyperparams_map=hyperparams_map,
-                )  # Build standardized result entry for this individual classifier
-                results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
-                send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} with F1: {truncate_value(metrics[3])} in {calculate_execution_time(0, metrics[6])}")  # Notify Telegram about completion
-                print(
-                    f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(metrics[0])}{Style.RESET_ALL}"
-                )  # Output individual model accuracy
-                progress_bar.update(1)  # Advance progress bar by one step
-
-                if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run explainability on original data
-                    try:  # Attempt to run explainability pipeline for this model
-                        trained_model = individual_models[model_name]  # Retrieve trained model object for explainability
-                        run_explainability_pipeline(
-                            trained_model,
-                            model_name,
-                            X_test_subset,
-                            y_test,
-                            subset_feature_names,
-                            file,
-                            name,
-                            execution_mode_str,
-                            config
-                        )  # Run explainability pipeline on original test data only
-                    except Exception as e:  # If explainability fails
-                        verbose_output(
-                            f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
-                            config=config
-                        )  # Log error but continue evaluation
+        ) as executor:  # CREATE A BOUNDED THREAD POOL FOR PARALLEL MODEL EVALUATION
+            future_to_model, current_combination = submit_classifier_evaluations_to_pool(executor, individual_models, current_combination, name, X_train_df, y_train, X_test_df, y_test, file, scaler, subset_feature_names, total_steps)  # SUBMIT ALL CLASSIFIERS TO THREAD POOL AND GET UPDATED COMBINATION COUNTER
+            results_dict = collect_classifier_results_from_futures(future_to_model, individual_models, name, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, y_train, y_test, hyperparams_map, subset_feature_names, total_steps, progress_bar, config)  # COLLECT RESULTS FROM ALL COMPLETED FUTURES
 
         return (results_dict, current_combination)  # Return accumulated results and updated combination counter
     except Exception as e:
