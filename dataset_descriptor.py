@@ -2320,6 +2320,37 @@ def generate_csv_and_image(df, csv_path, config: dict | None = None):
         raise
 
 
+def collect_report_input_files(input_path, file_extension, config):
+    """
+    Determine the matching files and base directory from the provided input path.
+
+    :param input_path: Directory or single file path to scan for matching dataset files.
+    :param file_extension: File extension used to filter files when scanning a directory.
+    :param config: Optional configuration dictionary passed through to collect_matching_files.
+    :return: Tuple of (sorted_matching_files, base_dir) where sorted_matching_files is a list of absolute file paths and base_dir is the absolute base directory used for relative path computations.
+    """
+
+    if os.path.isdir(input_path):  # Scan the directory for all matching files
+        print(
+            f"{BackgroundColors.GREEN}Scanning directory {BackgroundColors.CYAN}{input_path}{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files...{Style.RESET_ALL}"
+        )  # Announce directory scan start
+        sorted_matching_files = collect_matching_files(input_path, file_extension, config=config)  # Collect all matching files from the directory tree
+        base_dir = os.path.abspath(input_path)  # Use the directory itself as the base for relative paths
+    elif os.path.isfile(input_path) and input_path.endswith(file_extension):  # Single file provided
+        print(
+            f"{BackgroundColors.GREEN}Processing single file...{Style.RESET_ALL}"
+        )  # Announce single file processing
+        sorted_matching_files = [input_path]  # Wrap the single file in a list for uniform processing
+        base_dir = os.path.dirname(os.path.abspath(input_path))  # Use the file's parent directory as base
+    else:  # Input is neither a directory nor a valid matching file
+        print(
+            f"{BackgroundColors.RED}Input path is neither a directory nor a valid {file_extension} file: {input_path}{Style.RESET_ALL}"
+        )  # Report the invalid input path
+        sorted_matching_files = []  # No files to process when input is invalid
+        base_dir = os.path.abspath(input_path)  # Preserve input path as base for any downstream error messages
+    return sorted_matching_files, base_dir  # Return the collected files and resolved base directory
+
+
 def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename: str | None = None, config: dict | None = None):
     """
     Generates a CSV report for the specified input path.
@@ -2337,24 +2368,7 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
         sorted_matching_files = []  # List to store matching files
         preprocessing_metrics = []  # List to collect per-file preprocessing metric dicts
 
-        if os.path.isdir(input_path):  # If the input path is a directory
-            print(
-                f"{BackgroundColors.GREEN}Scanning directory {BackgroundColors.CYAN}{input_path}{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{file_extension}{BackgroundColors.GREEN} files...{Style.RESET_ALL}"
-            )  # Output scanning message
-            sorted_matching_files = collect_matching_files(input_path, file_extension, config=config)  # Collect matching files
-            base_dir = os.path.abspath(input_path)  # Get the absolute path of the base directory
-        elif os.path.isfile(input_path) and input_path.endswith(file_extension):  # If the input path is a file
-            print(
-                f"{BackgroundColors.GREEN}Processing single file...{Style.RESET_ALL}"
-            )  # Output processing single file message
-            sorted_matching_files = [input_path]  # Only process this single file
-            base_dir = os.path.dirname(os.path.abspath(input_path))  # Get the base directory of the file
-        else:  # If the input path is neither a directory nor a valid file
-            print(
-                f"{BackgroundColors.RED}Input path is neither a directory nor a valid {file_extension} file: {input_path}{Style.RESET_ALL}"
-            )  # Output the error message
-            sorted_matching_files = []  # No files to process
-            base_dir = os.path.abspath(input_path)  # Just use the input path as base_dir for error message
+        sorted_matching_files, base_dir = collect_report_input_files(input_path, file_extension, config)  # Collect matching files and resolve base directory from the provided input path
 
         cfg = config or get_default_config()
 
