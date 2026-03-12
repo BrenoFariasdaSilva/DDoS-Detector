@@ -205,8 +205,7 @@ def get_default_config() -> Dict[str, Any]:
     """
     Return defaults for hyperparameters_optimization as a dict.
 
-    :param: None
-    :return: Dict containing default configuration values for hyperparameters optimization
+    :return: Dict containing default configuration values for hyperparameters optimization.
     """
     
     return {
@@ -400,8 +399,7 @@ def init_logger_and_exception_hook():
     """
     Instantiate logger and set up global exception hook (side-effects).
 
-    :param: None
-    :return: None
+    :return: None.
     """
     
     global logger
@@ -415,11 +413,11 @@ def init_logger_and_exception_hook():
 
 def verbose_output(true_string="", false_string=""):
     """
-    Outputs a message if the VERBOSE constant is set to True.
+    Output a message if the VERBOSE constant is set to True.
 
     :param true_string: The string to be outputted if the VERBOSE constant is set to True.
     :param false_string: The string to be outputted if the VERBOSE constant is set to False.
-    :return: None
+    :return: None.
     """
     
     try:
@@ -471,10 +469,10 @@ def setup_telegram_bot():
 
         try:  # Try to initialize the Telegram bot
             TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
-            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
-            telegram_module.RUNNING_CODE = os.path.basename(__file__)
+            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"  # Set device info for Telegram notifications
+            telegram_module.RUNNING_CODE = os.path.basename(__file__)  # Set the running code name for Telegram context
         except Exception as e:
-            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")  # Report initialization failure to terminal
             TELEGRAM_BOT = None  # Set to None if initialization fails
     except Exception as e:
         print(str(e))
@@ -543,10 +541,9 @@ def get_n_jobs_display():
 
 def iterate_dataset_directories():
     """
-    Iterates over all dataset directories defined in DATASETS, skipping invalid and ignored directories.
+    Iterate over all dataset directories defined in DATASETS, skipping invalid and ignored directories.
 
-    :param: None
-    :return: Generator yielding (dataset_name, dirpath)
+    :return: Generator yielding (dataset_name, dirpath).
     """
     
     try:
@@ -607,7 +604,7 @@ def get_files_to_process(directory_path, file_extension=".csv"):
         )  # Verbose: starting file collection
         verify_filepath_exists(directory_path)  # Validate directory path exists
 
-        if not os.path.isdir(directory_path):  # Check if path is a valid directory
+        if not os.path.isdir(directory_path):  # Verify if path is a valid directory
             verbose_output(
                 f"{BackgroundColors.RED}Not a directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}"
             )  # Verbose: invalid directory
@@ -951,11 +948,11 @@ def get_feature_subset(X_scaled, features, feature_names):
 
 def is_valid_combination(model_name_local, params_local):
     """
-    Check if the given hyperparameter combination is valid for the specified model.
-    
-    :param model_name_local: Name of the model
-    :param params_local: Dictionary of hyperparameters
-    :return: True if the combination is valid, False otherwise
+    Verify if the given hyperparameter combination is valid for the specified model.
+
+    :param model_name_local: Name of the model.
+    :param params_local: Dictionary of hyperparameters.
+    :return: True if the combination is valid, False otherwise.
     """
     
     try:
@@ -991,18 +988,17 @@ def is_valid_combination(model_name_local, params_local):
 def get_cache_file_path(csv_path):
     """
     Generate cache file path for a specific dataset.
-    
-    :param csv_path: Path to the CSV dataset file
-    :return: Absolute path to the cache CSV file
+
+    :param csv_path: Path to the CSV dataset file.
+    :return: Absolute path to the cache CSV file.
     """
-    
+
     try:
         file_dir = os.path.dirname(csv_path)  # Directory containing the dataset file
-        base_filename = os.path.basename(csv_path)  # Get base filename
         cache_filename = f"{CACHE_PREFIX}{RESULTS_FILENAME}"  # Cache filename with prefix
         cache_dir = os.path.join(file_dir, "Classifiers_Hyperparameters")  # Cache directory
         cache_file = os.path.join(cache_dir, cache_filename)  # Full cache path
-        
+
         return cache_file  # Return cache file path
     except Exception as e:
         print(str(e))
@@ -1076,13 +1072,13 @@ def load_cache_results(csv_path):
         raise
 
 
-def check_if_fully_processed(csv_path, models):
+def is_fully_processed(csv_path, models):
     """
-    Check if the dataset has already been fully processed in the results file.
-    
-    :param csv_path: Path to the CSV dataset file
-    :param models: Dictionary of models being processed
-    :return: True if all models have been processed, False otherwise
+    Verify if the dataset has already been fully processed in the results file.
+
+    :param csv_path: Path to the CSV dataset file.
+    :param models: Dictionary of models being processed.
+    :return: True if all models have been processed, False otherwise.
     """
     
     try:
@@ -1510,10 +1506,9 @@ def build_all_models_config():
 
 def get_models_and_param_grids():
     """
-    Returns a dictionary of models with their corresponding hyperparameter grids for GridSearchCV.
+    Return a dictionary of models with their corresponding hyperparameter grids for GridSearchCV.
 
-    :param: None
-    :return: Dictionary with model names as keys and tuples (model_instance, param_grid) as values
+    :return: Dictionary with model names as keys and tuples (model_instance, param_grid) as values.
     """
 
     try:
@@ -2302,6 +2297,17 @@ def manual_grid_search(
         raise
 
 
+def safe_model_filename(name):
+    """
+    Sanitize a name for use in filesystem paths by replacing forbidden characters with underscores.
+
+    :param name: Name string to sanitize.
+    :return: Sanitized string safe for use as a filename or directory component.
+    """
+
+    return re.sub(r'[\\/*?:"<>|]', "_", str(name))  # Replace all forbidden filesystem characters with underscores
+
+
 def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_names, best_params):
     """
     Exports the trained model and scaler to disk in a structured directory.
@@ -2315,27 +2321,24 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_nam
     """
 
     try:
-        def safe_filename(name):
-            return re.sub(r'[\\/*?:"<>|]', "_", str(name))
-
-        export_dir = os.path.join(MODEL_EXPORT_BASE, safe_filename(dataset_name))
-        os.makedirs(export_dir, exist_ok=True)
-        param_str = "_".join(f"{k}-{v}" for k, v in sorted(best_params.items())) if best_params else ""
-        param_str = safe_filename(param_str)[:64]
-        features_str = safe_filename("_".join(feature_names))[:64]
-        base_name = f"{safe_filename(model_name)}__{features_str}__{param_str}"
-        model_path = os.path.join(export_dir, f"{base_name}_model.joblib")
-        scaler_path = os.path.join(export_dir, f"{base_name}_scaler.joblib")
-        dump(model, model_path)
-        dump(scaler, scaler_path)
-        meta_path = os.path.join(export_dir, f"{base_name}_meta.json")
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "model_name": model_name,
-                "features": feature_names,
-                "params": best_params,
-            }, f, indent=2)
-        verbose_output(f"Exported model to {model_path}\nExported scaler to {scaler_path}")
+        export_dir = os.path.join(MODEL_EXPORT_BASE, safe_model_filename(dataset_name))  # Build export directory using sanitized dataset name
+        os.makedirs(export_dir, exist_ok=True)  # Create export directory and any missing parents
+        param_str = "_".join(f"{k}-{v}" for k, v in sorted(best_params.items())) if best_params else ""  # Build param string from sorted hyperparameter keys and values
+        param_str = safe_model_filename(param_str)[:64]  # Sanitize and truncate param string for filesystem safety
+        features_str = safe_model_filename("_".join(feature_names))[:64]  # Sanitize and truncate feature names string
+        base_name = f"{safe_model_filename(model_name)}__{features_str}__{param_str}"  # Build base filename from model name, features, and params
+        model_path = os.path.join(export_dir, f"{base_name}_model.joblib")  # Build model export path
+        scaler_path = os.path.join(export_dir, f"{base_name}_scaler.joblib")  # Build scaler export path
+        dump(model, model_path)  # Export trained model to disk
+        dump(scaler, scaler_path)  # Export fitted scaler to disk
+        meta_path = os.path.join(export_dir, f"{base_name}_meta.json")  # Build metadata export path
+        with open(meta_path, "w", encoding="utf-8") as f:  # Open metadata file for writing
+            json.dump({  # Write model metadata as JSON
+                "model_name": model_name,  # Record model name
+                "features": feature_names,  # Record feature list
+                "params": best_params,  # Record best hyperparameters
+            }, f, indent=2)  # Indented JSON for readability
+        verbose_output(f"Exported model to {model_path}\nExported scaler to {scaler_path}")  # Log export paths
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -2483,7 +2486,7 @@ def process_single_csv_file(csv_path, dir_results_list):
 
         models = get_models_and_param_grids()  # Get models and their parameter grids
         
-        if check_if_fully_processed(csv_path, models):  # If already processed
+        if is_fully_processed(csv_path, models):  # Verify if all models are already processed for this file
             return  # Skip this file
 
         print(
@@ -2700,14 +2703,11 @@ def to_seconds(obj):
 
 def calculate_execution_time(start_time, finish_time=None):
     """
-    Calculates the execution time and returns a human-readable string.
+    Calculate the execution time and return a human-readable string.
 
-    Accepts either:
-    - Two datetimes/timedeltas: `calculate_execution_time(start, finish)`
-    - A single timedelta or numeric seconds: `calculate_execution_time(delta)`
-    - Two numeric timestamps (seconds): `calculate_execution_time(start_s, finish_s)`
-
-    Returns a string like "1h 2m 3s".
+    :param start_time: The start time or duration value (datetime, timedelta, or numeric seconds).
+    :param finish_time: Optional finish time; if None, start_time is treated as the total duration.
+    :return: Human-readable execution time string formatted as days, hours, minutes, and seconds.
     """
     
     try:
@@ -2919,10 +2919,9 @@ def run_optimization():
 
 def play_sound():
     """
-    Plays a sound when the program finishes and skips if the operating system is Windows.
+    Play a sound when the program finishes and skip if the operating system is Windows.
 
-    :param: None
-    :return: None
+    :return: None.
     """
     
     try:
@@ -2951,68 +2950,59 @@ def main():
     """
     Main function.
 
-    :param: None
-    :return: None
+    :return: None.
     """
-    
-    parser = argparse.ArgumentParser(description="Hyperparameters optimization runner")
-    parser.add_argument("--verbose", action="store_true", help="Enable verbose output (overrides config)")
-    parser.add_argument("--n_jobs", type=int, help="Number of parallel jobs (overrides config)")
-    parser.add_argument("--skip_train_if_model_exists", action="store_true", help="Skip training if model exists (overrides config)")
-    parser.add_argument("--results_dir", type=str, help="Results directory (overrides config)")
-    parser.add_argument("--results_filename", type=str, help="Results CSV filename (overrides config)")
-    parser.add_argument("--model_export_base_dir", type=str, help="Model export base directory (overrides config)")
-    parser.add_argument("--cache_prefix", type=str, help="Cache file prefix (overrides config)")
-    args = parser.parse_args()
 
-    # Load/merge configuration with precedence defaults < config.yaml < CLI
-    defaults = get_default_config()
-    file_cfg = load_config_file("config.yaml")
-    merged = deep_merge(defaults, file_cfg.get("hyperparameters_optimization") and {"hyperparameters_optimization": file_cfg.get("hyperparameters_optimization")} or defaults)
-    # Apply CLI overrides
-    merged = apply_cli_overrides_to_cfg(merged, args)
-    # Validate required fields
-    merged = validate_hyperopt_config(merged)
+    parser = argparse.ArgumentParser(description="Hyperparameters optimization runner")  # Create CLI argument parser
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output (overrides config)")  # Verbose flag
+    parser.add_argument("--n_jobs", type=int, help="Number of parallel jobs (overrides config)")  # n_jobs override
+    parser.add_argument("--skip_train_if_model_exists", action="store_true", help="Skip training if model exists (overrides config)")  # Skip-training flag
+    parser.add_argument("--results_dir", type=str, help="Results directory (overrides config)")  # Results directory override
+    parser.add_argument("--results_filename", type=str, help="Results CSV filename (overrides config)")  # Results filename override
+    parser.add_argument("--model_export_base_dir", type=str, help="Model export base directory (overrides config)")  # Model export directory override
+    parser.add_argument("--cache_prefix", type=str, help="Cache file prefix (overrides config)")  # Cache prefix override
+    args = parser.parse_args()  # Parse CLI arguments
 
-    # Build results path and ensure directory exists
-    results_path = build_results_path(merged)
+    defaults = get_default_config()  # Load hard-coded default configuration
+    file_cfg = load_config_file("config.yaml")  # Load configuration from disk
+    merged = deep_merge(defaults, file_cfg.get("hyperparameters_optimization") and {"hyperparameters_optimization": file_cfg.get("hyperparameters_optimization")} or defaults)  # Deep-merge file config over defaults
+    merged = apply_cli_overrides_to_cfg(merged, args)  # Apply CLI overrides to merged config
+    merged = validate_hyperopt_config(merged)  # Validate required configuration fields
 
-    # Initialize logger and exception hook now that runtime config exists
-    init_logger_and_exception_hook()
+    results_path = build_results_path(merged)  # Build results CSV path and ensure directory exists
 
-    # Expose selected values as module-level variables so existing code paths continue to work
-    global VERBOSE, MODEL_EXPORT_BASE, N_JOBS, SKIP_TRAIN_IF_MODEL_EXISTS
-    global RESULTS_FILENAME, CACHE_PREFIX, MATCH_FILENAMES_TO_PROCESS
-    global IGNORE_FILES, IGNORE_DIRS, HYPERPARAMETERS_RESULTS_CSV_COLUMNS
-    global ENABLED_MODELS, DATASETS
+    init_logger_and_exception_hook()  # Initialize logger and global exception hook for Telegram notifications
 
-    hp = merged["hyperparameters_optimization"]
-    exec_cfg = hp["execution"]
-    export = hp["export"]
+    global VERBOSE, MODEL_EXPORT_BASE, N_JOBS, SKIP_TRAIN_IF_MODEL_EXISTS  # Declare global variables for runtime config
+    global RESULTS_FILENAME, CACHE_PREFIX, MATCH_FILENAMES_TO_PROCESS  # Declare global variables for file processing config
+    global IGNORE_FILES, IGNORE_DIRS, HYPERPARAMETERS_RESULTS_CSV_COLUMNS  # Declare global variables for ignore/columns config
+    global ENABLED_MODELS, DATASETS  # Declare global variables for model and dataset config
+
+    hp = merged["hyperparameters_optimization"]  # Extract hyperparameters_optimization section
+    exec_cfg = hp["execution"]  # Extract execution sub-section
+    export = hp["export"]  # Extract export sub-section
     dp = hp.get("dataset_processing", {})  # Extract dataset processing configuration sub-section
 
-    VERBOSE = bool(exec_cfg.get("verbose", False))
-    N_JOBS = int(exec_cfg.get("n_jobs", -2))
-    SKIP_TRAIN_IF_MODEL_EXISTS = bool(exec_cfg.get("skip_train_if_model_exists", False))
+    VERBOSE = bool(exec_cfg.get("verbose", False))  # Set verbose flag from config
+    N_JOBS = int(exec_cfg.get("n_jobs", -2))  # Set parallel jobs count from config
+    SKIP_TRAIN_IF_MODEL_EXISTS = bool(exec_cfg.get("skip_train_if_model_exists", False))  # Set skip-train flag from config
 
-    RESULTS_FILENAME = export["results_filename"]
-    MODEL_EXPORT_BASE = export.get("model_export_base_dir")
-    CACHE_PREFIX = export.get("cache_prefix")
+    RESULTS_FILENAME = export["results_filename"]  # Set results CSV filename from config
+    MODEL_EXPORT_BASE = export.get("model_export_base_dir")  # Set model export directory from config
+    CACHE_PREFIX = export.get("cache_prefix")  # Set cache file prefix from config
 
-    MATCH_FILENAMES_TO_PROCESS = dp.get("match_filenames_to_process", [""])
-    IGNORE_FILES = dp.get("ignore_files", [RESULTS_FILENAME])
-    IGNORE_DIRS = dp.get("ignore_dirs", [])
+    MATCH_FILENAMES_TO_PROCESS = dp.get("match_filenames_to_process", [""])  # Set filename filter from config
+    IGNORE_FILES = dp.get("ignore_files", [RESULTS_FILENAME])  # Set files to ignore from config
+    IGNORE_DIRS = dp.get("ignore_dirs", [])  # Set directories to ignore from config
 
     HYPERPARAMETERS_RESULTS_CSV_COLUMNS = hp.get("results_schema", {}).get("columns", [])  # Load results CSV column ordering from configuration schema
     ENABLED_MODELS = hp.get("enabled_models", [])  # Load enabled models directly from hyperparameters_optimization configuration section
     if not ENABLED_MODELS:  # Raise error when no models are configured to prevent silent optimization bypass
         raise ValueError("Configuration error: 'enabled_models' under 'hyperparameters_optimization' is empty or missing. At least one model must be enabled.")  # Abort with descriptive error message
-    DATASETS = hp.get("datasets", {})
+    DATASETS = hp.get("datasets", {})  # Set datasets mapping from config
 
-    # Log results CSV path
-    print(f"{BackgroundColors.GREEN}Results CSV will be saved to: {BackgroundColors.CYAN}{results_path}{Style.RESET_ALL}")
-    # Start the optimization run
-    run_optimization()
+    print(f"{BackgroundColors.GREEN}Results CSV will be saved to: {BackgroundColors.CYAN}{results_path}{Style.RESET_ALL}")  # Log resolved results CSV path
+    run_optimization()  # Start the optimization run
 
 
 if __name__ == "__main__":
