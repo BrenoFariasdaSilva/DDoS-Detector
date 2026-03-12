@@ -1411,6 +1411,22 @@ def build_knn_config():
     )  # Return the instantiated model and its hyperparameter grid as a tuple
 
 
+def build_nearest_centroid_config():
+    """
+    Build the Nearest Centroid classifier instance and hyperparameter search grid.
+
+    :return: Tuple of (NearestCentroid instance, param_grid dict) for hyperparameter optimization.
+    """
+
+    return (
+        NearestCentroid(),  # Nearest Centroid classifier
+        {
+            "metric": ["euclidean", "manhattan"],  # Distance metric
+            "shrink_threshold": [None, 0.1, 0.5, 1.0, 2.0],  # Threshold for shrinking centroids
+        },
+    )  # Return the instantiated model and its hyperparameter grid as a tuple
+
+
 def build_all_models_config():
     """
     Build and return the full dictionary of all available model instances paired with their hyperparameter grids.
