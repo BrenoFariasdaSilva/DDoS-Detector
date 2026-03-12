@@ -4067,6 +4067,54 @@ def generate_permutation_importance(model, X_test, y_test, feature_names, output
         raise
 
 
+def extract_linear_model_importance(model, feature_names, output_dir, model_name, dataset_name, config=None):
+    """
+    Extracts feature importances from linear models using the coef_ attribute as a proxy for importance.
+
+    :param model: Trained linear model with a coef_ attribute
+    :param feature_names: List of feature names corresponding to model input columns
+    :param output_dir: Directory path where output artifacts will be created
+    :param model_name: Name of the model used in log messages and file names
+    :param dataset_name: Name of the dataset used in log messages and file names
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: Dictionary with key 'model_importance' mapping feature names to absolute coefficient scores
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Extracting coefficients as feature importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+            config=config
+        )  # Log linear model importance extraction start
+
+        os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists before writing
+
+        coef = model.coef_  # Read coefficient array from the linear model
+        if len(coef.shape) > 1:  # Multi-class models have a 2D coefficient matrix
+            importances = np.abs(coef).mean(axis=0)  # Average absolute coefficients across all classes
+        else:  # Binary classification models have a 1D coefficient array
+            importances = np.abs(coef[0] if coef.ndim > 1 else coef)  # Use absolute values of the single coefficient vector
+
+        sorted_indices = np.argsort(importances)[::-1]  # Sort indices from highest to lowest absolute coefficient
+        sorted_features = [feature_names[i] for i in sorted_indices]  # Reorder feature names by descending importance
+        sorted_importances = importances[sorted_indices]  # Reorder importance values by descending importance
+
+        importance_dict = dict(zip(sorted_features, sorted_importances.tolist()))  # Build feature-name-to-score mapping
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Model coefficients saved as importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
+            config=config
+        )  # Log successful extraction completion
+
+        return {"model_importance": importance_dict}  # Return the importance dictionary
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def extract_tree_based_importance(model, feature_names, output_dir, model_name, dataset_name, config=None):
     """
     Extracts and plots feature importances from tree-based models using the feature_importances_ attribute.
@@ -4154,31 +4202,7 @@ def extract_model_feature_importance(model, feature_names, output_dir, model_nam
                 return extract_tree_based_importance(model, feature_names, output_dir, model_name, dataset_name, config=config)  # Delegate to tree-based importance extractor
 
             elif hasattr(model, 'coef_'):  # If linear model with coefficients
-                verbose_output(
-                    f"{BackgroundColors.GREEN}Extracting coefficients as feature importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
-                    config=config
-                )  # Log extraction start
-
-                os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
-
-                coef = model.coef_  # Get coefficients
-                if len(coef.shape) > 1:  # Multi-class case
-                    importances = np.abs(coef).mean(axis=0)  # Average absolute coefficients across classes
-                else:  # Binary case
-                    importances = np.abs(coef[0] if coef.ndim > 1 else coef)  # Use absolute coefficients
-
-                sorted_indices = np.argsort(importances)[::-1]  # Sort indices by descending importance
-                sorted_features = [feature_names[i] for i in sorted_indices]  # Get sorted feature names
-                sorted_importances = importances[sorted_indices]  # Get sorted importances
-
-                importance_dict = dict(zip(sorted_features, sorted_importances.tolist()))  # Create importance dict
-
-                verbose_output(
-                    f"{BackgroundColors.GREEN}Model coefficients saved as importance for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
-                    config=config
-                )  # Log extraction completion
-
-                return {"model_importance": importance_dict}  # Return feature importance results
+                return extract_linear_model_importance(model, feature_names, output_dir, model_name, dataset_name, config=config)  # Delegate to linear coefficient importance extractor
 
             else:  # Model does not support feature importance
                 verbose_output(
