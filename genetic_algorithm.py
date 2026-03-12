@@ -2949,6 +2949,23 @@ def persist_generation_state_if_needed(
         pass  # Do nothing
 
 
+def compute_current_best_fitness_values(hof):
+    """
+    Extract the best F1-score and feature count from the leading Hall of Fame individual.
+
+    :param hof: Hall of Fame instance whose first entry provides multi-objective fitness values.
+    :return: Tuple of (best_f1_score, best_num_features) where either value may be None when the HOF is empty.
+    """
+
+    current_best_fitness_f1 = (
+        hof[0].fitness.values[0] if hof and hof[0].fitness.values else None
+    )  # Read the first objective (F1-score) from the top HOF individual
+    current_best_num_features = (
+        -hof[0].fitness.values[1] if hof and hof[0].fitness.values and len(hof[0].fitness.values) > 1 else None
+    )  # Negate the second objective (stored as negative) to recover the true feature count
+    return current_best_fitness_f1, current_best_num_features  # Return both best fitness values as a tuple
+
+
 def update_population_selection_and_hof(population, offspring, toolbox, hof):
     """
     Select the next generation from offspring, update the Hall of Fame, and enforce HOF elitism.
@@ -3065,12 +3082,7 @@ def run_genetic_algorithm_loop(
 
             update_population_selection_and_hof(population, offspring, toolbox, hof)  # Select next generation, update HOF, and enforce elitism in one step
 
-            current_best_fitness_f1 = (
-                hof[0].fitness.values[0] if hof and hof[0].fitness.values else None
-            )  # Get current best F1-score (first objective) from multi-objective fitness
-            current_best_num_features = (
-                -hof[0].fitness.values[1] if hof and hof[0].fitness.values and len(hof[0].fitness.values) > 1 else None
-            )  # Get current number of features (negated second objective) from multi-objective fitness
+            current_best_fitness_f1, current_best_num_features = compute_current_best_fitness_values(hof)  # Extract F1-score and feature count from the leading HOF individual
             update_generation_histories(
                 population,
                 current_best_fitness_f1,
