@@ -6263,6 +6263,102 @@ def build_and_write_run_results(
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
         raise  # Re-raise to preserve original failure semantics
 
+
+def prepare_output_dir_and_feature_extraction_time(csv_path, final_scaling_time):
+    """
+    Resolve and create the GA output directory and safely convert the feature scaling duration to seconds.
+
+    Resolves the canonical output directory from the csv_path, ensures it exists, and
+    robustly converts final_scaling_time to a rounded float (6 decimal places) for use
+    as the feature_extraction_time_s metadata field.
+
+    :param csv_path: Path to the original CSV dataset; used to resolve the output directory.
+    :param final_scaling_time: Raw scaling/feature-extraction duration value to convert (may
+                               be None or non-numeric, in which case None is returned).
+    :return: Tuple of (output_dir: str, feature_extraction_time_s: float or None).
+    """
+
+    try:
+        output_dir = resolve_ga_output_dir(csv_path)  # Resolve canonical GA output directory from configuration
+        os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
+
+        try:  # Try to round the feature extraction time
+            feature_extraction_time_s = round(float(final_scaling_time), 6) if final_scaling_time is not None else None  # Round scaling time to 6 decimal places
+        except Exception:  # On conversion failure
+            feature_extraction_time_s = None  # Default to None
+
+        return output_dir, feature_extraction_time_s  # Return resolved directory and converted timing value
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def build_save_results_metadata(
+    best_features,
+    rf_metrics,
+    output_dir,
+    rfe_ranking,
+    n_train,
+    n_test,
+    test_frac,
+    n_generations,
+    best_pop_size,
+    runs_list,
+    elapsed_for_base,
+    model_path,
+    scaler_path,
+    features_path,
+    params_path,
+):
+    """
+    Assemble the save_results return dictionary from its constituent metadata fields.
+
+    Constructs the standardised metadata dictionary returned to callers of save_results,
+    encoding elapsed time as integer seconds and preserving all artifact path references.
+
+    :param best_features: List of feature names selected by the best GA individual.
+    :param rf_metrics: Normalised RF metrics tuple (cv metrics + optional test metrics).
+    :param output_dir: Canonical GA output directory path.
+    :param rfe_ranking: RFE ranking dictionary mapping feature names to rank values.
+    :param n_train: Number of training samples, or None if unavailable.
+    :param n_test: Number of test samples, or None if unavailable.
+    :param test_frac: Test fraction used during dataset splitting, or None if unavailable.
+    :param n_generations: Number of GA generations run (metadata only).
+    :param best_pop_size: Population size that produced the best result (metadata only).
+    :param runs_list: List of per-run result dicts, or None if not applicable.
+    :param elapsed_for_base: Raw elapsed time value used for the base row (converted to int seconds).
+    :param model_path: File path to the saved Random Forest model artifact.
+    :param scaler_path: File path to the saved StandardScaler artifact.
+    :param features_path: File path to the saved selected-features JSON.
+    :param params_path: File path to the saved model hyperparameters JSON.
+    :return: Dictionary with all save_results metadata fields.
+    """
+
+    try:
+        return {  # Return metadata dictionary for downstream analysis
+            "best_features": best_features,  # List of selected feature names
+            "rf_metrics": rf_metrics,  # RF metrics tuple (cv + test)
+            "output_dir": output_dir,  # Output directory path
+            "rfe_ranking": rfe_ranking,  # RFE ranking dictionary
+            "n_train": n_train,  # Number of training samples
+            "n_test": n_test,  # Number of testing samples
+            "test_frac": test_frac,  # Test fraction used
+            "n_generations": n_generations,  # Number of GA generations
+            "best_pop_size": best_pop_size,  # Best population size
+            "runs_list": runs_list,  # Per-run results list
+            "elapsed_time_s": int(round(elapsed_for_base)) if elapsed_for_base is not None else None,  # Elapsed time in integer seconds
+            "model_path": model_path,  # Path to saved model artifact
+            "scaler_path": scaler_path,  # Path to saved scaler artifact
+            "features_path": features_path,  # Path to saved features JSON
+            "params_path": params_path,  # Path to saved params JSON
+        }
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def save_results(
     best_ind,
     feature_names,
@@ -6342,13 +6438,9 @@ def save_results(
 
         eval_metrics, testing_time_s = evaluate_final_on_test(model_local, X_test_selected, y_test)  # Evaluate trained model on held-out test set
 
-        output_dir = resolve_ga_output_dir(csv_path)  # Resolve canonical GA output directory from configuration
-        os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
-
-        try:  # Try to round the feature extraction time
-            feature_extraction_time_s = round(float(final_scaling_time), 6) if final_scaling_time is not None else None  # Round scaling time to 6 decimal places
-        except Exception:  # On conversion failure
-            feature_extraction_time_s = None  # Default to None
+        output_dir, feature_extraction_time_s = prepare_output_dir_and_feature_extraction_time(
+            csv_path, final_scaling_time
+        )  # Resolve output directory, create it if needed, and convert scaling time to seconds
 
         build_and_write_run_results(
             ts,
@@ -6369,23 +6461,11 @@ def save_results(
             union_features_across_runs,
         )  # Build and persist the consolidated run row to the GA results CSV
 
-        return {  # Return metadata dictionary for downstream analysis
-            "best_features": best_features,  # List of selected feature names
-            "rf_metrics": rf_metrics,  # RF metrics tuple (cv + test)
-            "output_dir": output_dir,  # Output directory path
-            "rfe_ranking": rfe_ranking,  # RFE ranking dictionary
-            "n_train": n_train,  # Number of training samples
-            "n_test": n_test,  # Number of testing samples
-            "test_frac": test_frac,  # Test fraction used
-            "n_generations": n_generations,  # Number of GA generations
-            "best_pop_size": best_pop_size,  # Best population size
-            "runs_list": runs_list,  # Per-run results list
-            "elapsed_time_s": int(round(elapsed_for_base)) if elapsed_for_base is not None else None,  # Elapsed time in integer seconds
-            "model_path": model_path,  # Path to saved model artifact
-            "scaler_path": scaler_path,  # Path to saved scaler artifact
-            "features_path": features_path,  # Path to saved features JSON
-            "params_path": params_path,  # Path to saved params JSON
-        }
+        return build_save_results_metadata(
+            best_features, rf_metrics, output_dir, rfe_ranking,
+            n_train, n_test, test_frac, n_generations, best_pop_size, runs_list,
+            elapsed_for_base, model_path, scaler_path, features_path, params_path,
+        )  # Assemble and return the standardised save_results metadata dictionary
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
