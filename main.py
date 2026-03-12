@@ -1332,6 +1332,69 @@ def determine_feature_extraction_method_suffix(selected_features, features_file)
         raise
 
 
+def train_evaluate_and_build_metrics(model, X_train, X_test, y_train, y_test, results_dir, index, name, feat_extraction_method, dataset_name, selected_features, return_metrics_only):
+    """
+    Train a model, evaluate it, optionally save results, and build the metrics dictionary.
+
+    :param model: Model instance to train and evaluate.
+    :param X_train: Training feature DataFrame.
+    :param X_test: Testing feature DataFrame.
+    :param y_train: Training label array.
+    :param y_test: Testing label array.
+    :param results_dir: Directory path where result CSV files are saved.
+    :param index: 1-based index of the model in the evaluation loop.
+    :param name: Display name of the model.
+    :param feat_extraction_method: Feature extraction method suffix string for file naming.
+    :param dataset_name: Name of the dataset being evaluated.
+    :param selected_features: List of selected feature names or None when using all features.
+    :param return_metrics_only: When True, skip saving results to disk.
+    :return: Metrics dictionary for the trained model.
+    """
+
+    try:
+        start_time = time.time()  # Start timer to measure training duration
+        model.fit(X_train, y_train)  # Train the model on the training data
+        duration = [
+            time.time() - start_time,
+            format_duration(time.time() - start_time),
+        ]  # Store training duration as both raw seconds and formatted string
+
+        tqdm.write(
+            f"{BackgroundColors.GREEN}✓ {name} trained in {duration[1]}{Style.RESET_ALL}"
+        )  # Output training duration to terminal alongside progress bar
+
+        report, metrics_df = evaluate_model(model, X_test, y_test, duration[1])  # Evaluate model on test data
+
+        if not return_metrics_only:  # Only save results to disk when full evaluation mode is active
+            save_results(
+                report, metrics_df, results_dir, index, name, feat_extraction_method=feat_extraction_method
+            )  # Persist classification report and extended metrics as CSV files
+
+        avg_row = metrics_df.iloc[-1]  # Retrieve the aggregate metrics row (last row of metrics DataFrame)
+
+        metrics_dict = {  # Build dictionary with standardised per-model metrics for aggregation
+            "Dataset": dataset_name,
+            "Model": name,
+            "Training Duration": duration[1],
+            "Correct (TP)": int(avg_row["Correct (TP)"]),
+            "Wrong (FN)": int(avg_row["Wrong (FN)"]),
+            "False Positives (FP)": int(avg_row["False Positives (FP)"]),
+            "True Negatives (TN)": int(avg_row["True Negatives (TN)"]),
+            "Support": int(avg_row["Support"]),
+            "Accuracy (per class)": avg_row["Accuracy (per class)"],
+            "Precision": avg_row["Precision"],
+            "Recall": avg_row["Recall"],
+            "F1-Score": avg_row["F1-Score"],
+            "Features Count": len(selected_features) if selected_features is not None else "All",
+        }
+
+        return metrics_dict  # Return the completed per-model metrics dictionary
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def train_and_evaluate_models(
     X_train,
     X_test,
@@ -1392,37 +1455,11 @@ def train_and_evaluate_models(
                     f"{BackgroundColors.GREEN}✓ {name} - F1: {truncate_value(mean_score)} ± {truncate_value(std_score)}{Style.RESET_ALL}"
                 )  # Output cross-validation results
             else:  # If not using cross-validation
-                start_time = time.time()  # Start timer for training duration
-                model.fit(X_train, y_train)  # Train the model
-                duration = [
-                    time.time() - start_time,
-                    format_duration(time.time() - start_time),
-                ]  # List to store the duration of training in seconds and in string
-                tqdm.write(
-                    f"{BackgroundColors.GREEN}✓ {name} trained in {duration[1]}{Style.RESET_ALL}"
-                )  # Output training duration
-
-                report, metrics_df = evaluate_model(model, X_test, y_test, duration[1])  # Evaluate the model
-                if not return_metrics_only:  # If not only returning metrics, save the results
-                    save_results(
-                        report, metrics_df, results_dir, index, name, feat_extraction_method=feat_extraction_method
-                    )  # Save the results to disk
-                avg_row = metrics_df.iloc[-1]  # Get the average metrics row
-                metrics_dict = {  # Create a dictionary with average metrics
-                    "Dataset": dataset_name,
-                    "Model": name,
-                    "Training Duration": duration[1],
-                    "Correct (TP)": int(avg_row["Correct (TP)"]),
-                    "Wrong (FN)": int(avg_row["Wrong (FN)"]),
-                    "False Positives (FP)": int(avg_row["False Positives (FP)"]),
-                    "True Negatives (TN)": int(avg_row["True Negatives (TN)"]),
-                    "Support": int(avg_row["Support"]),
-                    "Accuracy (per class)": avg_row["Accuracy (per class)"],
-                    "Precision": avg_row["Precision"],
-                    "Recall": avg_row["Recall"],
-                    "F1-Score": avg_row["F1-Score"],
-                    "Features Count": len(selected_features) if selected_features is not None else "All",
-                }
+                metrics_dict = train_evaluate_and_build_metrics(
+                    model, X_train, X_test, y_train, y_test,
+                    results_dir, index, name, feat_extraction_method,
+                    dataset_name, selected_features, return_metrics_only
+                )  # Train, evaluate, save and build metrics entry for this model
                 model_metrics_list.append(metrics_dict)  # Append metrics dictionary to the list
 
         if not use_cv and not return_metrics_only:  # If not using cross-validation and not only returning metrics
