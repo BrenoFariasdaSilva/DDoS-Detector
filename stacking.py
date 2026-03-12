@@ -5893,6 +5893,30 @@ def export_automl_pipeline_artifacts(model_study, stacking_study, stacking_confi
         raise
 
 
+def print_automl_pipeline_header(file):
+    """
+    Prints the formatted header block for the AutoML pipeline execution.
+
+    :param file: Path to the dataset file whose basename is shown in the header
+    :return: None
+    """
+
+    try:
+        print(
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}"
+        )  # Print top separator line
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}AutoML Pipeline - {BackgroundColors.CYAN}{os.path.basename(file)}{Style.RESET_ALL}"
+        )  # Print pipeline title with dataset filename
+        print(
+            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}\n"
+        )  # Print bottom separator line
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def run_automl_pipeline(file, df, feature_names, data_source_label="Original", config=None):
     """
     Runs the complete AutoML pipeline: model search, stacking optimization, evaluation, and export.
@@ -5909,15 +5933,7 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}"
-        )  # Print separator
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}AutoML Pipeline - {BackgroundColors.CYAN}{os.path.basename(file)}{Style.RESET_ALL}"
-        )  # Print pipeline header
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}\n"
-        )  # Print separator
+        print_automl_pipeline_header(file)  # Print AutoML pipeline header with dataset filename
 
         automl_start = time.time()  # Record pipeline start time
 
