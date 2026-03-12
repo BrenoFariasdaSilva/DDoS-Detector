@@ -6803,17 +6803,9 @@ def evaluate_on_dataset(
             X_train_scaled, X_test_scaled, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file
         )  # Assemble feature sets dictionary for evaluation
 
-        individual_models = {
-            k: v for k, v in base_models.items()
-        }  # Use the base models (with hyperparameters applied) for individual evaluation
-        total_steps = len(feature_sets) * (
-            len(individual_models) + 1
-        )  # Total steps: models + stacking per feature set
-        progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout)  # Progress bar for all evaluations
-
-        all_results = {}  # Dictionary to store results: (feature_set, model_name) -> result_entry
-
-        current_combination = 1  # Counter for combination index
+        individual_models, total_steps, progress_bar, all_results, current_combination = initialize_evaluation_run_state(
+            base_models, feature_sets, data_source_label
+        )  # Build individual model map, compute total steps, create progress bar, and initialize result containers
 
         for idx, (name, (X_train_subset, X_test_subset, subset_feature_names_list)) in enumerate(feature_sets.items(), start=1):
             if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
@@ -6823,28 +6815,15 @@ def evaluate_on_dataset(
                 progress_bar.update(len(individual_models) + 1)  # Skip all steps for this feature set
                 continue  # Skip to the next set
 
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Evaluating models on: {BackgroundColors.CYAN}{name} ({X_train_subset.shape[1]} features){Style.RESET_ALL}"
-            )  # Output evaluation status
-
-            subset_feature_names = setup_feature_set_names(name, X_train_subset, subset_feature_names_list)  # DETERMINE FEATURE NAMES FOR THIS SUBSET
-
-            X_train_df, X_test_df = convert_subset_to_dataframes(X_train_subset, X_test_subset, subset_feature_names)  # CONVERT FEATURE ARRAYS TO DATAFRAMES WITH NAMED COLUMNS
-
-            individual_results, current_combination = run_individual_classifiers_for_feature_set(
-                name, individual_models, X_train_df, y_train, X_test_df, y_test,
-                X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
+            individual_results, stacking_result_entry, current_combination = evaluate_single_feature_set(
+                idx, name, X_train_subset, X_test_subset, subset_feature_names_list,
+                individual_models, stacking_model, y_train, y_test,
+                file, execution_mode_str, attack_types_combined,
                 data_source_label, experiment_id, experiment_mode, augmentation_ratio,
-                hyperparams_map, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
-            )  # Evaluate all individual classifiers in parallel and collect their result entries
+                hyperparams_map, scaler, total_steps, current_combination, progress_bar, config=config,
+            )  # Evaluate all individual classifiers and stacking model on this non-empty feature subset
+
             all_results.update(individual_results)  # Merge this feature set's results into the global results dict
-
-            stacking_result_entry, current_combination = run_stacking_evaluation_for_feature_set(
-                name, stacking_model, X_train_df, y_train, X_test_df, y_test,
-                X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
-                data_source_label, experiment_id, experiment_mode, augmentation_ratio,
-                scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
-            )  # Evaluate stacking classifier, export model artifacts, generate metric plots, and collect result entry
             all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store stacking result with key
 
         progress_bar.close()  # Close progress bar
