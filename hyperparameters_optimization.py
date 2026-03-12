@@ -2175,6 +2175,22 @@ def expand_parameter_grid(param_grid):
     return keys, param_combinations, total_combinations  # RETURN EXPANDED GRID COMPONENTS
 
 
+def initialize_grid_search_state(global_counter_start):
+    """
+    Initialize the bookkeeping variables needed at the start of a manual grid search run.
+
+    :param global_counter_start: Integer offset representing the overall combination index from which this model's search begins.
+    :return: Tuple (best_score, best_params, best_elapsed, all_results, global_counter) with sentinel/empty initial values.
+    """
+
+    best_score = -float("inf")  # Initialize best score sentinel to negative infinity
+    best_params = None  # Placeholder for best hyperparameter combination found so far
+    best_elapsed = 0.0  # Elapsed wall-clock time recorded for the best combination
+    all_results = []  # List to collect per-combination result records
+    global_counter = global_counter_start  # Start global counter at caller-provided offset
+    return best_score, best_params, best_elapsed, all_results, global_counter  # Return initial state tuple to the caller
+
+
 def manual_grid_search(
     model_name,
     model,
