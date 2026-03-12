@@ -1447,6 +1447,28 @@ def build_gradient_boosting_config():
     )  # Return the instantiated model and its hyperparameter grid as a tuple
 
 
+def build_lightgbm_config():
+    """
+    Build the LightGBM classifier instance and hyperparameter search grid.
+
+    :return: Tuple of (LGBMClassifier instance, param_grid dict) for hyperparameter optimization.
+    """
+
+    return (
+        lgb.LGBMClassifier(
+            force_row_wise=True, random_state=42, verbosity=-1, n_jobs=N_JOBS
+        ),  # LightGBM classifier
+        {
+            "n_estimators": [50, 100, 200],  # Number of boosting stages to be run
+            "max_depth": [3, 5, 7, 10, -1],  # Maximum depth of the tree (-1 means no limit)
+            "learning_rate": [0.01, 0.1, 0.3],  # Step size shrinkage
+            "num_leaves": [15, 31, 63],  # Number of leaves in one tree
+            "min_child_samples": [10, 20, 30],  # Minimum number of data needed in a child (leaf)
+            "subsample": [0.6, 0.8, 1.0],  # Subsample ratio of the training instances
+        },
+    )  # Return the instantiated model and its hyperparameter grid as a tuple
+
+
 def build_all_models_config():
     """
     Build and return the full dictionary of all available model instances paired with their hyperparameter grids.
