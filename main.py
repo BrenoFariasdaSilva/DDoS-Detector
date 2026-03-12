@@ -2021,67 +2021,19 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
         feature_selected_metrics = []  # Metrics from Feature Selection-enabled runs
 
         for index, (dataset_key, dataset_info) in enumerate(sorted_datasets, start=1):  # Iterate datasets
-            training_file_path = dataset_info.get("train")  # Get train file
-            testing_file_path = dataset_info.get("test")  # Get test file
-            feature_files = dataset_info.get("features", [])  # Get features list
+            result = process_single_dataset_entry(index, dataset_key, dataset_info, sorted_datasets, extract_features, compare_feature_selection, use_cv)  # Execute full evaluation pipeline for this dataset
 
-            dataset_dir = os.path.dirname(str(training_file_path))  # Get the directory of the dataset file
-            dataset_name = os.path.splitext(os.path.basename(str(training_file_path)))[
-                0
-            ]  # Extract dataset name (casts to str)
+            if result is None:  # If dataset was skipped due to missing files or label resolution failure
+                continue  # Advance to the next dataset without accumulating results
 
-            print(
-                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset {BackgroundColors.CYAN}{index}/{len(sorted_datasets)}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN}{Style.RESET_ALL}"
-            )
-
-            send_telegram_message(TELEGRAM_BOT, [f"Processing dataset {index}/{len(sorted_datasets)}: {dataset_name}"])
-
-            if not verify_filepath_exists(training_file_path):  # Verify train file
-                print(f"{BackgroundColors.RED}Missing training file for {dataset_name}. Skipping.{Style.RESET_ALL}")
-                continue  # Skip dataset if missing train file
-
-            if not verify_filepath_exists(testing_file_path):  # Verify test file
-                testing_file_path = training_file_path  # Fallback to train file
-
-            features_to_use = None  # Reset feature list per dataset
-            features_file_used = None  # Reset last-used features file
-
-            features_to_use, features_file_used = load_and_merge_feature_files(feature_files, extract_features)  # Load and merge features from all provided feature files
-
-            train_df, test_df, split_required = load_and_prepare_data(
-                training_file_path, testing_file_path
-            )  # Load and preprocess dataset
-
-            label_col = resolve_dataset_label_col_interactively(train_df, dataset_name)  # Detect or prompt for the label column name
-
-            if label_col is None:  # If user provided empty input for the label column
-                continue  # Skip this dataset
-
-            if compare_feature_selection and features_to_use is not None:  # Run baseline without feature selection when comparison is enabled
-                baseline_scores = run_baseline_evaluation_for_dataset(train_df, test_df, split_required, label_col, dataset_dir, dataset_name, use_cv)  # Produce baseline scores
-                baseline_metrics.extend(baseline_scores)  # Accumulate baseline scores across all datasets
-
-            verbose_output(f"{BackgroundColors.GREEN}Preparing data with feature selection...{Style.RESET_ALL}")
-            X_train, X_test, y_train, y_test, feature_names = split_data(
-                train_df, test_df, split_required, label_col=label_col, selected_features=features_to_use
-            )  # Split with Feature Selection
-            verbose_output(f"{BackgroundColors.GREEN}Training models with feature selection...{Style.RESET_ALL}")
-            models, dataset_model_scores = train_and_evaluate_models(
-                X_train,
-                X_test,
-                y_train,
-                y_test,
-                dataset_dir,
-                dataset_name,
-                use_cv=use_cv,
-                selected_features=features_to_use,
-                features_file=features_file_used,
-            )  # Train Feature Selection models
+            dataset_model_scores, baseline_scores, features_to_use, features_file_used = result  # Unpack all evaluation results from the dataset processing function
 
             all_model_scores.extend(dataset_model_scores) if dataset_model_scores else None  # Add to overall scores
 
             if compare_feature_selection and features_to_use is not None:  # If comparing Feature Selection is enabled
                 feature_selected_metrics.extend(dataset_model_scores)  # Store Feature Selection metrics
+
+            baseline_metrics.extend(baseline_scores) if baseline_scores else None  # Accumulate baseline scores when present
 
         feat_extraction_method = build_overall_feature_extraction_method_tag(features_to_use, features_file_used)  # Map the features file to a method tag string for summary output and file naming
 
