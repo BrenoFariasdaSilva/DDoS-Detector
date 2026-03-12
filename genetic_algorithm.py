@@ -4020,6 +4020,37 @@ def cache_iteration_result_if_resumable(output_dir, state_id, result):
         pass  # Do nothing
 
 
+def finalize_and_cache_iteration_result(best_ind, feature_names, metrics, iteration_start_time, history_data, gens_ran, csv_path, pop_size, run, dataset_name, n_generations, cxpb, mutpb, output_dir, state_id):
+    """
+    Build the final result dictionary from the iteration's best individual, dispatch plots, persist it, and return it.
+
+    :param best_ind: Best DEAP individual from the completed GA loop.
+    :param feature_names: List of feature names corresponding to individual gene indices.
+    :param metrics: Tuple of evaluation metrics produced by evaluate_individual_with_test.
+    :param iteration_start_time: perf_counter timestamp recorded at the start of the iteration.
+    :param history_data: Consolidated generation history dictionary produced by build_ga_history_data_dict.
+    :param gens_ran: Number of generations actually executed before stopping.
+    :param csv_path: Path to the dataset CSV used for convergence plot naming.
+    :param pop_size: Population size used in this run for convergence plot labeling.
+    :param run: Current run index (1-based) used in convergence plot labeling.
+    :param dataset_name: Dataset name used in convergence plot labeling.
+    :param n_generations: Total number of generations configured for this run.
+    :param cxpb: Crossover probability used in this run.
+    :param mutpb: Mutation probability used in this run.
+    :param output_dir: Directory where the result and checkpoint files are stored.
+    :param state_id: Deterministic run state identifier used for cache file naming.
+    :return: Standardized result dictionary for this GA iteration.
+    """
+
+    best_features = extract_selected_features(best_ind, feature_names)  # Extract the names of features selected by the best individual
+    iteration_elapsed_time = time.perf_counter() - iteration_start_time  # Compute total elapsed time for the iteration
+    metrics_with_iteration_time = metrics + (iteration_elapsed_time,)  # Append total iteration time as the 7th metric element
+    dispatch_convergence_plots(history_data, csv_path, pop_size, run, dataset_name, n_generations, cxpb, mutpb)  # Generate and save convergence plots for this run
+    result = build_ga_run_result_dict(best_ind, metrics_with_iteration_time, best_features, history_data, gens_ran)  # Build the standardized result dictionary for this GA iteration
+    cache_iteration_result_if_resumable(output_dir, state_id, result)  # Persist result and remove checkpoint files when resume-progress is enabled
+    return result  # Return the completed result dictionary to the caller
+
+
 def run_single_ga_iteration(
     X_train,
     y_train,
@@ -4107,16 +4138,7 @@ def run_single_ga_iteration(
             progress_bar, dataset_name, csv_path, max_pop, run, runs,
         )  # Adjust progress for early stopping and refresh progress bar
 
-        best_features = extract_selected_features(best_ind, feature_names)  # Extract names of features selected by the best individual
-
-        iteration_elapsed_time = time.perf_counter() - iteration_start_time  # Calculate total iteration time
-        metrics_with_iteration_time = metrics + (iteration_elapsed_time,)  # Add total iteration time as 7th element
-
-        dispatch_convergence_plots(history_data, csv_path, pop_size, run, dataset_name, n_generations, cxpb, mutpb)  # Generate comprehensive and simple convergence plots for this run
-
-        result = build_ga_run_result_dict(best_ind, metrics_with_iteration_time, best_features, history_data, gens_ran)  # Build standardised result dictionary for this GA iteration
-
-        cache_iteration_result_if_resumable(output_dir, state_id, result)  # Persist result and clean up checkpoint files when resume-progress is enabled
+        result = finalize_and_cache_iteration_result(best_ind, feature_names, metrics, iteration_start_time, history_data, gens_ran, csv_path, pop_size, run, dataset_name, n_generations, cxpb, mutpb, output_dir, state_id)  # Build, cache, and return the final iteration result
 
         return result  # Return results
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
