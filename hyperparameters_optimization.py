@@ -1375,6 +1375,24 @@ def build_xgboost_config():
     )  # Return the instantiated model and its hyperparameter grid as a tuple
 
 
+def build_logistic_regression_config():
+    """
+    Build the Logistic Regression classifier instance and hyperparameter search grid.
+
+    :return: Tuple of (LogisticRegression instance, param_grid dict) for hyperparameter optimization.
+    """
+
+    return (
+        LogisticRegression(max_iter=5000, random_state=42, n_jobs=N_JOBS),  # Logistic Regression classifier
+        {
+            "C": [0.001, 0.01, 0.1, 1, 10, 100],  # Inverse of regularization strength
+            "penalty": ["l1", "l2", "elasticnet", None],  # Norm used in the penalization
+            "solver": ["lbfgs", "saga"],  # Algorithm to use in the optimization problem (liblinear removed)
+            "l1_ratio": [0.0, 0.5, 1.0],  # The Elastic-Net mixing parameter
+        },
+    )  # Return the instantiated model and its hyperparameter grid as a tuple
+
+
 def build_all_models_config():
     """
     Build and return the full dictionary of all available model instances paired with their hyperparameter grids.
