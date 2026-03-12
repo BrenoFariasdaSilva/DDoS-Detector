@@ -341,6 +341,40 @@ def collect_nested_functions(tree: ast.Module, parent_map: dict) -> list:
     return nested  # Return the sorted list of nested functions
 
 
+def filter_functions_by_min_size(classes: dict, top_level: list, nested: list, min_size: int) -> tuple:
+    """
+    Filter functions below a minimum size threshold.
+
+    :param classes: Mapping of class keys to lists of method metadata.
+    :param top_level: List of top-level function metadata dictionaries.
+    :param nested: List of nested function metadata dictionaries.
+    :param min_size: Minimum function size in lines to keep.
+    :return: Tuple of (classes, top_level, nested) filtered by the threshold.
+    """
+
+    if not min_size or int(min_size) <= 0:  # Verify if min_size is falsy or non-positive
+        return classes, top_level, nested  # Return originals when no filtering is requested
+
+    norm_min = int(min_size)  # Normalize the provided min_size to integer
+
+    top_level = [e for e in top_level if e.get("function_size", 0) >= norm_min]  # Filter out top-level functions smaller than threshold
+    top_level.sort(key=lambda e: e["function_size"], reverse=True)  # Sort resulting top-level functions by size desc
+
+    nested = [e for e in nested if e.get("function_size", 0) >= norm_min]  # Filter out nested functions smaller than threshold
+    nested.sort(key=lambda e: e["function_size"], reverse=True)  # Sort resulting nested functions by size desc
+
+    new_classes = {}  # Prepare a new mapping for classes that have remaining methods
+    
+    for class_key, methods in classes.items():  # Iterate each class and its methods list
+        filtered = [m for m in methods if m.get("function_size", 0) >= norm_min]  # Keep only methods meeting threshold
+        
+        if filtered:  # Verify filtered list is not empty before adding to new mapping
+            filtered.sort(key=lambda e: e["function_size"], reverse=True)  # Sort the filtered methods by size desc
+            new_classes[class_key] = filtered  # Store the filtered and sorted list for the class
+
+    return new_classes, top_level, nested  # Return filtered structures as a tuple
+
+
 def compute_avg_function_size(classes: dict, top_level: list, nested: list, total_functions: int) -> float:
     """
     Compute average function size for file.
@@ -387,24 +421,9 @@ def build_report(tree: ast.Module) -> dict:
     total_methods = sum(len(methods) for methods in classes.values())  # Compute the total method count across all classes
     total_functions = total_methods + len(top_level) + len(nested)  # Compute the grand total across all categories
 
-    avg_function_size = compute_avg_function_size(classes, top_level, nested, total_functions)  # Compute average size using helper
-
-    if MIN_FUNCTION_SIZE and int(MIN_FUNCTION_SIZE) > 0:  # Verify if a positive minimum size filter is configured
-        min_size = int(MIN_FUNCTION_SIZE)  # Normalize the configured minimum size to integer
-
-        top_level = [e for e in top_level if e.get("function_size", 0) >= min_size]  # Remove top-level entries smaller than min_size
-        top_level.sort(key=lambda e: e["function_size"], reverse=True)  # Sort remaining top-level functions by size desc
-
-        nested = [e for e in nested if e.get("function_size", 0) >= min_size]  # Remove nested entries smaller than min_size
-        nested.sort(key=lambda e: e["function_size"], reverse=True)  # Sort remaining nested functions by size desc
-
-        new_classes = {}  # Temporary mapping to store filtered class method lists
-        for class_key, methods in classes.items():  # Iterate each class and its methods list
-            filtered = [m for m in methods if m.get("function_size", 0) >= min_size]  # Keep only methods meeting threshold
-            if filtered:  # Verify the filtered list is not empty before including in final mapping
-                filtered.sort(key=lambda e: e["function_size"], reverse=True)  # Sort the filtered methods by size desc
-                new_classes[class_key] = filtered  # Store the filtered and sorted list for the class
-        classes = new_classes  # Replace original classes mapping with the filtered mapping
+    avg_function_size = compute_avg_function_size(classes, top_level, nested, total_functions)  # Compute average size using the totals
+    filtered_result = filter_functions_by_min_size(classes, top_level, nested, MIN_FUNCTION_SIZE)  # Call function to filter structures by MIN_FUNCTION_SIZE
+    classes, top_level, nested = filtered_result  # Unpack filtered structures replacing originals
 
     total_methods = sum(len(methods) for methods in classes.values())  # Compute total method count across filtered classes
     total_functions = total_methods + len(top_level) + len(nested)  # Compute grand total across filtered categories
