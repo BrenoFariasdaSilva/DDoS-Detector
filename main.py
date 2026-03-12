@@ -149,11 +149,11 @@ setup_global_exception_hook()  # Set up global exception hook to send exceptions
 
 def verbose_output(true_string="", false_string=""):
     """
-    Outputs a message if the VERBOSE constant is set to True.
+    Output a message if the VERBOSE constant is set to True.
 
     :param true_string: The string to be outputted if the VERBOSE constant is set to True.
     :param false_string: The string to be outputted if the VERBOSE constant is set to False.
-    :return: None
+    :return: None.
     """
     
     try:
@@ -169,9 +169,9 @@ def verbose_output(true_string="", false_string=""):
 
 def verify_dot_env_file():
     """
-    Verifies if the .env file exists in the current directory.
+    Verify if the .env file exists in the current directory.
 
-    :return: True if the .env file exists, False otherwise
+    :return: True if the .env file exists, False otherwise.
     """
     
     try:
@@ -189,9 +189,9 @@ def verify_dot_env_file():
 
 def setup_telegram_bot():
     """
-    Sets up the Telegram bot for progress messages.
+    Set up the Telegram bot for progress messages.
 
-    :return: None
+    :return: None.
     """
     
     try:
@@ -205,10 +205,10 @@ def setup_telegram_bot():
 
         try:  # Try to initialize the Telegram bot
             TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
-            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
-            telegram_module.RUNNING_CODE = os.path.basename(__file__)
+            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"  # Set device info string with IP and OS
+            telegram_module.RUNNING_CODE = os.path.basename(__file__)  # Set currently running script name
         except Exception as e:
-            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")  # Report initialization failure to terminal
             TELEGRAM_BOT = None  # Set to None if initialization fails
     except Exception as e:
         print(str(e))
@@ -746,10 +746,9 @@ def split_data(train_df, test_df, split_required, label_col=None, selected_featu
 
 def get_models():
     """
-    Initializes and returns a dictionary of models to train.
+    Initialize and return a dictionary of models to train.
 
-    :param: None
-    :return: Dictionary of model name and instance
+    :return: Dictionary of model name and instance.
     """
     
     try:
@@ -993,7 +992,7 @@ def export_dataframe_image(styled_df, output_path):
         if not parent.exists():  # Ensure parent exists
             parent.mkdir(parents=True, exist_ok=True)  # Create parent directories if missing
 
-        if not os.access(str(parent), os.W_OK):  # Check write permission on parent
+        if not os.access(str(parent), os.W_OK):  # Verify write permission on parent
             raise PermissionError(f"Directory not writable: {parent}")  # Raise if not writable
 
         dfi.export(styled_df, str(out_path))  # Use dataframe_image to export styled DataFrame to PNG
@@ -1664,14 +1663,11 @@ def to_seconds(obj):
 
 def calculate_execution_time(start_time, finish_time=None):
     """
-    Calculates the execution time and returns a human-readable string.
+    Calculate the execution time and return a human-readable string.
 
-    Accepts either:
-    - Two datetimes/timedeltas: `calculate_execution_time(start, finish)`
-    - A single timedelta or numeric seconds: `calculate_execution_time(delta)`
-    - Two numeric timestamps (seconds): `calculate_execution_time(start_s, finish_s)`
-
-    Returns a string like "1h 2m 3s".
+    :param start_time: The start time or duration value (datetime, timedelta, or numeric seconds).
+    :param finish_time: Optional finish time; if None, start_time is treated as the total duration.
+    :return: Human-readable execution time string formatted as days, hours, minutes, and seconds.
     """
     
     try:
@@ -1722,10 +1718,9 @@ def calculate_execution_time(start_time, finish_time=None):
 
 def play_sound():
     """
-    Plays a sound when the program finishes.
+    Play a sound when the program finishes.
 
-    :param: None
-    :return: None
+    :return: None.
     """
     
     try:
@@ -2001,12 +1996,12 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
         print(
             f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}DDoS Detector{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
             end="\n\n",
-        )
+        )  # Print welcome message and clear the terminal
         start_time = datetime.datetime.now()  # Get the start time of the program
         
         setup_telegram_bot()  # Setup Telegram bot if configured
         
-        send_telegram_message(TELEGRAM_BOT, [f"{BackgroundColors.GREEN}DDoS Detector main.py execution started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}"])
+        send_telegram_message(TELEGRAM_BOT, [f"{BackgroundColors.GREEN}DDoS Detector main.py execution started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}"])  # Notify Telegram about program start
 
         sorted_datasets = sorted(DATASETS.items())  # Sort datasets alphabetically by keys
 
@@ -2053,7 +2048,7 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
         )  # Output the end of the program message
         
-        send_telegram_message(TELEGRAM_BOT, [f"{BackgroundColors.GREEN}DDoS Detector main.py execution finished. Execution time: {calculate_execution_time(start_time, finish_time)}"])
+        send_telegram_message(TELEGRAM_BOT, [f"{BackgroundColors.GREEN}DDoS Detector main.py execution finished. Execution time: {calculate_execution_time(start_time, finish_time)}"])  # Notify Telegram about program completion
 
         atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None  # Register sound on exit if enabled
     except Exception as e:

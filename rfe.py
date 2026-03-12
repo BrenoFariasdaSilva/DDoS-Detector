@@ -118,11 +118,11 @@ RUN_FUNCTIONS = {"Play Sound": True}
 
 def verbose_output(true_string="", false_string=""):
     """
-    Outputs a message if the VERBOSE constant is set to True.
+    Output a message if the VERBOSE constant is set to True.
 
     :param true_string: The string to be outputted if the VERBOSE constant is set to True.
     :param false_string: The string to be outputted if the VERBOSE constant is set to False.
-    :return: None
+    :return: None.
     """
     
     try:
@@ -142,9 +142,8 @@ def get_default_config() -> Dict[str, Any]:
     """
     Return the default configuration for the RFE tool.
     Must match config.yaml.example exactly.
-    
-    :param: None
-    :return: Dict with default configuration values
+
+    :return: Dict with default configuration values.
     """
     
     return {
@@ -223,9 +222,8 @@ def load_config_file(path: Optional[str]) -> Dict[str, Any]:
 def parse_cli_args() -> Dict[str, Any]:
     """
     Parse command-line arguments and return them as a dictionary.
-    
-    :param: None
-    :return: Dict with the parsed command-line arguments
+
+    :return: Dict with the parsed command-line arguments.
     """
     
     parser = argparse.ArgumentParser(description="Run RFE pipeline")
@@ -407,9 +405,8 @@ def get_results_csv_columns(config: Optional[Dict[str, Any]] = None) -> list:
 def is_verbose() -> bool:
     """
     Verify if verbose output is enabled based on the CLI arguments or configuration.
-    
-    :param: None
-    :return: True if verbose output is enabled, False otherwise
+
+    :return: True if verbose output is enabled, False otherwise.
     """
     
     return bool((CLI_ARGS.get("verbose") if isinstance(CLI_ARGS, dict) else False) or (CONFIG.get("rfe", {}).get("execution", {}).get("verbose") if isinstance(CONFIG, dict) else False))
@@ -417,9 +414,9 @@ def is_verbose() -> bool:
 
 def verify_dot_env_file():
     """
-    Verifies if the .env file exists in the current directory.
+    Verify if the .env file exists in the current directory.
 
-    :return: True if the .env file exists, False otherwise
+    :return: True if the .env file exists, False otherwise.
     """
     
     try:
@@ -437,9 +434,9 @@ def verify_dot_env_file():
 
 def setup_telegram_bot():
     """
-    Sets up the Telegram bot for progress messages.
+    Set up the Telegram bot for progress messages.
 
-    :return: None
+    :return: None.
     """
     
     try:
@@ -453,10 +450,10 @@ def setup_telegram_bot():
 
         try:  # Try to initialize the Telegram bot
             TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
-            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
-            telegram_module.RUNNING_CODE = os.path.basename(__file__)
+            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"  # Set device info string with IP and OS
+            telegram_module.RUNNING_CODE = os.path.basename(__file__)  # Set currently running script name
         except Exception as e:
-            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")  # Report initialization failure to terminal
             TELEGRAM_BOT = None  # Set to None if initialization fails
     except Exception as e:
         print(str(e))
@@ -1210,7 +1207,7 @@ def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str
         parent = out_p.parent  # Get parent directory
         if not parent.exists():  # If parent doesn't exist
             parent.mkdir(parents=True, exist_ok=True)  # Try to create it
-        if not os.access(str(parent), os.W_OK):  # Check parent directory is writable
+        if not os.access(str(parent), os.W_OK):  # Verify write permission on parent
             raise PermissionError(f"Directory not writable: {parent}")  # Raise on non-writable directory
         styled = apply_zebra_style(df)  # Create styled DataFrame with zebra stripes
         export_dataframe_image(styled, out_p)  # Export styled DataFrame to PNG
@@ -2339,14 +2336,11 @@ def to_seconds(obj):
 
 def calculate_execution_time(start_time, finish_time=None):
     """
-    Calculates the execution time and returns a human-readable string.
+    Calculate the execution time and return a human-readable string.
 
-    Accepts either:
-    - Two datetimes/timedeltas: `calculate_execution_time(start, finish)`
-    - A single timedelta or numeric seconds: `calculate_execution_time(delta)`
-    - Two numeric timestamps (seconds): `calculate_execution_time(start_s, finish_s)`
-
-    Returns a string like "1h 2m 3s".
+    :param start_time: The start time or duration value (datetime, timedelta, or numeric seconds).
+    :param finish_time: Optional finish time; if None, start_time is treated as the total duration.
+    :return: Human-readable execution time string formatted as days, hours, minutes, and seconds.
     """
     
     try:
@@ -2397,10 +2391,9 @@ def calculate_execution_time(start_time, finish_time=None):
 
 def play_sound():
     """
-    Plays a sound when the program finishes and skips if the operating system is Windows.
+    Play a sound when the program finishes and skip if the operating system is Windows.
 
-    :param: None
-    :return: None
+    :return: None.
     """
     
     try:
@@ -2429,24 +2422,28 @@ def main(n_features_to_select=None, step=None, estimator_name=None, random_state
     """
     Main function.
 
-    :param: None
-    :return: None
+    :param n_features_to_select: Number of top features to select via RFE; None uses config value.
+    :param step: Number of features to remove per RFE iteration; None uses config value.
+    :param estimator_name: Name of the estimator model to use; None uses config value.
+    :param random_state: Random seed for reproducibility; None uses config value.
+    :param csv_path: Path to the input CSV dataset file; None uses config value.
+    :return: None.
     """
     
     try:
         print(
             f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Recursive Feature Elimination (RFE){BackgroundColors.GREEN} program!{Style.RESET_ALL}"
         )  # Output the welcome message
-        start_time = datetime.datetime.now()
-        setup_telegram_bot()
+        start_time = datetime.datetime.now()  # Record program start time
+        setup_telegram_bot()  # Initialize Telegram bot for progress notifications
 
-        dataset_to_use = csv_path or CONFIG.get("rfe", {}).get("execution", {}).get("dataset_path")
-        if not dataset_to_use:
+        dataset_to_use = csv_path or CONFIG.get("rfe", {}).get("execution", {}).get("dataset_path")  # Resolve dataset path from argument or config
+        if not dataset_to_use:  # Raise if no dataset path was provided
             raise ValueError("No dataset path provided. Use --dataset_path or set rfe.execution.dataset_path in config.")
 
-        dataset_name = os.path.splitext(os.path.basename(dataset_to_use))[0]
-        send_telegram_message(TELEGRAM_BOT, [f"Starting RFE Feature Selection on {dataset_name} at {start_time.strftime('%d/%m/%Y - %H:%M:%S')}"])
-        run_rfe(dataset_to_use, n_features_to_select=n_features_to_select, step=step, estimator_name=estimator_name, random_state=random_state)
+        dataset_name = os.path.splitext(os.path.basename(dataset_to_use))[0]  # Extract dataset name from file path
+        send_telegram_message(TELEGRAM_BOT, [f"Starting RFE Feature Selection on {dataset_name} at {start_time.strftime('%d/%m/%Y - %H:%M:%S')}"])  # Notify Telegram about program start
+        run_rfe(dataset_to_use, n_features_to_select=n_features_to_select, step=step, estimator_name=estimator_name, random_state=random_state)  # Execute RFE feature selection pipeline
 
         finish_time = datetime.datetime.now()  # Get the finish time of the program
         print(

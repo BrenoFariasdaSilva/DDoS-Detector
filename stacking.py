@@ -587,12 +587,12 @@ def initialize_logger(config=None):
 
 def verbose_output(true_string="", false_string="", config=None):
     """
-    Outputs a message if verbose mode is enabled in configuration.
+    Output a message if verbose mode is enabled in configuration.
 
     :param true_string: The string to be outputted if verbose is enabled.
     :param false_string: The string to be outputted if verbose is disabled.
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: None
+    :return: None.
     """
 
     try:
@@ -613,10 +613,10 @@ def verbose_output(true_string="", false_string="", config=None):
 
 def verify_dot_env_file(config=None):
     """
-    Verifies if the .env file exists in the current directory.
+    Verify if the .env file exists in the current directory.
 
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: True if the .env file exists, False otherwise
+    :return: True if the .env file exists, False otherwise.
     """
 
     try:
@@ -642,10 +642,10 @@ def verify_dot_env_file(config=None):
 
 def setup_telegram_bot(config=None):
     """
-    Sets up the Telegram bot for progress messages.
+    Set up the Telegram bot for progress messages.
 
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: None
+    :return: None.
     """
 
     try:
@@ -667,10 +667,10 @@ def setup_telegram_bot(config=None):
 
         try:  # Try to initialize the Telegram bot
             TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
-            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
-            telegram_module.RUNNING_CODE = os.path.basename(__file__)
+            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"  # Set device info string with IP and OS
+            telegram_module.RUNNING_CODE = os.path.basename(__file__)  # Set currently running script name
         except Exception as e:
-            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")  # Report initialization failure to terminal
             TELEGRAM_BOT = None  # Set to None if initialization fails
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -756,7 +756,7 @@ def get_files_to_process(directory_path, file_extension=".csv", config=None):
         )  # Verbose: starting file collection
         verify_filepath_exists(directory_path)  # Validate directory path exists
 
-        if not os.path.isdir(directory_path):  # Check if path is a valid directory
+        if not os.path.isdir(directory_path):  # Verify if path is a valid directory
             verbose_output(
                 f"{BackgroundColors.RED}Not a directory: {BackgroundColors.CYAN}{directory_path}{Style.RESET_ALL}",
                 config=config
@@ -781,7 +781,7 @@ def get_files_to_process(directory_path, file_extension=".csv", config=None):
             item_path = os.path.join(directory_path, item)  # Absolute path
             filename = os.path.basename(item_path)  # Extract just the filename
 
-            if any(ignore == filename or ignore == item_path for ignore in ignore_files):  # Check if file is in ignore list
+            if any(ignore == filename or ignore == item_path for ignore in ignore_files):  # Verify if file is in the ignore list
                 verbose_output(
                     f"{BackgroundColors.YELLOW}Ignoring {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} (listed in IGNORE_FILES){Style.RESET_ALL}",
                     config=config
@@ -1671,7 +1671,7 @@ def validate_augmented_dataframe(original_df, augmented_df, file_path):
     """
 
     try:
-        if augmented_df is None or augmented_df.empty:  # Check if augmented DataFrame is None or contains no rows
+        if augmented_df is None or augmented_df.empty:  # Verify if augmented DataFrame is None or contains no rows
             print(
                 f"{BackgroundColors.YELLOW}Warning: Augmented DataFrame is empty for {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping.{Style.RESET_ALL}"
             )  # Print warning about empty augmented data
@@ -1691,7 +1691,7 @@ def validate_augmented_dataframe(original_df, augmented_df, file_path):
         augmented_dtypes = augmented_df.select_dtypes(include=np.number).columns.tolist()  # Get list of numeric columns in augmented
         numeric_overlap = set(original_dtypes) & set(augmented_dtypes)  # Compute intersection of numeric columns
 
-        if len(numeric_overlap) < 2:  # Check if there are at least 2 overlapping numeric columns (features + target)
+        if len(numeric_overlap) < 2:  # Verify if there are at least 2 overlapping numeric columns (features + target)
             print(
                 f"{BackgroundColors.YELLOW}Warning: Augmented data for {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW} has insufficient numeric column overlap ({len(numeric_overlap)}). Skipping.{Style.RESET_ALL}"
             )  # Print warning about insufficient numeric overlap
@@ -1723,7 +1723,7 @@ def sample_augmented_by_ratio(augmented_df, original_df, ratio):
         n_requested = max(1, int(round(ratio * n_original)))  # Calculate requested sample size capped at minimum 1 row
         n_available = len(augmented_df)  # Get the total number of rows available in augmented data
 
-        if n_available == 0:  # Check if augmented DataFrame has zero rows
+        if n_available == 0:  # Verify if augmented DataFrame has zero rows
             print(
                 f"{BackgroundColors.YELLOW}Warning: Augmented DataFrame is empty. Cannot sample at ratio {ratio}.{Style.RESET_ALL}"
             )  # Print warning about empty augmented source
@@ -2082,7 +2082,7 @@ def export_dataframe_image(styled_df, output_path):
         if not parent.exists():  # Ensure parent exists
             parent.mkdir(parents=True, exist_ok=True)  # Create parent directories if missing
 
-        if not os.access(str(parent), os.W_OK):  # Check write permission on parent
+        if not os.access(str(parent), os.W_OK):  # Verify write permission on parent
             raise PermissionError(f"Directory not writable: {parent}")  # Raise if not writable
 
         dfi.export(styled_df, str(out_path))  # Use dataframe_image to export styled DataFrame to PNG
@@ -3336,7 +3336,7 @@ def load_pca_object(file_path, pca_n_components, config=None):
             file_dir, "Cache", f"PCA_{pca_n_components}_components.pkl"
         )  # Construct the path to the PCA pickle file
 
-        if not verify_filepath_exists(pca_file):  # Check if the PCA file exists
+        if not verify_filepath_exists(pca_file):  # Verify if the PCA file exists
             verbose_output(
                 f"{BackgroundColors.YELLOW}PCA object file not found at {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}",
                 config=config
@@ -3447,7 +3447,7 @@ def get_feature_subset(X_scaled, features, feature_names):
             indices = []  # List to store indices of selected features
             selected_names = []  # List to store names of selected features
             for f in features:  # Iterate over each feature in the provided list
-                if f in feature_names:  # Check if the feature exists in the full feature list
+                if f in feature_names:  # Verify if the feature exists in the full feature list
                     indices.append(feature_names.index(f))  # Append the index of the feature
                     selected_names.append(f)  # Append the name of the feature
             return X_scaled[:, indices], selected_names  # Return the subset and actual names
@@ -4749,7 +4749,7 @@ def safe_load_json(val):
     :return: The loaded JSON object if val is a string, None if val is Na
     """
     
-    if pd.isna(val):  # Check for NaN values and return None
+    if pd.isna(val):  # Verify value is NaN before returning None
         return None  # Return None for NaN values
     
     if isinstance(val, str):  # If the value is a string, attempt to parse it as JSON
@@ -4878,10 +4878,9 @@ def remove_cache_file(csv_path, config=None):
 
 def get_automl_search_spaces():
     """
-    Returns hyperparameter search space definitions for all AutoML candidate models.
+    Return hyperparameter search space definitions for all AutoML candidate models.
 
-    :param: None
-    :return: Dictionary mapping model names to their search space configurations
+    :return: Dictionary mapping model names to their search space configurations.
     """
     
     try:
@@ -5090,7 +5089,7 @@ def automl_cross_validate_model(model, X_train, y_train, cv_folds, trial=None, c
 
             if trial is not None:  # If Optuna trial is provided
                 trial.report(np.mean(f1_scores), fold_idx)  # Report intermediate value for pruning
-                if trial.should_prune():  # Check if trial should be pruned
+                if trial.should_prune():  # Verify if trial should be pruned
                     raise optuna.exceptions.TrialPruned()  # Prune this trial
 
         return float(np.mean(f1_scores))  # Return mean F1 score across folds as Python float
@@ -8027,7 +8026,7 @@ def save_results_with_optional_suffix(file, results_list, suffix, base_filename_
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        use_suffix = config.get("stacking", {}).get("use_suffix_filenames", False)  # Check if suffix filenames wanted
+        use_suffix = config.get("stacking", {}).get("use_suffix_filenames", False)  # Verify if suffix filenames are configured
         if use_suffix:  # If suffix-based files desired
             base = config.get("stacking", {}).get(base_filename_key, fallback_filename)  # Get base filename from config
             out_name = base.replace('.csv', f"{suffix}.csv")  # Compose suffixed filename
@@ -8652,14 +8651,11 @@ def to_seconds(obj):
 
 def calculate_execution_time(start_time, finish_time=None):
     """
-    Calculates the execution time and returns a human-readable string.
+    Calculate the execution time and return a human-readable string.
 
-    Accepts either:
-    - Two datetimes/timedeltas: `calculate_execution_time(start, finish)`
-    - A single timedelta or numeric seconds: `calculate_execution_time(delta)`
-    - Two numeric timestamps (seconds): `calculate_execution_time(start_s, finish_s)`
-
-    Returns a string like "1h 2m 3s".
+    :param start_time: The start time or duration value (datetime, timedelta, or numeric seconds).
+    :param finish_time: Optional finish time; if None, start_time is treated as the total duration.
+    :return: Human-readable execution time string formatted as days, hours, minutes, and seconds.
     """
     
     try:
@@ -8710,10 +8706,10 @@ def calculate_execution_time(start_time, finish_time=None):
 
 def play_sound(config=None):
     """
-    Plays a sound when the program finishes and skips if the operating system is Windows.
+    Play a sound when the program finishes and skip if the operating system is Windows.
 
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: None
+    :return: None.
     """
     
     try:

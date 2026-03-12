@@ -609,11 +609,11 @@ def get_config() -> tuple:
 
 def verbose_output(true_string="", false_string=""):
     """
-    Outputs a message if the VERBOSE constant is set to True.
+    Output a message if the VERBOSE constant is set to True.
 
     :param true_string: The string to be outputted if the VERBOSE constant is set to True.
     :param false_string: The string to be outputted if the VERBOSE constant is set to False.
-    :return: None
+    :return: None.
     """
     
     try:
@@ -629,9 +629,9 @@ def verbose_output(true_string="", false_string=""):
 
 def verify_dot_env_file():
     """
-    Verifies if the .env file exists in the current directory.
+    Verify if the .env file exists in the current directory.
 
-    :return: True if the .env file exists, False otherwise
+    :return: True if the .env file exists, False otherwise.
     """
     
     try:
@@ -649,9 +649,9 @@ def verify_dot_env_file():
 
 def setup_telegram_bot():
     """
-    Sets up the Telegram bot for progress messages.
+    Set up the Telegram bot for progress messages.
 
-    :return: None
+    :return: None.
     """
     
     try:
@@ -665,10 +665,10 @@ def setup_telegram_bot():
 
         try:  # Try to initialize the Telegram bot
             TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
-            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
-            telegram_module.RUNNING_CODE = os.path.basename(__file__)
+            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"  # Set device info string with IP and OS
+            telegram_module.RUNNING_CODE = os.path.basename(__file__)  # Set currently running script name
         except Exception as e:
-            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")  # Report initialization failure to terminal
             TELEGRAM_BOT = None  # Set to None if initialization fails
     except Exception as e:
         print(str(e))
@@ -1303,7 +1303,7 @@ def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str
         parent = out_p.parent  # Get parent directory
         if not parent.exists():  # If parent doesn't exist
             parent.mkdir(parents=True, exist_ok=True)  # Try to create it
-        if not os.access(str(parent), os.W_OK):  # Check parent directory is writable
+        if not os.access(str(parent), os.W_OK):  # Verify write permission on parent
             raise PermissionError(f"Directory not writable: {parent}")  # Raise on non-writable directory
         styled = apply_zebra_style(df)  # Create styled DataFrame with zebra stripes
         export_dataframe_image(styled, out_p)  # Export styled DataFrame to PNG
@@ -1604,7 +1604,7 @@ def save_pca_results(csv_path, all_results, cfg=None):
         raise
 
 
-def check_skip_existing_models(n_components_list: list, models_dir: str, base_name: str) -> bool:
+def should_skip_existing_models(n_components_list: list, models_dir: str, base_name: str) -> bool:
     """
     Determine if training should be skipped because exported models already exist.
 
@@ -1866,7 +1866,7 @@ def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=T
         base_name = Path(csv_path).stem  # Extract base filename stem from dataset path
 
         if SKIP_TRAIN_IF_MODEL_EXISTS:  # Verify if skip-training flag is enabled
-            if check_skip_existing_models(n_components_list, models_dir, base_name):  # Verify if any exported model already exists
+            if should_skip_existing_models(n_components_list, models_dir, base_name):  # Verify if any exported model already exists
                 return  # Skip all training when at least one model is found
 
         result = load_and_prepare_pca_dataset(csv_path, remove_zero_variance)  # Load and preprocess the dataset
@@ -1950,14 +1950,11 @@ def to_seconds(obj):
 
 def calculate_execution_time(start_time, finish_time=None):
     """
-    Calculates the execution time and returns a human-readable string.
+    Calculate the execution time and return a human-readable string.
 
-    Accepts either:
-    - Two datetimes/timedeltas: `calculate_execution_time(start, finish)`
-    - A single timedelta or numeric seconds: `calculate_execution_time(delta)`
-    - Two numeric timestamps (seconds): `calculate_execution_time(start_s, finish_s)`
-
-    Returns a string like "1h 2m 3s".
+    :param start_time: The start time or duration value (datetime, timedelta, or numeric seconds).
+    :param finish_time: Optional finish time; if None, start_time is treated as the total duration.
+    :return: Human-readable execution time string formatted as days, hours, minutes, and seconds.
     """
     
     try:
@@ -2008,10 +2005,9 @@ def calculate_execution_time(start_time, finish_time=None):
 
 def play_sound():
     """
-    Plays a sound when the program finishes and skips if the operating system is Windows.
+    Play a sound when the program finishes and skip if the operating system is Windows.
 
-    :param: None
-    :return: None
+    :return: None.
     """
     
     try:
@@ -2040,55 +2036,54 @@ def main():
     """
     Main function.
 
-    :param: None
-    :return: None
+    :return: None.
     """
     
     try:
-        merged_cfg, sources = get_config()
+        merged_cfg, sources = get_config()  # Load and merge configuration sources
 
-        global cfg, app_cfg
-        app_cfg = merged_cfg
-        cfg = (merged_cfg or {}).get("pca", {}) if isinstance(merged_cfg, dict) else {}
+        global cfg, app_cfg  # Declare global config variables for module-wide access
+        app_cfg = merged_cfg  # Store full merged config in global
+        cfg = (merged_cfg or {}).get("pca", {}) if isinstance(merged_cfg, dict) else {}  # Extract PCA-specific config block
 
-        logs_dir = app_cfg.get("paths", {}).get("logs_dir", "./Logs") if isinstance(app_cfg, dict) else "./Logs"
-        os.makedirs(logs_dir, exist_ok=True)
-        logger = Logger(f"{logs_dir}/{Path(__file__).stem}.log", clean=app_cfg.get("logging", {}).get("clean", True) if isinstance(app_cfg, dict) else True)
-        sys.stdout = logger
-        sys.stderr = logger
+        logs_dir = app_cfg.get("paths", {}).get("logs_dir", "./Logs") if isinstance(app_cfg, dict) else "./Logs"  # Resolve logs directory from config
+        os.makedirs(logs_dir, exist_ok=True)  # Create logs directory if missing
+        logger = Logger(f"{logs_dir}/{Path(__file__).stem}.log", clean=app_cfg.get("logging", {}).get("clean", True) if isinstance(app_cfg, dict) else True)  # Initialize Logger for file and stdout capture
+        sys.stdout = logger  # Redirect stdout to logger
+        sys.stderr = logger  # Redirect stderr to logger
 
-        setup_global_exception_hook()
+        setup_global_exception_hook()  # Register global exception notifier via Telegram
 
-        global N_JOBS, CROSS_N_FOLDS, CPU_PROCESSES, CACHING_ENABLED, PICKLE_PROTOCOL, VERBOSE, SKIP_TRAIN_IF_MODEL_EXISTS, CSV_FILE
-        CROSS_N_FOLDS = (cfg or {}).get("cross_validation", {}).get("n_folds")
-        N_JOBS = (cfg or {}).get("multiprocessing", {}).get("n_jobs")
-        CPU_PROCESSES = (cfg or {}).get("multiprocessing", {}).get("cpu_processes")
-        CACHING_ENABLED = (cfg or {}).get("caching", {}).get("enabled")
-        PICKLE_PROTOCOL = (cfg or {}).get("caching", {}).get("pickle_protocol")
-        VERBOSE = (cfg or {}).get("execution", {}).get("verbose", False)
-        SKIP_TRAIN_IF_MODEL_EXISTS = (cfg or {}).get("execution", {}).get("skip_train_if_model_exists", False)
-        CSV_FILE = (cfg or {}).get("execution", {}).get("dataset_path")
+        global N_JOBS, CROSS_N_FOLDS, CPU_PROCESSES, CACHING_ENABLED, PICKLE_PROTOCOL, VERBOSE, SKIP_TRAIN_IF_MODEL_EXISTS, CSV_FILE  # Declare all global runtime constants for config update
+        CROSS_N_FOLDS = (cfg or {}).get("cross_validation", {}).get("n_folds")  # Read cross-validation fold count from config
+        N_JOBS = (cfg or {}).get("multiprocessing", {}).get("n_jobs")  # Read parallel job count from config
+        CPU_PROCESSES = (cfg or {}).get("multiprocessing", {}).get("cpu_processes")  # Read CPU process count from config
+        CACHING_ENABLED = (cfg or {}).get("caching", {}).get("enabled")  # Read caching enabled flag from config
+        PICKLE_PROTOCOL = (cfg or {}).get("caching", {}).get("pickle_protocol")  # Read pickle protocol version from config
+        VERBOSE = (cfg or {}).get("execution", {}).get("verbose", False)  # Read verbose output flag from config
+        SKIP_TRAIN_IF_MODEL_EXISTS = (cfg or {}).get("execution", {}).get("skip_train_if_model_exists", False)  # Read skip-training flag from config
+        CSV_FILE = (cfg or {}).get("execution", {}).get("dataset_path")  # Read dataset path from config
 
-        if CSV_FILE is None:
+        if CSV_FILE is None:  # Raise if dataset path missing from config and CLI
             raise ValueError("Dataset path must be provided (CLI --dataset_path or config.pca.execution.dataset_path)")
-        if not Path(CSV_FILE).exists():
+        if not Path(CSV_FILE).exists():  # Raise if dataset file not found at given path
             raise ValueError(f"Dataset file not found: {CSV_FILE}")
 
-        n_components_list = (cfg or {}).get("dimensionality", {}).get("n_components_list")
-        if not isinstance(n_components_list, list) or not all(isinstance(x, int) and x > 0 for x in n_components_list):
+        n_components_list = (cfg or {}).get("dimensionality", {}).get("n_components_list")  # Read list of n_components values from config
+        if not isinstance(n_components_list, list) or not all(isinstance(x, int) and x > 0 for x in n_components_list):  # Validate n_components_list before proceeding
             raise ValueError("pca.dimensionality.n_components_list must be a list of positive integers")
 
-        random_state = (cfg or {}).get("model", {}).get("random_state")
-        scale_data = (cfg or {}).get("preprocessing", {}).get("scale_data", True)
-        remove_zero_variance = (cfg or {}).get("preprocessing", {}).get("remove_zero_variance", True)
-        max_workers = None
+        random_state = (cfg or {}).get("model", {}).get("random_state")  # Read random state seed from config
+        scale_data = (cfg or {}).get("preprocessing", {}).get("scale_data", True)  # Read scale_data flag from config
+        remove_zero_variance = (cfg or {}).get("preprocessing", {}).get("remove_zero_variance", True)  # Read zero-variance removal flag from config
+        max_workers = None  # Default to None for automatic thread pool sizing
 
-        print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}PCA Feature Extraction{BackgroundColors.GREEN} program!{Style.RESET_ALL}")
-        start_time = datetime.datetime.now()
+        print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}PCA Feature Extraction{BackgroundColors.GREEN} program!{Style.RESET_ALL}")  # Clear terminal and print welcome message
+        start_time = datetime.datetime.now()  # Record program start time
 
-        setup_telegram_bot()
+        setup_telegram_bot()  # Initialize Telegram bot for progress notifications
 
-        send_telegram_message(TELEGRAM_BOT, [f"Starting PCA Feature Extraction on {CSV_FILE} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])
+        send_telegram_message(TELEGRAM_BOT, [f"Starting PCA Feature Extraction on {CSV_FILE} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Notify Telegram about program start
 
         run_pca_analysis(
             CSV_FILE,
@@ -2097,20 +2092,20 @@ def main():
             random_state=random_state,
             scale_data=scale_data,
             remove_zero_variance=remove_zero_variance,
-        )
+        )  # Execute PCA feature extraction pipeline
 
-        finish_time = datetime.datetime.now()
+        finish_time = datetime.datetime.now()  # Record program finish time
         print(
             f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
-        )
-        print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}")
+        )  # Output start time, finish time, and total execution time
+        print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}")  # Output program completion message
 
-        send_telegram_message(TELEGRAM_BOT, [f"PCA Feature Extraction completed on {CSV_FILE} at {finish_time.strftime('%Y-%m-%d %H:%M:%S')}.\nExecution time: {calculate_execution_time(start_time, finish_time)}"])
+        send_telegram_message(TELEGRAM_BOT, [f"PCA Feature Extraction completed on {CSV_FILE} at {finish_time.strftime('%Y-%m-%d %H:%M:%S')}.\nExecution time: {calculate_execution_time(start_time, finish_time)}"])  # Notify Telegram about program completion
 
         try:
-            top_play_sound = app_cfg.get("execution", {}).get("play_sound", False)
-            if top_play_sound:
-                atexit.register(play_sound)
+            top_play_sound = app_cfg.get("execution", {}).get("play_sound", False)  # Read play_sound flag from top-level app config
+            if top_play_sound:  # Register sound effect on exit if enabled
+                atexit.register(play_sound)  # Register play_sound to run at program exit
         except Exception:
             pass
     except Exception as e:
@@ -2135,7 +2130,7 @@ if __name__ == "__main__":
         except Exception:  # Ignore notification failures during interrupt handling
             pass  # Continue to cleanup even if notification fails
         try:  # Attempt to flush/close logger for clean logs on interrupt
-            if "logger" in globals() and globals().get("logger") is not None:  # Check logger existence to avoid attribute errors
+            if "logger" in globals() and globals().get("logger") is not None:  # Verify logger existence before flushing to avoid attribute errors
                 try:  # Try flushing and closing logger
                     globals()["logger"].flush()  # Flush logger buffer
                     globals()["logger"].close()  # Close logger handle
@@ -2161,7 +2156,7 @@ if __name__ == "__main__":
             except Exception:  # If printing fails, swallow
                 pass  # Swallow to avoid further errors
         try:  # Attempt to flush and close logger to preserve logs on fatal errors
-            if "logger" in globals() and globals().get("logger") is not None:  # Check logger exists
+            if "logger" in globals() and globals().get("logger") is not None:  # Verify logger exists before flushing to preserve logs
                 try:  # Try to flush/close logger
                     globals()["logger"].flush()  # Flush logger buffer
                     globals()["logger"].close()  # Close logger handle
@@ -2169,12 +2164,12 @@ if __name__ == "__main__":
                     pass  # Continue after best-effort cleanup
             else:  # Fallback if logger unavailable
                 try:  # Try to flush/close sys.stdout if possible
-                    if hasattr(sys.stdout, "flush"):  # Check stdout flush
+                    if hasattr(sys.stdout, "flush"):  # Verify stdout supports flush before calling
                         try:
                             sys.stdout.flush()  # Attempt to flush stdout
                         except Exception:  # Ignore flush errors
                             pass  # Continue cleanup
-                    if hasattr(sys.stdout, "close"):  # Check stdout close
+                    if hasattr(sys.stdout, "close"):  # Verify stdout supports close before calling
                         try:
                             sys.stdout.close()  # Attempt to close stdout
                         except Exception:  # Ignore close errors

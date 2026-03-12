@@ -614,11 +614,11 @@ def initialize_logger(config):
 
 def verbose_output(true_string="", false_string=""):
     """
-    Outputs a message if the VERBOSE constant is set to True.
+    Output a message if the VERBOSE constant is set to True.
 
     :param true_string: The string to be outputted if the VERBOSE constant is set to True.
     :param false_string: The string to be outputted if the VERBOSE constant is set to False.
-    :return: None
+    :return: None.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
@@ -638,9 +638,9 @@ def verbose_output(true_string="", false_string=""):
 
 def verify_dot_env_file():
     """
-    Verifies if the .env file exists in the current directory.
+    Verify if the .env file exists in the current directory.
 
-    :return: True if the .env file exists, False otherwise
+    :return: True if the .env file exists, False otherwise.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
@@ -658,9 +658,9 @@ def verify_dot_env_file():
 
 def setup_telegram_bot():
     """
-    Sets up the Telegram bot for progress messages.
+    Set up the Telegram bot for progress messages.
 
-    :return: None
+    :return: None.
     """
     
     try:  # Wrap full function logic to ensure production-safe monitoring
@@ -677,7 +677,7 @@ def setup_telegram_bot():
             telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"  # Set device info string with IP and OS
             telegram_module.RUNNING_CODE = os.path.basename(__file__)  # Set currently running script name
         except Exception as e:
-            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {str(e)}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {str(e)}{Style.RESET_ALL}")  # Report initialization failure to terminal
             TELEGRAM_BOT = None  # Set to None if initialization fails
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -1921,9 +1921,8 @@ def load_cached_run_if_any(
 def attr_bool() -> int:
     """
     Generate a random binary value (0 or 1) for use as a gene in the genetic algorithm.
-    
-    :param: None
-    :return: 0 or 1
+
+    :return: 0 or 1.
     """
     
     return random.randint(0, 1)  # Return random 0 or 1 for binary gene
@@ -2657,7 +2656,7 @@ def create_and_evaluate_offspring(population, toolbox, cxpb, mutpb):
         raise  # Re-raise to preserve original failure semantics
 
 
-def check_ga_early_stop(current_best_f1, best_fitness, gens_without_improvement, early_stop_gens, gen):
+def evaluate_early_stop(current_best_f1, best_fitness, gens_without_improvement, early_stop_gens, gen):
     """
     Evaluate whether the GA should stop early due to fitness stagnation.
 
@@ -2688,7 +2687,7 @@ def check_ga_early_stop(current_best_f1, best_fitness, gens_without_improvement,
         raise  # Re-raise to preserve original failure semantics
 
 
-def check_telegram_progress_milestone(gen, n_generations, telegram_enabled, show_progress, telegram_progress_pct, last_telegram_block):
+def evaluate_telegram_progress_milestone(gen, n_generations, telegram_enabled, show_progress, telegram_progress_pct, last_telegram_block):
     """
     Determine whether a Telegram progress notification should be sent for the current generation.
 
@@ -3129,7 +3128,7 @@ def finalize_generation_and_notify(
     :return: Tuple of (gens_ran, last_telegram_block) with updated generation counter and notification block.
     """
 
-    should_send, last_telegram_block = check_telegram_progress_milestone(
+    should_send, last_telegram_block = evaluate_telegram_progress_milestone(
         gen, n_generations, telegram_enabled, show_progress, telegram_progress_pct, last_telegram_block
     )  # Determine whether a Telegram progress milestone notification should be sent
 
@@ -3252,7 +3251,7 @@ def run_genetic_algorithm_loop(
                 pareto_size_history, hypervolume_history, diversity_history,
             )  # Apply crossover, mutation, evaluation, selection, HOF update, and history recording for one generation
 
-            best_fitness, gens_without_improvement, should_stop = check_ga_early_stop(
+            best_fitness, gens_without_improvement, should_stop = evaluate_early_stop(
                 current_best_fitness_f1, best_fitness, gens_without_improvement, early_stop_gens, gen
             )  # Evaluate early-stop condition and update best fitness tracking
 
@@ -7254,14 +7253,11 @@ def to_seconds(obj):
 
 def calculate_execution_time(start_time, finish_time=None):
     """
-    Calculates the execution time and returns a human-readable string.
+    Calculate the execution time and return a human-readable string.
 
-    Accepts either:
-    - Two datetimes/timedeltas: "calculate_execution_time(start, finish)"
-    - A single timedelta or numeric seconds: "calculate_execution_time(delta)"
-    - Two numeric timestamps (seconds): "calculate_execution_time(start_s, finish_s)"
-
-    Returns a string like "1h 2m 3s".
+    :param start_time: The start time or duration value (datetime, timedelta, or numeric seconds).
+    :param finish_time: Optional finish time; if None, start_time is treated as the total duration.
+    :return: Human-readable execution time string formatted as days, hours, minutes, and seconds.
     """
 
     try:
@@ -7404,8 +7400,9 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
 
 def play_sound():
     """
-    Plays a sound when the program finishes and skips if the operating system is Windows.
-    :return: None
+    Play a sound when the program finishes and skip if the operating system is Windows.
+
+    :return: None.
     """
 
     try:

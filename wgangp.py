@@ -1044,12 +1044,12 @@ def preprocess_dataframe(df, label_col, remove_zero_variance=None, config: Optio
 
 def verbose_output(true_string="", false_string="", config: Optional[Dict] = None):
     """
-    Outputs a message if the verbose flag is enabled in configuration.
+    Output a message if the verbose flag is enabled in configuration.
 
     :param true_string: The string to be outputted if verbose is enabled.
     :param false_string: The string to be outputted if verbose is disabled.
     :param config: Optional configuration dictionary containing verbose setting
-    :return: None
+    :return: None.
     """
 
     try:
@@ -1070,10 +1070,10 @@ def verbose_output(true_string="", false_string="", config: Optional[Dict] = Non
 
 def verify_dot_env_file(config: Optional[Dict] = None):
     """
-    Verifies if the .env file exists in the current directory.
+    Verify if the .env file exists in the current directory.
 
     :param config: Optional configuration dictionary containing telegram settings
-    :return: True if the .env file exists, False otherwise
+    :return: True if the .env file exists, False otherwise.
     """
 
     try:
@@ -1097,10 +1097,10 @@ def verify_dot_env_file(config: Optional[Dict] = None):
 
 def setup_telegram_bot(config: Optional[Dict] = None):
     """
-    Sets up the Telegram bot for progress messages.
+    Set up the Telegram bot for progress messages.
 
     :param config: Optional configuration dictionary containing telegram settings
-    :return: None
+    :return: None.
     """
     
     try:
@@ -1121,11 +1121,11 @@ def setup_telegram_bot(config: Optional[Dict] = None):
 
         try:  # Try to initialize the Telegram bot
             TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
-            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"
-            telegram_module.RUNNING_CODE = os.path.basename(__file__)
+            telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"  # Set device info string with IP and OS
+            telegram_module.RUNNING_CODE = os.path.basename(__file__)  # Set currently running script name
             telegram_module.TELEGRAM_BOT = TELEGRAM_BOT  # Register the created bot instance in telegram_bot module
         except Exception as e:
-            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")
+            print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")  # Report initialization failure to terminal
             TELEGRAM_BOT = None  # Set to None if initialization fails
     except Exception as e:
         print(str(e))
@@ -4408,14 +4408,11 @@ def to_seconds(obj):
 
 def calculate_execution_time(start_time, finish_time=None):
     """
-    Calculates the execution time and returns a human-readable string.
+    Calculate the execution time and return a human-readable string.
 
-    Accepts either:
-    - Two datetimes/timedeltas: `calculate_execution_time(start, finish)`
-    - A single timedelta or numeric seconds: `calculate_execution_time(delta)`
-    - Two numeric timestamps (seconds): `calculate_execution_time(start_s, finish_s)`
-
-    Returns a string like "1h 2m 3s".
+    :param start_time: The start time or duration value (datetime, timedelta, or numeric seconds).
+    :param finish_time: Optional finish time; if None, start_time is treated as the total duration.
+    :return: Human-readable execution time string formatted as days, hours, minutes, and seconds.
     """
 
     try:
@@ -4621,10 +4618,10 @@ def row_style_for_zebra(row):
 
 def play_sound(config: Optional[Dict] = None):
     """
-    Plays a sound when the program finishes and skips if the operating system is Windows.
+    Play a sound when the program finishes and skip if the operating system is Windows.
 
     :param config: Optional configuration dictionary containing sound settings
-    :return: None
+    :return: None.
     """
 
     try:
@@ -4843,11 +4840,8 @@ def run_wgangp(config: Optional[Union[Dict, str]] = None, **kwargs) -> None:
 def close_all_results_csv_handles():
     """
     Close all opened results CSV file handles at process exit.
-    
-    This function is registered with atexit to ensure that all file handles in RESULTS_CSV_HANDLES are properly closed when the program terminates, preventing resource leaks.
-    
-    :param None
-    :return: None
+
+    :return: None.
     """
     
     try:
@@ -5361,12 +5355,9 @@ def register_exit_handlers(config: Dict) -> None:
 
 def main():
     """
-    Main CLI entry point.
+    Run the main CLI entry point for command-line argument parsing, configuration loading, and execution routing.
 
-    Handles command-line argument parsing, configuration loading, and execution routing.
-
-    :param: None
-    :return: None
+    :return: None.
     """
 
     try:
