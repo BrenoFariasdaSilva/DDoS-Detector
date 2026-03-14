@@ -4021,7 +4021,9 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
                 X_original_tsne = orig_df_tsne[valid_tsne_cols].apply(pd.to_numeric, errors="coerce").dropna().values.astype(np.float32)  # Extract numeric original feature matrix dropping non-finite rows
                 col_indices = [feature_cols.index(c) for c in valid_tsne_cols]  # Resolve column indices in the generated feature array
                 X_generated_tsne = X_orig[:, col_indices].astype(np.float32)  # Extract matching generated feature columns as float32
-                tsne_out_dir = Path(args.out_file).parent  # Derive output directory from out_file for t-SNE plot storage
+                out_file_parent = Path(args.out_file).parent  # Derive parent directory from out_file for t-SNE path normalization
+                data_aug_dirname = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")
+                tsne_out_dir = out_file_parent.parent if out_file_parent.name == data_aug_dirname else out_file_parent  # Route t-SNE output to Data_Augmentation when out_file is inside Data_Augmentation
                 tsne_dataset_name = Path(args.csv_path).stem  # Derive dataset name from CSV filename stem
                 generate_tsne_3d_separability_plot(X_original_tsne, X_generated_tsne, tsne_out_dir, dataset_name=tsne_dataset_name, config=config)  # Generate 3D t-SNE separability visualization
 
@@ -4360,7 +4362,9 @@ def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset:
         try:
             X_original_inmem = dataset.scaler.inverse_transform(dataset.X.numpy())  # Inverse-transform stored dataset tensor to original feature scale
             X_generated_inmem = df[feature_cols].values.astype(np.float32)  # Extract generated feature columns from postprocessed DataFrame as float32
-            tsne_out_dir_inmem = Path(args.out_file).parent  # Derive output root directory from out_file path for t-SNE plot storage
+            out_file_parent_inmem = Path(args.out_file).parent  # Derive parent directory from out_file for in-memory t-SNE path normalization
+            data_aug_dirname = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")
+            tsne_out_dir_inmem = out_file_parent_inmem.parent if out_file_parent_inmem.name == data_aug_dirname else out_file_parent_inmem  # Route in-memory t-SNE output to Data_Augmentation when out_file is inside Data_Augmentation
             tsne_name_inmem = Path(args.csv_path).stem if getattr(args, "csv_path", None) else "generated"  # Build dataset name from CSV stem when path is available
             generate_tsne_3d_separability_plot(X_original_inmem, X_generated_inmem, tsne_out_dir_inmem, dataset_name=tsne_name_inmem, config=config)  # Generate 3D t-SNE separability plot comparing training data and in-memory generated samples
         except Exception as _tsne_inmem_e:
