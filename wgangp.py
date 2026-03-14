@@ -3379,7 +3379,7 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
             raise PermissionError(f"Directory not writable: {parent}")  # Raise permission error
         df.to_csv(str(csv_p), index=False)  # Save CSV to disk preserving DataFrame content/order
         
-        if is_visualizable:  # If a visual representation is desired
+        if is_visualizable and len(df) <= 100:  # Generate PNG only for visualizable DataFrames within the safe row limit
             try:  # Guard PNG rendering to prevent aborting the CSV pipeline on image export failures
                 png_path = csv_p.with_suffix(".png")  # Replace CSV extension with PNG
                 generate_table_image_from_dataframe(df, png_path)  # Generate PNG from in-memory DataFrame
