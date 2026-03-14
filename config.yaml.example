@@ -572,7 +572,7 @@ wgangp:
   seed: 42 # Random seed for reproducibility
   force_cpu: false # Force CPU usage even if CUDA available
   from_scratch: false # Force training from scratch, ignore checkpoints
-  generating_order: "off" # Dataset file processing order by file size: "off", "Ascending", or "Descending"
+  generating_order: "Ascending" # Dataset file processing order by file size: "off", "Ascending", or "Descending"
   execution_mode: both # Execution mode: "both" (default, runs binary and multi-class sequentially), "binary" (one file per eval), or "multi-class" (combined attacks)
   results_suffix: "_data_augmented" # Suffix to add to generated filenames
   results_dir: "Feature_Analysis/PCA"
