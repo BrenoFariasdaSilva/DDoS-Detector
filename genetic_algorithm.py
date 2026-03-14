@@ -7391,9 +7391,12 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
         if not os.access(str(parent), os.W_OK):  # Verify write permission on parent
             raise PermissionError(f"Directory not writable: {parent}")  # Raise when not writable
         df.to_csv(str(csv_p), index=False)  # Persist DataFrame to CSV preserving column order and content
-        if is_visualizable:  # Only generate image when flagged as visualizable
-            png_path = csv_p.with_suffix('.png')  # Construct PNG path by replacing extension
-            generate_table_image_from_dataframe(df, png_path)  # Generate PNG from in-memory DataFrame
+        if is_visualizable and len(df) <= 100:  # Only generate image when visualizable and within the safe row limit
+            try:  # Guard PNG rendering to keep CSV persistence independent from image export
+                png_path = csv_p.with_suffix('.png')  # Construct PNG path by replacing extension
+                generate_table_image_from_dataframe(df, png_path)  # Generate PNG from in-memory DataFrame
+            except Exception as _png_e:  # Contain PNG rendering failures locally
+                print(f"{BackgroundColors.YELLOW}Warning: PNG generation failed for {csv_p.name}: {_png_e}{Style.RESET_ALL}")  # Warn and continue without propagating PNG errors
     except Exception:
         raise  # Propagate exceptions to caller
 
