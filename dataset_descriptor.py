@@ -2310,7 +2310,11 @@ def generate_csv_and_image(df, csv_path, config: dict | None = None):
         df.to_csv(csv_path, index=False)  # Persist DataFrame to CSV without index
         img_ext = (config or {}).get("dataset_descriptor", {}).get("table_image_format", "png")  # Resolve table image format from config with png fallback
         image_path = os.path.splitext(csv_path)[0] + f".{img_ext}"  # Build image path using configured format
-        generate_table_image_from_dataframe(df, image_path, config=config)  # Generate image from DataFrame
+        if len(df) <= 100:  # Generate image only when DataFrame size is within the safe row limit
+            try:  # Guard image rendering to preserve the already-written CSV on PNG export failure
+                generate_table_image_from_dataframe(df, image_path, config=config)  # Generate image from DataFrame
+            except Exception as e:  # Contain PNG export failure locally to avoid aborting the pipeline
+                print(f"{BackgroundColors.YELLOW}[WARNING] Failed to generate table image for {BackgroundColors.CYAN}{os.path.basename(csv_path)}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}")  # Warn and continue when PNG rendering fails
         return csv_path, image_path  # Return both paths for caller use
     except Exception:
         raise  # Re-raise to preserve original failure semantics
