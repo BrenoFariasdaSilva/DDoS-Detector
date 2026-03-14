@@ -1042,8 +1042,11 @@ def generate_csv_and_image(df, csv_path, is_visualizable=True, **to_csv_kwargs):
     """
     try:
         df.to_csv(csv_path, **to_csv_kwargs)  # Save DataFrame to CSV with original kwargs
-        if is_visualizable:  # Generate image only if flagged
-            generate_table_image_from_dataframe(df, csv_path)  # Generate PNG from in-memory DataFrame
+        if is_visualizable and len(df) <= 100:  # Generate image only when visualizable and within the safe row limit
+            try:  # Guard PNG rendering to keep CSV persistence independent from image export
+                generate_table_image_from_dataframe(df, csv_path)  # Generate PNG from in-memory DataFrame
+            except Exception as _png_e:  # Contain PNG rendering failures locally
+                print(f"{BackgroundColors.YELLOW}Warning: PNG generation failed for {Path(csv_path).name}: {_png_e}{Style.RESET_ALL}")  # Warn and continue without propagating PNG errors
         return csv_path  # Return CSV path
     except Exception as e:
         print(str(e))
