@@ -215,8 +215,8 @@ def extract_functions_between(text, start_name, end_name):
 
     verbose_output(f"{BackgroundColors.GREEN}Extracting functions between {BackgroundColors.CYAN}{start_name}{BackgroundColors.GREEN} and {BackgroundColors.CYAN}{end_name}{Style.RESET_ALL}")  # Log extraction start
     
-    name_pattern = r"^def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\("  # Regex pattern to capture function name at line start
-    name_matches = list(re.finditer(name_pattern, text, flags=re.MULTILINE))  # Find all name occurrences
+    pattern = r"^def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(.*?\)\s*(?:->.*?)?\s*:.*?(?=^def\s|\Z)"  # Regex pattern for top-level defs with optional return type annotations.
+    name_matches = list(re.finditer(pattern, text, flags=re.MULTILINE))  # Find all name occurrences
     funcs = []  # Container for (name, code, start, end)
     for i, m in enumerate(name_matches):
         func_name = m.group(1)  # Extract function name from match group
