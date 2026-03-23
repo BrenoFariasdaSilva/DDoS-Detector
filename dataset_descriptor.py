@@ -1765,6 +1765,7 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
         df_after_nan_inf_removal = df_after_nan_removal.loc[~inf_mask_after_nan]  # Remove rows with infinite values after NaN removal
         rows_after_nan_inf_removal = len(df_after_nan_inf_removal)  # Capture rows remaining after NaN+infinite filtering
         removed_rows_inf = rows_after_nan_removal - rows_after_nan_inf_removal  # Compute rows removed due to infinite filtering specifically
+        rows_after_inf_removal = rows_after_nan_inf_removal  # Record rows after infinite removal (applied after NaN removal)
         removed_rows_nan_inf = original_num_rows - rows_after_nan_inf_removal  # Compute total rows removed by NaN+infinite filtering combined
         removed_rows_nan_inf = removed_rows_nan_inf if removed_rows_nan_inf >= 0 else 0  # Clamp negative values to zero for safety
         if original_num_rows > 0:  # Verify original row count is non-zero before percentage division
@@ -1827,9 +1828,14 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
             "Number of Samples": f"{n_samples:,}",  # Format with commas for readability
             "Number of Features": f"{n_features:,}",  # Format with commas for readability
             "original_num_rows": original_num_rows,  # Rows immediately after reading CSV
-            "rows_after_nan_inf_removal": rows_after_nan_inf_removal,  # Rows remaining after removing NaN/infinite values
-            "removed_rows_nan_inf": removed_rows_nan_inf,  # Rows removed by NaN/infinite filtering step
-            "removed_rows_nan_inf_proportion": removed_rows_nan_inf_proportion,  # Proportion of rows removed by NaN/infinite filtering step
+            "rows_after_nan_removal": rows_after_nan_removal,  # Rows remaining after removing NaN/null values only
+            "removed_rows_nan": removed_rows_nan,  # Rows removed by NaN/null filtering step
+            "removed_rows_nan_proportion": removed_rows_nan_proportion,  # Proportion of rows removed by NaN/null filtering step
+            "rows_after_inf_removal": rows_after_inf_removal,  # Rows remaining after removing infinite values only
+            "removed_rows_inf": removed_rows_inf,  # Rows removed by infinite-value filtering step
+            "rows_after_nan_inf_removal": rows_after_nan_inf_removal,  # Rows remaining after removing NaN+infinite values
+            "removed_rows_nan_inf": removed_rows_nan_inf,  # Rows removed by combined NaN+infinite filtering step
+            "removed_rows_nan_inf_proportion": removed_rows_nan_inf_proportion,  # Proportion of rows removed by combined NaN+infinite filtering step
             "rows_after_preprocessing": rows_after_preprocessing,  # Rows after preprocessing
             "original_num_features": original_num_features,  # Features before preprocessing
             "features_after_zero_variance_removal": features_after_zero_variance_removal,  # Features remaining after zero-variance numerical feature removal
