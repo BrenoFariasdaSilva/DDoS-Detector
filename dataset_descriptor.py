@@ -661,35 +661,51 @@ def preprocess_dataframe(df, remove_zero_variance=True):
     try:  # Wrap full function logic to ensure production-safe monitoring
         if remove_zero_variance:  # If remove_zero_variance is set to True
             verbose_output(
-                f"{BackgroundColors.GREEN}Preprocessing DataFrame: "
-                f"{BackgroundColors.CYAN}normalizing and sanitizing column names, removing NaN/infinite rows, and dropping zero-variance numeric features"
+                f"{BackgroundColors.GREEN}Preprocessing DataFrame: "  # Verify intent message
+                f"{BackgroundColors.CYAN}normalizing and sanitizing column names, removing NaN rows, removing infinite rows, and dropping zero-variance numeric features"
                 f"{BackgroundColors.GREEN}.{Style.RESET_ALL}"
-            )
+            )  # Emit verbose message when zero-variance removal is requested
         else:  # If remove_zero_variance is set to False
             verbose_output(
-                f"{BackgroundColors.GREEN}Preprocessing DataFrame: "
-                f"{BackgroundColors.CYAN}normalizing and sanitizing column names and removing NaN/infinite rows"
+                f"{BackgroundColors.GREEN}Preprocessing DataFrame: "  # Verify intent message
+                f"{BackgroundColors.CYAN}normalizing and sanitizing column names, removing NaN rows, and removing infinite rows"
                 f"{BackgroundColors.GREEN}.{Style.RESET_ALL}"
-            )
+            )  # Emit verbose message when zero-variance removal is not requested
 
         if df is None:  # If the DataFrame is None
-            return df  # Return None
+            return df  # Return None when no DataFrame provided
 
         df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
-        
+
         df.columns = sanitize_feature_names(df.columns)  # Sanitize column names to remove special characters
 
-        df_clean = df.replace([np.inf, -np.inf], np.nan).dropna()  # Remove rows with NaN or infinite values
+        original_row_count = len(df)  # Record original row count for metric computations
 
-        if remove_zero_variance:  # If remove_zero_variance is set to True
-            numeric_cols = df_clean.select_dtypes(include=["number"]).columns  # Select only numeric columns
-            if len(numeric_cols) > 0:  # If there are numeric columns
-                variances = df_clean[numeric_cols].var(axis=0, ddof=0)  # Calculate variances
-                zero_var_cols = variances[variances == 0].index.tolist()  # Get columns with zero variance
-                if zero_var_cols:  # If there are zero-variance columns
-                    df_clean = df_clean.drop(columns=zero_var_cols)  # Drop zero-variance columns
+        missing_mask = df.isna().any(axis=1)  # Identify rows that contain any NaN/null values
+        df_no_nan = df.loc[~missing_mask]  # Remove rows that contain NaN/null values
+        rows_after_nan_removal = len(df_no_nan)  # Count rows remaining after NaN removal
+        removed_rows_nan = original_row_count - rows_after_nan_removal  # Compute removed rows due to NaN removal
 
-        return df_clean  # Return the cleaned DataFrame
+        numeric_cols = df_no_nan.select_dtypes(include=["number"]).columns  # Identify numeric columns to detect infinite values
+        if len(numeric_cols) > 0:  # Only compute infinite masks when numeric columns exist
+            inf_mask = df_no_nan[numeric_cols].isin([np.inf, -np.inf]).any(axis=1)  # Identify rows with any +/-inf in numeric columns
+        else:  # When no numeric columns exist
+            inf_mask = pd.Series([False] * len(df_no_nan), index=df_no_nan.index)  # Create false mask to avoid errors
+        df_no_inf = df_no_nan.loc[~inf_mask]  # Remove rows that contain infinite values in numeric columns
+        rows_after_inf_removal = len(df_no_inf)  # Count rows remaining after infinite removal
+        removed_rows_inf = rows_after_nan_removal - rows_after_inf_removal  # Compute removed rows due to infinite removal
+
+        df_clean = df_no_inf.replace([np.nan], np.nan)  # Ensure canonical NaN representation after removal steps
+
+        if remove_zero_variance:  # If zero-variance removal is requested
+            numeric_cols_post = df_clean.select_dtypes(include=["number"]).columns  # Identify numeric columns for variance computation
+            if len(numeric_cols_post) > 0:  # Only compute variances when numeric columns exist
+                variances = df_clean[numeric_cols_post].var(axis=0, ddof=0)  # Calculate variances for numeric columns
+                zero_var_cols = variances[variances == 0].index.tolist()  # Collect column names with zero variance
+                if zero_var_cols:  # If there are zero-variance columns found
+                    df_clean = df_clean.drop(columns=zero_var_cols)  # Drop the zero-variance columns from DataFrame
+
+        return df_clean  # Return the cleaned DataFrame after sequential preprocessing
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -1732,19 +1748,34 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
         original_num_rows = len(df)  # Capture original number of rows immediately after read
         original_num_features = df.shape[1] if hasattr(df, "shape") else 0  # Capture original feature count
 
-        df_after_nan_inf_removal = df.replace([np.inf, -np.inf], np.nan).dropna()  # Build intermediate frame after NaN/infinite row removal
-        rows_after_nan_inf_removal = len(df_after_nan_inf_removal)  # Capture rows remaining after NaN/infinite filtering
-        removed_rows_nan_inf = original_num_rows - rows_after_nan_inf_removal  # Compute removed row count for NaN/infinite filtering
+        df_after_nan_removal = df.dropna()  # Remove rows that contain any NaN/null values
+        rows_after_nan_removal = len(df_after_nan_removal)  # Capture rows remaining after NaN/null filtering
+        removed_rows_nan = original_num_rows - rows_after_nan_removal  # Compute removed row count due to NaN/null filtering
+        removed_rows_nan = removed_rows_nan if removed_rows_nan >= 0 else 0  # Clamp negative values to zero for safety
+        if original_num_rows > 0:  # Verify original row count is non-zero before percentage division
+            removed_rows_nan_proportion = round(removed_rows_nan / float(original_num_rows), 6)  # Compute rounded removed-row proportion for NaN/null filtering
+        else:  # Handle zero-row datasets without division
+            removed_rows_nan_proportion = 0.0  # Set removed-row proportion to zero when no rows are present
+
+        numeric_cols_after_nan = df_after_nan_removal.select_dtypes(include=["number"]).columns  # Identify numeric columns to detect infinite values after NaN removal
+        if len(numeric_cols_after_nan) > 0:  # Only compute infinite masks when numeric columns exist
+            inf_mask_after_nan = df_after_nan_removal[numeric_cols_after_nan].isin([np.inf, -np.inf]).any(axis=1)  # Identify rows with any +/-inf in numeric columns
+        else:  # When no numeric columns exist
+            inf_mask_after_nan = pd.Series([False] * len(df_after_nan_removal), index=df_after_nan_removal.index)  # Create false mask to avoid errors
+        df_after_nan_inf_removal = df_after_nan_removal.loc[~inf_mask_after_nan]  # Remove rows with infinite values after NaN removal
+        rows_after_nan_inf_removal = len(df_after_nan_inf_removal)  # Capture rows remaining after NaN+infinite filtering
+        removed_rows_inf = rows_after_nan_removal - rows_after_nan_inf_removal  # Compute rows removed due to infinite filtering specifically
+        removed_rows_nan_inf = original_num_rows - rows_after_nan_inf_removal  # Compute total rows removed by NaN+infinite filtering combined
         removed_rows_nan_inf = removed_rows_nan_inf if removed_rows_nan_inf >= 0 else 0  # Clamp negative values to zero for safety
         if original_num_rows > 0:  # Verify original row count is non-zero before percentage division
-            removed_rows_nan_inf_proportion = round(removed_rows_nan_inf / float(original_num_rows), 6)  # Compute rounded removed-row proportion for NaN/infinite filtering
+            removed_rows_nan_inf_proportion = round(removed_rows_nan_inf / float(original_num_rows), 6)  # Compute rounded removed-row proportion for NaN+infinite filtering
         else:  # Handle zero-row datasets without division
             removed_rows_nan_inf_proportion = 0.0  # Set removed-row proportion to zero when no rows are present
 
-        numeric_cols_after_nan_inf = df_after_nan_inf_removal.select_dtypes(include=["number"]).columns  # Collect numeric columns used for zero-variance analysis
+        numeric_cols_after_nan_inf = df_after_nan_inf_removal.select_dtypes(include=["number"]).columns  # Collect numeric columns used for zero-variance analysis after NaN+inf removals
         zero_var_cols = []  # Initialize zero-variance feature list
         if len(numeric_cols_after_nan_inf) > 0:  # Verify numeric features are available before variance computation
-            variances_after_nan_inf = df_after_nan_inf_removal[numeric_cols_after_nan_inf].var(axis=0, ddof=0)  # Compute variance for each numeric feature after NaN/infinite filtering
+            variances_after_nan_inf = df_after_nan_inf_removal[numeric_cols_after_nan_inf].var(axis=0, ddof=0)  # Compute variance for each numeric feature after NaN+inf filtering
             zero_var_cols = variances_after_nan_inf[variances_after_nan_inf == 0].index.tolist()  # Collect numeric features with zero variance
         removed_zero_variance_features = len(zero_var_cols)  # Capture number of removed zero-variance numerical features
         features_after_zero_variance_removal = int(df_after_nan_inf_removal.shape[1]) - int(removed_zero_variance_features)  # Compute feature count after zero-variance removal
