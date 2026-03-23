@@ -741,23 +741,47 @@ def preprocess_dataframe(df, remove_zero_variance=True):
 
         df.columns = sanitize_feature_names(df.columns)  # Sanitize column names to remove special characters
 
-        original_row_count = len(df)  # Record original row count for metric computations
+        original_row_count = int(len(df))  # Record original row count for metric computations
+        original_feature_count = int(df.shape[1]) if hasattr(df, "shape") else 0  # Record original feature count for metric computations
+        preprocessing_metrics = {"nan_removal": {}, "infinite_removal": {}, "nan_inf": {}, "zero_variance": {}, "final": {}}  # Initialize structured per-step metrics container
 
+        rows_before_nan_removal = int(len(df))  # Capture row count before NaN/null filtering step
         missing_mask = df.isna().any(axis=1)  # Identify rows that contain any NaN/null values
         df_no_nan = df.loc[~missing_mask]  # Remove rows that contain NaN/null values
-        rows_after_nan_removal = len(df_no_nan)  # Count rows remaining after NaN removal
-        removed_rows_nan = original_row_count - rows_after_nan_removal  # Compute removed rows due to NaN removal
+        rows_after_nan_removal = int(len(df_no_nan))  # Capture row count after NaN/null filtering step
+        removed_rows_nan = int(rows_before_nan_removal - rows_after_nan_removal)  # Compute rows removed by NaN/null filtering step
+        if rows_before_nan_removal > 0:  # Guard division by zero for NaN/null removed-row proportion
+            removed_rows_nan_proportion = round(float(removed_rows_nan) / float(rows_before_nan_removal), 6)  # Compute NaN/null removed-row proportion
+        else:  # Handle empty datasets before NaN/null filtering
+            removed_rows_nan_proportion = 0.0  # Set NaN/null removed-row proportion to zero
+        preprocessing_metrics["nan_removal"] = {"rows_before_step": rows_before_nan_removal, "rows_after_step": rows_after_nan_removal, "removed_rows_step": removed_rows_nan, "removed_rows_step_proportion": removed_rows_nan_proportion}  # Store isolated NaN/null step metrics
 
+        rows_before_inf_removal = int(len(df_no_nan))  # Capture row count before infinite-value filtering step
         numeric_cols = df_no_nan.select_dtypes(include=["number"]).columns  # Identify numeric columns to detect infinite values
         if len(numeric_cols) > 0:  # Only compute infinite masks when numeric columns exist
             inf_mask = df_no_nan[numeric_cols].isin([np.inf, -np.inf]).any(axis=1)  # Identify rows with any +/-inf in numeric columns
         else:  # When no numeric columns exist
             inf_mask = pd.Series([False] * len(df_no_nan), index=df_no_nan.index)  # Create false mask to avoid errors
         df_no_inf = df_no_nan.loc[~inf_mask]  # Remove rows that contain infinite values in numeric columns
-        rows_after_inf_removal = len(df_no_inf)  # Count rows remaining after infinite removal
-        removed_rows_inf = rows_after_nan_removal - rows_after_inf_removal  # Compute removed rows due to infinite removal
+        rows_after_inf_removal = int(len(df_no_inf))  # Capture row count after infinite-value filtering step
+        removed_rows_inf = int(rows_before_inf_removal - rows_after_inf_removal)  # Compute rows removed by infinite-value filtering step
+        if rows_before_inf_removal > 0:  # Guard division by zero for infinite-value removed-row proportion
+            removed_rows_inf_proportion = round(float(removed_rows_inf) / float(rows_before_inf_removal), 6)  # Compute infinite-value removed-row proportion
+        else:  # Handle empty datasets before infinite-value filtering
+            removed_rows_inf_proportion = 0.0  # Set infinite-value removed-row proportion to zero
+        preprocessing_metrics["infinite_removal"] = {"rows_before_step": rows_before_inf_removal, "rows_after_step": rows_after_inf_removal, "removed_rows_step": removed_rows_inf, "removed_rows_step_proportion": removed_rows_inf_proportion}  # Store isolated infinite-value step metrics
+
+        removed_rows_nan_inf = int(original_row_count - rows_after_inf_removal)  # Compute rows removed by NaN+infinite filtering sequence
+        if original_row_count > 0:  # Guard division by zero for NaN+infinite removed-row proportion
+            removed_rows_nan_inf_proportion = round(float(removed_rows_nan_inf) / float(original_row_count), 6)  # Compute NaN+infinite removed-row proportion
+        else:  # Handle empty original datasets
+            removed_rows_nan_inf_proportion = 0.0  # Set NaN+infinite removed-row proportion to zero
+        preprocessing_metrics["nan_inf"] = {"rows_before_step": original_row_count, "rows_after_step": rows_after_inf_removal, "removed_rows_step": removed_rows_nan_inf, "removed_rows_step_proportion": removed_rows_nan_inf_proportion}  # Store aggregated NaN+infinite step metrics
 
         df_clean = df_no_inf.replace([np.nan], np.nan)  # Ensure canonical NaN representation after removal steps
+        features_before_zero_variance = int(df_clean.shape[1]) if hasattr(df_clean, "shape") else 0  # Capture feature count before zero-variance removal
+        features_after_zero_variance = features_before_zero_variance  # Initialize feature count after zero-variance removal
+        removed_zero_variance_features = 0  # Initialize removed zero-variance feature counter
 
         if remove_zero_variance:  # If zero-variance removal is requested
             numeric_cols_post = df_clean.select_dtypes(include=["number"]).columns  # Identify numeric columns for variance computation
@@ -766,6 +790,24 @@ def preprocess_dataframe(df, remove_zero_variance=True):
                 zero_var_cols = variances[variances == 0].index.tolist()  # Collect column names with zero variance
                 if zero_var_cols:  # If there are zero-variance columns found
                     df_clean = df_clean.drop(columns=zero_var_cols)  # Drop the zero-variance columns from DataFrame
+        features_after_zero_variance = int(df_clean.shape[1]) if hasattr(df_clean, "shape") else 0  # Capture feature count after zero-variance removal step
+        removed_zero_variance_features = int(features_before_zero_variance - features_after_zero_variance)  # Compute removed zero-variance feature count
+        removed_zero_variance_features = removed_zero_variance_features if removed_zero_variance_features >= 0 else 0  # Clamp negative removed feature count to zero
+        if features_before_zero_variance > 0:  # Guard division by zero for zero-variance removed-feature proportion
+            removed_zero_variance_features_proportion = round(float(removed_zero_variance_features) / float(features_before_zero_variance), 6)  # Compute zero-variance removed-feature proportion
+        else:  # Handle empty feature spaces before zero-variance removal
+            removed_zero_variance_features_proportion = 0.0  # Set zero-variance removed-feature proportion to zero
+        preprocessing_metrics["zero_variance"] = {"features_before_step": features_before_zero_variance, "features_after_step": features_after_zero_variance, "removed_features_step": removed_zero_variance_features, "removed_features_step_proportion": removed_zero_variance_features_proportion}  # Store isolated zero-variance feature step metrics
+
+        rows_after_preprocessing = int(len(df_clean))  # Capture final row count after preprocessing pipeline
+        removed_rows_total = int(original_row_count - rows_after_preprocessing)  # Compute total removed rows across preprocessing pipeline
+        removed_rows_total = removed_rows_total if removed_rows_total >= 0 else 0  # Clamp negative total removed rows to zero
+        if original_row_count > 0:  # Guard division by zero for total removed-row proportion
+            removed_rows_total_proportion = round(float(removed_rows_total) / float(original_row_count), 6)  # Compute total removed-row proportion
+        else:  # Handle empty original datasets
+            removed_rows_total_proportion = 0.0  # Set total removed-row proportion to zero
+        preprocessing_metrics["final"] = {"rows_before_step": original_row_count, "rows_after_step": rows_after_preprocessing, "removed_rows_step": removed_rows_total, "removed_rows_step_proportion": removed_rows_total_proportion, "features_before_step": original_feature_count, "features_after_step": int(df_clean.shape[1]) if hasattr(df_clean, "shape") else 0}  # Store final aggregated preprocessing metrics
+        df_clean.attrs["preprocessing_metrics"] = preprocessing_metrics  # Attach structured preprocessing metrics to DataFrame metadata
 
         return df_clean  # Return the cleaned DataFrame after sequential preprocessing
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -1891,6 +1933,7 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
 
         rows_after_preprocessing = len(cleaned_df)  # Capture rows after preprocessing
         features_after_preprocessing = cleaned_df.shape[1] if hasattr(cleaned_df, "shape") else 0  # Capture features after preprocessing
+        preprocessing_step_metrics = cleaned_df.attrs.get("preprocessing_metrics", {}) if hasattr(cleaned_df, "attrs") else {}  # Capture structured preprocessing step metrics from DataFrame metadata
 
         label_col = detect_label_column(cleaned_df.columns)  # Try to detect the label column
         n_samples, n_features, n_numeric, n_int, n_categorical, n_other, categorical_cols_str = summarize_features(
@@ -1943,6 +1986,7 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
             "features_transformed_for_experiment_proportion": features_transformed_for_experiment_proportion,  # Proportion of transformed features for dtype enforcement and categorical encoding per experiment
             "features_cast_to_float64_int64": features_cast_to_float64_int64,  # Numeric features requiring cast to float64/int64
             "features_encoded_categorical": features_encoded_categorical,  # Categorical features requiring ordinal or one-hot encoding
+            "preprocessing_metrics": preprocessing_step_metrics,  # Structured per-step preprocessing metrics for isolated CSV mapping
             "Feature Types": f"{n_numeric} numeric (float64), {n_int} integer (int64), {n_categorical} categorical (object/category/bool/string), {n_other} other",
             "Categorical Features (object/string)": categorical_cols_str,
             "Missing Values": missing_summary,
@@ -2055,6 +2099,7 @@ def collect_preprocessing_metrics(
     features_transformed_for_experiment_proportion=0.0,
     features_cast_to_float64_int64=0,
     features_encoded_categorical=0,
+    preprocessing_step_metrics=None,
 ):
     """
     Collect preprocessing metrics for a single file and return a dict matching the required CSV schema.
@@ -2081,33 +2126,60 @@ def collect_preprocessing_metrics(
 
     try:  # Wrap logic to preserve existing error handling conventions
         filename = os.path.basename(filepath)  # Extract filename from filepath
-        removed_rows = original_num_rows - rows_after_preprocessing  # Compute removed rows count
-        removed_rows = removed_rows if removed_rows >= 0 else 0  # Clamp negative to zero for safety
-        if original_num_rows > 0:  # If original rows non-zero compute proportion
-            removed_rows_proportion = round(removed_rows / float(original_num_rows), 6)  # Compute proportion and round
-        else:  # Avoid division by zero when original is zero
-            removed_rows_proportion = 0.0  # Set proportion to 0.0 per spec
+        original_num_rows = int(original_num_rows) if original_num_rows is not None else 0  # Normalize original row count to integer
+        rows_after_preprocessing = int(rows_after_preprocessing) if rows_after_preprocessing is not None else 0  # Normalize final row count to integer
+        original_num_features = int(original_num_features) if original_num_features is not None else 0  # Normalize original feature count to integer
+        features_after_preprocessing = int(features_after_preprocessing) if features_after_preprocessing is not None else 0  # Normalize final feature count to integer
+        step_metrics = preprocessing_step_metrics if isinstance(preprocessing_step_metrics, dict) else {}  # Resolve optional structured per-step metrics container
+        nan_inf_metrics = step_metrics.get("nan_inf", {}) if isinstance(step_metrics.get("nan_inf", {}), dict) else {}  # Resolve NaN+infinite step metrics from structured container
+        zero_variance_metrics = step_metrics.get("zero_variance", {}) if isinstance(step_metrics.get("zero_variance", {}), dict) else {}  # Resolve zero-variance step metrics from structured container
+        final_metrics = step_metrics.get("final", {}) if isinstance(step_metrics.get("final", {}), dict) else {}  # Resolve final aggregated metrics from structured container
 
-        removed_features = original_num_features - features_after_preprocessing  # Compute removed features count
-        removed_features = removed_features if removed_features >= 0 else 0  # Clamp negative to zero for safety
-        if original_num_features > 0:  # If original features non-zero compute proportion
-            removed_features_proportion = round(removed_features / float(original_num_features), 6)  # Compute proportion and round
-        else:  # Avoid division by zero when original is zero
-            removed_features_proportion = 0.0  # Set proportion to 0.0 per spec
+        rows_after_nan_inf_value = nan_inf_metrics.get("rows_after_step", rows_after_nan_inf_removal)  # Resolve rows after NaN+infinite filtering from step metrics with fallback
+        rows_after_nan_inf_value = int(rows_after_nan_inf_value) if rows_after_nan_inf_value is not None else 0  # Normalize rows after NaN+infinite filtering to integer
+        removed_rows_nan_inf_value = nan_inf_metrics.get("removed_rows_step", removed_rows_nan_inf)  # Resolve removed rows for NaN+infinite filtering from step metrics with fallback
+        removed_rows_nan_inf_value = int(removed_rows_nan_inf_value) if removed_rows_nan_inf_value is not None else 0  # Normalize removed rows for NaN+infinite filtering to integer
+        removed_rows_nan_inf_value = removed_rows_nan_inf_value if removed_rows_nan_inf_value >= 0 else 0  # Clamp negative removed rows for NaN+infinite filtering to zero
+        removed_rows_nan_inf_proportion_value = nan_inf_metrics.get("removed_rows_step_proportion", removed_rows_nan_inf_proportion)  # Resolve NaN+infinite removed-row proportion from step metrics with fallback
+        removed_rows_nan_inf_proportion_value = round(float(removed_rows_nan_inf_proportion_value), 6) if removed_rows_nan_inf_proportion_value is not None else 0.0  # Normalize NaN+infinite removed-row proportion
+
+        features_after_zero_variance_value = zero_variance_metrics.get("features_after_step", features_after_zero_variance_removal)  # Resolve features after zero-variance removal from step metrics with fallback
+        features_after_zero_variance_value = int(features_after_zero_variance_value) if features_after_zero_variance_value is not None else 0  # Normalize features after zero-variance removal to integer
+        removed_zero_variance_features_value = zero_variance_metrics.get("removed_features_step", removed_zero_variance_features)  # Resolve removed zero-variance features from step metrics with fallback
+        removed_zero_variance_features_value = int(removed_zero_variance_features_value) if removed_zero_variance_features_value is not None else 0  # Normalize removed zero-variance features to integer
+        removed_zero_variance_features_value = removed_zero_variance_features_value if removed_zero_variance_features_value >= 0 else 0  # Clamp negative removed zero-variance features to zero
+        removed_zero_variance_features_proportion_value = zero_variance_metrics.get("removed_features_step_proportion", removed_zero_variance_features_proportion)  # Resolve zero-variance removed-feature proportion from step metrics with fallback
+        removed_zero_variance_features_proportion_value = round(float(removed_zero_variance_features_proportion_value), 6) if removed_zero_variance_features_proportion_value is not None else 0.0  # Normalize zero-variance removed-feature proportion
+
+        removed_rows = final_metrics.get("removed_rows_step", original_num_rows - rows_after_preprocessing)  # Resolve total removed rows from final step metrics with fallback
+        removed_rows = int(removed_rows) if removed_rows is not None else 0  # Normalize total removed rows to integer
+        removed_rows = removed_rows if removed_rows >= 0 else 0  # Clamp negative total removed rows to zero for safety
+        if original_num_rows > 0:  # Guard division by zero for total removed-row proportion
+            removed_rows_proportion = round(float(removed_rows) / float(original_num_rows), 6)  # Compute total removed-row proportion from normalized values
+        else:  # Handle zero-row datasets without division
+            removed_rows_proportion = 0.0  # Set total removed-row proportion to zero when no rows are present
+
+        removed_features = original_num_features - features_after_preprocessing  # Compute total removed features count
+        removed_features = int(removed_features) if removed_features is not None else 0  # Normalize total removed features to integer
+        removed_features = removed_features if removed_features >= 0 else 0  # Clamp negative total removed features to zero for safety
+        if original_num_features > 0:  # Guard division by zero for total removed-feature proportion
+            removed_features_proportion = round(float(removed_features) / float(original_num_features), 6)  # Compute total removed-feature proportion from normalized values
+        else:  # Handle zero-feature datasets without division
+            removed_features_proportion = 0.0  # Set total removed-feature proportion to zero when no features are present
 
         return {  # Return metrics dict matching required output columns and order
             "filename": filename,  # Base filename
             "original_num_rows": int(original_num_rows),  # Cast to int for CSV
-            "rows_after_nan_inf_removal": int(rows_after_nan_inf_removal),  # Cast to int for CSV
-            "removed_rows_nan_inf": int(removed_rows_nan_inf),  # Cast to int for CSV
-            "removed_rows_nan_inf_proportion": float(removed_rows_nan_inf_proportion),  # Float rounded to 6 decimals
+            "rows_after_nan_inf_removal": int(rows_after_nan_inf_value),  # Persist rows after NaN+infinite filtering only
+            "removed_rows_nan_inf": int(removed_rows_nan_inf_value),  # Persist removed rows from NaN+infinite filtering only
+            "removed_rows_nan_inf_proportion": float(removed_rows_nan_inf_proportion_value),  # Persist removed-row proportion from NaN+infinite filtering only
             "rows_after_preprocessing": int(rows_after_preprocessing),  # Cast to int
             "removed_rows": int(removed_rows),  # Cast to int
             "removed_rows_proportion": float(removed_rows_proportion),  # Float rounded to 6 decimals
             "original_num_features": int(original_num_features),  # Cast to int
-            "features_after_zero_variance_removal": int(features_after_zero_variance_removal),  # Cast to int for CSV
-            "removed_zero_variance_features": int(removed_zero_variance_features),  # Cast to int for CSV
-            "removed_zero_variance_features_proportion": float(removed_zero_variance_features_proportion),  # Float rounded to 6 decimals
+            "features_after_zero_variance_removal": int(features_after_zero_variance_value),  # Persist features after zero-variance filtering only
+            "removed_zero_variance_features": int(removed_zero_variance_features_value),  # Persist removed zero-variance features only
+            "removed_zero_variance_features_proportion": float(removed_zero_variance_features_proportion_value),  # Persist removed-feature proportion from zero-variance filtering only
             "features_after_preprocessing": int(features_after_preprocessing),  # Cast to int
             "removed_features": int(removed_features),  # Cast to int
             "removed_features_proportion": float(removed_features_proportion),  # Float rounded to 6 decimals
@@ -2753,6 +2825,7 @@ def append_preprocessing_metrics_safe(filepath, info, preprocessing_metrics, fil
             info.get("features_transformed_for_experiment_proportion", 0.0),  # Proportion of transformed features for dtype enforcement and categorical encoding per experiment
             info.get("features_cast_to_float64_int64", 0),  # Numeric features requiring cast to float64/int64
             info.get("features_encoded_categorical", 0),  # Categorical features requiring ordinal or one-hot encoding
+            info.get("preprocessing_metrics", None),  # Structured per-step preprocessing metrics for isolated CSV mapping
         )  # Create metrics row dict
         preprocessing_metrics.append(metrics_row)  # Append metrics row to list for this directory
     except Exception as _pm:  # If metrics collection fails
