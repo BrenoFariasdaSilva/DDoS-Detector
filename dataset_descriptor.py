@@ -506,9 +506,19 @@ def collect_matching_files(
 
                 matching_files.append(fullpath)  # Add the full file path to the list
 
-        sorted_matching_files = sorted(set(matching_files))  # Remove duplicates and sort the list
+        unique_files = list(set(matching_files))  # Remove duplicates while preserving no particular order
 
-        return sorted_matching_files  # Return the sorted list of matching files
+        files_with_size = []  # Prepare list to hold (path, size) tuples for robust sorting
+        for f in unique_files:  # Iterate files to resolve their sizes
+            try:  # Attempt to get file size and handle any filesystem issues gracefully
+                size = os.path.getsize(f)  # Get the file size in bytes for sorting by magnitude
+            except Exception:  # If size retrieval fails for any file
+                size = 0  # Fallback to zero size to avoid breaking the sort when file is inaccessible
+            files_with_size.append((f, size))  # Store tuple of file path and its size for later sorting
+
+        sorted_matching_files = [p for p, _ in sorted(files_with_size, key=lambda x: (-x[1], x[0]))]  # Sort by size descending then by path for determinism
+
+        return sorted_matching_files  # Return the list of matching files ordered from biggest to smallest by file size
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -2736,7 +2746,17 @@ def collect_group_files(paths, file_extension=".csv", config: dict | None = None
             elif os.path.isfile(p) and p.endswith(file_extension):  # If path is a file with correct extension
                 files.append(p)  # Add file to list
 
-        return sorted(set(files))  # Remove duplicates and sort
+        unique_files = list(set(files))  # Remove duplicates while preserving no particular order
+
+        files_with_size = []  # Prepare list to hold (path, size) tuples for robust sorting
+        for f in unique_files:  # Iterate files to resolve their sizes
+            try:  # Attempt to get file size and handle any filesystem issues gracefully
+                size = os.path.getsize(f)  # Get the file size in bytes for sorting by magnitude
+            except Exception:  # If size retrieval fails for any file
+                size = 0  # Fallback to zero size to avoid breaking the sort when file is inaccessible
+            files_with_size.append((f, size))  # Store tuple of file path and its size for later sorting
+
+        return [p for p, _ in sorted(files_with_size, key=lambda x: (-x[1], x[0]))]  # Sort by size descending then by path for determinism
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
