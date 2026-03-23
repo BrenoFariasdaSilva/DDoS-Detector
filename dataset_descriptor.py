@@ -59,6 +59,7 @@ import dataframe_image as dfi  # For exporting DataFrame as PNG images
 import datetime  # For timestamping
 import gc  # For explicit garbage collection
 import matplotlib.pyplot as plt  # For plotting t-SNE results
+import multiprocessing as mp  # For explicit process and semaphore resource finalization
 import numpy as np  # For numerical operations
 import os  # For running a command in the terminal
 import pandas as pd  # For data manipulation
@@ -658,6 +659,57 @@ def sanitize_feature_names(columns):
         raise  # Re-raise to preserve original failure semantics
 
 
+def finalize_multiprocessing_resources() -> None:
+    """
+    Finalize multiprocessing children and tracked shared resources.
+
+    :return: None.
+    """
+
+    try:  # Wrap function body to preserve exception-handling conventions
+        try:  # Iterate active children to avoid orphan processes at interpreter shutdown
+            for child in mp.active_children():  # Traverse active multiprocessing child processes
+                try:  # Join quickly when a child is already exiting
+                    child.join(timeout=0.2)  # Wait briefly for graceful child completion
+                except Exception:  # Ignore join failures to preserve best-effort semantics
+                    pass  # Continue with remaining children when join fails
+
+                if child.is_alive():  # Determine if child remained alive after short grace period
+                    try:  # Attempt forced termination when child does not exit naturally
+                        child.terminate()  # Terminate child process to avoid orphan resources
+                    except Exception:  # Ignore terminate failures to continue cleanup attempts
+                        pass  # Continue cleanup even when termination raises
+                    try:  # Attempt final join after termination request
+                        child.join(timeout=0.5)  # Wait briefly for terminated child to finalize
+                    except Exception:  # Ignore final join failures to preserve best-effort semantics
+                        pass  # Continue cleanup sequence
+        except Exception:  # Ignore failures while enumerating or joining children
+            pass  # Continue with shared-resource tracker cleanup path
+
+        gc.collect()  # Trigger garbage collection after resource finalization attempts
+    except Exception as e:  # Catch outer exceptions to preserve module-wide telemetry behavior
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def configure_multiprocessing_startup() -> None:
+    """
+    Configure multiprocessing startup behavior for safe macOS process semantics.
+
+    :return: None.
+    """
+
+    try:  # Wrap startup configuration with module-consistent error handling
+        mp.set_start_method("spawn", force=True)  # Force spawn context to prevent macOS fork-related semaphore lifecycle conflicts
+    except RuntimeError:  # Ignore context configuration errors when method is already fixed in this process
+        pass  # Preserve startup flow when start method cannot be changed
+    except Exception as e:  # Capture unexpected failures and keep telemetry behavior consistent
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def preprocess_dataframe(df, remove_zero_variance=True):
     """
     Preprocess a DataFrame by removing rows with NaN or infinite values and
@@ -1077,17 +1129,25 @@ def prepare_numeric_dataset(filepath, low_memory=True, sample_size=5000, random_
 
         cleaned = preprocess_dataframe(df, remove_zero_variance=False)  # Basic cleaning
         if cleaned is None:  # If cleaning failed
+            del df  # Release the loaded DataFrame before returning from failed cleaning path
             return None, None  # Abort
 
         numeric_df = coerce_numeric_columns(cleaned)  # Extract numeric features
         if numeric_df is None:  # If extraction failed
+            del cleaned  # Release cleaned DataFrame before returning from failed extraction path
+            del df  # Release original DataFrame before returning from failed extraction path
             return None, None  # Abort
 
         numeric_df = fill_replace_and_drop(numeric_df)  # Clean numeric frame
         if numeric_df is None:  # If cleaning failed
+            del cleaned  # Release cleaned DataFrame before returning from failed numeric cleanup path
+            del df  # Release original DataFrame before returning from failed numeric cleanup path
             return None, None  # Abort
 
         if numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0:  # No numeric data
+            del numeric_df  # Release empty numeric DataFrame before returning
+            del cleaned  # Release cleaned DataFrame before returning
+            del df  # Release original DataFrame before returning
             return None, None  # Abort
 
         label_col = detect_label_column(cleaned.columns)  # Detect label column
@@ -1097,6 +1157,10 @@ def prepare_numeric_dataset(filepath, low_memory=True, sample_size=5000, random_
             numeric_df, labels = downsample_with_class_awareness(
                 numeric_df, labels, sample_size, random_state
             )  # Class-aware downsampling
+
+        del cleaned  # Release cleaned DataFrame after deriving numeric frame and labels
+        del df  # Release original DataFrame after deriving numeric frame and labels
+        gc.collect()  # Trigger garbage collection after releasing large intermediate DataFrames
 
         return numeric_df, labels  # Return numeric DataFrame and labels
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -1125,13 +1189,17 @@ def prepare_numeric_dataset_from_df(df, sample_size=5000, random_state=42):
 
         numeric_df = coerce_numeric_columns(cleaned)  # Extract or coerce numeric columns from cleaned DataFrame
         if numeric_df is None:  # Verify coercion did not fail
+            del cleaned  # Release cleaned DataFrame before returning from failed coercion path
             return None, None  # Abort when no numeric columns could be obtained
 
         numeric_df = fill_replace_and_drop(numeric_df)  # Replace infinities, drop all-NaN columns and fill remaining NaNs
         if numeric_df is None:  # Verify fill and drop did not fail
+            del cleaned  # Release cleaned DataFrame before returning from failed numeric cleanup path
             return None, None  # Abort when numeric frame became invalid after cleaning
 
         if numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0:  # Verify numeric frame is not empty after all cleaning steps
+            del numeric_df  # Release empty numeric DataFrame before returning
+            del cleaned  # Release cleaned DataFrame before returning
             return None, None  # Abort when no usable rows or columns remain
 
         label_col = detect_label_column(cleaned.columns)  # Detect label column from cleaned DataFrame columns
@@ -1141,6 +1209,9 @@ def prepare_numeric_dataset_from_df(df, sample_size=5000, random_state=42):
             numeric_df, labels = downsample_with_class_awareness(
                 numeric_df, labels, sample_size, random_state
             )  # Downsample while preserving class distribution
+
+        del cleaned  # Release cleaned DataFrame after deriving numeric frame and labels
+        gc.collect()  # Trigger garbage collection after releasing large intermediate DataFrame
 
         return numeric_df, labels  # Return numeric features and corresponding labels
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -1661,6 +1732,14 @@ def generate_tsne_plot(
                 del numeric_df  # Free numeric DataFrame
             except Exception:  # Ignore any exceptions during deletion
                 pass  # Do nothing
+            try:  # Try to delete labels object to free memory
+                del labels  # Free labels series/object
+            except Exception:  # Ignore any exceptions during deletion
+                pass  # Do nothing
+            try:  # Try to delete scaled matrix to free memory
+                del X  # Free scaled feature matrix
+            except Exception:  # Ignore any exceptions during deletion
+                pass  # Do nothing
             gc.collect()  # Force garbage collection
 
             return out_name_2d, out_name_3d  # Return both saved filenames
@@ -1758,8 +1837,8 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
         original_num_rows = len(df)  # Capture original number of rows immediately after read
         original_num_features = df.shape[1] if hasattr(df, "shape") else 0  # Capture original feature count
 
-        df_after_nan_removal = df.dropna()  # Remove rows that contain any NaN/null values
-        rows_after_nan_removal = len(df_after_nan_removal)  # Capture rows remaining after NaN/null filtering
+        nan_mask = df.isna().any(axis=1)  # Build boolean mask for rows containing any NaN/null values
+        rows_after_nan_removal = int((~nan_mask).sum())  # Capture rows remaining after NaN/null filtering via mask count
         removed_rows_nan = original_num_rows - rows_after_nan_removal  # Compute removed row count due to NaN/null filtering
         removed_rows_nan = removed_rows_nan if removed_rows_nan >= 0 else 0  # Clamp negative values to zero for safety
         if original_num_rows > 0:  # Verify original row count is non-zero before percentage division
@@ -1767,13 +1846,15 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
         else:  # Handle zero-row datasets without division
             removed_rows_nan_proportion = 0.0  # Set removed-row proportion to zero when no rows are present
 
-        numeric_cols_after_nan = df_after_nan_removal.select_dtypes(include=["number"]).columns  # Identify numeric columns to detect infinite values after NaN removal
+        numeric_cols_after_nan = df.select_dtypes(include=["number"]).columns  # Identify numeric columns to detect infinite values after NaN removal
         if len(numeric_cols_after_nan) > 0:  # Only compute infinite masks when numeric columns exist
-            inf_mask_after_nan = df_after_nan_removal[numeric_cols_after_nan].isin([np.inf, -np.inf]).any(axis=1)  # Identify rows with any +/-inf in numeric columns
+            inf_mask_after_nan = df[numeric_cols_after_nan].isin([np.inf, -np.inf]).any(axis=1)  # Identify rows with any +/-inf in numeric columns
         else:  # When no numeric columns exist
-            inf_mask_after_nan = pd.Series([False] * len(df_after_nan_removal), index=df_after_nan_removal.index)  # Create false mask to avoid errors
-        df_after_nan_inf_removal = df_after_nan_removal.loc[~inf_mask_after_nan]  # Remove rows with infinite values after NaN removal
-        rows_after_nan_inf_removal = len(df_after_nan_inf_removal)  # Capture rows remaining after NaN+infinite filtering
+            inf_mask_after_nan = pd.Series([False] * len(df), index=df.index)  # Create false mask to avoid errors
+        valid_nan_mask = ~nan_mask  # Build non-NaN mask to reuse across metric computations
+        valid_inf_mask = ~inf_mask_after_nan  # Build non-infinite mask to reuse across metric computations
+        valid_nan_inf_mask = valid_nan_mask & valid_inf_mask  # Combine masks to represent rows surviving NaN and infinite filtering
+        rows_after_nan_inf_removal = int(valid_nan_inf_mask.sum())  # Capture rows remaining after NaN+infinite filtering
         removed_rows_inf = rows_after_nan_removal - rows_after_nan_inf_removal  # Compute rows removed due to infinite filtering specifically
         rows_after_inf_removal = rows_after_nan_inf_removal  # Record rows after infinite removal (applied after NaN removal)
         removed_rows_nan_inf = original_num_rows - rows_after_nan_inf_removal  # Compute total rows removed by NaN+infinite filtering combined
@@ -1783,14 +1864,15 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
         else:  # Handle zero-row datasets without division
             removed_rows_nan_inf_proportion = 0.0  # Set removed-row proportion to zero when no rows are present
 
-        numeric_cols_after_nan_inf = df_after_nan_inf_removal.select_dtypes(include=["number"]).columns  # Collect numeric columns used for zero-variance analysis after NaN+inf removals
+        numeric_cols_after_nan_inf = numeric_cols_after_nan  # Reuse numeric columns for zero-variance analysis after NaN+inf removals
         zero_var_cols = []  # Initialize zero-variance feature list
         if len(numeric_cols_after_nan_inf) > 0:  # Verify numeric features are available before variance computation
-            variances_after_nan_inf = df_after_nan_inf_removal[numeric_cols_after_nan_inf].var(axis=0, ddof=0)  # Compute variance for each numeric feature after NaN+inf filtering
+            df_after_nan_inf_numeric = df.loc[valid_nan_inf_mask, numeric_cols_after_nan_inf]  # Materialize filtered numeric frame only for variance computation
+            variances_after_nan_inf = df_after_nan_inf_numeric.var(axis=0, ddof=0)  # Compute variance for each numeric feature after NaN+inf filtering
             zero_var_cols = variances_after_nan_inf[variances_after_nan_inf == 0].index.tolist()  # Collect numeric features with zero variance
+            del df_after_nan_inf_numeric  # Release filtered numeric frame immediately after variance computation
+            del variances_after_nan_inf  # Release variance series immediately after extracting zero-variance column names
         removed_zero_variance_features = len(zero_var_cols)  # Capture number of removed zero-variance numerical features
-        features_after_zero_variance_removal = int(df_after_nan_inf_removal.shape[1]) - int(removed_zero_variance_features)  # Compute feature count after zero-variance removal
-        features_after_zero_variance_removal = features_after_zero_variance_removal if features_after_zero_variance_removal >= 0 else 0  # Clamp negative values to zero for safety
         if original_num_features > 0:  # Verify original feature count is non-zero before percentage division
             removed_zero_variance_features_proportion = round(removed_zero_variance_features / float(original_num_features), 6)  # Compute rounded removed-feature proportion for zero-variance removal
         else:  # Handle zero-feature datasets without division
@@ -1801,6 +1883,9 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
             dropped_non_informative_features_proportion = round(dropped_non_informative_features / float(original_num_features), 6)  # Compute rounded dropped-feature proportion for identifier/metadata step
         else:  # Handle zero-feature datasets without division
             dropped_non_informative_features_proportion = 0.0  # Set dropped-feature proportion to zero when no features are present
+
+        features_after_zero_variance_removal = int(df.shape[1]) - int(removed_zero_variance_features)  # Compute feature count after zero-variance removal using original feature count baseline
+        features_after_zero_variance_removal = features_after_zero_variance_removal if features_after_zero_variance_removal >= 0 else 0  # Clamp negative values to zero for safety
 
         cleaned_df = preprocess_dataframe(df)  # Preprocess the DataFrame
 
@@ -1870,6 +1955,16 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
         except Exception:  # Re-raise on failure to preserve original semantics
             raise  # Re-raise to preserve original failure semantics
         result["data_augmentation_samples"] = int(aug_count)  # Store integer augmented sample count in result dict
+
+        del nan_mask  # Release NaN mask to reduce retained memory after metrics extraction
+        del inf_mask_after_nan  # Release infinite-value mask to reduce retained memory after metrics extraction
+        del valid_nan_mask  # Release non-NaN mask to reduce retained memory after metrics extraction
+        del valid_inf_mask  # Release non-infinite mask to reduce retained memory after metrics extraction
+        del valid_nan_inf_mask  # Release combined valid-row mask to reduce retained memory after metrics extraction
+        del feature_view_df  # Release feature-view DataFrame reference after derived metrics are computed
+        del numeric_feature_view  # Release numeric feature view reference after dtype accounting
+        del categorical_feature_view  # Release categorical feature view reference after dtype accounting
+        gc.collect()  # Trigger garbage collection after releasing large intermediate objects
 
         verbose_output(f"{BackgroundColors.GREEN}Finished processing dataset: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Print message indicating completion of processing for dataset
         send_telegram_message(TELEGRAM_BOT, [f"Finished processing dataset: {os.path.basename(filepath)}"])  # Send Telegram notification indicating completion of processing for dataset
@@ -2448,6 +2543,16 @@ def export_dataframe_image(styled_df, output_path):
         except Exception:  # Ignore failures when sending Telegram notifications to avoid cascading errors
             pass  # Ignore failures when sending Telegram notifications
         return  # Return gracefully to avoid terminating the program
+    finally:  # Ensure multiprocessing and large object cleanup regardless of export outcome
+        try:  # Attempt explicit multiprocessing resource finalization to avoid leaked semaphores
+            finalize_multiprocessing_resources()  # Finalize active child processes and resource tracker state
+        except Exception:  # Ignore cleanup failures to preserve non-fatal export semantics
+            pass  # Continue gracefully when finalization fails
+        try:  # Attempt to release styled object reference as soon as export flow ends
+            del styled_df  # Delete styled DataFrame reference to reduce retained memory
+        except Exception:  # Ignore delete failures to preserve behavior
+            pass  # Continue gracefully when reference deletion fails
+        gc.collect()  # Trigger garbage collection after export cleanup
 
 
 def generate_table_image_from_dataframe(df, output_path, config: dict | None = None):
@@ -2709,6 +2814,7 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, 
                 report_rows.append(info)  # Add the info to the report rows
 
                 append_preprocessing_metrics_safe(filepath, info, preprocessing_metrics, file_basename)  # Collect and append preprocessing metrics with error-safe handling
+                del info  # Release info reference after appending to report structures to reduce retention
 
             try:  # Attempt to release dataset memory to minimize peak RAM consumption
                 del df_current  # Delete the current dataset reference to allow garbage collection
@@ -3149,6 +3255,8 @@ def main():
                 atexit.register(play_sound)  # Register play_sound to execute when the program exits
         except Exception:  # Ignore any errors during atexit registration to avoid crashing at exit
             pass  # Continue silently when atexit registration fails
+
+        finalize_multiprocessing_resources()  # Finalize child processes and tracked shared resources before interpreter shutdown
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -3163,6 +3271,7 @@ if __name__ == "__main__":
     """
 
     try:  # Protect main execution to ensure errors are reported and notified
+        configure_multiprocessing_startup()  # Configure multiprocessing start method once before executing main flow
         main()  # Call the main function
     except Exception as e:  # Catch any unhandled exception from main
         print(str(e))  # Print the exception message to terminal for logs
