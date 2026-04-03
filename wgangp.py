@@ -559,10 +559,10 @@ def resource_monitor_loop(stop_event: threading.Event, config: Optional[Dict] = 
 
         cfg = config or CONFIG or get_default_config()  # Prefer explicit config, fallback to global/default
         wd = cfg.get("watchdog", {}) if isinstance(cfg, dict) else {}  # Get watchdog config dict
-        max_ram = wd.get("max_ram_percent", 90)  # Percent RAM usage considered critical
-        max_cpu = wd.get("max_cpu_percent", 95)  # Percent CPU usage considered critical
+        max_ram = wd.get("max_ram_percent", 100)  # Percent RAM usage considered critical (default 100%)
+        max_cpu = wd.get("max_cpu_percent", 100)  # Percent CPU usage considered critical (default 100%)
         check_interval = wd.get("check_interval_s", 5)  # Seconds between checks
-        memory_threshold_duration_seconds = wd.get("memory_threshold_duration_seconds", wd.get("critical_duration_s", 30))  # Seconds memory usage must remain above threshold before termination
+        memory_threshold_duration_seconds = wd.get("memory_threshold_duration_seconds", wd.get("critical_duration_s", 3600))  # Seconds memory usage must remain above threshold before termination (default 30 minutes)
 
         high_usage_start_timestamp = None  # Timestamp when sustained high memory usage begins
         current_sustained_duration_seconds = 0.0  # Current sustained high-memory duration in seconds
@@ -684,10 +684,10 @@ def build_default_runtime_config() -> Dict:
             "results_suffix": "_data_augmented",  # Suffix to add to generated filenames for WGANGP
         },
         "watchdog": {  # Resource watcher configuration
-            "max_ram_percent": 90,  # Percent RAM usage considered critical
-            "max_cpu_percent": 95,  # Percent CPU usage considered critical
+            "max_ram_percent": 100,  # Percent RAM usage considered critical (default 100%)
+            "max_cpu_percent": 100,  # Percent CPU usage considered critical (default 100%)
             "check_interval_s": 5,  # Seconds between checks
-            "memory_threshold_duration_seconds": 30,  # Seconds memory usage must remain above threshold before termination
+            "memory_threshold_duration_seconds": 1800,  # Seconds memory usage must remain above threshold before termination (default 30 minutes)
         },
         "dataset": {  # Dataset configuration
             "remove_zero_variance": True,  # Remove zero-variance features during preprocessing
