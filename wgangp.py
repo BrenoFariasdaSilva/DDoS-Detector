@@ -555,50 +555,57 @@ def resource_monitor_loop(stop_event: threading.Event, config: Optional[Dict] = 
     """
 
     try:
-        if psutil is None: return  # If psutil missing, nothing to monitor
+        if psutil is None: return  # Verify psutil is available before monitoring
 
         cfg = config or CONFIG or get_default_config()  # Prefer explicit config, fallback to global/default
         wd = cfg.get("watchdog", {}) if isinstance(cfg, dict) else {}  # Get watchdog config dict
         max_ram = wd.get("max_ram_percent", 90)  # Percent RAM usage considered critical
         max_cpu = wd.get("max_cpu_percent", 95)  # Percent CPU usage considered critical
         check_interval = wd.get("check_interval_s", 5)  # Seconds between checks
-        sustained_checks = max(1, int((wd.get("critical_duration_s", 30) // max(1, check_interval))))  # Number of checks to consider sustained
+        memory_threshold_duration_seconds = wd.get("memory_threshold_duration_seconds", wd.get("critical_duration_s", 30))  # Seconds memory usage must remain above threshold before termination
 
-        consecutive = 0  # Counter for consecutive threshold breaches
+        high_usage_start_timestamp = None  # Timestamp when sustained high memory usage begins
+        current_sustained_duration_seconds = 0.0  # Current sustained high-memory duration in seconds
 
         while not stop_event.is_set():
             mem = psutil.virtual_memory().percent  # Current RAM usage percent
             cpu = psutil.cpu_percent(interval=None)  # Current CPU usage percent (non-blocking)
+            current_timestamp = time.time()  # Capture the current timestamp for sustained duration tracking
 
             if logger:
                 safe_debug(f"Resources Monitor: Memory={mem:.1f}%, CPU={cpu:.1f}%")  # Debug log
 
-            if mem >= max_ram or cpu >= max_cpu:
-                consecutive += 1  # Count this breach
-                if logger:
-                    safe_warning(f"Resources Monitor: Threshold Breach (Memory={mem:.1f}%, CPU={cpu:.1f}%)")  # Warn
-                try:
-                    send_telegram_message(TELEGRAM_BOT, f"Resource Watcher: High Resource Usage Detected: Memory={mem:.1f}%, CPU={cpu:.1f}%")  # Notify
-                except Exception:
-                    pass  # Ignore Telegram failures to avoid cascading errors
-            else:
-                consecutive = 0  # Reset counter when metrics return to normal
-
-            if consecutive >= sustained_checks:
-                if logger:
-                    safe_critical(f"Resources Monitor: Sustained High Resource Usage For ~{sustained_checks * check_interval}s; Requesting Termination")  # Critical log
-                try:
-                    send_telegram_message(TELEGRAM_BOT, f"Resource Watcher: Sustained High Resource Usage; Requesting Process Termination to Avoid Abrupt OOM Kill")  # Notify
-                except Exception:
-                    pass  # Ignore failures in notification
-
-                try:
-                    os.kill(os.getpid(), signal.SIGTERM)  # Send SIGTERM to self for graceful shutdown
-                except Exception:
-                    try:
-                        os._exit(1)  # Force exit if signal fails
+            if mem >= max_ram:  # Verify memory is above the configured threshold
+                if high_usage_start_timestamp is None:  # Verify this is the first sustained breach
+                    high_usage_start_timestamp = current_timestamp  # Record when high memory usage started
+                    current_sustained_duration_seconds = 0.0  # Reset sustained duration at the start of the breach
+                    if logger:  # Verify logging is enabled before reporting high memory usage
+                        safe_warning(f"Resource Watcher: High memory usage started (Memory={mem:.1f}%, Threshold={max_ram:.1f}%)")  # Warn when sustained high usage begins
+                else:
+                    current_sustained_duration_seconds = current_timestamp - high_usage_start_timestamp  # Update sustained high-memory duration
+                    if logger:  # Verify logging is enabled before reporting sustained high memory usage
+                        safe_warning(f"Resource Watcher: High memory usage sustained for {current_sustained_duration_seconds:.1f}s (Memory={mem:.1f}%, Threshold={max_ram:.1f}%)")  # Warn while memory remains elevated
+                if current_sustained_duration_seconds >= memory_threshold_duration_seconds:  # Verify sustained duration meets the configured threshold
+                    if logger:  # Verify logging is enabled before reporting termination
+                        safe_critical(f"Resource Watcher: High memory usage sustained for {current_sustained_duration_seconds:.1f}s; Requesting termination")  # Critical log for real termination
+                    try:  # Verify graceful termination signaling is available
+                        send_telegram_message(TELEGRAM_BOT, f"Resource Watcher: High memory usage sustained for {current_sustained_duration_seconds:.1f}s; Requesting process termination to avoid abrupt OOM kill")  # Notify only on real termination
                     except Exception:
-                        pass  # Best effort: if even exit fails, continue
+                        pass  # Ignore failures in notification
+
+                    try:  # Verify SIGTERM delivery succeeds
+                        os.kill(os.getpid(), signal.SIGTERM)  # Send SIGTERM to self for graceful shutdown
+                    except Exception:
+                        try:  # Verify forced exit remains available if SIGTERM fails
+                            os._exit(1)  # Force exit if signal fails
+                        except Exception:
+                            pass  # Best effort: if even exit fails, continue
+            else:  # Verify memory has returned below the configured threshold
+                if high_usage_start_timestamp is not None:  # Verify a sustained high-memory interval was active
+                    if logger:  # Verify logging is enabled before reporting the reset
+                        safe_debug(f"Resource Watcher: High memory usage reset after {current_sustained_duration_seconds:.1f}s (Memory={mem:.1f}%, Threshold={max_ram:.1f}%)")  # Debug reset when memory recovers
+                high_usage_start_timestamp = None  # Clear the stored start timestamp after recovery
+                current_sustained_duration_seconds = 0.0  # Reset sustained duration after recovery
 
             stop_event.wait(timeout=check_interval)  # Wait with interruptability
 
@@ -675,6 +682,12 @@ def build_default_runtime_config() -> Dict:
             "generating_order": "off",  # Dataset file processing order by file size: "off", "Ascending", or "Descending"
             "execution_mode": "both",  # Execution mode: train, gen, or both for WGANGP
             "results_suffix": "_data_augmented",  # Suffix to add to generated filenames for WGANGP
+        },
+        "watchdog": {  # Resource watcher configuration
+            "max_ram_percent": 90,  # Percent RAM usage considered critical
+            "max_cpu_percent": 95,  # Percent CPU usage considered critical
+            "check_interval_s": 5,  # Seconds between checks
+            "memory_threshold_duration_seconds": 30,  # Seconds memory usage must remain above threshold before termination
         },
         "dataset": {  # Dataset configuration
             "remove_zero_variance": True,  # Remove zero-variance features during preprocessing
