@@ -7992,7 +7992,10 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
 
         enable_automl = config.get("automl", {}).get("enabled", False)  # Get enable automl flag from config
         if enable_automl:  # If AutoML pipeline is enabled
+            print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[DEBUG] AutoML pipeline is ENABLED. Running AutoML for binary dataset: {os.path.basename(file)}{Style.RESET_ALL}")  # Log AutoML execution start
             run_automl_pipeline(file, df_original_cleaned, feature_names, config=config)  # Run AutoML pipeline
+        else:  # AutoML pipeline is disabled in config
+            print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML pipeline is DISABLED (automl.enabled=false). Skipping AutoML for {os.path.basename(file)}. Enable via config or --automl flag.{Style.RESET_ALL}")  # Log AutoML skip reason
 
         if test_data_augmentation:  # If data augmentation testing is enabled
             process_augmented_data_evaluation(
