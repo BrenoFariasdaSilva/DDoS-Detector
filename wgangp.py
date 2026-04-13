@@ -1748,6 +1748,26 @@ def open_results_csv(results_csv_path, results_cols_cfg):
         return (None, None)  # Return sentinel values so callers can continue
 
 
+def resolve_results_csv_path(args, config: Dict) -> Optional[Path]:
+    """
+    Resolve the absolute path to the results CSV from runtime arguments and configuration.
+
+    :param args: Parsed arguments namespace containing csv_path attribute.
+    :param config: Configuration dictionary with paths section for directory names.
+    :return: Absolute Path to the results CSV file, or None when resolution fails.
+    """
+
+    try:
+        if not getattr(args, "csv_path", None):  # Verify csv_path is set on args before proceeding
+            return None  # Cannot resolve path without source CSV
+        csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
+        data_aug_subdir = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Read data augmentation base directory name from config
+        data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct data augmentation directory under dataset folder
+        return data_aug_dir / "data_augmentation_results.csv"  # Return absolute path to results CSV
+    except Exception:  # If resolution fails for any reason
+        return None  # Return None to indicate path resolution failure
+
+
 def find_config_value(cfg, key):
     """
     Search `cfg` recursively for `key` and return first found value or None.
@@ -2812,6 +2832,42 @@ def flush_csv_file_safely(file_handle) -> None:
         pass  # Ignore outer errors as well
 
 
+def update_results_csv_row(results_csv_path: Path, ordered_row: list, results_cols_cfg: list, original_file: str) -> None:
+    """
+    Load existing results CSV, remove all rows for original_file, append new row, and save back.
+
+    :param results_csv_path: Absolute path to the results CSV file.
+    :param ordered_row: Ordered list of values aligned to results_cols_cfg schema.
+    :param results_cols_cfg: List of column names defining the CSV schema.
+    :param original_file: Filename used to deduplicate rows matched against the original_file column.
+    :return: None
+    """
+
+    try:
+        os.makedirs(results_csv_path.parent, exist_ok=True)  # Ensure parent directory exists before any read or write
+        existing_rows: list = []  # Accumulate rows not belonging to current original_file
+        original_file_idx = results_cols_cfg.index("original_file") if "original_file" in results_cols_cfg else -1  # Locate original_file column index once for efficiency
+        if results_csv_path.exists() and results_csv_path.stat().st_size > 0:  # Load existing rows only when file is non-empty
+            with open(results_csv_path, "r", newline="", encoding="utf-8") as rf:  # Open existing CSV for reading
+                reader = csv.reader(rf)  # Create CSV reader for row iteration
+                all_rows = list(reader)  # Read all rows into memory for in-place filtering
+            data_rows = all_rows[1:] if (all_rows and all_rows[0] == results_cols_cfg) else all_rows  # Skip header row when schema matches, else treat entire file as data
+            for row in data_rows:  # Iterate over retained data rows
+                if not row:  # Skip blank lines present in malformed files
+                    continue  # Do not include empty rows in retained set
+                row_original_file = row[original_file_idx] if original_file_idx >= 0 and original_file_idx < len(row) else ""  # Extract original_file value safely using precomputed index
+                if row_original_file != original_file:  # Retain rows belonging to different original files only
+                    existing_rows.append(row)  # Preserve unrelated rows without modification
+        with open(results_csv_path, "w", newline="", encoding="utf-8") as wf:  # Open file in write mode to perform full rewrite
+            writer = csv.writer(wf)  # Create CSV writer for full rewrite operation
+            writer.writerow(results_cols_cfg)  # Write schema header row first to preserve column order
+            for row in existing_rows:  # Write all retained rows for other original files
+                writer.writerow(row)  # Persist each retained row in original order
+            writer.writerow(ordered_row)  # Append deduplicated row for current original_file as last entry
+    except Exception as _ue:  # On any failure, warn without interrupting training
+        print(f"{BackgroundColors.YELLOW}Warning: could not update results CSV {results_csv_path}: {_ue}{Style.RESET_ALL}")  # Warn about CSV update failure
+
+
 def extract_optimizer_learning_rates(opt_G, opt_D, args) -> tuple:
     """
     Safely extract current learning rates from generator and discriminator optimizers.
@@ -2898,13 +2954,15 @@ def write_epoch_csv_row(args, config: Dict, device: torch.device, dataset, epoch
         print(f"{BackgroundColors.YELLOW}Warning: failed to measure epoch time: {_te}{Style.RESET_ALL}")  # Warn but continue
 
     try:  # Wrap CSV write to avoid crashing on I/O errors
-        if results_csv_writer and results_cols_cfg:  # Only write if we have a valid writer and columns
+        if results_cols_cfg and getattr(args, "csv_path", None):  # Only write when schema and source path are available
             row_runtime = build_epoch_runtime_row(args, dataset, epoch, metrics_history, opt_G, opt_D)  # Build epoch runtime metrics dict from training state
             ordered = build_ordered_csv_row_from_runtime(row_runtime, results_cols_cfg, config)  # Build ordered CSV row from runtime values
             ordered = inject_hardware_into_csv_row(ordered, results_cols_cfg, config, device)  # Inject hardware spec into row if tracking enabled
             if (epoch + 1) in epoch_milestones:  # Only write per-epoch row when this epoch is a milestone
-                results_csv_writer.writerow(ordered)  # Write ordered row following configured schema for milestone epoch
-                flush_csv_file_safely(results_csv_file)  # Flush CSV file to disk safely after milestone write
+                rcsv_path = resolve_results_csv_path(args, config)  # Resolve results CSV path from args and config
+                if rcsv_path is not None:  # Only write when valid path is available
+                    original_file = row_runtime.get("original_file", "")  # Extract original_file value from runtime row for deduplication
+                    update_results_csv_row(rcsv_path, ordered, results_cols_cfg, original_file)  # Perform deduplicated write replacing previous rows for same original_file
     except Exception as _cw:  # If writing fails, warn and continue training
         print(f"{BackgroundColors.YELLOW}Warning: failed to write epoch row to results CSV: {_cw}{Style.RESET_ALL}")  # Warn but do not abort
 
@@ -3216,12 +3274,14 @@ def write_final_timing_and_csv_row(args, config: Dict, device: torch.device, dat
     compute_and_store_final_timing(args, training_start_time, file_start_time)  # Compute and store final timing on args
 
     try:  # Wrap writes to avoid crashing on I/O errors
-        if results_csv_writer and results_cols_cfg:  # Only write if writer and schema are available
+        if results_cols_cfg and getattr(args, "csv_path", None):  # Only write when schema and source path are available
             final_runtime = build_final_training_runtime_row(args, config, dataset, metrics_history, opt_G, opt_D)  # Build final training runtime metrics dict
             ordered_final = build_ordered_csv_row_from_runtime(final_runtime, results_cols_cfg, config)  # Build ordered CSV row from runtime values
             ordered_final = inject_hardware_into_csv_row(ordered_final, results_cols_cfg, config, device)  # Inject hardware spec into final row if tracking enabled
-            results_csv_writer.writerow(ordered_final)  # Write final per-file ordered row to CSV
-            flush_csv_file_safely(results_csv_file)  # Flush CSV file to disk safely after final row
+            rcsv_path = resolve_results_csv_path(args, config)  # Resolve results CSV path from args and config
+            if rcsv_path is not None:  # Only write when valid path is available
+                original_file = final_runtime.get("original_file", "")  # Extract original_file value from final runtime row for deduplication
+                update_results_csv_row(rcsv_path, ordered_final, results_cols_cfg, original_file)  # Perform deduplicated write replacing all previous rows for same original_file
     except Exception as _fw:  # If writing fails, warn and continue
         print(f"{BackgroundColors.YELLOW}Warning: failed to write final file row to results CSV: {_fw}{Style.RESET_ALL}")  # Warn about failure
 
