@@ -5366,6 +5366,10 @@ def process_dataset_path(args: Any, config: Dict, mode: str, input_path: str, re
     generating_order = config.get("wgangp", {}).get("generating_order", "off")  # Read configured generation ordering strategy
     files_to_process = apply_dataset_ordering(files_to_process, generating_order)  # Apply ordering strategy to collected file list
     total_files = len(files_to_process)  # Count total files for progress display
+    verbose_output(f"Found {total_files} CSV files in {input_path}")  # Log total discovered CSV file count for this directory
+    if total_files == 0:  # Warn and return early when no CSV files are present in directory
+        print(f"{BackgroundColors.YELLOW}Warning: no CSV files found in directory: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}")  # Print actionable warning about empty directory
+        return  # Exit without processing when directory yields no CSV files
     
     for index, file in enumerate(files_to_process, start=1):  # Iterate files with 1-based index for progress tracking
         try:  # Catch per-file errors to allow batch to continue after individual failures
@@ -5455,7 +5459,10 @@ def main():
         mode, csv_path, results_suffix, datasets, args = extract_runtime_parameters(config)  # Extract execution mode, paths, and arg namespace from config
         results_cols = validate_results_csv_columns(config)  # Validate and retrieve results CSV column configuration
 
-        if csv_path is not None:  # Single file mode (csv_path provided)
+        if csv_path is not None and os.path.isdir(csv_path):  # Directory mode (csv_path is an existing directory)
+            safe_debug(f"Running on directory: {csv_path}")  # Log directory mode entry with resolved path
+            process_dataset_path(args, config, mode, csv_path, results_cols, results_suffix)  # Process all CSV files discovered inside the provided directory
+        elif csv_path is not None:  # Single file mode (csv_path is a file path)
             handle_single_file_mode(args, config, mode, csv_path, results_cols, results_suffix)  # Execute all single-file output setup and mode dispatch steps
         else:  # Batch dataset mode (no csv_path provided)
             run_batch_mode(args, config, datasets, mode, results_suffix, results_cols)  # Iterate and process all configured dataset directory files
