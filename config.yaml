@@ -279,6 +279,7 @@ stacking: # Stacking experiment settings
   
   methods: # Method toggles for stacking pipeline (overridable via CLI)
     augmentation: true # Enable data augmentation combination in pipeline
+    automl: true # Enable AutoML pipeline in stacking
     feature_selection: true # Enable feature selection combination in pipeline
     hyperparameter_optimization: true # Enable hyperparameter optimization combination in pipeline
 
