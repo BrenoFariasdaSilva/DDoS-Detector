@@ -224,6 +224,7 @@ def parse_cli_args():
         parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
         parser.add_argument("--skip-train-if-model-exists", dest="skip_train", action="store_true", help="Load existing models instead of retraining")
         parser.add_argument("--csv", type=str, default=None, help="Path to specific CSV file to process")
+        parser.add_argument("--dataset-path", type=str, default=None, help="Path to a dataset directory or single CSV file to process")
         parser.add_argument("--automl", action="store_true", help="Enable AutoML pipeline")
         parser.add_argument("--automl-trials", type=int, default=None, help="Number of AutoML trials")
         parser.add_argument("--automl-stacking-trials", type=int, default=None, help="Number of stacking trials")
@@ -235,6 +236,12 @@ def parse_cli_args():
         parser.add_argument("--both", action="store_true", help="Run both binary and multi-class pipelines sequentially")
         parser.add_argument("--stacking-results-dir", type=str, default=None, help="Directory to save stacking results (relative to dataset root)")
         parser.add_argument("--top-n-features", dest="top_n_features", type=int, default=None, help="Number of top features to show in heatmap (overrides config)")
+        parser.add_argument("--enable-augmentation", dest="enable_augmentation", action="store_true", default=None, help="Enable data augmentation method toggle")
+        parser.add_argument("--disable-augmentation", dest="enable_augmentation", action="store_false", help="Disable data augmentation method toggle")
+        parser.add_argument("--enable-feature-selection", dest="enable_feature_selection", action="store_true", default=None, help="Enable feature selection method toggle")
+        parser.add_argument("--disable-feature-selection", dest="enable_feature_selection", action="store_false", help="Disable feature selection method toggle")
+        parser.add_argument("--enable-hyperparameters", dest="enable_hyperparameters", action="store_true", default=None, help="Enable hyperparameter optimization method toggle")
+        parser.add_argument("--disable-hyperparameters", dest="enable_hyperparameters", action="store_false", help="Disable hyperparameter optimization method toggle")
         
         return parser.parse_args()  # Return parsed arguments
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -270,6 +277,11 @@ def get_default_stacking_config():
                 "features_list", "Hardware",
             ],  # Column names for results CSV export
             "top_n_features_heatmap": 15,  # Number of top features to show in heatmap
+            "methods": {
+                "augmentation": True,  # Enable data augmentation combination by default
+                "feature_selection": True,  # Enable feature selection combination by default
+                "hyperparameter_optimization": True,  # Enable hyperparameter optimization combination by default
+            },  # Method toggles for stacking pipeline
             "match_filenames_to_process": [""],  # Filename patterns to match for processing
             "ignore_files": ["Stacking_Classifiers_Results.csv"],  # Files to ignore during processing
             "ignore_dirs": [
@@ -529,6 +541,18 @@ def merge_configs(defaults, file_config, cli_args):
 
         if hasattr(cli_args, "stacking_results_dir") and cli_args.stacking_results_dir:
             config.setdefault("stacking", {})["results_dir"] = cli_args.stacking_results_dir
+
+        if hasattr(cli_args, "dataset_path") and cli_args.dataset_path is not None:  # Dataset path CLI override
+            config["execution"]["dataset_path"] = cli_args.dataset_path  # Store CLI dataset path override
+
+        if hasattr(cli_args, "enable_augmentation") and cli_args.enable_augmentation is not None:  # Augmentation method toggle CLI override
+            config.setdefault("stacking", {}).setdefault("methods", {})["augmentation"] = cli_args.enable_augmentation  # Apply augmentation toggle override
+
+        if hasattr(cli_args, "enable_feature_selection") and cli_args.enable_feature_selection is not None:  # Feature selection method toggle CLI override
+            config.setdefault("stacking", {}).setdefault("methods", {})["feature_selection"] = cli_args.enable_feature_selection  # Apply feature selection toggle override
+
+        if hasattr(cli_args, "enable_hyperparameters") and cli_args.enable_hyperparameters is not None:  # Hyperparameter optimization method toggle CLI override
+            config.setdefault("stacking", {}).setdefault("methods", {})["hyperparameter_optimization"] = cli_args.enable_hyperparameters  # Apply hyperparameter optimization toggle override
         
         return config  # Return final merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -7848,6 +7872,13 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
         ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
             reference_file, config=config
         )  # Load feature selection results
+
+        methods_cfg = config.get("stacking", {}).get("methods", {})  # Retrieve method toggles from config
+
+        if not methods_cfg.get("feature_selection", True):  # Verify if feature selection is disabled via toggle
+            ga_selected_features = None  # Suppress GA features when feature selection is disabled
+            pca_n_components = None  # Suppress PCA components when feature selection is disabled
+            rfe_selected_features = None  # Suppress RFE features when feature selection is disabled
         
         feature_names = [col for col in combined_multiclass_df.columns if col != 'attack_type']  # Get feature column names
         
@@ -7855,12 +7886,20 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
             f"{BackgroundColors.GREEN}Multi-class dataset features: {BackgroundColors.CYAN}{len(feature_names)} features{Style.RESET_ALL}",
             config=config
         )  # Output feature count
-        
-        base_models, hp_params_map = prepare_models_with_hyperparameters(reference_file, config=config)  # Prepare base models
+
+        if methods_cfg.get("hyperparameter_optimization", True):  # Verify if hyperparameter optimization is enabled via toggle
+            base_models, hp_params_map = prepare_models_with_hyperparameters(reference_file, config=config)  # Prepare base models with hyperparameters
+        else:  # Hyperparameter optimization is disabled via toggle
+            base_models = get_models(config=config)  # Instantiate base models without hyperparameter optimization
+            hp_params_map = {}  # Initialize empty hyperparameters mapping when disabled
         
         original_experiment_id = generate_experiment_id(reference_file, "multiclass_original_only")  # Generate unique experiment ID
         
         test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", False)  # Get test data augmentation flag from config
+
+        if not methods_cfg.get("augmentation", True):  # Verify if augmentation is disabled via toggle
+            test_data_augmentation = False  # Override test data augmentation when augmentation method is disabled
+
         augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
         
         total_steps = 1 + (len(augmentation_ratios) if test_data_augmentation else 0)  # Calculate total evaluation steps
@@ -8310,6 +8349,15 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     configured_mode = config.get("execution", {}).get("execution_mode", "both")  # Read configured mode
     modes = [configured_mode] if configured_mode in ("binary", "multi-class") else ["binary", "multi-class"]  # Modes list
 
+    methods_cfg = config.get("stacking", {}).get("methods", {})  # Retrieve method toggles from config
+    fs_toggle = methods_cfg.get("feature_selection", True)  # Resolve feature selection toggle from config
+    hp_toggle = methods_cfg.get("hyperparameter_optimization", True)  # Resolve hyperparameter optimization toggle from config
+    da_toggle = methods_cfg.get("augmentation", True)  # Resolve data augmentation toggle from config
+
+    fs_options = [True, False] if fs_toggle else [False]  # Build feature selection iteration options based on toggle
+    hp_options = [True, False] if hp_toggle else [False]  # Build hyperparameter optimization iteration options based on toggle
+    da_options = [True, False] if da_toggle else [False]  # Build data augmentation iteration options based on toggle
+
     for mode in modes:  # For each mode
         for file in files_to_process:  # For each file in the input path
             try:  # Protect individual-file orchestration
@@ -8321,7 +8369,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                 aug_file = artifacts.get("augmented_file")  # Get augmented file path if present
                 aug_available = bool(aug_file)  # True when augmented file exists
 
-                for fs_flag, hp_flag, da_flag in itertools.product([True, False], repeat=3):  # Cartesian product of FS/HP/DA flags
+                for fs_flag, hp_flag, da_flag in itertools.product(fs_options, hp_options, da_options):  # Cartesian product of FS/HP/DA flags gated by method toggles
                     feature_selection_enabled = fs_flag and fs_available  # Only enabled if requested and available
                     hyperparameters_enabled = hp_flag and hp_available  # Only enabled if requested and available
                     data_augmentation_enabled = da_flag and aug_available  # Only enabled if requested and available
@@ -8776,6 +8824,83 @@ def play_sound(config=None):
         raise
 
 
+def validate_and_resolve_dataset_path(dataset_path: str, config: dict) -> dict:
+    """
+    Validate the CLI dataset path and return an overridden datasets dictionary.
+
+    :param dataset_path: Path to a dataset directory or single CSV file from CLI
+    :param config: Configuration dictionary for fallback dataset name resolution
+    :return: Dictionary mapping dataset name to list of paths
+    """
+
+    try:
+        resolved = os.path.abspath(dataset_path)  # Resolve to absolute path
+
+        if not os.path.exists(resolved):  # Verify path existence before proceeding
+            raise FileNotFoundError(f"Dataset path does not exist: {resolved}")  # Raise descriptive error for missing path
+
+        dataset_name = get_dataset_name(resolved)  # Extract dataset name from resolved path
+
+        if os.path.isfile(resolved):  # Verify if the path points to a single file
+            if not resolved.lower().endswith(".csv"):  # Verify file has CSV extension
+                raise ValueError(f"Dataset file must be a CSV: {resolved}")  # Raise error for non-CSV files
+            print(f"{BackgroundColors.GREEN}[INFO] CLI --dataset-path resolved to single file: {BackgroundColors.CYAN}{resolved}{Style.RESET_ALL}")  # Log resolved file path
+            config["execution"]["csv_file"] = resolved  # Set CSV file override for single-file processing
+            return {dataset_name: [os.path.dirname(resolved)]}  # Return parent directory containing the file
+
+        elif os.path.isdir(resolved):  # Verify if the path points to a directory
+            print(f"{BackgroundColors.GREEN}[INFO] CLI --dataset-path resolved to directory: {BackgroundColors.CYAN}{resolved}{Style.RESET_ALL}")  # Log resolved directory path
+            return {dataset_name: [resolved]}  # Return directory path as dataset entry
+
+        else:  # Path exists but is neither file nor directory
+            raise ValueError(f"Dataset path is neither a file nor directory: {resolved}")  # Raise error for unsupported path type
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def log_resolved_configuration(config: dict) -> None:
+    """
+    Log the resolved configuration for dataset path and method toggles.
+
+    :param config: Configuration dictionary with resolved settings
+    :return: None
+    """
+
+    try:
+        dataset_path_cli = config.get("execution", {}).get("dataset_path", None)  # Retrieve CLI dataset path override
+        methods_cfg = config.get("stacking", {}).get("methods", {})  # Retrieve method toggles from config
+
+        fs_enabled = methods_cfg.get("feature_selection", True)  # Resolve feature selection toggle state
+        hp_enabled = methods_cfg.get("hyperparameter_optimization", True)  # Resolve hyperparameter optimization toggle state
+        da_enabled = methods_cfg.get("augmentation", True)  # Resolve data augmentation toggle state
+
+        if dataset_path_cli is not None:  # Verify if dataset path was overridden via CLI
+            print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}[INFO] Dataset path override (CLI): {BackgroundColors.CYAN}{dataset_path_cli}{Style.RESET_ALL}")  # Log CLI dataset path override
+        else:  # Dataset path is from config.yaml or default
+            print(f"{BackgroundColors.GREEN}[INFO] Dataset path source: {BackgroundColors.CYAN}config.yaml (default){Style.RESET_ALL}")  # Log config-based dataset path
+
+        print(f"{BackgroundColors.GREEN}[INFO] Method toggle — Feature Selection: {BackgroundColors.CYAN}{fs_enabled}{Style.RESET_ALL}")  # Log feature selection toggle state
+        print(f"{BackgroundColors.GREEN}[INFO] Method toggle — Hyperparameter Optimization: {BackgroundColors.CYAN}{hp_enabled}{Style.RESET_ALL}")  # Log hyperparameter optimization toggle state
+        print(f"{BackgroundColors.GREEN}[INFO] Method toggle — Data Augmentation: {BackgroundColors.CYAN}{da_enabled}{Style.RESET_ALL}")  # Log data augmentation toggle state
+
+        overrides = []  # Initialize list for override source tracking
+
+        if dataset_path_cli is not None:  # Verify if dataset path came from CLI
+            overrides.append("dataset_path")  # Track dataset path as CLI override
+
+        if any(k in methods_cfg for k in ("feature_selection", "hyperparameter_optimization", "augmentation")):  # Verify if any method toggle was explicitly set
+            overrides.append("method_toggles")  # Track method toggles as override source
+
+        if overrides:  # Verify if any overrides were detected
+            print(f"{BackgroundColors.YELLOW}[INFO] Configuration overrides active for: {BackgroundColors.CYAN}{', '.join(overrides)}{Style.RESET_ALL}")  # Log active override sources
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def main(config=None):
     """
     Main function.
@@ -8791,6 +8916,8 @@ def main(config=None):
         print(
             f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Classifiers Stacking{BackgroundColors.GREEN} program!{Style.RESET_ALL}\n"
         )  # Output the welcome message
+
+        log_resolved_configuration(config=config)  # Log resolved dataset path and method toggle states
         
         test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", True)  # Get test augmentation flag from config
         augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
@@ -8813,7 +8940,12 @@ def main(config=None):
 
         threads_limit = set_threads_limit_based_on_ram(config=config)  # Adjust config.get("evaluation", {}).get("threads_limit", 2) based on system RAM
         
-        datasets = config.get("dataset", {}).get("datasets", {})  # Get datasets from config
+        dataset_path_override = config.get("execution", {}).get("dataset_path", None)  # Retrieve CLI --dataset-path override
+
+        if dataset_path_override is not None:  # Verify if CLI dataset path was provided
+            datasets = validate_and_resolve_dataset_path(dataset_path_override, config=config)  # Validate and resolve CLI dataset path into datasets dict
+        else:  # No CLI override, use config.yaml datasets
+            datasets = config.get("dataset", {}).get("datasets", {})  # Get datasets from config
 
         for dataset_name, paths in datasets.items():  # For each dataset in the datasets dictionary
             process_dataset_paths(dataset_name, paths, config=config)  # Process all paths for this dataset
