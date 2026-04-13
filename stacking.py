@@ -233,7 +233,7 @@ def parse_cli_args():
         parser.add_argument("--multi-class", action="store_true", help="Enable multi-class classification mode (combine all attacks)")
         parser.add_argument("--binary", dest="multi_class", action="store_false", help="Enable binary classification mode (default)")
         parser.add_argument("--both", action="store_true", help="Run both binary and multi-class pipelines sequentially")
-        parser.add_argument("--stacking-results-dir", type=str, default=None, help="Directory to save stacking results (relative to Feature_Analysis)")
+        parser.add_argument("--stacking-results-dir", type=str, default=None, help="Directory to save stacking results (relative to dataset root)")
         parser.add_argument("--top-n-features", dest="top_n_features", type=int, default=None, help="Number of top features to show in heatmap (overrides config)")
         
         return parser.parse_args()  # Return parsed arguments
@@ -4695,7 +4695,7 @@ def save_stacking_results(csv_path, results_list, config=None):
         os.makedirs(feature_analysis_dir, exist_ok=True)
         
         stacking_results_dir = config.get("stacking", {}).get("results_dir", "Stacking")
-        stacking_dir = feature_analysis_dir / stacking_results_dir
+        stacking_dir = file_path_obj.parent / stacking_results_dir
         os.makedirs(stacking_dir, exist_ok=True)
         output_path = stacking_dir / results_filename
 
