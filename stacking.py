@@ -225,7 +225,8 @@ def parse_cli_args():
         parser.add_argument("--skip-train-if-model-exists", dest="skip_train", action="store_true", help="Load existing models instead of retraining")
         parser.add_argument("--csv", type=str, default=None, help="Path to specific CSV file to process")
         parser.add_argument("--dataset-path", type=str, default=None, help="Path to a dataset directory or single CSV file to process")
-        parser.add_argument("--automl", action="store_true", help="Enable AutoML pipeline")
+        parser.add_argument("--enable-automl", dest="enable_automl", action="store_true", default=None, help="Enable AutoML pipeline method toggle")  # Enable AutoML via CLI
+        parser.add_argument("--disable-automl", dest="enable_automl", action="store_false", help="Disable AutoML pipeline method toggle")  # Disable AutoML via CLI
         parser.add_argument("--automl-trials", type=int, default=None, help="Number of AutoML trials")
         parser.add_argument("--automl-stacking-trials", type=int, default=None, help="Number of stacking trials")
         parser.add_argument("--automl-timeout", type=int, default=None, help="AutoML timeout in seconds")
@@ -281,6 +282,7 @@ def get_default_stacking_config():
                 "augmentation": True,  # Enable data augmentation combination by default
                 "feature_selection": True,  # Enable feature selection combination by default
                 "hyperparameter_optimization": True,  # Enable hyperparameter optimization combination by default
+                "automl": True,  # Enable AutoML pipeline by default
             },  # Method toggles for stacking pipeline
             "match_filenames_to_process": [""],  # Filename patterns to match for processing
             "ignore_files": ["Stacking_Classifiers_Results.csv"],  # Files to ignore during processing
@@ -519,8 +521,8 @@ def merge_configs(defaults, file_config, cli_args):
             config["execution"]["skip_train_if_model_exists"] = True
         if hasattr(cli_args, "csv") and cli_args.csv:  # CSV file override
             config["execution"]["csv_file"] = cli_args.csv
-        if hasattr(cli_args, "automl") and cli_args.automl:  # AutoML flag
-            config["automl"]["enabled"] = True
+        if hasattr(cli_args, "enable_automl") and cli_args.enable_automl is not None:  # AutoML method toggle CLI override
+            config.setdefault("stacking", {}).setdefault("methods", {})["automl"] = cli_args.enable_automl  # Apply AutoML toggle override
         if hasattr(cli_args, "automl_trials") and cli_args.automl_trials is not None:  # AutoML trials
             config["automl"]["n_trials"] = cli_args.automl_trials
         if hasattr(cli_args, "automl_stacking_trials") and cli_args.automl_stacking_trials is not None:  # Stacking trials
@@ -7922,13 +7924,13 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
         original_results_list = list(results_original.values())  # Convert results dict to list
         feature_analysis_dir = save_multiclass_results_to_csv(reference_file, original_results_list, config=config)  # Save multi-class results and get Feature_Analysis directory
         
-        enable_automl = config.get("automl", {}).get("enabled", False)  # Get enable automl flag from config
+        enable_automl = methods_cfg.get("automl", True)  # Resolve AutoML toggle from stacking methods config
         if enable_automl:  # If AutoML pipeline is enabled
             print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[DEBUG] AutoML pipeline is ENABLED. Running AutoML for multi-class dataset.{Style.RESET_ALL}")  # Log AutoML execution start
             send_telegram_message(TELEGRAM_BOT, [f"Running AutoML pipeline for multi-class dataset: {dataset_name}"])  # Notify Telegram about AutoML pipeline execution
             run_automl_pipeline(reference_file, combined_multiclass_df, feature_names, data_source_label="Original_MultiClass", config=config)  # Run AutoML pipeline for multi-class
-        else:  # AutoML pipeline is disabled in config
-            print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML pipeline is DISABLED (automl.enabled=false). Skipping AutoML for multi-class. Enable via config or --automl flag.{Style.RESET_ALL}")  # Log AutoML skip reason
+        else:  # AutoML pipeline is disabled via method toggle
+            print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML pipeline is DISABLED (stacking.methods.automl=false). Skipping AutoML for multi-class. Enable via config or --enable-automl flag.{Style.RESET_ALL}")  # Log AutoML skip reason
         
         if test_data_augmentation:  # If data augmentation testing is enabled
             process_multiclass_augmentation_testing(
@@ -8034,12 +8036,13 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
         original_results_list = list(results_original.values())  # Convert results dict to list
         save_stacking_results(file, original_results_list, config=config)  # Save original results to CSV
 
-        enable_automl = config.get("automl", {}).get("enabled", False)  # Get enable automl flag from config
+        methods_cfg_local = config.get("stacking", {}).get("methods", {})  # Retrieve method toggles from config
+        enable_automl = methods_cfg_local.get("automl", True)  # Resolve AutoML toggle from stacking methods config
         if enable_automl:  # If AutoML pipeline is enabled
             print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[DEBUG] AutoML pipeline is ENABLED. Running AutoML for binary dataset: {os.path.basename(file)}{Style.RESET_ALL}")  # Log AutoML execution start
             run_automl_pipeline(file, df_original_cleaned, feature_names, config=config)  # Run AutoML pipeline
-        else:  # AutoML pipeline is disabled in config
-            print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML pipeline is DISABLED (automl.enabled=false). Skipping AutoML for {os.path.basename(file)}. Enable via config or --automl flag.{Style.RESET_ALL}")  # Log AutoML skip reason
+        else:  # AutoML pipeline is disabled via method toggle
+            print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML pipeline is DISABLED (stacking.methods.automl=false). Skipping AutoML for {os.path.basename(file)}. Enable via config or --enable-automl flag.{Style.RESET_ALL}")  # Log AutoML skip reason
 
         if test_data_augmentation:  # If data augmentation testing is enabled
             process_augmented_data_evaluation(
@@ -8360,6 +8363,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     fs_toggle = methods_cfg.get("feature_selection", True)  # Resolve feature selection toggle from config
     hp_toggle = methods_cfg.get("hyperparameter_optimization", True)  # Resolve hyperparameter optimization toggle from config
     da_toggle = methods_cfg.get("augmentation", True)  # Resolve data augmentation toggle from config
+    automl_toggle = methods_cfg.get("automl", True)  # Resolve AutoML toggle from config
 
     fs_options = [True, False] if fs_toggle else [False]  # Build feature selection iteration options based on toggle
     hp_options = [True, False] if hp_toggle else [False]  # Build hyperparameter optimization iteration options based on toggle
@@ -8885,6 +8889,7 @@ def log_resolved_configuration(config: dict) -> None:
         fs_enabled = methods_cfg.get("feature_selection", True)  # Resolve feature selection toggle state
         hp_enabled = methods_cfg.get("hyperparameter_optimization", True)  # Resolve hyperparameter optimization toggle state
         da_enabled = methods_cfg.get("augmentation", True)  # Resolve data augmentation toggle state
+        automl_enabled = methods_cfg.get("automl", True)  # Resolve AutoML toggle state
 
         if dataset_path_cli is not None:  # Verify if dataset path was overridden via CLI
             print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}[INFO] Dataset path override (CLI): {BackgroundColors.CYAN}{dataset_path_cli}{Style.RESET_ALL}")  # Log CLI dataset path override
@@ -8894,13 +8899,14 @@ def log_resolved_configuration(config: dict) -> None:
         print(f"{BackgroundColors.GREEN}[INFO] Method toggle — Feature Selection: {BackgroundColors.CYAN}{fs_enabled}{Style.RESET_ALL}")  # Log feature selection toggle state
         print(f"{BackgroundColors.GREEN}[INFO] Method toggle — Hyperparameter Optimization: {BackgroundColors.CYAN}{hp_enabled}{Style.RESET_ALL}")  # Log hyperparameter optimization toggle state
         print(f"{BackgroundColors.GREEN}[INFO] Method toggle — Data Augmentation: {BackgroundColors.CYAN}{da_enabled}{Style.RESET_ALL}")  # Log data augmentation toggle state
+        print(f"{BackgroundColors.GREEN}[INFO] Method toggle — AutoML: {BackgroundColors.CYAN}{automl_enabled}{Style.RESET_ALL}")  # Log AutoML toggle state
 
         overrides = []  # Initialize list for override source tracking
 
         if dataset_path_cli is not None:  # Verify if dataset path came from CLI
             overrides.append("dataset_path")  # Track dataset path as CLI override
 
-        if any(k in methods_cfg for k in ("feature_selection", "hyperparameter_optimization", "augmentation")):  # Verify if any method toggle was explicitly set
+        if any(k in methods_cfg for k in ("feature_selection", "hyperparameter_optimization", "augmentation", "automl")):  # Verify if any method toggle was explicitly set
             overrides.append("method_toggles")  # Track method toggles as override source
 
         if overrides:  # Verify if any overrides were detected
@@ -8950,7 +8956,7 @@ def main(config=None):
         _fs_on = _methods_cfg.get("feature_selection", True)  # Resolve feature selection toggle
         _hp_on = _methods_cfg.get("hyperparameter_optimization", True)  # Resolve hyperparameter optimization toggle
         _da_on = _methods_cfg.get("augmentation", True)  # Resolve data augmentation toggle
-        _automl_on = config.get("automl", {}).get("enabled", False)  # Resolve AutoML toggle
+        _automl_on = _methods_cfg.get("automl", True)  # Resolve AutoML toggle
         _start_lines = [
             f"Starting Classifiers Stacking at {start_time.strftime('%Y-%m-%d %H:%M:%S')}",
             f"Dataset: {_dataset_path_cli if _dataset_path_cli else 'config.yaml (default)'}",
