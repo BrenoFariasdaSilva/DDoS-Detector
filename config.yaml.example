@@ -35,6 +35,7 @@ execution: # Execution control and per-script overrides
   csv_file: null # Optional single CSV file to process (null = process all)
   process_entire_dataset: false # Process all files in dataset (true) or single file (false)
   test_data_augmentation: true # Enable data augmentation testing experiments
+  classification_mode: "both" # Classification mode: "binary", "multiclass", or "both" (default: both)
   results_suffix: "_result" # Suffix to add to generated filenames
   match_filenames_to_process: [""] # List of specific filenames to match
   ignore_files: ["_data_augmented"] # List of filename substrings to ignore

@@ -358,6 +358,7 @@ def get_default_config():
             "process_entire_dataset": False,
             "test_data_augmentation": True,
             "execution_mode": "both",
+            "classification_mode": "both",
         },
         "dataset": {
             "remove_zero_variance": True,
@@ -492,6 +493,10 @@ def merge_configs(defaults, file_config, cli_args):
 
     try:
         config = deep_merge_dicts(defaults, file_config)  # Merge file config into defaults
+        
+        classification_mode = config.get("execution", {}).get("classification_mode", None)  # Read classification_mode from config if present
+        if classification_mode is not None:  # If classification_mode was explicitly set in config
+            config["execution"]["execution_mode"] = classification_mode  # Map classification_mode to execution_mode for internal use
         
         if cli_args is None:  # If no CLI args
             return config  # Return merged config
@@ -7876,7 +7881,10 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
         
         enable_automl = config.get("automl", {}).get("enabled", False)  # Get enable automl flag from config
         if enable_automl:  # If AutoML pipeline is enabled
+            print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[DEBUG] AutoML pipeline is ENABLED. Running AutoML for multi-class dataset.{Style.RESET_ALL}")  # Log AutoML execution start
             run_automl_pipeline(reference_file, combined_multiclass_df, feature_names, data_source_label="Original_MultiClass", config=config)  # Run AutoML pipeline for multi-class
+        else:  # AutoML pipeline is disabled in config
+            print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML pipeline is DISABLED (automl.enabled=false). Skipping AutoML for multi-class. Enable via config or --automl flag.{Style.RESET_ALL}")  # Log AutoML skip reason
         
         if test_data_augmentation:  # If data augmentation testing is enabled
             process_multiclass_augmentation_testing(
@@ -8552,15 +8560,20 @@ def process_files_in_path(input_path, dataset_name, config=None):
         csv_file = config.get("execution", {}).get("csv_file", None)  # Get CSV file override from config
         execution_mode = config.get("execution", {}).get("execution_mode", "both")  # Get execution mode from config (binary/multi-class/both, default: both)
 
+        print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[DEBUG] Classification mode: {execution_mode}{Style.RESET_ALL}")  # Log the resolved classification mode
+
         files_to_process = determine_files_to_process(csv_file, input_path, config=config)  # Determine which files to process
 
         local_dataset_name = dataset_name or get_dataset_name(input_path)  # Use provided dataset name or infer from path
 
         if execution_mode == "both":  # If BOTH execution modes are enabled (run binary first, then multi-class)
+            print(f"{BackgroundColors.CYAN}[DEBUG] Running binary and multi-class classification pipelines sequentially{Style.RESET_ALL}")  # Log both mode execution
             execute_both_mode_pipeline(files_to_process, local_dataset_name, config=config)  # Run binary + multi-class pipelines sequentially
         elif execution_mode == "multi-class":  # If multi-class execution mode is enabled
+            print(f"{BackgroundColors.CYAN}[DEBUG] Running multiclass classification pipeline{Style.RESET_ALL}")  # Log multiclass pipeline start
             execute_multiclass_mode_pipeline(files_to_process, local_dataset_name, config=config)  # Run multi-class pipeline only
         else:  # If binary execution mode (default)
+            print(f"{BackgroundColors.CYAN}[DEBUG] Running binary classification pipeline{Style.RESET_ALL}")  # Log binary pipeline start
             execute_binary_mode_pipeline(files_to_process, local_dataset_name, config=config)  # Run binary pipeline only
     except Exception as e:
         print(str(e))
