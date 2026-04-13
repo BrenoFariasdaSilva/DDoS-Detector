@@ -116,7 +116,11 @@ wgangp: dependencies
 				$(if $(COMPILE),--compile,) \
 				$(if $(FROM_SCRATCH),--from_scratch,) $(ARGS)); \
 		else \
-			echo "Running on single file: $(CSV_PATH)"; \
+			if [ -d "$(CSV_PATH)" ]; then \
+				echo "Running on directory: $(CSV_PATH)"; \
+			else \
+				echo "Running on single file: $(CSV_PATH)"; \
+			fi; \
 			$(call RUN_AND_LOG, ./wgangp.py --csv_path $(CSV_PATH) \
 				$(if $(MODE),--mode $(MODE),) \
 				$(if $(EPOCHS),--epochs $(EPOCHS),) \
