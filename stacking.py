@@ -7449,6 +7449,7 @@ def run_single_ratio_experiment(file, df_original_cleaned, df_augmented_cleaned,
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx}/{total_ratios}] Evaluating Original + Augmented@{ratio_pct}%{Style.RESET_ALL}"
         )  # Print progress indicator for current ratio experiment
+        send_telegram_message(TELEGRAM_BOT, [f"[{ratio_idx}/{total_ratios}] Augmentation experiment: Original + Augmented@{ratio_pct}% | file: {os.path.basename(file)}"])  # Notify Telegram about per-ratio augmentation experiment progress
 
         df_sampled = sample_augmented_by_ratio(df_augmented_cleaned, df_original_cleaned, ratio)  # Sample augmented rows at the current ratio
 
@@ -7534,6 +7535,7 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}\n"
         )  # Print closing separator line
+        send_telegram_message(TELEGRAM_BOT, [f"[BINARY] Starting ratio-based augmentation experiments | file: {os.path.basename(file)} | ratios: {[f'{int(r * 100)}%' for r in augmentation_ratios]}"])  # Notify Telegram about augmentation ratio experiments start
 
         all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
 
@@ -7813,6 +7815,7 @@ def process_multiclass_augmentation_testing(reference_file, original_files_list,
             return  # Exit function early as signaled by the loading function
 
         print_multiclass_augmentation_header(augmentation_ratios)  # Print the section header for ratio-based multi-class augmentation experiments
+        send_telegram_message(TELEGRAM_BOT, [f"[MULTI-CLASS] Starting ratio-based augmentation experiments | Dataset: {dataset_name} | ratios: {[f'{int(r * 100)}%' for r in augmentation_ratios]}"])  # Notify Telegram about multiclass augmentation ratio experiments start
 
         all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
 
@@ -7868,7 +7871,8 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
         )  # Print closing separator
-        
+        send_telegram_message(TELEGRAM_BOT, [f"Starting multi-class evaluation | Dataset: {dataset_name} | {len(attack_types_list)} attack types: {', '.join(str(a) for a in attack_types_list)}"])  # Notify Telegram about multiclass evaluation start
+
         ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
             reference_file, config=config
         )  # Load feature selection results
@@ -7921,6 +7925,7 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
         enable_automl = config.get("automl", {}).get("enabled", False)  # Get enable automl flag from config
         if enable_automl:  # If AutoML pipeline is enabled
             print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[DEBUG] AutoML pipeline is ENABLED. Running AutoML for multi-class dataset.{Style.RESET_ALL}")  # Log AutoML execution start
+            send_telegram_message(TELEGRAM_BOT, [f"Running AutoML pipeline for multi-class dataset: {dataset_name}"])  # Notify Telegram about AutoML pipeline execution
             run_automl_pipeline(reference_file, combined_multiclass_df, feature_names, data_source_label="Original_MultiClass", config=config)  # Run AutoML pipeline for multi-class
         else:  # AutoML pipeline is disabled in config
             print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML pipeline is DISABLED (automl.enabled=false). Skipping AutoML for multi-class. Enable via config or --automl flag.{Style.RESET_ALL}")  # Log AutoML skip reason
@@ -8130,6 +8135,8 @@ def orchestrate_binary_combination(file, ga_sel, pca_n, rfe_sel, base_models, hp
         if df_original is None:  # If loading failed
             print(f"{BackgroundColors.YELLOW}Skipping file {file} (failed to load).{Style.RESET_ALL}")  # Warn about load failure
             return False  # Signal failure
+
+        send_telegram_message(TELEGRAM_BOT, [f"[BINARY] Starting evaluation | file: {os.path.basename(file)} | FS: {'ON' if feature_selection_enabled else 'OFF'} | HP: {'ON' if hyperparameters_enabled else 'OFF'} | DA: {'ON' if data_augmentation_enabled else 'OFF'}"])  # Notify Telegram about binary evaluation start
 
         try:  # Protect the evaluation call
             results = evaluate_on_dataset(
@@ -8377,6 +8384,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     suffix = f"_fs_{'on' if feature_selection_enabled else 'off'}_hp_{'on' if hyperparameters_enabled else 'off'}_da_{'on' if data_augmentation_enabled else 'off'}"  # Suffix
 
                     print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}Orchestrating: mode={mode}, file={file}, combo={suffix}{Style.RESET_ALL}")  # Log orchestration
+                    send_telegram_message(TELEGRAM_BOT, [f"[{mode.upper()}] Starting combination: {suffix} | file: {os.path.basename(file)}"])  # Notify Telegram about FS/HP/DA combination start
 
                     if hyperparameters_enabled:  # If we should use hyperparameters
                         base_models, hp_params_map = prepare_models_with_hyperparameters(file, config=config)  # Apply HP mapping
@@ -8612,6 +8620,7 @@ def process_files_in_path(input_path, dataset_name, config=None):
         execution_mode = config.get("execution", {}).get("execution_mode", "both")  # Get execution mode from config (binary/multi-class/both, default: both)
 
         print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[DEBUG] Classification mode: {execution_mode}{Style.RESET_ALL}")  # Log the resolved classification mode
+        send_telegram_message(TELEGRAM_BOT, [f"Classification mode: {execution_mode} | path: {input_path}"])  # Notify Telegram about classification mode and input path
 
         files_to_process = determine_files_to_process(csv_file, input_path, config=config)  # Determine which files to process
 
@@ -8654,6 +8663,7 @@ def process_dataset_paths(dataset_name, paths, config=None):
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
         )  # Print dataset name
+        send_telegram_message(TELEGRAM_BOT, [f"Processing dataset: {dataset_name} ({len(paths)} path(s))"])  # Notify Telegram about dataset processing start
 
         for input_path in paths:  # For each path in the dataset's paths list
             process_files_in_path(input_path, dataset_name, config=config)  # Process all files in  this path
@@ -8934,9 +8944,25 @@ def main(config=None):
 
         setup_telegram_bot(config=config)  # Setup Telegram bot if configured
 
-        send_telegram_message(
-            TELEGRAM_BOT, [f"Starting Classifiers Stacking at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"]
-        )  # Send Telegram message indicating start
+        _exec_mode = config.get("execution", {}).get("execution_mode", "both")  # Retrieve execution mode from config
+        _dataset_path_cli = config.get("execution", {}).get("dataset_path", None)  # Retrieve CLI dataset path override
+        _methods_cfg = config.get("stacking", {}).get("methods", {})  # Retrieve method toggles from config
+        _fs_on = _methods_cfg.get("feature_selection", True)  # Resolve feature selection toggle
+        _hp_on = _methods_cfg.get("hyperparameter_optimization", True)  # Resolve hyperparameter optimization toggle
+        _da_on = _methods_cfg.get("augmentation", True)  # Resolve data augmentation toggle
+        _automl_on = config.get("automl", {}).get("enabled", False)  # Resolve AutoML toggle
+        _start_lines = [
+            f"Starting Classifiers Stacking at {start_time.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Dataset: {_dataset_path_cli if _dataset_path_cli else 'config.yaml (default)'}",
+            f"Execution mode: {_exec_mode}",
+            f"Feature Selection: {'ON' if _fs_on else 'OFF'} | HP Optimization: {'ON' if _hp_on else 'OFF'} | Data Augmentation: {'ON' if _da_on else 'OFF'}",
+            f"AutoML: {'ON' if _automl_on else 'OFF'}",
+        ]
+        
+        if test_data_augmentation and _da_on:  # If augmentation testing is enabled and augmentation toggle is on
+            _start_lines.append(f"Augmentation ratios: {[f'{int(r * 100)}%' for r in augmentation_ratios]}")  # Append augmentation ratios to start message
+        
+        send_telegram_message(TELEGRAM_BOT, _start_lines)  # Send detailed start message with full execution configuration
 
         threads_limit = set_threads_limit_based_on_ram(config=config)  # Adjust config.get("evaluation", {}).get("threads_limit", 2) based on system RAM
         
