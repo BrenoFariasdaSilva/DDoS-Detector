@@ -386,7 +386,7 @@ models: # Model hyperparameters for classifiers
     random_state: 42 # Random seed for the stacking meta-estimator
 
 automl:
-  enabled: false # Enable AutoML Optuna pipeline
+  enabled: true # Enable AutoML Optuna pipeline
   n_trials: 50 # Number of Optuna trials for model search
   stacking_trials: 20 # Number of Optuna trials for stacking search
   timeout: 3600 # Timeout in seconds per search phase
