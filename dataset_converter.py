@@ -34,7 +34,7 @@ Notes and Caveats:
     - The converter performs pragmatic cleaning only; do not rely on it to
         fully sanitize malformed CSVs.
     - The script uses both `scipy` and `liac-arff` as fallbacks for ARFF.
-    - Disk-space checks are performed before writing outputs.
+    - Disk-space verifies are performed before writing outputs.
     - The module expects UTF-8 encoded text files.
 
 TODOs (short):
@@ -51,7 +51,7 @@ import io  # For in-memory file operations
 import os  # For running commands in the terminal
 import pandas as pd  # For handling CSV and TXT file formats
 import platform  # For getting the operating system name
-import shutil  # For checking disk usage
+import shutil  # For analyzing disk usage
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import traceback  # For printing tracebacks on exceptions
@@ -1445,7 +1445,7 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
             if not os.path.exists(target_path):  # Verify if the target output file is missing on disk using normalized path
                 needed_targets.append(fmt)  # Append format when output file does not exist and conversion is required
 
-        if not needed_targets:  # Verify whether any conversion is required after existence checks
+        if not needed_targets:  # Verify whether any conversion is required after existence verifies
             return  # Return early when the file is already standardized and no conversions are necessary
 
         size_str = compute_file_size_str(str(input_path))  # Retrieve formatted file size string for current input_path now that conversion is required
@@ -1463,13 +1463,13 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
         clean_file(input_path, cleaned_path)  # Clean the file before conversion to normalize content
 
         df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame for conversion now that conversion is required
-        if "arff" in needed_targets:  # If ARFF format is required for output after checks
+        if "arff" in needed_targets:  # If ARFF format is required for output after verifies
             convert_to_arff(df, os.path.join(str(dest_dir), f"{name}.arff"))  # Convert and save as ARFF format
-        if "csv" in needed_targets:  # If CSV format is required for output after checks
+        if "csv" in needed_targets:  # If CSV format is required for output after verifies
             convert_to_csv(df, os.path.join(str(dest_dir), f"{name}.csv"))  # Convert and save as CSV format
-        if "parquet" in needed_targets:  # If Parquet format is required for output after checks
+        if "parquet" in needed_targets:  # If Parquet format is required for output after verifies
             convert_to_parquet(df, os.path.join(str(dest_dir), f"{name}.parquet"))  # Convert and save as Parquet format
-        if "txt" in needed_targets:  # If TXT format is required for output after checks
+        if "txt" in needed_targets:  # If TXT format is required for output after verifies
             convert_to_txt(df, os.path.join(str(dest_dir), f"{name}.txt"))  # Convert and save as TXT format
 
         print()  # Print a newline for better readability between files in terminal output
@@ -1791,7 +1791,7 @@ def perform_conversions(df, formats_list: Optional[list], dest_dir: Optional[str
 
     formats = formats_list or []  # Ensure formats is a list to avoid issues with None
     dest_dir_str = str(dest_dir) if dest_dir is not None else ""  # Ensure os.path.join receives a string
-    dest_dir_str = os.path.abspath(os.path.normpath(dest_dir_str))  # Normalize and absolutize dest_dir to ensure consistent writes and space checks
+    dest_dir_str = os.path.abspath(os.path.normpath(dest_dir_str))  # Normalize and absolutize dest_dir to ensure consistent writes and space verifies
     name_str = str(name) if name is not None else ""  # Ensure filename component is a string
 
     dir_created = os.path.exists(dest_dir_str)  # Determine whether destination directory already exists
