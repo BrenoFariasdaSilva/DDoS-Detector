@@ -1567,7 +1567,7 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
         if "txt" in needed_targets:  # If TXT format is required for output after verifies
             convert_to_txt(df, os.path.join(str(dest_dir), f"{name}.txt"))  # Convert and save as TXT format
 
-        output_paths_str = ", ".join(os.path.join(str(dest_dir), f"{name}.{fmt}") for fmt in needed_targets)  # Build comma-separated output paths string for Telegram success notification
+        output_paths_str = ", ".join(os.path.relpath(os.path.join(str(dest_dir), f"{name}.{fmt}"), start=str(dest_dir)) for fmt in needed_targets)  # Build comma-separated relative output paths string for Telegram success notification
         send_telegram_message(TELEGRAM_BOT, f"Converted: {file} | Output formats: {', '.join(needed_targets)} | Output paths: {output_paths_str}")  # Notify successful conversion via Telegram with original filename, output formats, and output paths
 
         print()  # Print a newline for better readability between files in terminal output
@@ -1798,7 +1798,7 @@ def process_single_input_file(idx: int, params: dict) -> None:
         df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame for conversion now that conversion is required
 
         perform_conversions(df, needed_targets, dest_dir, name)  # Perform only the conversions that were detected as necessary
-        output_paths_str = ", ".join(os.path.join(str(dest_dir), f"{name}.{fmt}") for fmt in needed_targets)  # Build comma-separated output paths string for Telegram success notification
+        output_paths_str = ", ".join(os.path.relpath(os.path.join(str(dest_dir), f"{name}.{fmt}"), start=str(dest_dir)) for fmt in needed_targets)  # Build comma-separated relative output paths string for Telegram success notification
         send_telegram_message(TELEGRAM_BOT, f"Converted: {file} | Output formats: {', '.join(needed_targets)} | Output paths: {output_paths_str}")  # Notify successful conversion via Telegram with original filename, output formats, and output paths
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert for per-file failures
         print(str(e))  # Print error to terminal for server logs in case of per-file failure
