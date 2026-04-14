@@ -1544,7 +1544,7 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
             return  # Return early when the file is already standardized and no conversions are necessary
 
         size_str = compute_file_size_str(str(input_path))  # Retrieve formatted file size string for current input_path now that conversion is required
-        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path} ({size_str})")  # Notify progress via Telegram before processing with file size
+        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path} ({size_str}) | Input format: {orig_format}")  # Notify progress via Telegram before processing with file size and detected input format
 
         if pbar is not None:  # Verify progress bar instance exists before calling set_description
             try:  # Attempt to compute a relative path for the description to show in pbar
@@ -1566,6 +1566,9 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
             convert_to_parquet(df, os.path.join(str(dest_dir), f"{name}.parquet"))  # Convert and save as Parquet format
         if "txt" in needed_targets:  # If TXT format is required for output after verifies
             convert_to_txt(df, os.path.join(str(dest_dir), f"{name}.txt"))  # Convert and save as TXT format
+
+        output_paths_str = ", ".join(os.path.join(str(dest_dir), f"{name}.{fmt}") for fmt in needed_targets)  # Build comma-separated output paths string for Telegram success notification
+        send_telegram_message(TELEGRAM_BOT, f"Converted: {file} | Output formats: {', '.join(needed_targets)} | Output paths: {output_paths_str}")  # Notify successful conversion via Telegram with original filename, output formats, and output paths
 
         print()  # Print a newline for better readability between files in terminal output
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -1786,7 +1789,7 @@ def process_single_input_file(idx: int, params: dict) -> None:
             return  # Return early when file is already standardized and no conversion is required
 
         size_str = compute_file_size_str(str(input_path))  # Retrieve formatted file size string for current input_path now that conversion is required
-        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path} ({size_str})")  # Notify progress via Telegram for current file with file size
+        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path} ({size_str}) | Input format: {orig_format}")  # Notify progress via Telegram for current file with file size and detected input format
 
         dir_created = create_destination_if_missing(dest_dir, os.path.exists(dest_dir))  # Verify and create destination directory lazily then update flag using normalized path
         cleaned_path = os.path.join(dest_dir, f"{name}{ext}")  # Path for saving the cleaned file prior to conversion using normalized dest_dir
@@ -1795,6 +1798,8 @@ def process_single_input_file(idx: int, params: dict) -> None:
         df = load_dataset(cleaned_path)  # Load the cleaned dataset into a DataFrame for conversion now that conversion is required
 
         perform_conversions(df, needed_targets, dest_dir, name)  # Perform only the conversions that were detected as necessary
+        output_paths_str = ", ".join(os.path.join(str(dest_dir), f"{name}.{fmt}") for fmt in needed_targets)  # Build comma-separated output paths string for Telegram success notification
+        send_telegram_message(TELEGRAM_BOT, f"Converted: {file} | Output formats: {', '.join(needed_targets)} | Output paths: {output_paths_str}")  # Notify successful conversion via Telegram with original filename, output formats, and output paths
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert for per-file failures
         print(str(e))  # Print error to terminal for server logs in case of per-file failure
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram when per-file failure occurs
@@ -2078,7 +2083,7 @@ def main():
         if input_paths is None or output_path is None:  # If either resolution failed
             return  # Exit early when inputs/outputs are invalid
 
-        send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter started for input: {', '.join(input_paths)} and output: {output_path} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")  # Notify start via Telegram for all inputs
+        send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter started for input: {', '.join(input_paths)} and output: {output_path} at {start_time.strftime('%Y-%m-%d %H:%M:%S')} | Input formats: {', '.join(resolve_input_file_formats(None))} | Output formats: {', '.join(resolve_output_file_formats(None))}")  # Notify start via Telegram with input paths, output directory, start time, input formats, and output formats
 
         configure_verbose_mode(args)  # Enable verbose mode if requested
 
