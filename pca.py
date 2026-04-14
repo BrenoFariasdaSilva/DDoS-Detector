@@ -295,7 +295,7 @@ def validate_config_structure(config: dict) -> None:
     Validate the merged configuration structure and raise ValueError on issues.
 
     This enforces the required pca.export.results_csv_columns presence and
-    performs light type/range checks.
+    performs light type/range verifications.
 
     :param config: Merged configuration dictionary to validate.
     :return: None
@@ -346,7 +346,7 @@ def resolve_config_file_path(cli_config_arg) -> str | None:
             return cli_config_arg  # Return the CLI-specified config path directly
 
         candidate = Path(__file__).parent / "config.yaml"  # Auto-detect config.yaml in script directory
-        candidate_example = Path(__file__).parent / "config.yaml.example"  # Check for example config file as fallback
+        candidate_example = Path(__file__).parent / "config.yaml.example"  # Verify for example config file as fallback
 
         if candidate.exists():  # Verify if the primary config file exists
             return str(candidate)  # Return the primary config file path
