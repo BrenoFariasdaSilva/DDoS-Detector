@@ -325,7 +325,7 @@ def send_telegram_message(bot, messages, condition=True):
 
     :param bot: TelegramBot instance
     :param messages: List of messages to send
-    :param condition: Additional condition to check before sending
+    :param condition: Additional condition to verify before sending
     :return: None
     """
 
