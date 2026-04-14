@@ -54,7 +54,7 @@ import datetime  # For getting the current date and time
 import os  # For running a command in the terminal
 import platform  # For getting the operating system name
 import re  # For splitting comment text while preserving whitespace
-import string  # For punctuation classification used in token checks
+import string  # For punctuation classification used in token analysis
 import sys  # For system-specific parameters and functions
 import tokenize  # For safe Python token parsing
 from colorama import Style  # For coloring the terminal
@@ -195,7 +195,7 @@ def build_string_spans(tokens) -> list:
 
     string_spans = []  # Initialize list for string spans
     for t in tokens:  # Iterate through all tokens
-        if t.type == tokenize.STRING:  # Check if token is a string
+        if t.type == tokenize.STRING:  # Verifies if token is a string
             srow, scol = t.start  # Get start row and column
             erow, ecol = t.end  # Get end row and column
             string_spans.append((srow, scol, erow, ecol))  # Append span to list
@@ -204,7 +204,7 @@ def build_string_spans(tokens) -> list:
 
 def is_comment_in_string(tok, string_spans: list) -> bool:
     """
-    Check if a comment token is located inside a string literal.
+    Verifies if a comment token is located inside a string literal.
 
     :param tok: The comment token.
     :param string_spans: List of string spans.
@@ -213,14 +213,14 @@ def is_comment_in_string(tok, string_spans: list) -> bool:
 
     crow, ccol = tok.start  # Get comment's row and column
     for srow, scol, erow, ecol in string_spans:  # Iterate through string spans
-        if srow <= crow <= erow:  # Check if comment row is within string span
+        if srow <= crow <= erow:  # Verifies if comment row is within string span
             if srow == erow:  # Single-line string
-                if scol <= ccol < ecol:  # Check if column is within span
+                if scol <= ccol < ecol:  # Verifies if column is within span
                     return True  # Comment is inside string
             else:  # Multi-line string
                 if (srow < crow < erow) or (crow == srow and ccol >= scol) or (
                     crow == erow and ccol < ecol
-                ):  # Check conditions for multi-line
+                ):  # Verifies conditions for multi-line
                     return True  # Comment is inside string
     return False  # Comment is not inside string
 
@@ -325,7 +325,7 @@ def to_sentence_case(text: str) -> str:
 
     parts = re.split(r"(\s+)", normalized)  # Split text preserving whitespace separators
 
-    strip_chars = "".join(ch for ch in string.punctuation if ch not in ("_", "-"))  # Punctuation to strip for core checks
+    strip_chars = "".join(ch for ch in string.punctuation if ch not in ("_", "-"))  # Punctuation to strip for core analysis (preserve underscores and hyphens)
 
     out_parts = []  # Collect transformed parts preserving original separators
     first_natural_found = False  # Track whether first natural-language word was already processed
@@ -365,7 +365,7 @@ def process_comment_line(original_line: str, tok_string: str, start_col: int) ->
     prefix = original_line[:hash_idx]  # Get text before "#"
     suffix = original_line[hash_idx + len(tok_string) :]  # Get text after the comment
 
-    is_full_line = original_line.strip().startswith("#")  # Check if it's a full-line comment
+    is_full_line = original_line.strip().startswith("#")  # Verifies if it's a full-line comment
 
     if is_full_line:  # For full-line comments
         new_line = prefix + standardized + suffix  # Replace comment
