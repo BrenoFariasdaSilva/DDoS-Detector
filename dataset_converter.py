@@ -2083,11 +2083,11 @@ def main():
         if input_paths is None or output_path is None:  # If either resolution failed
             return  # Exit early when inputs/outputs are invalid
 
-        send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter started for input: {', '.join(input_paths)} and output: {output_path} | Input formats: {', '.join(resolve_input_file_formats(None))} | Output formats: {', '.join(resolve_output_file_formats(None))} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")  # Notify start via Telegram with input paths, output directory, start time, input formats, and output formats
-
         configure_verbose_mode(args)  # Enable verbose mode if requested
 
         configure_input_output_formats(args)  # Update DEFAULTS with input and output file formats from CLI
+
+        send_telegram_message(TELEGRAM_BOT, f"Multi-Format Dataset Converter started for input: {', '.join(input_paths)} and output: {output_path} | Input formats: {', '.join(resolve_input_file_formats(None))} | Output formats: {', '.join(resolve_output_file_formats(None))} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")  # Notify start via Telegram with input paths, output directory, start time, input formats, and output formats
 
         output_formats = args.output_file_formats if args.output_file_formats else (args.formats if args.formats else None)  # Preference: --output-file-formats > --formats > config fallback
 
