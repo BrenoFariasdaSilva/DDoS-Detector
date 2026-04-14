@@ -133,7 +133,7 @@ class FunctionASTVisitor(ast.NodeVisitor):
         :return: None
         """
         
-        if node.name != "__init__"  :  # Exclude __init__ methods from unused check
+        if node.name != "__init__"  :  # Exclude __init__ methods from unused verification
             self.defined_funcs.append(node.name)  # Record the defined function name
         self.generic_visit(node)  # Continue traversing child nodes
 
@@ -141,7 +141,7 @@ class FunctionASTVisitor(ast.NodeVisitor):
         """
         Visits each class definition node in the AST.
 
-        Checks if the class has an __init__ method and records the class name
+        Verifies if the class has an __init__ method and records the class name
         in classes_with_init set.
 
         :param node: ast.ClassDef node representing a class definition
