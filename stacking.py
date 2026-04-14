@@ -1467,7 +1467,7 @@ def extract_class_metrics(y_true, y_pred):
         report = classification_report(y_true, y_pred, output_dict=True, zero_division=0)  # Generate report dict
 
         if not isinstance(report, dict):  # Ensure report has mapping semantics
-            raise TypeError("classification_report did not return a dict as expected")  # Defensive type check
+            raise TypeError("classification_report did not return a dict as expected")  # Defensive type verification
 
         per_class = {}  # Prepare per-class metrics mapping
         for k, v in report.items():  # Iterate over report items (class labels and metrics)
