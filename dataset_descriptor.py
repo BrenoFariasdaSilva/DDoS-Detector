@@ -34,7 +34,7 @@ Behavioral notes & guarantees
         proportionally using a fractional remainder method.
     - Numeric extraction tries `select_dtypes(include=["number"])` and
         attempts coercion of object/string columns to numeric when needed.
-    - The script performs disk-space checks before writing large outputs.
+    - The script performs disk-space verification before writing large outputs.
     - The generator writes one cross-dataset CSV per dataset group and
         normalizes rows so the file's group appears as "Dataset A".
 
@@ -480,8 +480,8 @@ def collect_matching_files(
         resolved_ignore_files = ignore_files if ignore_files is not None else list(cfg.get("paths", {}).get("ignore_files", []) or [])
         resolved_ignore_dirs = ignore_dirs if ignore_dirs is not None else list(cfg.get("execution", {}).get("ignore_dirs", ["Cache", "Data_Separability", "Dataset_Description", "Feature_Analysis"]) or ["Cache", "Data_Separability", "Dataset_Description", "Feature_Analysis"])
 
-        normalized_ignore_files: set[str] = {os.path.normcase(f) for f in (resolved_ignore_files or [])}  # Create normalized set of ignored filenames for fast membership checks
-        normalized_ignore_dirs: set[str] = {os.path.normcase(d) for d in (resolved_ignore_dirs or [])}  # Create normalized set of ignored directory names for fast membership checks
+        normalized_ignore_files: set[str] = {os.path.normcase(f) for f in (resolved_ignore_files or [])}  # Create normalized set of ignored filenames for fast membership verification
+        normalized_ignore_dirs: set[str] = {os.path.normcase(d) for d in (resolved_ignore_dirs or [])}  # Create normalized set of ignored directory names for fast membership verification
 
         matching_files = []  # List to store matching file paths
 
@@ -1364,7 +1364,7 @@ def compute_class_aware_allocations(labels, sample_size, min_class_size=50):
             allocations = allocate_remaining_budget(counts, allocations, remaining_budget)  # Distribute remaining budget
 
         total_alloc = sum(allocations.values())  # Total allocated samples
-        if total_alloc > sample_size:  # Safety check to reduce overallocation
+        if total_alloc > sample_size:  # Safety verification to reduce overallocation
             sorted_by_alloc = sorted(
                 allocations.items(), key=lambda x: x[1], reverse=True
             )  # Sort classes by allocation descending
@@ -1489,9 +1489,9 @@ def initialize_and_fit_tsne(X, n_components=2, perplexity=30, n_iter=1000, rando
             "random_state": random_state,
             "init": "pca",
         }  # Base t-SNE args
-        if "n_iter" in sig:  # Check for n_iter parameter
+        if "n_iter" in sig:  # Verifies for n_iter parameter
             tsne_kwargs["n_iter"] = n_iter  # Set n_iter if supported
-        elif "max_iter" in sig:  # Check for max_iter parameter
+        elif "max_iter" in sig:  # Verifies for max_iter parameter
             tsne_kwargs["max_iter"] = n_iter  # Set max_iter if supported
         else:  # Neither parameter supported
             tsne_kwargs["max_iter"] = n_iter  # Default to max_iter
@@ -1761,7 +1761,7 @@ def generate_tsne_plot(
             X = scale_features(numeric_df)  # Scale features for t-SNE
 
             n_rows = X.shape[0]  # Number of rows after downsampling
-            if n_rows <= max(3, int(perplexity) + 1):  # Check t-SNE feasibility
+            if n_rows <= max(3, int(perplexity) + 1):  # Verifies t-SNE feasibility
                 return None, None  # Abort if too few samples for t-SNE
 
             output_dir = resolve_tsne_output_directory(filepath, output_dir, config)  # Resolve output directory from explicit path or config and create it
@@ -2384,9 +2384,9 @@ def apply_zebra_style(df):
 
 def upscale_image_if_needed(path, fallback=False):
     """
-    This function checks the dimensions of the image at the given path and upscales it if either dimension is below 4k (3840x2160).
+    This function verifies the dimensions of the image at the given path and upscales it if either dimension is below 4k (3840x2160).
     
-    :param path: Absolute path to the image file to check and potentially upscale
+    :param path: Absolute path to the image file to verify and potentially upscale
     :param fallback: Boolean indicating if this upscale is being attempted after a fallback export (for logging purposes)
     :return: None
     """
@@ -2604,7 +2604,7 @@ def export_dataframe_image(styled_df, output_path):
     except Exception as e:  # If export fails, log warning and continue without crashing
         try:  # Try to import Playwright-specific TimeoutError for precise detection
             from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError  # Optional import of Playwright TimeoutError for specific handling
-        except Exception:  # If import fails, ensure variable is defined for downstream checks
+        except Exception:  # If import fails, ensure variable is defined for downstream verification logic
             PlaywrightTimeoutError = None  # Set to None when Playwright TimeoutError cannot be imported
         if PlaywrightTimeoutError is not None and isinstance(e, PlaywrightTimeoutError):  # Verify if exception is Playwright TimeoutError
             print(f"{BackgroundColors.YELLOW}[WARNING] Playwright screenshot timeout while exporting {BackgroundColors.CYAN}{output_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}")  # Warn when Playwright timeout occurs with colored output
