@@ -577,6 +577,11 @@ def get_dataset_files(directory=None):
                     if os.path.splitext(file)[1].lower() in allowed_exts:  # Verify if the file has an allowed input format extension
                         dataset_files.append(os.path.join(dirpath, file))  # Append full file path to results list
         
+        try:  # Sort the discovered dataset files alphabetically in a case-insensitive manner for deterministic order
+            dataset_files = sorted(dataset_files, key=lambda p: str(p).lower())  # Sort paths case-insensitively
+        except Exception:  # If case-insensitive sorting fails for any reason, fall back to regular sorting
+            dataset_files = sorted(dataset_files, key=lambda p: str(p))  # Sort paths with default string comparison
+
         return dataset_files  # Return collected dataset file paths
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -601,6 +606,11 @@ def scan_top_level_for_supported_files(input_directory: str) -> list:
                 candidate = os.path.join(input_directory, entry)  # Build candidate full path
                 if os.path.isfile(candidate) and os.path.splitext(entry)[1].lower() in supported_exts:  # Verify file and extension
                     direct_files.append(candidate)  # Add matching file to direct_files
+
+        try:  # Sort the directly found files alphabetically in a case-insensitive manner for deterministic order
+            direct_files = sorted(direct_files, key=lambda p: str(p).lower())  # Sort paths case-insensitively
+        except Exception:  # If case-insensitive sorting fails for any reason, fall back to regular sorting
+            direct_files = sorted(direct_files, key=lambda p: str(p))  # Sort paths with default string comparison
         return direct_files  # Return the directly found files (may be empty)
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -646,14 +656,26 @@ def resolve_dataset_files(input_directory):
 
         files = get_dataset_files(input_directory)  # Attempt to recursively discover dataset files under the directory
         if files:  # If recursive discovery returned any files
+            try:  # Sort the discovered files alphabetically in a case-insensitive manner for deterministic order
+                files = sorted(files, key=lambda p: str(p).lower())  # Sort paths case-insensitively
+            except Exception:  # If case-insensitive sorting fails for any reason, fall back to regular sorting
+                files = sorted(files, key=lambda p: str(p))  # Sort paths with default string comparison
             return files  # Return discovered files immediately
 
         direct_files = scan_top_level_for_supported_files(input_directory)  # Scan the directory itself for supported extensions
         if direct_files:  # If direct files were found in the top-level directory
+            try:  # Sort the directly found files alphabetically in a case-insensitive manner for deterministic order
+                direct_files = sorted(direct_files, key=lambda p: str(p).lower())  # Sort paths case-insensitively
+            except Exception:  # If case-insensitive sorting fails for any reason, fall back to regular sorting
+                direct_files = sorted(direct_files, key=lambda p: str(p))  # Sort paths with default string comparison
             return direct_files  # Return the directly found files
 
         child_files = scan_immediate_subdirs_for_files(input_directory)  # Scan each immediate subdirectory separately to handle unusual mounts
         if child_files:  # If any files were discovered in an immediate child directory
+            try:  # Sort the child-discovered files alphabetically in a case-insensitive manner for deterministic order
+                child_files = sorted(child_files, key=lambda p: str(p).lower())  # Sort paths case-insensitively
+            except Exception:  # If case-insensitive sorting fails for any reason, fall back to regular sorting
+                child_files = sorted(child_files, key=lambda p: str(p))  # Sort paths with default string comparison
             return child_files  # Return the first non-empty child discovery
 
         return []  # Return empty list when no dataset files could be located
@@ -1707,6 +1729,12 @@ def gather_dataset_files(input_directory: str) -> tuple:
     """
 
     dataset_files = resolve_dataset_files(input_directory)  # Get all dataset files from the input directory
+
+    try:  # Attempt to sort files case-insensitively for better user experience on case-insensitive file systems
+        dataset_files = sorted(dataset_files, key=lambda p: str(p).lower())  # Sort files case-insensitively by their string representation for consistent ordering across platforms
+    except Exception:  # Fallback to regular sorting if case-insensitive sorting fails for any reason
+        dataset_files = sorted(dataset_files, key=lambda p: str(p))  # Sort files using regular string representation as a fallback
+
     len_dataset_files = len(dataset_files)  # Get the number of dataset files found
     
     return dataset_files, len_dataset_files  # Return both the list and its length
