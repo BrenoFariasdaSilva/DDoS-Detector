@@ -561,7 +561,7 @@ def resource_monitor_loop(stop_event: threading.Event, config: Optional[Dict] = 
         wd = cfg.get("watchdog", {}) if isinstance(cfg, dict) else {}  # Get watchdog config dict
         max_ram = wd.get("max_ram_percent", 100)  # Percent RAM usage considered critical (default 100%)
         max_cpu = wd.get("max_cpu_percent", 100)  # Percent CPU usage considered critical (default 100%)
-        check_interval = wd.get("check_interval_s", 5)  # Seconds between checks
+        check_interval = wd.get("check_interval_s", 5)  # Seconds between verifying resource usage (default 5 seconds)
         memory_threshold_duration_seconds = wd.get("memory_threshold_duration_seconds", wd.get("critical_duration_s", 3600))  # Seconds memory usage must remain above threshold before termination (default 30 minutes)
 
         high_usage_start_timestamp = None  # Timestamp when sustained high memory usage begins
@@ -686,7 +686,7 @@ def build_default_runtime_config() -> Dict:
         "watchdog": {  # Resource watcher configuration
             "max_ram_percent": 100,  # Percent RAM usage considered critical (default 100%)
             "max_cpu_percent": 100,  # Percent CPU usage considered critical (default 100%)
-            "check_interval_s": 5,  # Seconds between checks
+            "check_interval_s": 5,  # Seconds between verifying resource usage (default 5 seconds)
             "memory_threshold_duration_seconds": 1800,  # Seconds memory usage must remain above threshold before termination (default 30 minutes)
         },
         "dataset": {  # Dataset configuration
@@ -2973,7 +2973,7 @@ def resolve_checkpoint_dir_and_prefix(args, config: Dict, epoch: int) -> tuple:
 
     :param args: Parsed arguments namespace with csv_path, out_dir, and save_every.
     :param config: Configuration dictionary with dataset directories for disk space verification.
-    :param epoch: Current epoch index (zero-based) for periodic save check.
+    :param epoch: Current epoch index (zero-based) for periodic save verification.
     :return: Tuple of (checkpoint_dir, checkpoint_prefix, skip_checkpoint).
     """
 
