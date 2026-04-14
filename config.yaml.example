@@ -678,11 +678,11 @@ dataset_converter:
     UNSW-NB15-Dataset:
       - "./Datasets/UNSW-NB15-Dataset/"
   ignore_dirs:
-    - "Classifiers",
-    - "Classifiers_Hyperparameters",
-    - "Converted",
-    - "Data_Separability",
-    - "Dataset_Description",
-    - "Feature_Analysis",
-    - "Results", # Directory names to ignore during discovery
+    - "Classifiers"
+    - "Classifiers_Hyperparameters"
+    - "Converted"
+    - "Data_Separability"
+    - "Dataset_Description"
+    - "Feature_Analysis"
+    - "Results" # Directory names to ignore during discovery
   ignore_files: ["results", "summary"] # Filename substrings to ignore
