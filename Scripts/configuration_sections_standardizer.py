@@ -209,7 +209,7 @@ def separate_sections(config_dict: object, py_list: list) -> tuple:
     :return: Tuple containing (general_sections_dict, python_sections_dict).
     """
 
-    py_set = set(py_list)  # Convert list of python names to a set for fast membership checks
+    py_set = set(py_list)  # Convert list of python names to a set for fast membership verification
     general = OrderedDict()  # Initialize ordered dict for general sections
     python = OrderedDict()  # Initialize ordered dict for python-specific sections
     if not isinstance(config_dict, dict):  # Verify config_dict is a mapping
