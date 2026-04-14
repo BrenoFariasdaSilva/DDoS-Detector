@@ -627,7 +627,7 @@ def get_files_to_process(directory_path, file_extension=".csv"):
             item_path = os.path.join(directory_path, item)  # Absolute path
             filename = os.path.basename(item_path)  # Extract just the filename
 
-            if any(ignore == filename or ignore == item_path for ignore in IGNORE_FILES):  # Check if file is in ignore list
+            if any(ignore == filename or ignore == item_path for ignore in IGNORE_FILES):  # Verifies if file is in ignore list
                 verbose_output(
                     f"{BackgroundColors.YELLOW}Ignoring {BackgroundColors.CYAN}{filename}{BackgroundColors.YELLOW} (listed in IGNORE_FILES){Style.RESET_ALL}"
                 )  # Verbose: ignoring file
@@ -1088,7 +1088,7 @@ def is_fully_processed(csv_path, models):
         if not os.path.exists(results_file):  # If results file doesn't exist
             return False  # Not fully processed
         
-        try:  # Try to check results file
+        try:  # Try to verify results file
             results_df = pd.read_csv(results_file)  # Load results CSV
             
             file_results = results_df[results_df["base_csv"] == base_filename]  # Filter by filename
@@ -1109,7 +1109,7 @@ def is_fully_processed(csv_path, models):
         
         except Exception as e:  # If checking fails
             verbose_output(
-                f"{BackgroundColors.YELLOW}Warning: Failed to check results file: {e}{Style.RESET_ALL}"
+                f"{BackgroundColors.YELLOW}Warning: Failed to verify results file: {e}{Style.RESET_ALL}"
             )
             return False  # Assume not processed
     except Exception as e:
@@ -1138,7 +1138,7 @@ def save_to_cache(csv_path, result_entry):
             for k, v in list(save_entry.items()):  # Iterate over key-value pairs
                 if v is None:  # Skip None values
                     continue  # Continue to next item
-                key_l = k.lower()  # Lowercase key for checks
+                key_l = k.lower()  # Lowercase key for verification
                 if "time" in key_l or "execution" in key_l or k in ("params", "hyperparameters", "hardware"):  # Skip time/execution/hardware/params fields
                     continue  # Continue to next item
                 try:  # Try to truncate value
@@ -1245,7 +1245,7 @@ def get_thundersvm_estimator():
         try:  # Try to run nvidia-smi
             res = subprocess.run(
                 ["nvidia-smi", "-L"], capture_output=True, text=True, check=False
-            )  # Run nvidia-smi to check for GPUs
+            )  # Run nvidia-smi to verify GPU availability
             if res.returncode == 0 and res.stdout.strip():  # If command succeeded and output is non-empty
                 gpu_available = True  # GPU is available
         except Exception:  # Any error means no GPU
@@ -1634,7 +1634,7 @@ def compute_metrics_from_predictions(model, y_true, y_pred, X=None):
             pass  # Ignore if confusion-based metrics fail
 
         try:  # Attempt to compute ROC-AUC if possible
-            if X is not None and hasattr(model, "predict_proba"):  # Check if model supports predict_proba
+            if X is not None and hasattr(model, "predict_proba"):  # Verifies if model supports predict_proba
                 y_pred_proba = model.predict_proba(X)  # Get predicted probabilities
                 roc_auc = roc_auc_score(y_true, y_pred_proba, multi_class="ovr", average="weighted")  # Compute ROC-AUC
                 metrics["roc_auc_score"] = float(roc_auc)  # Store ROC-AUC
@@ -2066,7 +2066,7 @@ def process_cached_combinations(
     Process cached results and filter combinations that need to be tested.
     
     :param model_name: Name of the model being optimized
-    :param param_combinations: List of all parameter combinations to check
+    :param param_combinations: List of all parameter combinations to verifies
     :param keys: Parameter names
     :param cache_dict: Dictionary of cached results
     :param best_score: Current best F1 score
@@ -2809,7 +2809,7 @@ def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str
         parent = out_p.parent  # Get parent directory
         if not parent.exists():  # If parent doesn't exist
             parent.mkdir(parents=True, exist_ok=True)  # Try to create it
-        if not os.access(str(parent), os.W_OK):  # Check parent directory is writable
+        if not os.access(str(parent), os.W_OK):  # Verifies if parent directory is writable
             raise PermissionError(f"Directory not writable: {parent}")  # Raise on non-writable directory
         styled = apply_zebra_style(df)  # Create styled DataFrame with zebra stripes
         export_dataframe_image(styled, out_p)  # Export styled DataFrame to PNG
