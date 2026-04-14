@@ -125,7 +125,7 @@ def get_default_config() -> dict:  # Return default configuration for dataset_co
                 "Feature_Analysis",
                 "Results",
             ],  # Directories to ignore during discovery
-            "ignore_files": [],  # File substrings to ignore
+            "ignore_files": ["results", "summary"],  # Filename substrings to ignore
         }
     }
 
@@ -502,6 +502,8 @@ def get_dataset_files(directory=None):
                 "Results",
             ],
         )  # Get ignore directories list from configuration (default expanded)
+
+        ignore_files = cfg.get("ignore_files", ["results", "summary"]) or ["results", "summary"]  # Get ignore filename substrings from configuration (default to ["results", "summary"])
         
         if directory:  # If a specific directory argument provided
             roots = [directory]  # Use the provided directory as single root to scan
@@ -520,12 +522,15 @@ def get_dataset_files(directory=None):
             if not root:  # If root is empty string or None
                 continue  # Skip empty root entries safely
             
-            for r, dirs, files in os.walk(root):  # Walk the directory tree starting at root
-                if any(ignore_word.lower() in r.lower() for ignore_word in ignore_list):  # If the current path contains ignored directory names
+            for dirpath, dirs, files in os.walk(root):  # Walk the directory tree starting at root
+                if any(ignore_word.lower() in dirpath.lower() for ignore_word in ignore_list):  # If the current path contains ignored directory names
                     continue  # Skip ignored directories
                 for file in files:  # Iterate files in the current directory
-                    if os.path.splitext(file)[1].lower() in [".arff", ".csv", ".txt", ".parquet"]:  # If file extension is supported
-                        dataset_files.append(os.path.join(r, file))  # Append full file path to results list
+                    lower_filename = file.lower()  # Lowercase filename for case-insensitive comparison
+                    if any(ignore_sub.lower() in lower_filename for ignore_sub in ignore_files):  # If the filename contains any of the ignored substrings
+                        continue  # Skip files that match ignore patterns
+                    if os.path.splitext(file)[1].lower() in [".arff", ".csv", ".txt", ".parquet"]:  # Verify if the file has a supported dataset extension
+                        dataset_files.append(os.path.join(dirpath, file))  # Append full file path to results list
         
         return dataset_files  # Return collected dataset file paths
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
