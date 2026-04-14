@@ -116,7 +116,15 @@ def get_default_config() -> dict:  # Return default configuration for dataset_co
             "verbose": False,  # Whether to enable verbose messages
             "input_directory": "./Input",  # Default input directory
             "output_directory": "./Output",  # Default output directory
-            "ignore_dirs": ["Results"],  # Directories to ignore
+            "ignore_dirs": [
+                "Classifiers",
+                "Classifiers_Hyperparameters",
+                "Converted",
+                "Data_Separability",
+                "Dataset_Description",
+                "Feature_Analysis",
+                "Results",
+            ],  # Directories to ignore during discovery
             "ignore_files": [],  # File substrings to ignore
         }
     }
@@ -482,7 +490,18 @@ def get_dataset_files(directory=None):
 
         dataset_files = []  # List to store discovered dataset file paths
         cfg = DEFAULTS.get("dataset_converter", {}) if DEFAULTS else {}  # Get dataset_converter settings from DEFAULTS
-        ignore_list = cfg.get("ignore_dirs", ["Results"])  # Get ignore directories list from configuration
+        ignore_list = cfg.get(
+            "ignore_dirs",
+            [
+                "Classifiers",
+                "Classifiers_Hyperparameters",
+                "Converted",
+                "Data_Separability",
+                "Dataset_Description",
+                "Feature_Analysis",
+                "Results",
+            ],
+        )  # Get ignore directories list from configuration (default expanded)
         
         if directory:  # If a specific directory argument provided
             roots = [directory]  # Use the provided directory as single root to scan
