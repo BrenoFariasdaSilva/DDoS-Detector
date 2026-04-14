@@ -241,7 +241,7 @@ def is_ignored(path: str) -> bool:
     """
     
     parts = set(Path(path).parts)  # Get the path parts as a set
-    return bool(parts.intersection(IGNORE_DIRS))  # Check if any part intersects with ignored directories
+    return bool(parts.intersection(IGNORE_DIRS))  # Verifies if any part intersects with ignored directories
 
 
 def collect_python_files(root_dir: str) -> List[str]:
