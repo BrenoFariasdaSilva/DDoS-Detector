@@ -114,8 +114,10 @@ def get_default_config() -> dict:  # Return default configuration for dataset_co
     return {
         "dataset_converter": {
             "verbose": False,  # Whether to enable verbose messages
-            "input_directory": "./Input",  # Default input directory
-            "output_directory": "./Output",  # Default output directory
+            "input_file_formats": ["arff", "csv", "parquet", "txt"],  # Input formats to discover during dataset scanning
+            "output_file_formats": ["arff", "csv", "parquet", "txt"],  # Output formats to generate during conversion
+            "input_directory": "./Datasets/",  # Default input directory
+            "output_directory": "./Converted",  # Default output directory
             "ignore_dirs": [
                 "Classifiers",
                 "Classifiers_Hyperparameters",
@@ -273,7 +275,7 @@ def parse_cli_arguments():
             "-i", "--input", type=str, help="Input path (file or directory). If not provided, uses ./Input"
         )  # Input path argument
         parser.add_argument(
-            "-o", "--output", type=str, help="Output directory. If not provided, uses ./Output"
+            "-o", "--output", type=str, help="Output directory. If not provided, uses ./Converted"
         )  # Output directory argument
         parser.add_argument(
             "-f",
@@ -281,6 +283,16 @@ def parse_cli_arguments():
             type=str,
             help="Comma-separated output formats to produce (arff,csv,parquet,txt). If not provided, all formats are produced",
         )  # Output formats argument
+        parser.add_argument(
+            "--input-file-formats",
+            type=str,
+            help="Comma-separated input formats to discover (arff,csv,parquet,txt). If not provided, uses config",
+        )  # Input file formats argument
+        parser.add_argument(
+            "--output-file-formats",
+            type=str,
+            help="Comma-separated output formats to produce (arff,csv,parquet,txt). If not provided, uses config",
+        )  # Output file formats argument
         parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")  # Verbose mode flag
 
         return parser.parse_args()  # Return parsed CLI arguments
@@ -450,6 +462,37 @@ def configure_verbose_mode(args):
         raise  # Re-raise to preserve original failure semantics
 
 
+def configure_input_output_formats(args):
+    """
+    Update DEFAULTS with input and output file formats from CLI arguments.
+
+    :param args: Parsed CLI arguments.
+    :return: None
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        global DEFAULTS  # Declare that we will assign to the module-global DEFAULTS
+
+        if DEFAULTS is None:  # Verify DEFAULTS is initialized before mutation
+            DEFAULTS = get_default_config()  # Initialize DEFAULTS if not yet initialized
+
+        cfg_section = DEFAULTS.setdefault("dataset_converter", {})  # Retrieve or create the dataset_converter section in DEFAULTS
+
+        if hasattr(args, "input_file_formats") and args.input_file_formats:  # Verify if input formats were provided via CLI
+            parsed = [file.strip().lower().lstrip(".") for file in args.input_file_formats.split(",") if file.strip()]  # Parse and normalize comma-separated input formats from CLI
+            if parsed:  # Only update when parsed list is non-empty
+                cfg_section["input_file_formats"] = parsed  # Override input_file_formats in DEFAULTS with CLI-provided value
+
+        if hasattr(args, "output_file_formats") and args.output_file_formats:  # Verify if output formats were provided via CLI
+            parsed = [file.strip().lower().lstrip(".") for file in args.output_file_formats.split(",") if file.strip()]  # Parse and normalize comma-separated output formats from CLI
+            if parsed:  # Only update when parsed list is non-empty
+                cfg_section["output_file_formats"] = parsed  # Override output_file_formats in DEFAULTS with CLI-provided value
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def create_directories(directory_name):
     """
     Creates a directory if it does not exist.
@@ -504,6 +547,8 @@ def get_dataset_files(directory=None):
         )  # Get ignore directories list from configuration (default expanded)
 
         ignore_files = cfg.get("ignore_files", ["results", "summary"]) or ["results", "summary"]  # Get ignore filename substrings from configuration (default to ["results", "summary"])
+        input_fmts = resolve_input_file_formats(None)  # Resolve allowed input formats from configuration for discovery
+        allowed_exts = {"." + str(f).lower().lstrip(".") for f in input_fmts}  # Build allowed extensions set from input formats
         
         if directory:  # If a specific directory argument provided
             roots = [directory]  # Use the provided directory as single root to scan
@@ -529,7 +574,7 @@ def get_dataset_files(directory=None):
                     lower_filename = file.lower()  # Lowercase filename for case-insensitive comparison
                     if any(ignore_sub.lower() in lower_filename for ignore_sub in ignore_files):  # If the filename contains any of the ignored substrings
                         continue  # Skip files that match ignore patterns
-                    if os.path.splitext(file)[1].lower() in [".arff", ".csv", ".txt", ".parquet"]:  # Verify if the file has a supported dataset extension
+                    if os.path.splitext(file)[1].lower() in allowed_exts:  # Verify if the file has an allowed input format extension
                         dataset_files.append(os.path.join(dirpath, file))  # Append full file path to results list
         
         return dataset_files  # Return collected dataset file paths
@@ -548,7 +593,8 @@ def scan_top_level_for_supported_files(input_directory: str) -> list:
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        supported_exts = {".arff", ".csv", ".parquet", ".txt"}  # Supported file extensions set
+        input_fmts = resolve_input_file_formats(None)  # Resolve allowed input formats from configuration for discovery
+        supported_exts = {"." + str(file).lower().lstrip(".") for file in input_fmts}  # Build supported extensions set from input formats
         direct_files = []  # Container for files found directly under the directory
         if os.path.isdir(input_directory):  # Verify the path is a directory before listing
             for entry in os.listdir(input_directory):  # Iterate entries directly under the directory
@@ -639,9 +685,36 @@ def resolve_formats(formats):
         raise  # Re-raise to preserve original failure semantics
 
 
-def resolve_standardize_formats(formats_list: Optional[list]) -> list:
+def resolve_input_file_formats(formats_list: Optional[list]) -> list:
     """
-    Resolve standardize_formats from configuration and return final target formats.
+    Resolve input_file_formats from configuration and return final discovery formats.
+
+    :param formats_list: The formats requested via CLI or per-call.
+    :return: The list of input formats to allow during file discovery.
+    """
+
+    try:  # Wrap resolution to avoid raising from malformed DEFAULTS
+        cfg_section = DEFAULTS.get("dataset_converter", {}) if DEFAULTS else {}  # Retrieve dataset_converter section from DEFAULTS
+        in_formats = cfg_section.get("input_file_formats", None)  # Retrieve configured input_file_formats from config
+
+        if in_formats is None:  # If configuration does not provide input_file_formats
+            return formats_list or ["arff", "csv", "parquet", "txt"]  # Return provided formats_list or all formats as default
+
+        norm = [str(file).lower() for file in (in_formats or [])]  # Normalize configured entries to lowercase strings
+        allowed = ["arff", "csv", "parquet", "txt"]  # Allowed input formats list
+        final = [file for file in norm if file in allowed]  # Filter configured formats to allowed set
+
+        if not final:  # If no valid configured formats remain after filtering
+            return formats_list or ["arff", "csv", "parquet", "txt"]  # Fallback to all formats when config invalid or empty
+
+        return final  # Return the configured list of input formats
+    except Exception:  # Fallback on any unexpected error during resolution
+        return formats_list or ["arff", "csv", "parquet", "txt"]  # Return provided formats_list or all formats on error
+
+
+def resolve_output_file_formats(formats_list: Optional[list]) -> list:
+    """
+    Resolve output_file_formats from configuration and return final target formats.
 
     :param formats_list: The formats requested via CLI or per-call.
     :return: The list of formats to actually generate.
@@ -649,19 +722,19 @@ def resolve_standardize_formats(formats_list: Optional[list]) -> list:
 
     try:  # Wrap resolution to avoid raising from malformed DEFAULTS
         cfg_section = DEFAULTS.get("dataset_converter", {}) if DEFAULTS else {}  # Retrieve dataset_converter section from DEFAULTS
-        std_formats = cfg_section.get("standardize_formats", None)  # Retrieve configured standardize_formats from config
-        
-        if std_formats is None:  # If configuration does not provide standardize_formats
+        out_formats = cfg_section.get("output_file_formats", None)  # Retrieve configured output_file_formats from config
+
+        if out_formats is None:  # If configuration does not provide output_file_formats
             return formats_list or []  # Return provided formats_list or empty list when not configured
-        
-        norm = [str(x).lower() for x in (std_formats or [])]  # Normalize configured entries to lowercase strings
+
+        norm = [str(file).lower() for file in (out_formats or [])]  # Normalize configured entries to lowercase strings
         allowed = ["arff", "csv", "parquet", "txt"]  # Allowed target formats list
-        final = [f for f in norm if f in allowed]  # Filter configured formats to allowed set
-        
+        final = [file for file in norm if file in allowed]  # Filter configured formats to allowed set
+
         if not final:  # If no valid configured formats remain after filtering
             return formats_list or []  # Fallback to provided formats_list when config invalid or empty
-        
-        return final  # Return the configured list of formats to standardize to
+
+        return final  # Return the configured list of output formats
     except Exception:  # Fallback on any unexpected error during resolution
         return formats_list or []  # Return provided formats_list or empty list on error
 
@@ -1427,13 +1500,13 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
         ext = ext.lower()  # Normalize extension to lowercase for matching
 
         formats_list = resolve_formats(formats_list) if formats_list is not None else []  # Normalize formats_list to a list when possible
-        formats_list = resolve_standardize_formats(formats_list)  # Apply configured standardize_formats override when present
+        formats_list = resolve_output_file_formats(formats_list)  # Apply configured output_file_formats override when present
         orig_format = ext.lstrip('.')  # Compute original extension without leading dot for native-skip logic
 
         if orig_format in formats_list:  # Verify whether native format is included in requested targets
             formats_list = [f for f in formats_list if f != orig_format]  # Remove native format to avoid rewriting original file
 
-        if ext not in [".arff", ".csv", ".parquet", ".txt"]:  # Verify supported extension set before any further work
+        if not is_supported_extension(ext):  # Verify the file has an allowed input format extension before any further work
             return  # Return early to the caller when unsupported extension
 
         dest_dir = resolve_destination_directory(effective_input, input_path, effective_output_base)  # Determine destination directory preserving relative structure
@@ -1596,7 +1669,7 @@ def process_input_directory(context: dict) -> None:
             return  # Exit early when function signaled empty discovery
 
         formats_list = resolve_formats(context.get("formats"))  # Normalize and validate output formats for the run
-        formats_list = resolve_standardize_formats(formats_list)  # Apply configured standardize_formats override when present
+        formats_list = resolve_output_file_formats(formats_list)  # Apply configured output_file_formats override when present
 
         pbar = create_progress_bar(dataset_files, len_dataset_files)  # Create a progress bar for the conversion process
 
@@ -1661,7 +1734,7 @@ def process_single_input_file(idx: int, params: dict) -> None:
         ext = ext.lower()  # Normalize extension to lowercase for matching
 
         formats_list = resolve_formats(formats_list) if formats_list is not None else []  # Normalize formats_list to a list when possible
-        formats_list = resolve_standardize_formats(formats_list)  # Apply configured standardize_formats override when present
+        formats_list = resolve_output_file_formats(formats_list)  # Apply configured output_file_formats override when present
         orig_format = ext.lstrip('.')  # Compute original extension without leading dot for native-skip logic
 
         if orig_format in formats_list:  # Verify whether native format is included in requested targets
@@ -1669,7 +1742,7 @@ def process_single_input_file(idx: int, params: dict) -> None:
 
         update_progress_description(pbar, input_path)  # Update progress bar description using function
 
-        if not is_supported_extension(ext):  # Verify that the file has a supported extension before further work
+        if not is_supported_extension(ext):  # Verify the file has an allowed input format extension before further work
             return  # Return early to the caller when unsupported extension
 
         dest_dir = resolve_destination_directory(input_directory, input_path, output_directory)  # Determine destination directory for converted files
@@ -1749,13 +1822,15 @@ def update_progress_description(pbar, input_path: Optional[str]) -> None:
 
 def is_supported_extension(ext: str) -> bool:
     """
-    Verify whether the file extension is one of the supported dataset formats.
+    Verify whether the file extension is one of the allowed input dataset formats.
 
     :param ext: The file extension to evaluate (including leading dot).
     :return: True when extension is supported, otherwise False.
     """
 
-    return ext in [".arff", ".csv", ".parquet", ".txt"]  # Return True for supported extensions and False otherwise
+    input_fmts = resolve_input_file_formats(None)  # Resolve allowed input formats from configuration for discovery
+    allowed_exts = {"." + str(f).lower().lstrip(".") for f in input_fmts}  # Build allowed extensions set from input formats
+    return ext in allowed_exts  # Return True for allowed input format extensions and False otherwise
 
 
 def create_destination_if_missing(dest_dir: str, dir_created: bool) -> bool:
@@ -1979,8 +2054,12 @@ def main():
 
         configure_verbose_mode(args)  # Enable verbose mode if requested
 
+        configure_input_output_formats(args)  # Update DEFAULTS with input and output file formats from CLI
+
+        output_formats = args.output_file_formats if args.output_file_formats else (args.formats if args.formats else None)  # Preference: --output-file-formats > --formats > config fallback
+
         for input_path in input_paths:  # Iterate through each resolved input path
-            batch_convert(input_path, output_path, formats=args.formats if args.formats else None)  # Perform batch conversion per input path
+            batch_convert(input_path, output_path, formats=output_formats)  # Perform batch conversion per input path
 
         finish_time = datetime.datetime.now()  # Get the finish time of the program
         print(
