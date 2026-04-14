@@ -684,4 +684,4 @@ dataset_converter:
     - "Data_Separability"
     - "Feature_Analysis"
     - "Results" # Directory names to ignore during discovery
-  ignore_files: [] # Filename substrings to ignore
+  ignore_files: ["results", "summary"] # Filename substrings to ignore
