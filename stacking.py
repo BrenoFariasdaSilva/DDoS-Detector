@@ -243,6 +243,7 @@ def parse_cli_args():
         parser.add_argument("--disable-feature-selection", dest="enable_feature_selection", action="store_false", help="Disable feature selection method toggle")
         parser.add_argument("--enable-hyperparameters", dest="enable_hyperparameters", action="store_true", default=None, help="Enable hyperparameter optimization method toggle")
         parser.add_argument("--disable-hyperparameters", dest="enable_hyperparameters", action="store_false", help="Disable hyperparameter optimization method toggle")
+        parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
         
         return parser.parse_args()  # Return parsed arguments
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -368,6 +369,7 @@ def get_default_config():
             "verbose": False,
             "play_sound": True,
             "skip_train_if_model_exists": False,
+            "low_memory": False,
             "csv_file": None,
             "process_entire_dataset": False,
             "test_data_augmentation": True,
@@ -555,6 +557,9 @@ def merge_configs(defaults, file_config, cli_args):
 
         if hasattr(cli_args, "enable_hyperparameters") and cli_args.enable_hyperparameters is not None:  # Hyperparameter optimization method toggle CLI override
             config.setdefault("stacking", {}).setdefault("methods", {})["hyperparameter_optimization"] = cli_args.enable_hyperparameters  # Apply hyperparameter optimization toggle override
+
+        if hasattr(cli_args, "low_memory") and cli_args.low_memory:  # Low memory CLI override
+            config["execution"]["low_memory"] = True  # Apply low memory override to config
         
         return config  # Return final merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -2587,7 +2592,8 @@ def extract_genetic_algorithm_features(file_path, config=None):
             return None  # Return None if the file does not exist
 
         try:  # Try to load the GA results
-            df = pd.read_csv(ga_results_path, usecols=["best_features", "run_index"])  # Load only the necessary columns
+            low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
+            df = pd.read_csv(ga_results_path, usecols=["best_features", "run_index"], low_memory=low_memory)  # Load only the necessary columns
             df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
             best_row = df[df["run_index"] == "best"].iloc[0]  # Get the row where run_index is 'best'
             best_features_json = best_row["best_features"]  # Get the JSON string of best features
@@ -2646,7 +2652,8 @@ def extract_principal_component_analysis_features(file_path, config=None):
             return None  # Return None if the file does not exist
 
         try:  # Try to load the PCA results
-            df = pd.read_csv(pca_results_path, usecols=["n_components", "cv_f1_score"])  # Load only the necessary columns
+            low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
+            df = pd.read_csv(pca_results_path, usecols=["n_components", "cv_f1_score"], low_memory=low_memory)  # Load only the necessary columns
             df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
 
             if df.empty:  # Verify if the DataFrame is empty
@@ -2713,7 +2720,8 @@ def extract_recursive_feature_elimination_features(file_path, config=None):
             return None  # Return None if the file does not exist
 
         try:  # Try to load the RFE runs results
-            df = pd.read_csv(rfe_runs_path, usecols=["top_features"])  # Load only the "top_features" column
+            low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
+            df = pd.read_csv(rfe_runs_path, usecols=["top_features"], low_memory=low_memory)  # Load only the "top_features" column
             df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
 
             if not df.empty:  # Verify if the DataFrame is not empty
@@ -2834,7 +2842,8 @@ def load_dataset(csv_path, config=None):
             print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
             return None  # Return None
 
-        df = pd.read_csv(csv_path, low_memory=False)  # Load the dataset
+        low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
+        df = pd.read_csv(csv_path, low_memory=low_memory)  # Load the dataset with configured memory mode
 
         df.columns = df.columns.str.strip()  # Clean column names by stripping leading/trailing whitespace
 
@@ -3200,7 +3209,8 @@ def extract_hyperparameter_optimization_results(csv_path, config=None):
             return None  # Return None if no optimization results found
 
         try:  # Try to load the CSV file
-            df = pd.read_csv(hyperparams_path)  # Load the CSV into a DataFrame
+            low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
+            df = pd.read_csv(hyperparams_path, low_memory=low_memory)  # Load the CSV into a DataFrame
             df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
         except Exception as e:  # If there is an error loading the CSV
             print(
@@ -4831,7 +4841,8 @@ def load_cache_results(csv_path, config=None):
         )  # Output the verbose message
 
         try:  # Try to load the cache file
-            df_cache = pd.read_csv(cache_path)  # Read the cache file
+            low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
+            df_cache = pd.read_csv(cache_path, low_memory=low_memory)  # Read the cache file
             df_cache.columns = df_cache.columns.str.strip()  # Remove leading/trailing whitespace from column names
             cache_dict = {}  # Initialize cache dictionary
 
