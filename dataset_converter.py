@@ -1544,7 +1544,7 @@ def process_dataset_file(idx: int, len_dataset_files: int, input_path: str, effe
             return  # Return early when the file is already standardized and no conversions are necessary
 
         size_str = compute_file_size_str(str(input_path))  # Retrieve formatted file size string for current input_path now that conversion is required
-        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path} ({size_str}) | Input format: {orig_format}")  # Notify progress via Telegram before processing with file size and detected input format
+        send_telegram_message(TELEGRAM_BOT, f"Converting file [{idx}/{len_dataset_files}]: {input_path} ({size_str}) | Input format: {orig_format} | Output formats: {', '.join(needed_targets)}")  # Notify conversion start via Telegram with file index, name, size, input format, and output formats
 
         if pbar is not None:  # Verify progress bar instance exists before calling set_description
             try:  # Attempt to compute a relative path for the description to show in pbar
