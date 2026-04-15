@@ -66,6 +66,7 @@ import atexit  # For playing a sound when the program finishes
 import concurrent.futures  # For parallel execution
 import dataframe_image as dfi  # For exporting DataFrame styled tables as PNG images
 import datetime  # For getting the current date and time
+import gc  # For explicit garbage collection to reclaim memory from deleted objects
 import glob  # For file pattern matching
 import itertools  # For generating combinations of FS/HP/DA
 import json  # Import json for handling JSON strings within the CSV
@@ -912,6 +913,10 @@ def process_single_file(f, config=None):
         
         remove_zero_variance = config.get("dataset", {}).get("remove_zero_variance", True)  # Get remove zero variance flag from config
         df_clean = preprocess_dataframe(df, remove_zero_variance=remove_zero_variance, config=config)  # Preprocess the dataframe
+
+        del df  # Release raw dataframe to free memory after preprocessing
+        gc.collect()  # Force garbage collection to reclaim memory from deleted raw dataframe
+
         if df_clean is None or df_clean.empty:  # If preprocessing failed or dataframe is empty
             return None  # Return None
 
@@ -1054,11 +1059,16 @@ def create_reduced_dataframes(dfs, common_features, target_col_name, config=None
         )  # Output the verbose message
 
         reduced_dfs = []  # Initialize list for reduced dataframes
-        for f, df_clean in dfs:  # Iterate over valid dataframes
+        for idx, (f, df_clean) in enumerate(dfs):  # Iterate over valid dataframes with index for memory release
             cols_to_keep = [c for c in common_features if c in df_clean.columns]  # Get common features present in this df
             cols_to_keep.append(target_col_name)  # Add the target column
-            reduced = df_clean.loc[:, cols_to_keep].copy()  # Create reduced dataframe
+            reduced = df_clean.loc[:, cols_to_keep].copy()  # Create reduced dataframe with only common features and target
             reduced_dfs.append(reduced)  # Add to list
+
+            dfs[idx] = (f, None)  # Release original full dataframe reference to free memory
+
+        del dfs  # Release the dfs list reference after building all reduced dataframes
+        gc.collect()  # Force garbage collection to reclaim memory from released original dataframes
 
         return reduced_dfs  # Return the reduced dataframes
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -1086,7 +1096,12 @@ def combine_and_clean_dataframes(reduced_dfs, config=None):
         )  # Output the verbose message
 
         combined = pd.concat(reduced_dfs, ignore_index=True)  # Concatenate all reduced dataframes
-        combined = combined.replace([np.inf, -np.inf], np.nan).dropna()  # Replace inf with nan and drop na
+
+        del reduced_dfs  # Release list of reduced dataframes to free memory after concatenation
+        gc.collect()  # Force garbage collection to reclaim memory from deleted reduced dataframes
+
+        combined.replace([np.inf, -np.inf], np.nan, inplace=True)  # Replace infinite values with NaN in-place to save memory
+        combined.dropna(inplace=True)  # Drop rows with NaN values in-place to avoid creating a copy
 
         if combined.empty:  # If combined dataframe is empty
             print(f"{BackgroundColors.RED}Combined dataset is empty after alignment and NaN removal.{Style.RESET_ALL}")  # Print error
@@ -1131,7 +1146,12 @@ def combine_dataset_files(files_list, config=None):
         common_features, target_col_name, dfs = find_common_features_and_target(processed_files, config=config)  # Find common features and target
         if common_features is None:  # If finding common features failed
             print(f"{BackgroundColors.RED}No valid target column found.{Style.RESET_ALL}")  # Print error
+            del processed_files  # Release processed files to free memory on failure path
+            gc.collect()  # Force garbage collection on failure path
             return None  # Return None
+
+        del processed_files  # Release processed files list to free memory before creating reduced dataframes
+        gc.collect()  # Force garbage collection to reclaim memory from released processed files
 
         reduced_dfs = create_reduced_dataframes(dfs, common_features, target_col_name, config=config)  # Create reduced dataframes
         combined = combine_and_clean_dataframes(reduced_dfs, config=config)  # Combine and clean the dataframes
@@ -1187,17 +1207,27 @@ def concat_files_into_multiclass_df(processed_files_with_labels, common_features
 
     combined_parts = []  # Initialize list to accumulate dataframe parts
 
-    for f, df_clean, this_target, feat_cols, attack_label in processed_files_with_labels:  # Iterate over processed files
-        df_subset = df_clean[common_features_list].copy()  # Select only common features
+    for idx, (f, df_clean, this_target, feat_cols, attack_label) in enumerate(processed_files_with_labels):  # Iterate over processed files with index
+        df_subset = df_clean[common_features_list].copy()  # Select only common features as a copy for safe modification
         df_subset['attack_type'] = attack_label  # Add attack type column with the extracted label
         combined_parts.append(df_subset)  # Append to combined parts list
+
+        processed_files_with_labels[idx] = (f, None, this_target, feat_cols, attack_label)  # Release original full dataframe reference to free memory
+
         verbose_output(
             f"{BackgroundColors.GREEN}Added {BackgroundColors.CYAN}{len(df_subset)}{BackgroundColors.GREEN} samples from {BackgroundColors.CYAN}{attack_label}{Style.RESET_ALL}",
             config=config
         )  # Output samples added message
 
+    gc.collect()  # Force garbage collection to reclaim memory from released original dataframes
+
     combined_df = pd.concat(combined_parts, ignore_index=True)  # Concatenate all parts into single dataframe
-    combined_df = combined_df.replace([np.inf, -np.inf], np.nan).dropna()  # Replace inf with nan and drop na
+
+    del combined_parts  # Release list of dataframe parts to free memory after concatenation
+    gc.collect()  # Force garbage collection to reclaim memory from deleted parts list
+
+    combined_df.replace([np.inf, -np.inf], np.nan, inplace=True)  # Replace infinite values with NaN in-place to save memory
+    combined_df.dropna(inplace=True)  # Drop rows with NaN values in-place to avoid creating a copy
 
     if combined_df.empty:  # If combined dataframe is empty after cleaning
         print(f"{BackgroundColors.RED}Combined multi-class dataset is empty after cleaning.{Style.RESET_ALL}")  # Print error
@@ -1308,10 +1338,16 @@ def combine_files_for_multiclass(files_list, config=None):
         
         feature_result = compute_common_features_across_files(processed_files_with_labels, config)  # Compute common features across all files
         if feature_result is None:  # If no common features found
+            del processed_files_with_labels  # Release processed files to free memory on failure path
+            gc.collect()  # Force garbage collection on failure path
             return (None, None, None)  # Return failure tuple
         common_features_list, target_col_name = feature_result  # Unpack common features and target column name
         
         concat_result = concat_files_into_multiclass_df(processed_files_with_labels, common_features_list, attack_types_set, config)  # Concatenate files into multiclass dataframe
+
+        del processed_files_with_labels  # Release individual dataframes to free memory after concatenation
+        gc.collect()  # Force garbage collection to reclaim memory from released individual dataframes
+
         if concat_result is None:  # If concatenation failed
             return (None, None, None)  # Return failure tuple
         
@@ -3248,7 +3284,10 @@ def preprocess_dataframe(df, remove_zero_variance=True, config=None):
         
         df.columns = sanitize_feature_names(df.columns)  # Sanitize column names to remove special characters
 
-        df_clean = df.replace([np.inf, -np.inf], np.nan).dropna()  # Remove rows with NaN or infinite values
+        df.replace([np.inf, -np.inf], np.nan, inplace=True)  # Replace infinite values with NaN in-place to avoid creating a copy
+        df_clean = df.dropna()  # Drop rows containing NaN values into a new dataframe
+        del df  # Release original dataframe reference to free memory after cleaning
+        gc.collect()  # Force garbage collection to reclaim memory from deleted original dataframe
 
         if remove_zero_variance:  # If remove_zero_variance is set to True
             numeric_cols = df_clean.select_dtypes(include=["number"]).columns  # Select only numeric columns
@@ -7771,6 +7810,9 @@ def run_single_ratio_experiment(file, df_original_cleaned, df_augmented_cleaned,
             TELEGRAM_BOT, f"Completed augmentation ratio {ratio_pct}% for {os.path.basename(file)}"
         )  # Send Telegram notification for ratio completion
 
+        del df_sampled  # Release sampled augmented data to free memory after evaluation
+        gc.collect()  # Force garbage collection to reclaim memory from sampled data
+
         return results_ratio  # Return the evaluation results for this ratio
     except Exception as e:
         print(str(e))
@@ -7837,6 +7879,9 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
 
             if results_ratio is not None:  # If the ratio experiment produced valid results
                 all_ratio_results[ratio] = results_ratio  # Store the results for this ratio in the results dictionary
+
+        del df_augmented_cleaned  # Release augmented data to free memory after all ratio experiments
+        gc.collect()  # Force garbage collection to reclaim memory from augmented data
 
         if not all_ratio_results:  # If no ratio experiments produced valid results
             print(
@@ -8117,6 +8162,9 @@ def process_multiclass_augmentation_testing(reference_file, original_files_list,
             if results_ratio is None:  # If this ratio experiment failed at the sampling stage
                 continue  # Skip to the next ratio
             all_ratio_results[ratio] = results_ratio  # Store the results for this ratio
+
+        del combined_augmented_df  # Release combined augmented dataframe to free memory after all ratio experiments
+        gc.collect()  # Force garbage collection to reclaim memory from augmented data
 
         save_multiclass_augmentation_comparison(results_original, all_ratio_results, feature_analysis_dir, config=config)  # Generate comparison report and save results to CSV
     except Exception as e:
@@ -8461,6 +8509,9 @@ def orchestrate_binary_combination(file, ga_sel, pca_n, rfe_sel, base_models, hp
                 send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
                 return False  # Signal failure
 
+        del df_original, results  # Release evaluation data to free memory after binary combination completes
+        gc.collect()  # Force garbage collection to reclaim memory from evaluation data
+
         return True  # Signal success
     except Exception as e:
         print(str(e))
@@ -8573,6 +8624,8 @@ def execute_multiclass_augmentation(files_to_process, combined_df, attack_types,
                     res_list = list(res.values())  # Convert augmented results to list
                     annotate_results_with_combination_flags(res_list, feature_selection_enabled, hyperparameters_enabled, True)  # Annotate with da enabled
                     save_stacking_results(files_to_process[0], res_list, config=config)  # Save augmented results
+                del combined_aug_df  # Release combined augmented dataframe to free memory after all ratios
+                gc.collect()  # Force garbage collection to reclaim memory from augmented data
     except Exception as e:  # Catch augmentation orchestration errors
         print(f"{BackgroundColors.YELLOW}Multi-class augmentation orchestration failed for combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
@@ -8616,6 +8669,9 @@ def orchestrate_multiclass_combination(files_to_process, ga_sel, pca_n, rfe_sel,
             augmentation_signal = execute_multiclass_augmentation(files_to_process, combined_df, attack_types, feature_names, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config)  # Run augmented experiments for all configured ratios
             if augmentation_signal is not None:  # If augmentation returned a flow control signal
                 return augmentation_signal  # Propagate signal to caller
+
+        del combined_df, data  # Release multi-class evaluation data to free memory
+        gc.collect()  # Force garbage collection to reclaim memory from multi-class combination
 
         return None  # Signal success (no flow control change needed)
     except Exception as e:
@@ -8752,6 +8808,9 @@ def execute_both_mode_pipeline(files_to_process, local_dataset_name, config=None
         for file in files_for_binary:  # For each file to process in binary mode
             orchestrate_all_combinations(file, dataset_name=local_dataset_name, config=config)  # Orchestrate all combinations for binary mode
 
+        del combined_df, combined_file_for_features, files_for_binary  # Release binary phase data to free memory before multi-class
+        gc.collect()  # Force garbage collection to reclaim memory from binary phase before multi-class loading
+
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Binary pipeline complete{Style.RESET_ALL}\n"
         )  # Print binary completion message
@@ -8783,6 +8842,9 @@ def execute_both_mode_pipeline(files_to_process, local_dataset_name, config=None
             process_multiclass_evaluation(
                 files_to_process, combined_multiclass_df, attack_types_list, local_dataset_name, config=config
             )  # Process multi-class evaluation workflow
+
+            del combined_multiclass_df  # Release combined multi-class dataframe to free memory after evaluation
+            gc.collect()  # Force garbage collection to reclaim memory from multi-class evaluation
 
             print(
                 f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}✓ Multi-class pipeline complete{Style.RESET_ALL}\n"
@@ -8846,6 +8908,9 @@ def execute_multiclass_mode_pipeline(files_to_process, local_dataset_name, confi
         process_multiclass_evaluation(
             files_to_process, combined_multiclass_df, attack_types_list, local_dataset_name, config=config
         )  # Process multi-class evaluation workflow
+
+        del combined_multiclass_df  # Release combined multi-class dataframe to free memory after evaluation
+        gc.collect()  # Force garbage collection to reclaim memory from multi-class evaluation
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
