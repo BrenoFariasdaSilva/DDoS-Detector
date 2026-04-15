@@ -8911,7 +8911,7 @@ def process_files_in_path(input_path, dataset_name, config=None):
         execution_mode = config.get("execution", {}).get("execution_mode", "both")  # Get execution mode from config (binary/multi-class/both, default: both)
 
         print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[DEBUG] Classification mode: {execution_mode}{Style.RESET_ALL}")  # Log the resolved classification mode
-        send_telegram_message(TELEGRAM_BOT, [f"Classification mode: {execution_mode} | path: {input_path}"])  # Notify Telegram about classification mode and input path
+        send_telegram_message(TELEGRAM_BOT, [f"Classification mode: {execution_mode} | path: {os.path.relpath(input_path)}"])  # Notify Telegram about classification mode and relative input path
 
         files_to_process = determine_files_to_process(csv_file, input_path, config=config)  # Determine which files to process
 
