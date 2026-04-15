@@ -9246,10 +9246,7 @@ def main(config=None):
         _automl_on = _methods_cfg.get("automl", True)  # Resolve AutoML toggle
         _start_lines = [
             f"Starting Classifiers Stacking at {start_time.strftime('%Y-%m-%d %H:%M:%S')}",
-            f"Dataset: {_dataset_path_cli if _dataset_path_cli else 'config.yaml (default)'}",
-            f"Execution mode: {_exec_mode}",
-            f"Feature Selection: {'ON' if _fs_on else 'OFF'} | HP Optimization: {'ON' if _hp_on else 'OFF'} | Data Augmentation: {'ON' if _da_on else 'OFF'}",
-            f"AutoML: {'ON' if _automl_on else 'OFF'}",
+            f"Execution mode: {_exec_mode} | Dataset: {_dataset_path_cli if _dataset_path_cli else 'config.yaml (default)'} | Methods: Feature Selection: {'ON' if _fs_on else 'OFF'}, HP Optimization: {'ON' if _hp_on else 'OFF'}, Data Augmentation: {'ON' if _da_on else 'OFF'}, AutoML: {'ON' if _automl_on else 'OFF'}",
         ]
         
         if test_data_augmentation and _da_on:  # If augmentation testing is enabled and augmentation toggle is on
