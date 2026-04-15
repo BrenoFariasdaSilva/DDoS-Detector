@@ -274,6 +274,8 @@ stacking: # Stacking experiment settings
   hyperparameters_filename: "Hyperparameter_Optimization_Results.csv" # Hyperparameter tuning results filename
 
   data_augmentation_suffix: "_data_augmented" # Suffix for augmented files (matches wgangp.py output)
+  dataset_file_format: "csv" # Supported formats: arff,csv,parquet,txt
+  augmentation_file_format: "csv" # Supported formats: arff,csv,parquet,txt
   augmentation_ratios: [0.10, 0.25, 0.50, 0.75, 1.00] # Augmented-to-original sample ratios for experiments
 
   top_n_features_heatmap: 15 # Number of top features to show in generated heatmaps and CSV exports (int)
