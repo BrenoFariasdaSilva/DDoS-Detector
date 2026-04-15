@@ -59,6 +59,7 @@ Dependencies:
     - Optional: telegram_bot for notifications
 """
 
+import arff  # Liac-arff, used to load ARFF files
 import argparse  # For parsing command-line arguments
 import ast  # For safely evaluating Python literals
 import atexit  # For playing a sound when the program finishes
@@ -94,6 +95,7 @@ from joblib import dump, load  # For exporting and loading trained models and sc
 from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
+from scipy.io import arff as scipy_arff  # Used to read ARFF files
 from sklearn.decomposition import PCA  # For Principal Component Analysis
 from sklearn.ensemble import (  # For ensemble models
     ExtraTreesClassifier,
@@ -121,6 +123,7 @@ from sklearn.svm import SVC  # For Support Vector Machine model
 from sklearn.tree import DecisionTreeClassifier  # For Decision Tree classifier model
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
+from typing import Optional  # For optional typing hints
 from xgboost import XGBClassifier  # For XGBoost classifier
 
 
@@ -244,6 +247,8 @@ def parse_cli_args():
         parser.add_argument("--enable-hyperparameters", dest="enable_hyperparameters", action="store_true", default=None, help="Enable hyperparameter optimization method toggle")
         parser.add_argument("--disable-hyperparameters", dest="enable_hyperparameters", action="store_false", help="Disable hyperparameter optimization method toggle")
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
+        parser.add_argument("--dataset-file-format", type=str, default=None, dest="dataset_file_format", help="File format for dataset files: arff, csv, parquet, txt")  # Dataset file format CLI override
+        parser.add_argument("--augmentation-file-format", type=str, default=None, dest="augmentation_file_format", help="File format for augmentation files: arff, csv, parquet, txt")  # Augmentation file format CLI override
         
         return parser.parse_args()  # Return parsed arguments
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -285,6 +290,8 @@ def get_default_stacking_config():
                 "hyperparameter_optimization": True,  # Enable hyperparameter optimization combination by default
                 "automl": True,  # Enable AutoML pipeline by default
             },  # Method toggles for stacking pipeline
+            "dataset_file_format": "csv",  # File format for dataset files: arff, csv, parquet, txt
+            "augmentation_file_format": "csv",  # File format for augmentation files: arff, csv, parquet, txt
             "match_filenames_to_process": [""],  # Filename patterns to match for processing
             "ignore_files": ["Stacking_Classifiers_Results.csv"],  # Files to ignore during processing
             "ignore_dirs": [
@@ -560,6 +567,12 @@ def merge_configs(defaults, file_config, cli_args):
 
         if hasattr(cli_args, "low_memory") and cli_args.low_memory:  # Low memory CLI override
             config["execution"]["low_memory"] = True  # Apply low memory override to config
+
+        if hasattr(cli_args, "dataset_file_format") and cli_args.dataset_file_format is not None:  # Dataset file format CLI override
+            config.setdefault("stacking", {})["dataset_file_format"] = cli_args.dataset_file_format  # Apply dataset file format override to config
+
+        if hasattr(cli_args, "augmentation_file_format") and cli_args.augmentation_file_format is not None:  # Augmentation file format CLI override
+            config.setdefault("stacking", {})["augmentation_file_format"] = cli_args.augmentation_file_format  # Apply augmentation file format override to config
         
         return config  # Return final merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -1343,7 +1356,9 @@ def find_data_augmentation_file(original_file_path, config=None):
         data_aug_dir = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Use configured data augmentation base directory name
         data_aug_sample_dir = config.get("paths", {}).get("data_augmentation_sample_dir", "Samples")  # Use configured augmented samples subdirectory name
         augmented_dir = original_path.parent / data_aug_dir / data_aug_sample_dir  # Build data augmentation samples subdirectory path using config
-        augmented_filename = f"{original_path.stem}{data_augmentation_suffix}{original_path.suffix}"  # Build augmented filename with configured suffix
+        augmentation_format = config.get("stacking", {}).get("augmentation_file_format", "csv")  # Read configured augmentation file format
+        augmentation_extension = resolve_format_extension(augmentation_format)  # Resolve format string to file extension
+        augmented_filename = f"{original_path.stem}{data_augmentation_suffix}{augmentation_extension}"  # Build augmented filename with configured extension
         augmented_file = augmented_dir / augmented_filename  # Construct the full augmented file path
 
         if augmented_file.exists():  # If the expected augmented file exists at the constructed path
@@ -2820,11 +2835,260 @@ def load_feature_selection_results(file_path, config=None):
         raise
 
 
-def load_dataset(csv_path, config=None):
+def resolve_format_extension(file_format: str) -> str:
     """
-    Load CSV and return DataFrame.
+    Resolve a file format string to its dot-prefixed file extension.
 
-    :param csv_path: Path to CSV dataset.
+    :param file_format: File format string (arff, csv, parquet, txt).
+    :return: Dot-prefixed file extension string.
+    """
+
+    try:
+        extension_map = {  # Mapping of format strings to file extensions
+            "arff": ".arff",
+            "csv": ".csv",
+            "parquet": ".parquet",
+            "txt": ".txt",
+        }
+        return extension_map.get(file_format.lower(), ".csv")  # Return extension or fallback to .csv
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def load_arff_with_scipy(input_path: str, config=None) -> pd.DataFrame:
+    """
+    Load an ARFF file using scipy, decoding byte strings when necessary.
+
+    :param input_path: Path to the ARFF file.
+    :param config: Configuration dictionary (uses global CONFIG if None).
+    :return: pandas DataFrame loaded from the ARFF file.
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Loading ARFF file with scipy: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
+
+        data, meta = scipy_arff.loadarff(input_path)  # Load the ARFF file using scipy
+        df = pd.DataFrame(data)  # Convert the loaded data to a DataFrame
+
+        for col in df.columns:  # Iterate through each column in the DataFrame
+            if df[col].dtype == object:  # If column contains byte/string data
+                df[col] = df[col].apply(
+                    lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
+                )  # Decode bytes to strings
+
+        return df  # Return the DataFrame with decoded strings
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def load_arff_with_liac(input_path: str, config=None) -> pd.DataFrame:
+    """
+    Load an ARFF file using the liac-arff library.
+
+    :param input_path: Path to the ARFF file.
+    :param config: Configuration dictionary (uses global CONFIG if None).
+    :return: pandas DataFrame loaded from the ARFF file.
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Loading ARFF file with liac-arff: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
+
+        with open(input_path, "r", encoding="utf-8") as f:  # Open the ARFF file for reading
+            data = arff.load(f)  # Load using liac-arff
+
+        return pd.DataFrame(data["data"], columns=[attr[0] for attr in data["attributes"]])  # Convert to DataFrame
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def load_arff_file(input_path: str, config=None) -> pd.DataFrame:
+    """
+    Load an ARFF file, trying scipy first and falling back to liac-arff if needed.
+
+    :param input_path: Path to the ARFF file.
+    :param config: Configuration dictionary (uses global CONFIG if None).
+    :return: pandas DataFrame loaded from the ARFF file.
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        try:  # Attempt to load using scipy
+            return load_arff_with_scipy(input_path, config=config)  # Return DataFrame from scipy loader
+        except Exception as e:  # If scipy fails, warn and try liac-arff
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Warning: Failed to load ARFF with scipy ({e}). Trying liac-arff...{Style.RESET_ALL}",
+                config=config
+            )  # Output fallback warning message
+
+            try:  # Attempt to load using liac-arff
+                return load_arff_with_liac(input_path, config=config)  # Return DataFrame from liac loader
+            except Exception as e2:  # If both loaders fail
+                raise RuntimeError(f"Failed to load ARFF file with both scipy and liac-arff: {e2}")  # Raise combined error
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def load_parquet_file(input_path: str, config=None) -> pd.DataFrame:
+    """
+    Load a Parquet file into a pandas DataFrame.
+
+    :param input_path: Path to the Parquet file.
+    :param config: Configuration dictionary (uses global CONFIG if None).
+    :return: pandas DataFrame loaded from the Parquet file.
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Loading Parquet file: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
+
+        return pd.read_parquet(input_path)  # Load and return the Parquet file as a DataFrame
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def load_txt_file(input_path: str, config=None) -> pd.DataFrame:
+    """
+    Load a TXT file into a pandas DataFrame, assuming tab-separated values.
+
+    :param input_path: Path to the TXT file.
+    :param config: Configuration dictionary (uses global CONFIG if None).
+    :return: pandas DataFrame containing the loaded dataset.
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Loading TXT file: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}",
+            config=config
+        )  # Output the verbose message
+
+        low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
+        df = pd.read_csv(input_path, sep="\t", low_memory=low_memory)  # Load TXT file using tab separator
+
+        return df  # Return the DataFrame
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def dispatch_format_loader(file_path: str, file_format: str, config=None) -> pd.DataFrame:
+    """
+    Dispatch dataset loading to the appropriate loader based on the given file format.
+
+    :param file_path: Path to the dataset file to load.
+    :param file_format: File format string: arff, csv, parquet, or txt.
+    :param config: Configuration dictionary (uses global CONFIG if None).
+    :return: pandas DataFrame loaded from the file.
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        supported_formats = {"arff", "csv", "parquet", "txt"}  # Set of supported file formats
+        if file_format not in supported_formats:  # If the format is not supported
+            raise ValueError(f"Unsupported file format: '{file_format}'. Supported: {sorted(supported_formats)}")  # Raise error for unsupported format
+
+        low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
+
+        if file_format == "arff":  # If the file format is ARFF
+            return load_arff_file(file_path, config=config)  # Load and return ARFF file
+        elif file_format == "csv":  # If the file format is CSV
+            df = pd.read_csv(file_path, low_memory=low_memory)  # Load CSV file with configured memory mode
+            return df  # Return the loaded CSV DataFrame
+        elif file_format == "parquet":  # If the file format is Parquet
+            return load_parquet_file(file_path, config=config)  # Load and return Parquet file
+        elif file_format == "txt":  # If the file format is TXT
+            return load_txt_file(file_path, config=config)  # Load and return TXT file
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def load_augmented_dataset(file_path: str, config=None) -> Optional[pd.DataFrame]:
+    """
+    Load an augmented dataset file and return a DataFrame.
+    Supports csv, txt, parquet, and arff formats via stacking.augmentation_file_format.
+
+    :param file_path: Path to the augmented dataset file.
+    :param config: Configuration dictionary (uses global CONFIG if None).
+    :return: DataFrame or None if file not found or invalid.
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        verbose_output(
+            f"\n{BackgroundColors.GREEN}Loading augmented dataset from: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
+            config=config
+        )  # Output the loading augmented dataset message
+
+        if not verify_filepath_exists(file_path):  # If the augmented dataset file does not exist
+            print(f"{BackgroundColors.RED}Augmented dataset file not found: {file_path}{Style.RESET_ALL}")
+            return None  # Return None
+
+        file_format = config.get("stacking", {}).get("augmentation_file_format", "csv")  # Read configured augmentation file format
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Loading augmented dataset with format: {BackgroundColors.CYAN}{file_format}{Style.RESET_ALL}",
+            config=config
+        )  # Output the selected format message
+
+        df = dispatch_format_loader(file_path, file_format, config=config)  # Dispatch to the appropriate loader
+
+        df.columns = df.columns.str.strip()  # Clean column names by stripping leading/trailing whitespace
+
+        if df.shape[1] < 2:  # If there are less than 2 columns
+            print(f"{BackgroundColors.RED}Augmented dataset must have at least 1 feature and 1 target.{Style.RESET_ALL}")
+            return None  # Return None
+
+        return df  # Return the loaded DataFrame
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def load_dataset(file_path: str, config=None) -> Optional[pd.DataFrame]:
+    """
+    Load a dataset file and return a DataFrame.
+    Supports csv, txt, parquet, and arff formats via stacking.dataset_file_format.
+
+    :param file_path: Path to the dataset file.
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: DataFrame
     """
@@ -2834,21 +3098,27 @@ def load_dataset(csv_path, config=None):
             config = CONFIG  # Use global CONFIG
 
         verbose_output(
-            f"\n{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}",
+            f"\n{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
             config=config
         )  # Output the loading dataset message
 
-        if not verify_filepath_exists(csv_path):  # If the CSV file does not exist
-            print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")
+        if not verify_filepath_exists(file_path):  # If the dataset file does not exist
+            print(f"{BackgroundColors.RED}Dataset file not found: {file_path}{Style.RESET_ALL}")
             return None  # Return None
 
-        low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
-        df = pd.read_csv(csv_path, low_memory=low_memory)  # Load the dataset with configured memory mode
+        file_format = config.get("stacking", {}).get("dataset_file_format", "csv")  # Read configured dataset file format
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}Loading dataset with format: {BackgroundColors.CYAN}{file_format}{Style.RESET_ALL}",
+            config=config
+        )  # Output the selected format message
+
+        df = dispatch_format_loader(file_path, file_format, config=config)  # Dispatch to the appropriate loader
 
         df.columns = df.columns.str.strip()  # Clean column names by stripping leading/trailing whitespace
 
         if df.shape[1] < 2:  # If there are less than 2 columns
-            print(f"{BackgroundColors.RED}CSV must have at least 1 feature and 1 target.{Style.RESET_ALL}")
+            print(f"{BackgroundColors.RED}Dataset must have at least 1 feature and 1 target.{Style.RESET_ALL}")
             return None  # Return None
 
         return df  # Return the loaded DataFrame
@@ -6915,8 +7185,10 @@ def determine_files_to_process(csv_file, input_path, config=None):
                     return []  # Return empty list to skip this path
             except Exception:  # If validation fails
                 return []  # Return empty list on error
-        else:  # No CLI override, scan directory for CSV files
-            return get_files_to_process(input_path, file_extension=".csv", config=config)  # Get list of CSV files to process
+        else:  # No CLI override, scan directory for dataset files
+            dataset_format = config.get("stacking", {}).get("dataset_file_format", "csv")  # Read configured dataset file format
+            dataset_extension = resolve_format_extension(dataset_format)  # Resolve format string to file extension
+            return get_files_to_process(input_path, file_extension=dataset_extension, config=config)  # Get list of dataset files to process
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -7394,17 +7666,21 @@ def generate_ratio_comparison_report(results_original, all_ratio_results):
         raise
 
 
-def load_and_validate_augmented_data(file, df_original_cleaned):
+def load_and_validate_augmented_data(file, df_original_cleaned, config=None):
     """
     Locates, loads, preprocesses, and validates augmented data for the given file.
 
     :param file: Original file path used to locate the augmented counterpart
     :param df_original_cleaned: Cleaned original dataframe for validation reference
+    :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Cleaned augmented dataframe, or None if loading or validation fails
     """
 
     try:
-        augmented_file = find_data_augmentation_file(file)  # Look for augmented data file using wgangp.py naming convention
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        augmented_file = find_data_augmentation_file(file, config=config)  # Look for augmented data file using wgangp.py naming convention
 
         if augmented_file is None:  # If no augmented file found at expected path
             print(
@@ -7412,7 +7688,7 @@ def load_and_validate_augmented_data(file, df_original_cleaned):
             )  # Print warning message about missing augmented file
             return None  # Signal caller that no augmented data is available
 
-        df_augmented = load_dataset(augmented_file)  # Load the augmented dataset from the discovered file
+        df_augmented = load_augmented_dataset(augmented_file, config=config)  # Load the augmented dataset using configured augmentation format
 
         if df_augmented is None:  # If augmented dataset failed to load from disk
             print(
@@ -7529,7 +7805,7 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
             f"{BackgroundColors.GREEN}Processing augmented data evaluation for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
         )  # Output the verbose message
 
-        df_augmented_cleaned = load_and_validate_augmented_data(file, df_original_cleaned)  # Load, preprocess, and validate augmented data
+        df_augmented_cleaned = load_and_validate_augmented_data(file, df_original_cleaned, config=config)  # Load, preprocess, and validate augmented data
 
         if df_augmented_cleaned is None:  # If augmented data could not be loaded or validated
             return  # Exit function early when no valid augmented data is available
