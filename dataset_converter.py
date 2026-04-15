@@ -772,6 +772,9 @@ def resolve_destination_directory(input_directory, input_path, output_directory)
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
+        if str(output_directory).strip().lower() == "in-place":  # Verify if in-place output mode is requested via CLI (--output in-place) or config (output_directory: "in-place") to save converted files alongside input files
+            in_place_dir = os.path.dirname(os.path.abspath(str(input_path)))  # Resolve absolute parent directory of input file for in-place output
+            return in_place_dir if in_place_dir else "."  # Return parent directory of input file or fallback to current directory when parent is empty
         input_dir_str = str(input_directory) if input_directory is not None else ""  # Normalize input_directory to string
         out_dir_str = str(output_directory) if output_directory is not None else ""  # Normalize output_directory to string
         if not out_dir_str:  # Verify whether an output_directory was provided
