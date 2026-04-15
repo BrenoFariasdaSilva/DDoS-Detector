@@ -665,7 +665,7 @@ dataset_converter:
   verbose: false # Enable verbose output for dataset converter
   input_file_formats: ["arff", "csv", "parquet", "txt"] # Supported input formats: arff,csv,parquet,txt. Defaults to all
   output_file_formats: ["arff", "csv", "parquet", "txt"] # Supported output formats: arff,csv,parquet,txt. Defaults to all
-  output_directory: "Converted" # Default output directory for converted datasets
+  output_directory: "Converted" # Default output directory for converted datasets; use "in-place" to save converted files in the same directory as the input file
   datasets: # Dictionary containing dataset paths
     CICDDoS2019-Dataset:
       - "./Datasets/CICDDoS2019/01-12/"
