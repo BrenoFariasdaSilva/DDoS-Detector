@@ -92,18 +92,17 @@ from sklearn.neural_network import MLPClassifier  # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For label encoding and feature scaling
 from sklearn.svm import SVC  # For Support Vector Machine model
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
-from thundersvm import SVC as ThunderSVC  # For ThunderSVM classifier (imported in try/except)
 from tqdm import tqdm  # For progress bars
 from typing import Any, cast, Dict, Union  # For type hints
 from xgboost import XGBClassifier  # For XGBoost classifier
 
-try:  # Attempt to import ThunderSVM
+try:  # Attempt to import ThunderSVM with full CUDA safety guard
     from thundersvm import SVC as ThunderSVC  # For ThunderSVM classifier
     THUNDERSVM_AVAILABLE = True  # Flag indicating ThunderSVM is available
-except Exception as _th_err:  # Import failed
-    ThunderSVC = None  # ThunderSVM not available
-    THUNDERSVM_AVAILABLE = False  # Set flag to False
-    print(f"Warning: ThunderSVM import failed ({type(_th_err).__name__}: {_th_err}). Falling back to sklearn.SVC.")  # Print warning message
+except (ImportError, OSError) as _th_err:  # Catch missing package or missing CUDA libraries (e.g., libcusparse.so)
+    ThunderSVC = None  # ThunderSVM not available; set to None for conditional guards
+    THUNDERSVM_AVAILABLE = False  # Flag indicating ThunderSVM is unavailable due to import or CUDA failure
+    print(f"[WARNING] ThunderSVM import failed ({type(_th_err).__name__}: {_th_err}). CUDA may be unavailable. Falling back to sklearn.SVC (CPU).")  # Log warning with reason and fallback strategy
 
 
 # Warnings:
