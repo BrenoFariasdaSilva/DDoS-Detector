@@ -671,7 +671,7 @@ def extract_genetic_algorithm_features(file_path):
 
         file_dir = os.path.dirname(file_path)  # Determine the directory of the input file
         ga_results_path = os.path.join(
-            file_dir, "Feature_Analysis", "Genetic_Algorithm_Results.csv"
+            file_dir, "Feature_Analysis", "Genetic_Algorithm", "Genetic_Algorithm_Results.csv"
         )  # Construct the path to the consolidated GA results file
 
         verbose_output(
