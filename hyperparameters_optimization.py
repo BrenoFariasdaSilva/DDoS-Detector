@@ -104,6 +104,7 @@ except (ImportError, OSError) as _th_err:  # Catch missing package or missing CU
     THUNDERSVM_AVAILABLE = False  # Flag indicating ThunderSVM is unavailable due to import or CUDA failure
     print(f"[WARNING] ThunderSVM import failed ({type(_th_err).__name__}: {_th_err}). CUDA may be unavailable. Falling back to sklearn.SVC (CPU).")  # Log warning with reason and fallback strategy
 
+ORIGINAL_STDOUT = sys.stdout  # Capture original stdout at module load time to prevent Logger isatty crash on re-initialization
 
 # Warnings:
 warnings.filterwarnings("ignore", category=pd.errors.DtypeWarning)  # Ignore pandas dtype warnings
@@ -401,13 +402,14 @@ def init_logger_and_exception_hook():
     :return: None.
     """
     
-    global logger
-    logs_dir = Path("./Logs")
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)
-    sys.stdout = logger
-    sys.stderr = logger
-    setup_global_exception_hook()
+    global logger  # Declare logger as global to allow module-scope assignment
+    logs_dir = Path("./Logs")  # Define the logs directory path
+    logs_dir.mkdir(parents=True, exist_ok=True)  # Create logs directory and any missing parents
+    sys.stdout = ORIGINAL_STDOUT  # Restore original stdout before Logger creation to prevent isatty AttributeError
+    logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Instantiate Logger with truncated log file
+    sys.stdout = logger  # Redirect stdout to Logger for dual terminal/file output
+    sys.stderr = logger  # Redirect stderr to Logger for dual terminal/file output
+    setup_global_exception_hook()  # Register global exception hook for Telegram notifications
 
 
 def verbose_output(true_string="", false_string=""):
