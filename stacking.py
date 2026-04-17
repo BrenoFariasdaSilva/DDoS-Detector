@@ -6993,6 +6993,35 @@ def setup_feature_set_names(name, X_train_subset, subset_feature_names_list):
     )  # Use actual feature names or generate generic ones
 
 
+def align_feature_names_to_array(X_subset, feature_names, label):
+    """
+    Align a feature name list to match the number of columns in a feature array.
+
+    :param X_subset: Feature array whose column count is the authoritative shape.
+    :param feature_names: List of feature names to align against the array shape.
+    :param label: Label string used in the warning message to identify which array is being aligned.
+    :return: Feature name list whose length exactly matches X_subset.shape[1].
+    """
+
+    n_features_array = X_subset.shape[1]  # Get the number of columns in the feature array
+    n_features_names = len(feature_names)  # Get the number of provided feature names
+
+    if n_features_array == n_features_names:  # Verify if sizes already match
+        return feature_names  # Return unchanged list when sizes are equal
+
+    print(
+        f"{BackgroundColors.YELLOW}[WARNING] Feature name/array mismatch in {label}: "
+        f"array has {n_features_array} columns, names list has {n_features_names} entries. "
+        f"Applying safe alignment.{Style.RESET_ALL}"
+    )  # Log the mismatch details and alignment action
+
+    if n_features_names > n_features_array:  # Verify if names list is longer than array columns
+        return feature_names[:n_features_array]  # Truncate names list to match array column count
+
+    extra_names = [f"feature_{i}" for i in range(n_features_names, n_features_array)]  # Generate synthetic names for missing indices
+    return feature_names + extra_names  # Extend names list with synthetic entries to match array column count
+
+
 def convert_subset_to_dataframes(X_train_subset, X_test_subset, subset_feature_names):
     """
     Convert training and test feature arrays to DataFrames using the provided feature name list.
@@ -7003,9 +7032,13 @@ def convert_subset_to_dataframes(X_train_subset, X_test_subset, subset_feature_n
     :return: Tuple of (X_train_df, X_test_df) DataFrames with named columns.
     """
 
-    X_train_df = pd.DataFrame(X_train_subset, columns=subset_feature_names)  # Convert training features to dataframe
-    X_test_df = pd.DataFrame(X_test_subset, columns=subset_feature_names)  # Convert test features to dataframe
-    return X_train_df, X_test_df  # Return dataframes with named columns
+    train_names = align_feature_names_to_array(X_train_subset, subset_feature_names, "X_train_subset")  # Align feature names to training array shape
+    test_names = align_feature_names_to_array(X_test_subset, subset_feature_names, "X_test_subset")  # Align feature names to test array shape
+
+    X_train_df = pd.DataFrame(X_train_subset, columns=train_names)  # Convert training features to DataFrame with aligned column names
+    X_test_df = pd.DataFrame(X_test_subset, columns=test_names)  # Convert test features to DataFrame with aligned column names
+
+    return X_train_df, X_test_df  # Return DataFrames with named columns
 
 
 def initialize_evaluation_run_state(base_models, feature_sets, data_source_label):
