@@ -937,8 +937,14 @@ def get_feature_subset(X_scaled, features, feature_names):
         )  # Output the verbose message
 
         if features:  # Only proceed if the list of selected features is NOT empty/None
-            indices = [feature_names.index(f) for f in features if f in feature_names]  # Get indices of selected features
-            return X_scaled[:, indices]  # Return the subset of features
+            valid_features = [f for f in features if f in feature_names]  # Filter features to only those present in feature_names to prevent KeyError on column mismatch
+
+            if not valid_features:  # Verify if any requested features matched the available column names
+                print(f"{BackgroundColors.YELLOW}[WARNING] No GA-selected features matched available columns. Returning empty array for upstream fallback handling.{Style.RESET_ALL}")  # Warn that no features matched the prepared dataset columns
+                return np.empty((X_scaled.shape[0], 0))  # Return empty array to trigger fallback handling at the call site
+
+            indices = [feature_names.index(f) for f in valid_features]  # Map valid feature names to positional indices in the feature list
+            return X_scaled[:, indices]  # Return the subset of scaled features at the resolved positional indices
         else:  # If no features are selected (or features is None)
             return np.empty((X_scaled.shape[0], 0))  # Return an empty array with correct number of rows
     except Exception as e:
@@ -1681,40 +1687,46 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
         start_time = time.time()  # Start timing
         metrics = None  # Initialize metrics as None
         try:
-            cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
-            fold_metrics_list = []
-            fold_elapsed = []
-            for train_idx, val_idx in cv.split(X_train, y_train):
-                X_tr, X_val = X_train[train_idx], X_train[val_idx]
-                y_tr, y_val = y_train[train_idx], y_train[val_idx]
-                clf = clone(model)
-                clf.set_params(**current_params)
-                t0 = time.time()
-                clf.fit(X_tr, y_tr)
-                elapsed_fold = time.time() - t0
-                y_pred = clf.predict(X_val)
-                m = compute_metrics_from_predictions(clf, y_val, y_pred, X_val)
-                if m is not None:
-                    fold_metrics_list.append(m)
-                    fold_elapsed.append(elapsed_fold)
+            y_train_arr = np.asarray(y_train)  # Convert y_train to numpy array to prevent pandas label-indexing KeyError on non-sequential Series index
+            cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)  # Initialize stratified 10-fold cross-validator for robust evaluation
+            fold_metrics_list = []  # Accumulate per-fold metric dicts for aggregation
+            fold_elapsed = []  # Accumulate per-fold elapsed times for diagnostics
+
+            for train_idx, val_idx in cv.split(X_train, y_train_arr):  # Generate stratified fold indices using numpy-converted labels to avoid pandas label-indexing errors
+                X_tr, X_val = X_train[train_idx], X_train[val_idx]  # Slice training and validation features using positional indices
+                y_tr, y_val = y_train_arr[train_idx], y_train_arr[val_idx]  # Slice training and validation labels using safe positional numpy indexing
+                clf = clone(model)  # Clone model to avoid state leakage between folds
+                clf.set_params(**current_params)  # Apply the current hyperparameter combination to the cloned model
+                t0 = time.time()  # Record fold training start time
+                clf.fit(X_tr, y_tr)  # Train the cloned model on the current fold training split
+                elapsed_fold = time.time() - t0  # Measure elapsed training time for this fold
+                y_pred = clf.predict(X_val)  # Generate predictions on the validation split
+                m = compute_metrics_from_predictions(clf, y_val, y_pred, X_val)  # Compute evaluation metrics for this fold
+
+                if m is not None:  # Verify if metrics were successfully computed for this fold
+                    fold_metrics_list.append(m)  # Accumulate valid fold metrics for aggregation
+                    fold_elapsed.append(elapsed_fold)  # Accumulate fold elapsed time alongside its metrics
 
             if len(fold_metrics_list) == 0:  # Verify if all folds failed to produce valid metrics
                 metrics = {"f1_score": 0.0}  # Set fallback metrics with zero F1 when no folds succeeded
             else:
-                aggregated = {}
-                keys_all = set().union(*(d.keys() for d in fold_metrics_list))
-                for k in keys_all:
-                    vals = [d.get(k) for d in fold_metrics_list if d.get(k) is not None]
-                    if len(vals) == 0:
-                        aggregated[k] = None
+                aggregated = {}  # Initialize aggregated metrics dictionary across all valid folds
+                keys_all = set().union(*(d.keys() for d in fold_metrics_list))  # Collect the union of all metric keys present across folds
+
+                for k in keys_all:  # Iterate over each metric key to aggregate across folds
+                    vals = [d.get(k) for d in fold_metrics_list if d.get(k) is not None]  # Collect non-None values for this metric across folds
+
+                    if len(vals) == 0:  # Verify if no folds produced a value for this metric
+                        aggregated[k] = None  # Assign None when no valid values are present
                     else:
-                        try:
-                            aggregated[k] = float(np.mean(vals))
-                        except Exception:
-                            aggregated[k] = vals[0]
-                metrics = aggregated
-                if "f1_score" in metrics:
-                    metrics["f1_score"] = metrics.get("f1_score")
+                        try:  # Attempt numeric mean aggregation for the metric
+                            aggregated[k] = float(np.mean(vals))  # Compute the mean of all valid fold values as the aggregated metric
+                        except Exception:  # Fall back to first value when mean computation fails
+                            aggregated[k] = vals[0]  # Use first available fold value as fallback aggregate
+
+                metrics = aggregated  # Assign aggregated cross-fold metrics as the final metrics for this combination
+                if "f1_score" in metrics:  # Verify if f1_score is present in the aggregated metrics
+                    metrics["f1_score"] = metrics.get("f1_score", 0.0) if metrics.get("f1_score") is not None else 0.0  # Ensure f1_score is always a float value and never None
 
         except MemoryError:
             print(f"{BackgroundColors.RED}MemoryError with params {current_params}. Consider reducing dataset size or n_jobs.{Style.RESET_ALL}")  # Log MemoryError with reduction hint
@@ -2536,10 +2548,26 @@ def process_single_csv_file(csv_path, dir_results_list):
         else:  # GA features were successfully loaded
             feature_selection_method = "Genetic Algorithm"  # Label selection method as GA-driven
 
-        print(f"{BackgroundColors.GREEN}Applying feature selection ({feature_selection_method})...{Style.RESET_ALL}")  # Output the active feature selection method
-        X_train_ga = get_feature_subset(X_train_scaled, ga_selected_features, feature_names)  # Apply feature subset to training set
-        X_test_ga = get_feature_subset(X_test_scaled, ga_selected_features, feature_names)  # Apply feature subset to testing set
+        valid_ga_features = [f for f in ga_selected_features if f in feature_names]  # Verify each GA feature name against the available dataset columns before applying selection
 
+        if not valid_ga_features:  # Verify if any GA features survived the column name validation filter
+            print(f"{BackgroundColors.YELLOW}[WARNING] No GA features matched dataset columns for {os.path.basename(csv_path)}. Falling back to all features.{Style.RESET_ALL}")  # Warn about feature name mismatch and activate fallback mode
+            valid_ga_features = feature_names  # Fall back to all available features to preserve pipeline execution
+            feature_selection_method = "All Features (Fallback)"  # Update selection method label to reflect fallback mode
+
+        try:  # Apply validated feature selection with KeyError protection for residual index mismatches
+            X_train_ga = get_feature_subset(X_train_scaled, valid_ga_features, feature_names)  # Apply validated feature subset to the scaled training set
+            X_test_ga = get_feature_subset(X_test_scaled, valid_ga_features, feature_names)  # Apply validated feature subset to the scaled testing set
+        except KeyError:  # Catch any residual KeyError from unexpected column index mismatch during selection
+            print(f"{BackgroundColors.YELLOW}[WARNING] KeyError during feature selection for {os.path.basename(csv_path)}. Falling back to all features.{Style.RESET_ALL}")  # Log the fallback reason with file context
+            X_train_ga = X_train_scaled  # Use the full scaled training set as a safe fallback
+            X_test_ga = X_test_scaled  # Use the full scaled testing set as a safe fallback
+            valid_ga_features = feature_names  # Reset to all feature names to align with the full feature fallback
+            feature_selection_method = "All Features (Fallback)"  # Update label to reflect fallback mode
+
+        print(
+            f"{BackgroundColors.GREEN}Applying feature selection ({feature_selection_method})...{Style.RESET_ALL}"
+        )  # Output the active feature selection method
         print(
             f"{BackgroundColors.GREEN}Training set shape after feature selection: {BackgroundColors.CYAN}{X_train_ga.shape}{Style.RESET_ALL}"
         )  # Output training set shape
@@ -2547,9 +2575,12 @@ def process_single_csv_file(csv_path, dir_results_list):
             f"{BackgroundColors.GREEN}Testing set shape after feature selection: {BackgroundColors.CYAN}{X_test_ga.shape}{Style.RESET_ALL}"
         )  # Output testing set shape
 
-        if X_train_ga.shape[1] == 0:  # Verify if feature selection produced an empty training matrix
-            print(f"{BackgroundColors.RED}No valid features remain after feature selection for {csv_path}. Skipping file.{Style.RESET_ALL}")  # Log error for empty feature matrix
-            return  # Exit early due to empty feature matrix
+        if X_train_ga.shape[1] == 0:  # Verify if feature matrix is still empty after all fallback attempts
+            print(f"{BackgroundColors.YELLOW}[WARNING] Feature matrix empty after all selection attempts for {csv_path}. Falling back to full feature set.{Style.RESET_ALL}")  # Log emergency fallback due to persistent empty feature matrix
+            X_train_ga = X_train_scaled  # Use the full training set as last-resort emergency fallback
+            X_test_ga = X_test_scaled  # Use the full testing set as last-resort emergency fallback
+            valid_ga_features = feature_names  # Reset feature list to all features for the emergency fallback
+            feature_selection_method = "All Features (Emergency Fallback)"  # Update label for tracking the emergency fallback path
 
         models_and_grids = get_models_and_param_grids()  # Get model grids
 
@@ -2561,7 +2592,7 @@ def process_single_csv_file(csv_path, dir_results_list):
         models = list(models_and_grids.items())  # Convert dict to list
 
         dataset_name = os.path.basename(os.path.dirname(csv_path))  # Extract dataset directory name
-        run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=scaler, dataset_name=dataset_name, feature_names=ga_selected_features, feature_selection_method=feature_selection_method)  # Run optimizations with active feature selection method
+        run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=scaler, dataset_name=dataset_name, feature_names=valid_ga_features, feature_selection_method=feature_selection_method)  # Run optimizations with validated feature selection applied
 
         added_slice = dir_results_list[start_idx:]  # Extract slice
         print(
@@ -2933,9 +2964,6 @@ def run_optimization():
         print(
             f"{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
         )  # Output the start and finish times
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
-        )  # Output the end of the program message
 
         send_telegram_message(
             TELEGRAM_BOT,
@@ -2948,9 +2976,16 @@ def run_optimization():
             atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None
         )  # Register the play_sound function to be called when the program finishes
     except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+        print(str(e))  # Print exception message to terminal for logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception details via Telegram
+        raise  # Propagate exception to preserve exit semantics
+    finally:
+        try:  # Guarantee final completion message always executes regardless of exceptions
+            print(
+                f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program Finished.{Style.RESET_ALL}"
+            )  # Output program completion message as final safety guarantee
+        except Exception:
+            pass  # Ignore any output error during completion message
 
 
 def play_sound():
