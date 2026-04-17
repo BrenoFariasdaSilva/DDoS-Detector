@@ -2345,55 +2345,79 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_nam
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
 
-def build_result_entry_from_best(csv_path, model_name, best_params, best_score, best_elapsed, all_results, X_train_ga, scaler=None, dataset_name=None, feature_names=None, best_estimator=None):
+def build_result_entry_from_best(csv_path, model_name, best_params, best_score, best_elapsed, all_results, X_train_ga, scaler=None, dataset_name=None, feature_names=None, best_estimator=None, feature_selection_method: str = "Genetic Algorithm"):
     """
     Build the ordered result dict for the best found parameters for a model.
-    Optionally export model and scaler if provided.
+
+    :param csv_path: Path to the dataset CSV file for base name extraction.
+    :param model_name: Name of the model for the result entry.
+    :param best_params: Best hyperparameter dictionary found during optimization.
+    :param best_score: Best cross-validation F1 score achieved by the model.
+    :param best_elapsed: Execution time of the best combination in seconds.
+    :param all_results: List of all per-combination result entries from grid search.
+    :param X_train_ga: Training feature matrix used to determine feature count.
+    :param scaler: Fitted scaler object for export (optional).
+    :param dataset_name: Dataset directory name for model export path (optional).
+    :param feature_names: Feature names list used during training (optional).
+    :param best_estimator: Trained estimator instance for export (optional).
+    :param feature_selection_method: Label indicating the feature selection strategy used.
+    :return: OrderedDict with result fields for the best parameter combination.
     """
-    
+
     try:
-        elapsed_time = float(best_elapsed or 0.0)
-        best_result = None
-        for result in all_results:
-            if result.get("params") == json.dumps(best_params):
-                best_result = result
-                break
-        result_dict: Dict[str, Any] = OrderedDict([
-            ("base_csv", os.path.basename(csv_path)),
-            ("model", model_name),
-            ("best_params", json.dumps(best_params)),
-            ("best_cv_f1_score", truncate_value(best_score)),
-            ("n_features", X_train_ga.shape[1]),
-            ("feature_selection_method", "Genetic Algorithm"),
-            ("dataset", os.path.basename(csv_path)),
-            ("elapsed_time_s", int(round(float(elapsed_time)))),
+        elapsed_time = float(best_elapsed or 0.0)  # Convert best elapsed time to float
+
+        best_result = None  # Initialize best result entry as None
+
+        for result in all_results:  # Iterate over all results to find the best entry
+            if result.get("params") == json.dumps(best_params):  # Verify if params match best params
+                best_result = result  # Assign matching result as the best result
+                break  # Stop iteration once match is found
+
+        result_dict: Dict[str, Any] = OrderedDict([  # Build ordered result dict with core fields
+            ("base_csv", os.path.basename(csv_path)),  # Base filename of the dataset CSV
+            ("model", model_name),  # Model name identifier
+            ("best_params", json.dumps(best_params)),  # Serialized best hyperparameter dict
+            ("best_cv_f1_score", truncate_value(best_score)),  # Truncated best cross-validation F1 score
+            ("n_features", X_train_ga.shape[1]),  # Number of features used during training
+            ("feature_selection_method", feature_selection_method),  # Feature selection strategy label
+            ("dataset", os.path.basename(csv_path)),  # Dataset filename for identification
+            ("elapsed_time_s", int(round(float(elapsed_time)))),  # Elapsed time rounded to nearest second
         ])
-        if best_result:
-            for metric_key in [
+
+        if best_result:  # Append metric fields when a matching result was found
+            for metric_key in [  # Iterate over standard metric keys to include in result
                 "accuracy", "precision", "recall", "false_positive_rate", "false_negative_rate",
                 "true_positive_rate", "true_negative_rate", "matthews_corrcoef", "roc_auc_score", "cohen_kappa"
             ]:
-                if metric_key in best_result:
-                    result_dict[metric_key] = truncate_value(best_result[metric_key])
-        if best_estimator is not None and scaler is not None and dataset_name is not None and feature_names is not None:
-            export_model_and_scaler(best_estimator, scaler, dataset_name, model_name, feature_names, best_params)
-        save_to_cache(csv_path, result_dict)
-        return result_dict
+                if metric_key in best_result:  # Verify if metric exists in result
+                    result_dict[metric_key] = truncate_value(best_result[metric_key])  # Truncate and store metric value
+
+        if best_estimator is not None and scaler is not None and dataset_name is not None and feature_names is not None:  # Verify all export components are available
+            export_model_and_scaler(best_estimator, scaler, dataset_name, model_name, feature_names, best_params)  # Export trained model and scaler to disk
+
+        save_to_cache(csv_path, result_dict)  # Persist result entry to cache file
+
+        return result_dict  # Return fully assembled result dict
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
 
 
-def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=None, dataset_name=None, feature_names=None):
+def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=None, dataset_name=None, feature_names=None, feature_selection_method: str = "Genetic Algorithm"):
     """
     Runs optimization for all configured ML models using a progress bar and manual grid search.
 
     :param models: List of (model_name, (model_instance, param_grid))
     :param csv_path: Path of the CSV file currently being processed
-    :param X_train_ga: Training feature matrix generated by the Genetic Algorithm
+    :param X_train_ga: Training feature matrix used for optimization
     :param y_train: Training labels
     :param dir_results_list: Accumulator list for storing optimization results
+    :param scaler: Fitted scaler object for model export (optional)
+    :param dataset_name: Dataset directory name used for model export path (optional)
+    :param feature_names: Feature names list used during training (optional)
+    :param feature_selection_method: Label indicating the feature selection strategy used
     :return: None
     """
 
@@ -2446,7 +2470,8 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
                     best_estimator = clf
                     result_dict = build_result_entry_from_best(
                         csv_path, model_name, best_params, best_score, best_elapsed, all_results, X_train_ga,
-                        scaler=scaler, dataset_name=dataset_name, feature_names=feature_names, best_estimator=best_estimator
+                        scaler=scaler, dataset_name=dataset_name, feature_names=feature_names, best_estimator=best_estimator,
+                        feature_selection_method=feature_selection_method
                     )
                     dir_results_list.append(result_dict)
                 else:
@@ -2494,8 +2519,6 @@ def process_single_csv_file(csv_path, dir_results_list):
             f"{BackgroundColors.GREEN}Loading Genetic Algorithm selected features...{Style.RESET_ALL}"
         )  # Output loading message
         ga_selected_features = extract_genetic_algorithm_features(csv_path)  # Extract GA features
-        if ga_selected_features is None or len(ga_selected_features) == 0:  # If no GA features found
-            print(f"{BackgroundColors.YELLOW}No GA features found for {csv_path}. Resuming without feature selection.{Style.RESET_ALL}")  # Print warning
 
         dataset_bundle = load_and_prepare_dataset(csv_path)  # Load, preprocess, split, scale
         if dataset_bundle is None:  # If loading/preprocessing failed
@@ -2503,20 +2526,27 @@ def process_single_csv_file(csv_path, dir_results_list):
 
         X_train_scaled, X_test_scaled, y_train, y_test, scaler, feature_names = dataset_bundle  # Unpack dataset bundle
 
-        print(f"{BackgroundColors.GREEN}Applying GA feature selection...{Style.RESET_ALL}")  # Output message
-        X_train_ga = get_feature_subset(X_train_scaled, ga_selected_features, feature_names)  # GA train subset
-        X_test_ga = get_feature_subset(X_test_scaled, ga_selected_features, feature_names)  # GA test subset
+        if ga_selected_features is None or len(ga_selected_features) == 0:  # Verify if GA features are unavailable or empty
+            print(f"{BackgroundColors.YELLOW}No GA features found for {csv_path}. Using all available features.{Style.RESET_ALL}")  # Warn that pipeline falls back to full feature set
+            ga_selected_features = feature_names  # Fall back to all available dataset features
+            feature_selection_method = "All Features"  # Label selection method as full feature set fallback
+        else:  # GA features were successfully loaded
+            feature_selection_method = "Genetic Algorithm"  # Label selection method as GA-driven
+
+        print(f"{BackgroundColors.GREEN}Applying feature selection ({feature_selection_method})...{Style.RESET_ALL}")  # Output the active feature selection method
+        X_train_ga = get_feature_subset(X_train_scaled, ga_selected_features, feature_names)  # Apply feature subset to training set
+        X_test_ga = get_feature_subset(X_test_scaled, ga_selected_features, feature_names)  # Apply feature subset to testing set
 
         print(
-            f"{BackgroundColors.GREEN}Training set shape after GA feature selection: {BackgroundColors.CYAN}{X_train_ga.shape}{Style.RESET_ALL}"
-        )  # Output shape
+            f"{BackgroundColors.GREEN}Training set shape after feature selection: {BackgroundColors.CYAN}{X_train_ga.shape}{Style.RESET_ALL}"
+        )  # Output training set shape
         print(
-            f"{BackgroundColors.GREEN}Testing set shape after GA feature selection: {BackgroundColors.CYAN}{X_test_ga.shape}{Style.RESET_ALL}"
-        )  # Output shape
+            f"{BackgroundColors.GREEN}Testing set shape after feature selection: {BackgroundColors.CYAN}{X_test_ga.shape}{Style.RESET_ALL}"
+        )  # Output testing set shape
 
-        if X_train_ga.shape[1] == 0:  # If GA selects no features
-            print(f"{BackgroundColors.YELLOW}No features selected by GA for {csv_path}. Skipping file.{Style.RESET_ALL}")  # Print warning
-            return  # Exit early
+        if X_train_ga.shape[1] == 0:  # Verify if feature selection produced an empty training matrix
+            print(f"{BackgroundColors.RED}No valid features remain after feature selection for {csv_path}. Skipping file.{Style.RESET_ALL}")  # Log error for empty feature matrix
+            return  # Exit early due to empty feature matrix
 
         models_and_grids = get_models_and_param_grids()  # Get model grids
 
@@ -2527,8 +2557,8 @@ def process_single_csv_file(csv_path, dir_results_list):
 
         models = list(models_and_grids.items())  # Convert dict to list
 
-        dataset_name = os.path.basename(os.path.dirname(csv_path))
-        run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=scaler, dataset_name=dataset_name, feature_names=ga_selected_features)  # Run optimizations
+        dataset_name = os.path.basename(os.path.dirname(csv_path))  # Extract dataset directory name
+        run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=scaler, dataset_name=dataset_name, feature_names=ga_selected_features, feature_selection_method=feature_selection_method)  # Run optimizations with active feature selection method
 
         added_slice = dir_results_list[start_idx:]  # Extract slice
         print(
