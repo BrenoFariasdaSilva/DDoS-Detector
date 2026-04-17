@@ -2030,14 +2030,36 @@ def run_parallel_evaluation(
             return best_params, best_score, best_elapsed, all_results, global_counter  # Return early
 
         local_counter = 0  # Start local counter
+        heartbeat_interval = 5  # Number of combinations between periodic heartbeat log lines
 
         for combo in combinations_to_test:  # Process each combination sequentially
-            current_params, metrics, elapsed = evaluate_combination_and_handle_failure(clone(model), model_name, keys, combo, X_train, y_train, local_counter + 1, len(combinations_to_test))  # Evaluate combination and return safe result tuple on failure
+            combo_display = local_counter + 1  # Compute 1-based display index for this combination
+            total_display = len(combinations_to_test)  # Total combinations count for display
+            verbose_output(f"{BackgroundColors.GREEN}Evaluating combination {BackgroundColors.CYAN}{combo_display}/{total_display}{BackgroundColors.GREEN} for model {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}")  # Log combination start with index and model name
+
+            iter_start = time.time()  # Record iteration start time for per-combination elapsed measurement
+
+            try:  # Attempt evaluation with fail-safe logging and guaranteed progress bar update
+                current_params, metrics, elapsed = evaluate_combination_and_handle_failure(clone(model), model_name, keys, combo, X_train, y_train, local_counter + 1, len(combinations_to_test))  # Evaluate combination and return safe result tuple on failure
+                iter_elapsed = time.time() - iter_start  # Compute actual wall-clock time for this iteration
+                verbose_output(f"{BackgroundColors.GREEN}Finished combination {BackgroundColors.CYAN}{combo_display}/{total_display}{BackgroundColors.GREEN} | Time: {BackgroundColors.CYAN}{iter_elapsed:.2f}s{BackgroundColors.GREEN} | Score: {BackgroundColors.CYAN}{metrics}{Style.RESET_ALL}")  # Log combination completion with timing and score
+            except Exception as loop_err:  # Catch any unexpected exception that escaped evaluate_combination_and_handle_failure
+                print(f"{BackgroundColors.RED}Exception during combination {combo_display}/{total_display} for {model_name}: {loop_err}{Style.RESET_ALL}")  # Log exception before re-raise
+                raise  # Re-raise to preserve original exception propagation
+            finally:  # Guarantee progress bar advancement regardless of evaluation success or failure
+                if progress_bar is not None:  # Verify progress bar exists before updating
+                    try:  # Protect against progress bar update errors
+                        progress_bar.update(1)  # Advance progress bar unconditionally
+                    except Exception:  # Ignore update errors to prevent masking real errors
+                        pass  # Continue silently if progress bar update fails
 
             global_counter += 1  # Increment global progress
             local_counter += 1  # Increment local model progress
 
-            if progress_bar is not None:
+            if local_counter % heartbeat_interval == 0:  # Emit periodic heartbeat every heartbeat_interval combinations
+                verbose_output(f"{BackgroundColors.YELLOW}Progress: {BackgroundColors.CYAN}{local_counter}/{total_display}{BackgroundColors.YELLOW} combinations completed for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}")  # Log periodic heartbeat with count and model name
+
+            if progress_bar is not None:  # Verify progress bar exists before updating description
                 update_optimization_progress_bar(
                     progress_bar,
                     csv_path,
@@ -2050,10 +2072,6 @@ def run_parallel_evaluation(
                     total_models=total_models,
                     overall=global_counter,
                 )  # Update progress description
-                try:
-                    progress_bar.update(1)  # Advance progress
-                except Exception:
-                    pass  # Ignore update errors
 
             result_entry = build_result_entry_with_metrics(current_params, elapsed, metrics)  # Build an OrderedDict result entry from params, execution time, and metrics
             all_results.append(result_entry)  # Append to list
