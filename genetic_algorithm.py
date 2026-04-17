@@ -1547,7 +1547,18 @@ def cache_preprocessed_data(result, cache_file, csv_path):
     """
 
     try:  # Wrap full function logic to ensure production-safe execution
-        X_train_scaled, X_test_scaled, y_train_np, y_test_np, X_columns = result  # Unpack the result tuple
+        if not isinstance(result, (tuple, list)):  # Verify result is a tuple or list before unpacking
+            raise ValueError(f"Expected tuple or list from preprocessing, got {type(result).__name__}")  # Raise with clear message
+
+        if len(result) < 5:  # Verify result contains at least the 5 required elements
+            raise ValueError(f"Preprocessing result has {len(result)} element(s), expected at least 5")  # Raise with clear message
+
+        safe_result = result[:5]  # Extract only the first 5 expected elements, ignoring any extras
+        X_train_scaled, X_test_scaled, y_train_np, y_test_np, X_columns = safe_result  # Unpack the first 5 elements safely
+
+        if X_train_scaled is None or X_test_scaled is None or y_train_np is None or y_test_np is None or X_columns is None:  # Verify none of the 5 required elements are None
+            logger.warning("One or more preprocessed elements are None; caching may produce incomplete results")  # Log warning without crashing
+
         estimated_size = (
             X_train_scaled.nbytes
             + X_test_scaled.nbytes
@@ -1564,7 +1575,7 @@ def cache_preprocessed_data(result, cache_file, csv_path):
             return  # Return without saving
         else:  # If there is enough space
             with open(cache_file, "wb") as f:  # Open cache file for writing
-                pickle.dump(result, f)  # Dump the result to cache file
+                pickle.dump(safe_result, f)  # Dump only the first 5 elements to preserve cache compatibility
             verbose_output(
                 f"{BackgroundColors.GREEN}Saved preprocessed data to cache {cache_file}.{Style.RESET_ALL}"
             )  # Output the verbose message
