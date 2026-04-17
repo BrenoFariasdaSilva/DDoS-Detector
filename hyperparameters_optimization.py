@@ -2495,8 +2495,7 @@ def process_single_csv_file(csv_path, dir_results_list):
         )  # Output loading message
         ga_selected_features = extract_genetic_algorithm_features(csv_path)  # Extract GA features
         if ga_selected_features is None or len(ga_selected_features) == 0:  # If no GA features found
-            print(f"{BackgroundColors.YELLOW}No GA features found for {csv_path}. Skipping file.{Style.RESET_ALL}")  # Print warning
-            return  # Exit early
+            print(f"{BackgroundColors.YELLOW}No GA features found for {csv_path}. Resuming without feature selection.{Style.RESET_ALL}")  # Print warning
 
         dataset_bundle = load_and_prepare_dataset(csv_path)  # Load, preprocess, split, scale
         if dataset_bundle is None:  # If loading/preprocessing failed
