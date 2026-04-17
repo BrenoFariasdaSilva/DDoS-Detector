@@ -3429,7 +3429,7 @@ def get_models(config=None):
         lgb_params = config.get("models", {}).get("lightgbm", {})  # LightGBM params
         mlp_params = config.get("models", {}).get("mlp", {})  # MLP params
 
-        return {  # Dictionary of models to train
+        models = {  # Build full models dictionary with all classifiers
             "Random Forest": RandomForestClassifier(
                 n_estimators=rf_params.get("n_estimators", 100),
                 random_state=rf_params.get("random_state", random_state),
@@ -3471,10 +3471,32 @@ def get_models(config=None):
                 random_state=mlp_params.get("random_state", random_state)
             ),
         }
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+
+        classifiers_list = config.get("stacking", {}).get("enabled_classifiers", None)  # Read optional classifier filter list from config
+
+        if classifiers_list is None:  # If no classifier filter key is present, preserve original behavior
+            return models  # Return full models dictionary with no filtering applied
+
+        unique_classifiers = list(dict.fromkeys(classifiers_list))  # Deduplicate classifiers list while preserving insertion order
+        filtered_models = {k: v for k, v in models.items() if k in unique_classifiers}  # Retain only classifiers whose names appear in the filter list
+
+        enabled_names = list(filtered_models.keys())  # Collect names of enabled classifiers for logging
+        disabled_names = [k for k in models if k not in filtered_models]  # Collect names of disabled classifiers for logging
+
+        verbose_output(
+            f"[DEBUG] Enabled classifiers: {enabled_names}",
+            config=config
+        )  # Output the list of enabled classifiers
+        verbose_output(
+            f"[DEBUG] Disabled classifiers: {disabled_names}",
+            config=config
+        )  # Output the list of disabled classifiers
+
+        return filtered_models  # Return filtered models dictionary, may be empty if all names were invalid or list was empty
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def extract_hyperparameter_optimization_results(csv_path, config=None):
