@@ -1608,12 +1608,15 @@ def compute_metrics_from_predictions(model, y_true, y_pred, X=None):
     try:
         metrics = {}  # Container for computed metrics
 
-        f1 = f1_score(y_true, y_pred, average="weighted")  # Weighted F1 score
+        f1 = f1_score(y_true, y_pred, average="weighted", zero_division=0)  # Weighted F1 score with zero_division guard for single-class folds
         accuracy = accuracy_score(y_true, y_pred)  # Accuracy score
-        precision = precision_score(y_true, y_pred, average="weighted", zero_division=0)  # Precision
-        recall = recall_score(y_true, y_pred, average="weighted", zero_division=0)  # Recall
+        precision = precision_score(y_true, y_pred, average="weighted", zero_division=0)  # Precision with zero_division guard
+        recall = recall_score(y_true, y_pred, average="weighted", zero_division=0)  # Recall with zero_division guard
         mcc = matthews_corrcoef(y_true, y_pred)  # Matthews correlation coefficient
-        kappa = cohen_kappa_score(y_true, y_pred)  # Cohen's kappa
+        try:  # Attempt Cohen's kappa safely to handle single-class fold edge cases
+            kappa = cohen_kappa_score(y_true, y_pred)  # Cohen's kappa
+        except Exception:  # If kappa computation fails on single-class fold, fall back to zero
+            kappa = 0.0  # Default kappa to zero when computation is undefined
 
         metrics.update({
             "f1_score": float(f1),  # Store F1 as float
@@ -1695,8 +1698,8 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
                     fold_metrics_list.append(m)
                     fold_elapsed.append(elapsed_fold)
 
-            if len(fold_metrics_list) == 0:
-                metrics = None
+            if len(fold_metrics_list) == 0:  # Verify if all folds failed to produce valid metrics
+                metrics = {"f1_score": 0.0}  # Set fallback metrics with zero F1 when no folds succeeded
             else:
                 aggregated = {}
                 keys_all = set().union(*(d.keys() for d in fold_metrics_list))
@@ -1714,17 +1717,17 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
                     metrics["f1_score"] = metrics.get("f1_score")
 
         except MemoryError:
-            print(f"{BackgroundColors.RED}MemoryError with params {current_params}. Consider reducing dataset size or n_jobs.{Style.RESET_ALL}")
-            metrics = None
+            print(f"{BackgroundColors.RED}MemoryError with params {current_params}. Consider reducing dataset size or n_jobs.{Style.RESET_ALL}")  # Log MemoryError with reduction hint
+            metrics = {"f1_score": 0.0}  # Set fallback metrics with zero F1 score on memory failure
         except KeyboardInterrupt:
-            raise
+            raise  # Propagate keyboard interrupt without suppression
         except Exception as e:
-            verbose_output(f"{BackgroundColors.YELLOW}Error evaluating params {current_params}: {type(e).__name__}: {e}{Style.RESET_ALL}")
-            metrics = None
+            verbose_output(f"{BackgroundColors.YELLOW}Error evaluating params {current_params}: {type(e).__name__}: {e}{Style.RESET_ALL}")  # Log evaluation failure with exception context
+            metrics = {"f1_score": 0.0}  # Set fallback metrics with zero F1 score on evaluation failure
 
         elapsed = time.time() - start_time
         
-        send_telegram_message(TELEGRAM_BOT, [f"Completed {model_name} combination {current_index}/{total_combinations} with F1: {truncate_value(metrics.get('f1_score')) if metrics else 'N/A'} in {calculate_execution_time(start_time, time.time())}"])
+        send_telegram_message(TELEGRAM_BOT, [f"Completed {model_name} combination {current_index}/{total_combinations} with F1: {truncate_value(metrics.get('f1_score')) if metrics is not None and metrics.get('f1_score') is not None else 'N/A'} in {calculate_execution_time(start_time, time.time())}"])  # Log completion reporting N/A only when F1 is genuinely unavailable
         
         return current_params, metrics, elapsed
     except Exception as e:
