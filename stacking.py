@@ -92,7 +92,7 @@ import time  # For measuring execution time
 import traceback  # For formatting and printing exception tracebacks
 import yaml  # Import YAML library
 from colorama import Style  # For terminal text styling
-from joblib import dump, load  # For exporting and loading trained models and scalers
+from joblib import dump, load, parallel_backend  # For exporting and loading trained models, scalers, and parallel backend selection
 from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
@@ -3447,7 +3447,8 @@ def get_models(config=None):
             ),
             "Logistic Regression": LogisticRegression(
                 max_iter=lr_params.get("max_iter", 1000),
-                random_state=lr_params.get("random_state", random_state)
+                random_state=lr_params.get("random_state", random_state),
+                n_jobs=n_jobs
             ),
             "KNN": KNeighborsClassifier(
                 n_neighbors=knn_params.get("n_neighbors", 5),
@@ -4024,7 +4025,8 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             if existing_metrics is not None:  # If a valid existing model was found and used
                 return existing_metrics  # Return cached metrics without retraining
 
-        model.fit(X_train, y_train)  # Fit the model on the training data
+        with parallel_backend("loky"):  # Enable loky multiprocessing backend for parallel model training
+            model.fit(X_train, y_train)  # Fit the model on the training data
 
         y_pred = model.predict(X_test)  # Predict the labels for the test set
 
@@ -4074,7 +4076,8 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
 
         start_time = time.time()  # Record the start time for timing training and prediction
 
-        model.fit(X_train, y_train)  # Fit the stacking model on the training data (accepts DataFrame or array)
+        with parallel_backend("loky"):  # Enable loky multiprocessing backend for parallel stacking training
+            model.fit(X_train, y_train)  # Fit the stacking model on the training data (accepts DataFrame or array)
 
         y_pred = model.predict(X_test)  # Predict the labels for the test set
 
@@ -5392,7 +5395,7 @@ def create_model_from_params(model_name, params, config=None):
         elif model_name == "LightGBM":  # LightGBM classifier
             return lgb.LGBMClassifier(force_row_wise=True, random_state=automl_random_state, verbosity=-1, n_jobs=n_jobs, **clean_params)  # Create LGBM instance
         elif model_name == "Logistic Regression":  # Logistic Regression classifier
-            return LogisticRegression(random_state=automl_random_state, **clean_params)  # Create LR instance
+            return LogisticRegression(random_state=automl_random_state, n_jobs=n_jobs, **clean_params)  # Create LR instance with parallel jobs
         elif model_name == "SVM":  # Support Vector Machine classifier
             return SVC(probability=True, random_state=automl_random_state, **clean_params)  # Create SVM instance
         elif model_name == "Extra Trees":  # Extra Trees classifier
@@ -5444,7 +5447,8 @@ def automl_cross_validate_model(model, X_train, y_train, cv_folds, trial=None, c
             X_fold_val = X_train[val_idx]  # Get fold validation features
             y_fold_val = y_train[val_idx]  # Get fold validation target
 
-            model.fit(X_fold_train, y_fold_train)  # Fit model on fold training data
+            with parallel_backend("loky"):  # Enable loky multiprocessing backend for parallel fold training
+                model.fit(X_fold_train, y_fold_train)  # Fit model on fold training data
             y_pred = model.predict(X_fold_val)  # Predict on fold validation data
             fold_f1 = f1_score(y_fold_val, y_pred, average="weighted", zero_division=0)  # Calculate fold F1
             f1_scores.append(fold_f1)  # Append fold F1 score
@@ -5619,7 +5623,7 @@ def automl_stacking_objective(trial, X_train, y_train, cv_folds, candidate_model
                 estimators.append((safe_name, model))  # Add to estimators list
 
             if meta_learner_name == "Logistic Regression":  # Logistic Regression meta-learner
-                meta_model = LogisticRegression(max_iter=1000, random_state=automl_random_state)  # Create LR meta-learner
+                meta_model = LogisticRegression(max_iter=1000, random_state=automl_random_state, n_jobs=n_jobs)  # Create LR meta-learner with parallel jobs
             elif meta_learner_name == "Random Forest":  # Random Forest meta-learner
                 meta_model = RandomForestClassifier(n_estimators=50, random_state=automl_random_state, n_jobs=n_jobs)  # Create RF meta-learner
             else:  # Gradient Boosting meta-learner
@@ -5799,7 +5803,7 @@ def build_automl_stacking_model(best_config, config=None):
         meta_learner_name = best_config["meta_learner"]  # Get meta-learner name
 
         if meta_learner_name == "Logistic Regression":  # Logistic Regression meta-learner
-            meta_model = LogisticRegression(max_iter=1000, random_state=config.get("automl", {}).get("random_state", 42))  # Create LR
+            meta_model = LogisticRegression(max_iter=1000, random_state=config.get("automl", {}).get("random_state", 42), n_jobs=config.get("evaluation", {}).get("n_jobs", -1))  # Create LR with parallel jobs
         elif meta_learner_name == "Random Forest":  # Random Forest meta-learner
             meta_model = RandomForestClassifier(n_estimators=50, random_state=config.get("automl", {}).get("random_state", 42), n_jobs=config.get("evaluation", {}).get("n_jobs", -1))  # Create RF
         else:  # Gradient Boosting meta-learner
@@ -5837,7 +5841,8 @@ def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y
     try:
         start_time = time.time()  # Record start time
 
-        model.fit(X_train, y_train)  # Train model on full training set
+        with parallel_backend("loky"):  # Enable loky multiprocessing backend for parallel model training
+            model.fit(X_train, y_train)  # Train model on full training set
         y_pred = model.predict(X_test)  # Generate predictions on test set
 
         elapsed = time.time() - start_time  # Calculate elapsed training time
@@ -6290,7 +6295,8 @@ def export_automl_pipeline_artifacts(model_study, stacking_study, stacking_confi
 
         if stacking_config is not None and stacking_metrics is not None:  # If stacking was successful
             best_stacking_model_final = build_automl_stacking_model(stacking_config, config=config)  # Rebuild stacking model for export
-            best_stacking_model_final.fit(X_train_scaled, y_train_arr)  # Fit stacking model on full training data
+            with parallel_backend("loky"):  # Enable loky multiprocessing backend for parallel stacking training
+                best_stacking_model_final.fit(X_train_scaled, y_train_arr)  # Fit stacking model on full training data
             export_automl_best_model(
                 best_stacking_model_final, scaler, automl_output_dir, "AutoML_Stacking", feature_names, dataset_file=file
             )  # Export best stacking model to file
