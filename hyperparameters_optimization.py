@@ -2496,7 +2496,7 @@ def process_single_csv_file(csv_path, dir_results_list):
 
     try:
         print(
-            f"{BackgroundColors.GREEN}\nProcessing file: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}"
+            f"{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}"
         )  # Output the file being processed
 
         dataset_name = os.path.basename(os.path.dirname(csv_path))
@@ -2882,7 +2882,7 @@ def run_optimization():
 
         print(
             f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Classifiers Hyperparameters Optimization{BackgroundColors.GREEN} program!{Style.RESET_ALL}",
-            end="\n\n",
+            end="\n",
         )  # Output the welcome message
         start_time = datetime.datetime.now()  # Get the start time of the program
         
