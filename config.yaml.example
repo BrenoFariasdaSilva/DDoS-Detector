@@ -286,6 +286,17 @@ stacking: # Stacking experiment settings
     feature_selection: true # Enable feature selection combination in pipeline
     hyperparameter_optimization: true # Enable hyperparameter optimization combination in pipeline
 
+  enabled_classifiers: # List of classifier names to include in stacking pipeline (remove entries to disable)
+    - Random Forest
+    - SVM
+    - XGBoost
+    - Logistic Regression
+    - KNN
+    - Nearest Centroid
+    - Gradient Boosting
+    - LightGBM
+    - MLP (Neural Net)
+
   cache_prefix: "Cache_" # Prefix for cached preprocessing artifacts
   model_export_base: "Stacking/Models/" # Base directory for model exports
   match_filenames_to_process: [""] # List of specific filenames to match (empty = process all)
