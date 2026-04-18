@@ -182,7 +182,7 @@ DATASETS = {  # Dictionary containing dataset paths and feature files
 # SVM Performance Constants:
 HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION = None  # Optional float fraction for grid-search subsampling (None = use full training set; set to e.g. 0.05 for 5%)
 USE_LINEAR_SVC_FOR_LINEAR_KERNEL = False  # If True, substitute SVC(kernel='linear') with LinearSVC for faster equivalent linear training
-SVM_MAX_ITER = 10000  # Maximum solver iterations for SVC to prevent unbounded training time on large datasets
+SVM_MAX_ITER = None  # Maximum solver iterations for SVC (None = unlimited; set to integer to cap iterations)
 
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
@@ -223,7 +223,7 @@ def get_default_config() -> Dict[str, Any]:
                 "low_memory": False,  # Enable low memory mode for pandas CSV loading (forced True when verbose is active)
                 "sample_fraction": None,  # Optional float fraction for grid-search subsampling (None disables)
                 "use_linear_svc_for_linear_kernel": False,  # If True, substitute SVC(kernel='linear') with LinearSVC
-                "svm_max_iter": 10000,  # Maximum solver iterations for SVC
+                "svm_max_iter": None,  # Maximum solver iterations for SVC (None = unlimited; set to integer to cap iterations)
             },
             "export": {
                 "results_dir": "Feature_Analysis/Hyperparameter_Optimization",
@@ -389,6 +389,9 @@ def apply_cli_overrides_to_cfg(cfg: Dict[str, Any], args: argparse.Namespace) ->
 
     if getattr(args, "skip_train_if_model_exists", None) is not None:
         execution["skip_train_if_model_exists"] = bool(args.skip_train_if_model_exists)
+
+    if getattr(args, "svm_max_iter", None) is not None:  # Verify if svm_max_iter CLI argument was provided
+        execution["svm_max_iter"] = int(args.svm_max_iter)  # Apply CLI svm_max_iter override to execution config
 
     if getattr(args, "results_dir", None):
         export["results_dir"] = str(args.results_dir)
@@ -1262,7 +1265,7 @@ def get_thundersvm_estimator():
             else:  # If no GPU info was detected
                 print(f"{BackgroundColors.YELLOW}ThunderSVM not available; falling back to sklearn.SVC.{Style.RESET_ALL}")
 
-            return SVC(random_state=42, probability=True, max_iter=SVM_MAX_ITER)  # Return sklearn's SVC as fallback with iteration limit to prevent unbounded training time
+            return SVC(random_state=42, probability=True, max_iter=SVM_MAX_ITER)  # Return sklearn's SVC as fallback with configured max_iter (None = unlimited)
 
         gpu_available = False  # Assume no GPU by default
         try:  # Try to run nvidia-smi
@@ -1303,7 +1306,7 @@ def get_thundersvm_estimator():
 
         if ThunderSVC is not None:
             return cast(Any, ThunderSVC)(random_state=42, probability=True)  # Return default ThunderSVC as final GPU/CPU fallback
-        return SVC(random_state=42, probability=True, max_iter=SVM_MAX_ITER)  # Return sklearn SVC with iteration limit as last-resort fallback
+        return SVC(random_state=42, probability=True, max_iter=SVM_MAX_ITER)  # Return sklearn SVC with configured max_iter as last-resort fallback (None = unlimited)
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -3147,6 +3150,7 @@ def main():
     parser.add_argument("--results_filename", type=str, help="Results CSV filename (overrides config)")  # Results filename override
     parser.add_argument("--model_export_base_dir", type=str, help="Model export base directory (overrides config)")  # Model export directory override
     parser.add_argument("--cache_prefix", type=str, help="Cache file prefix (overrides config)")  # Cache prefix override
+    parser.add_argument("--svm_max_iter", type=int, help="Maximum SVC solver iterations (overrides config)")  # SVM max iterations override
     args = parser.parse_args()  # Parse CLI arguments
 
     defaults = get_default_config()  # Load hard-coded default configuration
@@ -3181,7 +3185,9 @@ def main():
     sample_frac = exec_cfg.get("sample_fraction", None)  # Get raw subsampling fraction value from config
     HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION = float(sample_frac) if sample_frac is not None else None  # Convert to float when defined, or keep None to disable subsampling
     USE_LINEAR_SVC_FOR_LINEAR_KERNEL = bool(exec_cfg.get("use_linear_svc_for_linear_kernel", False))  # Set LinearSVC substitution flag from config
-    SVM_MAX_ITER = int(exec_cfg.get("svm_max_iter", ))  # Set SVM maximum solver iterations from config
+    svm_max_iter_cfg = exec_cfg.get("svm_max_iter", None)  # Read svm_max_iter from config with None as unlimited default
+    SVM_MAX_ITER = int(svm_max_iter_cfg) if svm_max_iter_cfg is not None else None  # Use integer value when defined, or None for unlimited
+    verbose_output(f"{BackgroundColors.GREEN}[DEBUG] svm_max_iter resolved to: {BackgroundColors.CYAN}{SVM_MAX_ITER}{Style.RESET_ALL}")  # Log the final resolved svm_max_iter value; displays None when unlimited
 
     print(f"{BackgroundColors.GREEN}[INFO] N_JOBS={BackgroundColors.CYAN}{N_JOBS}{BackgroundColors.GREEN} | SVM_MAX_ITER={BackgroundColors.CYAN}{SVM_MAX_ITER}{BackgroundColors.GREEN} | Sample fraction={BackgroundColors.CYAN}{HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION}{BackgroundColors.GREEN} | LinearSVC for linear={BackgroundColors.CYAN}{USE_LINEAR_SVC_FOR_LINEAR_KERNEL}{Style.RESET_ALL}")  # Log all SVM performance config values at startup
 
