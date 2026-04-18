@@ -1816,7 +1816,7 @@ def prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations):
         train_count = len(y_train) if y_train is not None else 0  # Count training samples
         test_count = len(y_test) if y_test is not None else 0  # Count testing samples
         verbose_output(
-            f"  {BackgroundColors.GREEN}  Dataset: {BackgroundColors.CYAN}{dataset_name} - {train_count} training / {test_count} testing  (80/20){Style.RESET_ALL}\n"
+            f"  {BackgroundColors.GREEN}Dataset: {BackgroundColors.CYAN}{dataset_name} - {train_count} training / {test_count} testing  (80/20){Style.RESET_ALL}\n"
         )
 
         return X_train, X_test, y_train, y_test, feature_names  # Return prepared data
