@@ -3217,6 +3217,61 @@ def get_hardware_specifications():
         raise
 
 
+def migrate_results_csv_schema(filepath: str) -> None:
+    """
+    Migrates an existing results CSV from the old schema to the new schema.
+
+    :param filepath: Absolute or relative path to the results CSV file to migrate.
+    :return: None
+    """
+
+    if not os.path.exists(filepath):  # Return early when the results CSV does not yet exist on disk
+        return  # Nothing to migrate
+
+    try:  # Guard the entire migration against unexpected read or write failures
+        df = pd.read_csv(filepath)  # Load the existing results CSV into a DataFrame for inspection
+
+        missing_cols = [c for c in ("dataset_name", "dataset_path") if c not in df.columns]  # Identify columns absent from the existing schema
+
+        if not missing_cols:  # Return immediately when the schema is already current
+            return  # No migration required
+
+        print(f"{BackgroundColors.YELLOW}[WARNING] Migrating old CSV schema to include dataset_name and dataset_path{Style.RESET_ALL}")  # Log migration warning before modifying the file
+
+        inferred_base = os.path.normpath(os.path.dirname(os.path.dirname(filepath)))  # Derive the dataset directory by ascending two levels above the results file
+        rel_dataset_path = "./" + os.path.relpath(inferred_base).replace(os.sep, "/")  # Convert to forward-slash relative path anchored at the working directory
+
+        if not rel_dataset_path.endswith("/"):  # Ensure a trailing slash is present on the dataset path
+            rel_dataset_path += "/"  # Append trailing slash to conform to the DATASETS path format
+
+        inferred_dataset_name = ""  # Initialize dataset name to empty string before attempting lookup
+
+        for cfg_name, cfg_paths in DATASETS.items():  # Iterate configured dataset entries to find a matching path
+            for cfg_path in cfg_paths:  # Iterate each path listed under the current dataset name
+                norm_cfg = os.path.normpath(cfg_path).replace(os.sep, "/").rstrip("/") + "/"  # Normalize the configured path for comparison
+                norm_inf = os.path.normpath(rel_dataset_path).replace(os.sep, "/").rstrip("/") + "/"  # Normalize the inferred path for comparison
+                if norm_cfg == norm_inf:  # Compare normalized paths to resolve the matching dataset name
+                    inferred_dataset_name = cfg_name  # Assign the matched dataset name from the configuration
+                    break  # Stop searching once a match is found
+            if inferred_dataset_name:  # Exit the outer loop once the dataset name has been resolved
+                break  # Match found; no need to iterate further
+
+        if "dataset_name" not in df.columns:  # Add dataset_name column only when absent from the existing schema
+            df.insert(0, "dataset_name", inferred_dataset_name)  # Insert dataset_name as the first column with the inferred value
+
+        if "dataset_path" not in df.columns:  # Add dataset_path column only when absent from the existing schema
+            df.insert(1, "dataset_path", rel_dataset_path)  # Insert dataset_path as the second column with the inferred value
+
+        tmp_path = filepath + ".tmp"  # Define a temporary file path for atomic write safety
+        df.to_csv(tmp_path, index=False)  # Write the migrated DataFrame to the temporary file before replacing the original
+        os.replace(tmp_path, filepath)  # Atomically replace the original file with the migrated version
+
+        print(f"{BackgroundColors.GREEN}Migration complete: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Confirm successful schema migration to the terminal
+
+    except Exception as e:  # Catch any error during migration to prevent aborting the main execution flow
+        print(f"{BackgroundColors.RED}[ERROR] CSV schema migration failed for {filepath}: {e}{Style.RESET_ALL}")  # Log the migration failure with file context for diagnostics
+
+
 def save_optimization_results(csv_path, results_list):
     """
     Saves hyperparameter optimization results to a CSV file.
@@ -3263,6 +3318,8 @@ def save_optimization_results(csv_path, results_list):
                 df_results[col] = df_results[col].apply(lambda v: truncate_value(v) if pd.notnull(v) else v)  # Truncate values
             except Exception:  # If truncation fails
                 pass  # Keep original value
+
+        migrate_results_csv_schema(output_path)  # Migrate existing results CSV to the new schema before appending new rows
 
         if os.path.exists(output_path):  # Verify if the results CSV file already exists to determine write mode
             df_results.to_csv(output_path, mode="a", header=False, index=False)  # Append new rows to existing CSV without duplicating the header
