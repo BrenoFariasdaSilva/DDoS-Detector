@@ -308,7 +308,7 @@ def build_resource_monitor_defaults():
         raise  # Re-raise to preserve original failure semantics
 
 
-def resolve_n_jobs():
+def resolve_n_jobs(log=False):
     """
     Resolve the effective n_jobs value for the fitness estimator from configuration.
 
@@ -317,6 +317,7 @@ def resolve_n_jobs():
     oversubscription.  When the GA runs in a single process the full n_jobs value
     from the multiprocessing config section is used, defaulting to -1 (all CPUs).
 
+    :parameter log: If True, print the resolved n_jobs and reasoning to the terminal (only on change or when verbose)
     :return: Integer n_jobs value safe for the current parallelism mode.
     """
 
@@ -348,18 +349,19 @@ def resolve_n_jobs():
         except Exception:  # If config access fails, default to non-verbose to avoid noisy output
             verbose_flag = False  # Default to non-verbose when config inaccessible
 
-        if LAST_RESOLVED_N_JOBS != effective_n_jobs or verbose_flag:  # Print only on change or when verbose
-            if cpu_processes_int > 1:  # Describe forced single-threaded mode when applicable
-                print(
-                    f"resolve_n_jobs: GA uses {cpu_processes_int} worker processes — "
-                    f"forcing estimator n_jobs=1 to prevent CPU oversubscription"
-                )  # Log change to n_jobs behavior
-            else:  # Describe the configured n_jobs when running single-process
-                print(
-                    f"resolve_n_jobs: GA runs in single-process mode — "
-                    f"using configured estimator n_jobs={effective_n_jobs}"
-                )  # Log resolved n_jobs
-            LAST_RESOLVED_N_JOBS = effective_n_jobs  # Update cached value to avoid repeated prints
+        if log:  # Only print if logging is requested (e.g., during fitness evaluation) to avoid unnecessary prints during GA setup
+            if LAST_RESOLVED_N_JOBS != effective_n_jobs or verbose_flag:  # Print only on change or when verbose
+                if cpu_processes_int > 1:  # Describe forced single-threaded mode when applicable
+                    print(
+                        f"resolve_n_jobs: GA uses {cpu_processes_int} worker processes — "
+                        f"forcing estimator n_jobs=1 to prevent CPU oversubscription"
+                    )  # Log change to n_jobs behavior
+                else:  # Describe the configured n_jobs when running single-process
+                    print(
+                        f"resolve_n_jobs: GA runs in single-process mode — "
+                        f"using configured estimator n_jobs={effective_n_jobs}"
+                    )  # Log resolved n_jobs
+                LAST_RESOLVED_N_JOBS = effective_n_jobs  # Update cached value to avoid repeated prints
 
         return effective_n_jobs  # Return resolved n_jobs for estimator instantiation
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -1757,7 +1759,7 @@ def print_ga_parameters(min_pop, max_pop, n_generations, feature_count):
             f"  {BackgroundColors.GREEN}Fitness evaluation: {BackgroundColors.CYAN}10-fold Stratified CV on training set{Style.RESET_ALL}"
         )
         print(
-            f"  {BackgroundColors.GREEN}Base estimator: {BackgroundColors.CYAN}RandomForestClassifier (n_estimators=100, n_jobs={resolve_n_jobs()}){Style.RESET_ALL}"
+            f"  {BackgroundColors.GREEN}Base estimator: {BackgroundColors.CYAN}RandomForestClassifier (n_estimators=100, n_jobs={resolve_n_jobs(log=False)}){Style.RESET_ALL}"
         )
         print(f"  {BackgroundColors.GREEN}Optimization goal: {BackgroundColors.CYAN}Maximize F1-Score while minimizing model complexity (number of features){Style.RESET_ALL}")
         print("")  # Empty line for spacing
@@ -2086,7 +2088,7 @@ def instantiate_estimator(estimator_cls=None):
         if ga_parallel > 1:  # If GA uses multiple processes
             estimator_n_jobs = 1  # Force single-threaded estimator to avoid nested loky
         else:  # If GA is not parallelized across processes
-            estimator_n_jobs = resolve_n_jobs()  # Resolve n_jobs from multiprocessing config
+            estimator_n_jobs = resolve_n_jobs(log=False)  # Resolve n_jobs from multiprocessing config (silent)
 
         if estimator_cls is None:  # If no estimator class provided by caller
             return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=estimator_n_jobs)  # Return default RandomForest
@@ -6430,7 +6432,7 @@ def train_and_save_final_model(best_feats_local, X, y, feature_names, X_test, mo
         sel_indices_local = [i for i, f in enumerate(feature_names) if f in best_feats_local]  # Get indices of selected features
         X_final_local = X_scaled_local[:, sel_indices_local] if sel_indices_local else X_scaled_local  # Select only chosen feature columns from scaled data
         X_test_selected_local = X_test[:, sel_indices_local] if sel_indices_local and X_test is not None else X_test  # Select same feature columns from test data
-        model_local = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=resolve_n_jobs())  # Instantiate Random Forest classifier with 100 trees
+        model_local = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=resolve_n_jobs(log=False))  # Instantiate Random Forest classifier with 100 trees (silent resolver)
         start_train_local = time.perf_counter()  # Record training start time
         model_local.fit(X_final_local, y)  # Train model on selected features
         training_time_local = time.perf_counter() - start_train_local  # Calculate training duration
