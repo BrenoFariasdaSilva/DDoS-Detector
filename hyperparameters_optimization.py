@@ -1562,8 +1562,9 @@ def compute_total_param_combinations(models):
 
         for model_name, (model, param_grid) in models:  # Iterate models
             if param_grid:  # If there is a param grid
+                keys = list(param_grid.keys())  # Extract parameter names for combination validation
                 values = [v if isinstance(v, (list, tuple)) else [v] for v in param_grid.values()]  # Ensure lists
-                count = len(list(product(*values)))  # Count combinations
+                count = sum(1 for combo in product(*values) if is_valid_combination(model_name, dict(zip(keys, combo))))  # Count valid combinations only, matching the filter applied during actual grid search
             else:  # No hyperparameters
                 count = 1  # Single combination
 
