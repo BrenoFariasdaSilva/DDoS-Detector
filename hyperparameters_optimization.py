@@ -2422,7 +2422,7 @@ def compute_max_parallel_jobs(memory_per_job_mb: float) -> int:
         swap = psutil.swap_memory()  # Retrieve current swap memory statistics from the OS
         available_mb = (vm.available + swap.free) / (1024 ** 2)  # Total available memory including swap in megabytes
 
-        safety_margin = 0.75  # Reserve 25% of available memory for OS and non-worker process overhead
+        safety_margin = 0.90  # Reserve 90% of available memory for OS and non-worker process overhead
         usable_mb = available_mb * safety_margin  # Apply safety margin to compute the usable memory budget
 
         cpu_count = os.cpu_count() or 1  # Number of logical CPU cores available on this machine
