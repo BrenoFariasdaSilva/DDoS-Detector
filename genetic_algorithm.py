@@ -130,6 +130,8 @@ TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegr
 # Logger Setup:
 logger = None  # Global logger instance (initialized in initialize_logger)
 
+LAST_RESOLVED_N_JOBS = None  # Cache the last resolved n_jobs to avoid noisy repeated prints during GA loops
+
 # Fitness Cache:
 fitness_cache = {}  # Cache for fitness results to avoid re-evaluating same feature masks
 fitness_cache_lock = threading.Lock()  # Thread lock for fitness cache
@@ -319,6 +321,7 @@ def resolve_n_jobs():
     """
 
     try:
+        global LAST_RESOLVED_N_JOBS  # Update module-level cache when value changes
         ga_mp_cfg = CONFIG.get("genetic_algorithm", {}).get("multiprocessing", {})  # Read GA multiprocessing sub-section from config
         configured_n_jobs = ga_mp_cfg.get("n_jobs", -1)  # Read configured n_jobs; default -1 (all CPUs)
 
@@ -337,16 +340,26 @@ def resolve_n_jobs():
 
         if cpu_processes_int > 1:  # GA pool is running with multiple worker processes
             effective_n_jobs = 1  # Force estimator to single-threaded to avoid nested parallelism
-            print(  # Log the forced single-threaded mode via stdout/logger
-                f"resolve_n_jobs: GA uses {cpu_processes_int} worker processes — "
-                f"forcing estimator n_jobs=1 to prevent CPU oversubscription"
-            )  # Debug log for forced n_jobs=1
         else:  # GA is running in single-process mode
             effective_n_jobs = configured_n_jobs  # Use the configured value directly
-            print(  # Log the resolved n_jobs value via stdout/logger
-                f"resolve_n_jobs: GA runs in single-process mode — "
-                f"using configured estimator n_jobs={effective_n_jobs}"
-            )  # Debug log for configured n_jobs
+
+        try:  # Safely read verbose flag from config; default to False if any issue occurs to avoid noisy output
+            verbose_flag = CONFIG.get("execution", {}).get("verbose", False)  # Read verbose flag from config
+        except Exception:  # If config access fails, default to non-verbose to avoid noisy output
+            verbose_flag = False  # Default to non-verbose when config inaccessible
+
+        if LAST_RESOLVED_N_JOBS != effective_n_jobs or verbose_flag:  # Print only on change or when verbose
+            if cpu_processes_int > 1:  # Describe forced single-threaded mode when applicable
+                print(
+                    f"resolve_n_jobs: GA uses {cpu_processes_int} worker processes — "
+                    f"forcing estimator n_jobs=1 to prevent CPU oversubscription"
+                )  # Log change to n_jobs behavior
+            else:  # Describe the configured n_jobs when running single-process
+                print(
+                    f"resolve_n_jobs: GA runs in single-process mode — "
+                    f"using configured estimator n_jobs={effective_n_jobs}"
+                )  # Log resolved n_jobs
+            LAST_RESOLVED_N_JOBS = effective_n_jobs  # Update cached value to avoid repeated prints
 
         return effective_n_jobs  # Return resolved n_jobs for estimator instantiation
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -2074,10 +2087,6 @@ def instantiate_estimator(estimator_cls=None):
             estimator_n_jobs = 1  # Force single-threaded estimator to avoid nested loky
         else:  # If GA is not parallelized across processes
             estimator_n_jobs = resolve_n_jobs()  # Resolve n_jobs from multiprocessing config
-
-        print(  # Log the resolved n_jobs value for the fitness estimator via stdout/logger
-            f"instantiate_estimator: ga_parallel={ga_parallel}, resolved estimator n_jobs={estimator_n_jobs}"
-        )  # Debug log for instantiated estimator configuration
 
         if estimator_cls is None:  # If no estimator class provided by caller
             return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=estimator_n_jobs)  # Return default RandomForest
