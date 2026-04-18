@@ -90,7 +90,7 @@ from sklearn.model_selection import StratifiedKFold, train_test_split  # For hyp
 from sklearn.neighbors import KNeighborsClassifier, NearestCentroid  # For k-nearest neighbors model
 from sklearn.neural_network import MLPClassifier  # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For label encoding and feature scaling
-from sklearn.svm import SVC  # For Support Vector Machine model
+from sklearn.svm import LinearSVC, SVC  # For Support Vector Machine models
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
 from typing import Any, cast, Dict, Union  # For type hints
@@ -178,6 +178,11 @@ DATASETS = {  # Dictionary containing dataset paths and feature files
     ],
 }
 
+# SVM Performance Constants:
+HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION = None  # Optional float fraction for grid-search subsampling (None = use full training set; set to e.g. 0.05 for 5%)
+USE_LINEAR_SVC_FOR_LINEAR_KERNEL = False  # If True, substitute SVC(kernel='linear') with LinearSVC for faster equivalent linear training
+SVM_MAX_ITER = 10000  # Maximum solver iterations for SVC to prevent unbounded training time on large datasets
+
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
 
@@ -214,6 +219,9 @@ def get_default_config() -> Dict[str, Any]:
                 "verbose": False,
                 "n_jobs": -2,
                 "skip_train_if_model_exists": False,
+                "sample_fraction": None,  # Optional float fraction for grid-search subsampling (None disables)
+                "use_linear_svc_for_linear_kernel": False,  # If True, substitute SVC(kernel='linear') with LinearSVC
+                "svm_max_iter": 10000,  # Maximum solver iterations for SVC
             },
             "export": {
                 "results_dir": "Feature_Analysis/Hyperparameter_Optimization",
@@ -963,29 +971,35 @@ def is_valid_combination(model_name_local, params_local):
     """
     
     try:
-        if model_name_local != "Logistic Regression":  # Only validate for Logistic Regression
-            return True  # All combinations valid for other models
+        if model_name_local == "SVM":  # Validate SVM-specific hyperparameter combinations before other rules
+            kernel = params_local.get("kernel")  # Get kernel parameter from the combination
+            gamma = params_local.get("gamma")  # Get gamma parameter from the combination
+            if kernel == "linear" and gamma not in ("scale", None):  # For linear kernel, gamma has no effect on the decision boundary
+                return False  # Skip redundant gamma variations to eliminate duplicate results for linear kernel
 
-        solver = params_local.get("solver")  # Get solver parameter
-        penalty = params_local.get("penalty")  # Get penalty parameter
-        l1_ratio = params_local.get("l1_ratio", 0.0)  # Get l1_ratio parameter (default to 0.0)
+        if model_name_local != "Logistic Regression":  # Only Logistic Regression requires further validation below
+            return True  # All remaining combinations are valid for non-Logistic-Regression models
 
-        if solver == "lbfgs" and penalty in ("l1", "elasticnet"):
-            return False
-        
-        if penalty == "elasticnet" and solver != "saga":
-            return False
-        
-        if penalty == "l1" and solver not in ("saga", "liblinear"):
-            return False
-        
-        if l1_ratio not in (None, 0.0) and penalty != "elasticnet":
-            return False
-        
-        if penalty is None and l1_ratio not in (None, 0.0):
-            return False
+        solver = params_local.get("solver")  # Get solver parameter from the combination
+        penalty = params_local.get("penalty")  # Get penalty parameter from the combination
+        l1_ratio = params_local.get("l1_ratio", 0.0)  # Get l1_ratio parameter with default of 0.0
 
-        return True  # Valid combination
+        if solver == "lbfgs" and penalty in ("l1", "elasticnet"):  # lbfgs does not support l1 or elasticnet penalties
+            return False  # Reject invalid lbfgs solver with l1 or elasticnet penalty
+
+        if penalty == "elasticnet" and solver != "saga":  # elasticnet penalty requires saga solver
+            return False  # Reject elasticnet penalty with any solver other than saga
+
+        if penalty == "l1" and solver not in ("saga", "liblinear"):  # l1 penalty requires saga or liblinear solver
+            return False  # Reject l1 penalty with unsupported solvers
+
+        if l1_ratio not in (None, 0.0) and penalty != "elasticnet":  # l1_ratio is only valid for elasticnet penalty
+            return False  # Reject non-zero l1_ratio when penalty is not elasticnet
+
+        if penalty is None and l1_ratio not in (None, 0.0):  # No penalty means l1_ratio must be neutral
+            return False  # Reject non-zero l1_ratio when no penalty is specified
+
+        return True  # Combination passed all validation rules
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -1246,7 +1260,7 @@ def get_thundersvm_estimator():
             else:  # If no GPU info was detected
                 print(f"{BackgroundColors.YELLOW}ThunderSVM not available; falling back to sklearn.SVC.{Style.RESET_ALL}")
 
-            return SVC(random_state=42, probability=True)  # Return sklearn's SVC as fallback
+            return SVC(random_state=42, probability=True, max_iter=SVM_MAX_ITER)  # Return sklearn's SVC as fallback with iteration limit to prevent unbounded training time
 
         gpu_available = False  # Assume no GPU by default
         try:  # Try to run nvidia-smi
@@ -1286,8 +1300,8 @@ def get_thundersvm_estimator():
         )  # Verbose message
 
         if ThunderSVC is not None:
-            return cast(Any, ThunderSVC)(random_state=42, probability=True)
-        return SVC(random_state=42, probability=True)
+            return cast(Any, ThunderSVC)(random_state=42, probability=True)  # Return default ThunderSVC as final GPU/CPU fallback
+        return SVC(random_state=42, probability=True, max_iter=SVM_MAX_ITER)  # Return sklearn SVC with iteration limit as last-resort fallback
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -1683,7 +1697,23 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
                 current_params = {k: v for k, v in current_params.items() if k != "l1_ratio"}  # Remove l1_ratio if not needed
 
         send_telegram_message(TELEGRAM_BOT, [f"Testing {model_name} combination {current_index}/{total_combinations}: {current_params}"])
-        
+
+        verbose_output(
+            f"{BackgroundColors.GREEN}[DEBUG] Evaluating combination {BackgroundColors.CYAN}{current_index}/{total_combinations}"
+            f"{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: "
+            f"{BackgroundColors.CYAN}{current_params}{Style.RESET_ALL}"
+        )  # Log the current parameters being evaluated so each combination is individually identifiable
+
+        svm_linear_substitution = (  # Determine once per combination whether LinearSVC substitution applies
+            USE_LINEAR_SVC_FOR_LINEAR_KERNEL and current_params.get("kernel") == "linear"
+        )  # True when substitution is enabled and the current combination uses a linear kernel
+
+        if svm_linear_substitution:  # Verify if LinearSVC substitution is active for this combination
+            print(
+                f"{BackgroundColors.GREEN}[INFO] LinearSVC substitution active: replacing SVC(kernel='linear', C={current_params.get('C', 1.0)}) "
+                f"with LinearSVC for faster equivalent linear training.{Style.RESET_ALL}"
+            )  # Log LinearSVC substitution activation so the operator knows the estimator swap is in effect
+
         start_time = time.time()  # Start timing
         metrics = None  # Initialize metrics as None
         try:
@@ -1695,12 +1725,26 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
             for train_idx, val_idx in cv.split(X_train, y_train_arr):  # Generate stratified fold indices using numpy-converted labels to avoid pandas label-indexing errors
                 X_tr, X_val = X_train[train_idx], X_train[val_idx]  # Slice training and validation features using positional indices
                 y_tr, y_val = y_train_arr[train_idx], y_train_arr[val_idx]  # Slice training and validation labels using safe positional numpy indexing
-                clf = clone(model)  # Clone model to avoid state leakage between folds
-                clf.set_params(**current_params)  # Apply the current hyperparameter combination to the cloned model
-                t0 = time.time()  # Record fold training start time
-                clf.fit(X_tr, y_tr)  # Train the cloned model on the current fold training split
-                elapsed_fold = time.time() - t0  # Measure elapsed training time for this fold
-                y_pred = clf.predict(X_val)  # Generate predictions on the validation split
+
+                if svm_linear_substitution:  # Verify if LinearSVC should replace SVC for this fold
+                    linear_c = float(current_params.get("C", 1.0))  # Extract C regularization parameter for LinearSVC construction
+                    clf = LinearSVC(C=linear_c, max_iter=SVM_MAX_ITER, random_state=42)  # Instantiate a fresh LinearSVC as faster equivalent to SVC(kernel='linear')
+                    verbose_output(f"{BackgroundColors.GREEN}[DEBUG] LinearSVC fold instance: C={BackgroundColors.CYAN}{linear_c}{BackgroundColors.GREEN}, max_iter={BackgroundColors.CYAN}{SVM_MAX_ITER}{Style.RESET_ALL}")  # Log the fresh LinearSVC instance parameters for this fold
+                else:  # Use the standard clone-and-set-params path for all other models and kernels
+                    clf = clone(model)  # Create a fresh model instance for this fold to prevent state leakage across folds and combinations
+                    clf.set_params(**current_params)  # Apply the exact current hyperparameter combination to the fresh clone
+
+                t0 = time.time()  # Record fold fit start time for timing breakdown
+                clf.fit(X_tr, y_tr)  # Train the fresh model instance on the current fold training split
+                elapsed_fit = time.time() - t0  # Measure fold fit elapsed time for the timing breakdown
+
+                t1 = time.time()  # Record fold predict start time for timing breakdown
+                y_pred = clf.predict(X_val)  # Generate predictions on the validation fold split using the trained instance
+                elapsed_predict = time.time() - t1  # Measure fold predict elapsed time for the timing breakdown
+
+                elapsed_fold = elapsed_fit + elapsed_predict  # Compute total fold elapsed as the sum of fit and predict time
+                verbose_output(f"{BackgroundColors.GREEN}[DEBUG] Fold timing — Fit: {BackgroundColors.CYAN}{elapsed_fit:.3f}s{BackgroundColors.GREEN} | Predict: {BackgroundColors.CYAN}{elapsed_predict:.3f}s{BackgroundColors.GREEN} | Total: {BackgroundColors.CYAN}{elapsed_fold:.3f}s{Style.RESET_ALL}")  # Log per-fold timing breakdown for diagnosis of slow combinations
+
                 m = compute_metrics_from_predictions(clf, y_val, y_pred, X_val)  # Compute evaluation metrics for this fold
 
                 if m is not None:  # Verify if metrics were successfully computed for this fold
@@ -2236,6 +2280,45 @@ def report_combination_search_progress(cached_count, combinations_to_test, model
         print(f"{BackgroundColors.GREEN}Testing {BackgroundColors.CYAN}{len(combinations_to_test)}{BackgroundColors.GREEN} combinations for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}")  # Print total combinations count when no cache was found
 
 
+def apply_grid_search_subsampling(X_train, y_train):
+    """
+    Apply stratified subsampling to the training data for grid search only.
+
+    :param X_train: Training feature matrix.
+    :param y_train: Training labels.
+    :return: Tuple (X_sampled, y_sampled) with subsampled data, or originals when no fraction is configured.
+    """
+
+    try:
+        if HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION is None:  # Verify if subsampling is configured
+            return X_train, y_train  # Return the full training set when no fraction is set
+
+        fraction = float(HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION)  # Convert configured fraction to float for validation
+
+        if not (0.0 < fraction < 1.0):  # Verify fraction is a valid proportion strictly between 0 and 1
+            print(f"{BackgroundColors.YELLOW}[WARNING] HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION must be strictly between 0 and 1. Using full training set.{Style.RESET_ALL}")  # Warn about invalid fraction value
+            return X_train, y_train  # Fall back to full training set when fraction is invalid
+
+        y_arr = np.asarray(y_train)  # Convert labels to numpy array for stratified split compatibility
+
+        _, X_sampled, _, y_sampled = train_test_split(
+            X_train, y_arr, test_size=fraction, random_state=42, stratify=y_arr
+        )  # Apply stratified split to retain class proportions in the subsample
+
+        print(
+            f"{BackgroundColors.GREEN}[INFO] Grid-search subsampling active: using {BackgroundColors.CYAN}{fraction * 100:.1f}%"
+            f"{BackgroundColors.GREEN} of training data ({BackgroundColors.CYAN}{X_sampled.shape[0]}{BackgroundColors.GREEN} of "
+            f"{BackgroundColors.CYAN}{X_train.shape[0]}{BackgroundColors.GREEN} samples). "
+            f"Final model training will use the full dataset.{Style.RESET_ALL}"
+        )  # Log subsampling details with sample counts and reminder that final training uses full data
+
+        return X_sampled, y_sampled  # Return the stratified subsample for grid search evaluation only
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def manual_grid_search(
     model_name,
     model,
@@ -2301,13 +2384,15 @@ def manual_grid_search(
 
         log_resource_information(X_train, y_train)  # Log available ram, dataset size, and core count before evaluation
 
+        X_train_search, y_train_search = apply_grid_search_subsampling(X_train, y_train)  # Apply stratified subsampling to training data for grid search only; final model training uses the full dataset
+
         best_params, best_score, best_elapsed, all_results, global_counter = run_parallel_evaluation(
             model_name,
             model,
             keys,
             combinations_to_test,
-            X_train,
-            y_train,
+            X_train_search,
+            y_train_search,
             csv_path,
             progress_bar,
             total_combinations,
@@ -3066,6 +3151,7 @@ def main():
     global RESULTS_FILENAME, CACHE_PREFIX, MATCH_FILENAMES_TO_PROCESS  # Declare global variables for file processing config
     global IGNORE_FILES, IGNORE_DIRS, HYPERPARAMETERS_RESULTS_CSV_COLUMNS  # Declare global variables for ignore/columns config
     global ENABLED_MODELS, DATASETS  # Declare global variables for model and dataset config
+    global HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION, USE_LINEAR_SVC_FOR_LINEAR_KERNEL, SVM_MAX_ITER  # Declare global variables for SVM performance config
 
     hp = merged["hyperparameters_optimization"]  # Extract hyperparameters_optimization section
     exec_cfg = hp["execution"]  # Extract execution sub-section
@@ -3075,6 +3161,13 @@ def main():
     VERBOSE = bool(exec_cfg.get("verbose", False))  # Set verbose flag from config
     N_JOBS = int(exec_cfg.get("n_jobs", -2))  # Set parallel jobs count from config
     SKIP_TRAIN_IF_MODEL_EXISTS = bool(exec_cfg.get("skip_train_if_model_exists", False))  # Set skip-train flag from config
+
+    sample_frac = exec_cfg.get("sample_fraction", None)  # Get raw subsampling fraction value from config
+    HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION = float(sample_frac) if sample_frac is not None else None  # Convert to float when defined, or keep None to disable subsampling
+    USE_LINEAR_SVC_FOR_LINEAR_KERNEL = bool(exec_cfg.get("use_linear_svc_for_linear_kernel", False))  # Set LinearSVC substitution flag from config
+    SVM_MAX_ITER = int(exec_cfg.get("svm_max_iter", 10000))  # Set SVM maximum solver iterations from config
+
+    print(f"{BackgroundColors.GREEN}[INFO] N_JOBS={BackgroundColors.CYAN}{N_JOBS}{BackgroundColors.GREEN} | SVM_MAX_ITER={BackgroundColors.CYAN}{SVM_MAX_ITER}{BackgroundColors.GREEN} | Sample fraction={BackgroundColors.CYAN}{HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION}{BackgroundColors.GREEN} | LinearSVC for linear={BackgroundColors.CYAN}{USE_LINEAR_SVC_FOR_LINEAR_KERNEL}{Style.RESET_ALL}")  # Log all SVM performance config values at startup
 
     RESULTS_FILENAME = export["results_filename"]  # Set results CSV filename from config
     MODEL_EXPORT_BASE = export.get("model_export_base_dir")  # Set model export directory from config
