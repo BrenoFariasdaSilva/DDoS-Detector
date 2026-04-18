@@ -1697,7 +1697,7 @@ def print_ga_parameters(min_pop, max_pop, n_generations, feature_count):
         print(
             f"  {BackgroundColors.GREEN}Base estimator: {BackgroundColors.CYAN}RandomForestClassifier (n_estimators=100, n_jobs={CONFIG['multiprocessing']['n_jobs']}){Style.RESET_ALL}"
         )
-        print(f"  {BackgroundColors.GREEN}Optimization goal: {BackgroundColors.CYAN}Maximize F1-Score{Style.RESET_ALL}")
+        print(f"  {BackgroundColors.GREEN}Optimization goal: {BackgroundColors.CYAN}Maximize F1-Score while minimizing model complexity (number of features){Style.RESET_ALL}")
         print("")  # Empty line for spacing
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
