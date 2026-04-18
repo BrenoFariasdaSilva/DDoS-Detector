@@ -57,9 +57,9 @@ hyperparameters_optimization:
     skip_train_if_model_exists: false
 
   export:
-    results_dir: "Feature_Analysis/Hyperparameter_Optimization"
+    results_dir: "Hyperparameter_Optimization"
     results_filename: "Hyperparameter_Optimization_Results.csv"
-    model_export_base_dir: "Feature_Analysis/Hyperparameter_Optimization/Models"
+    model_export_base_dir: "Hyperparameter_Optimization/Models"
     cache_prefix: "Cache_"
 
   dataset_processing:
