@@ -236,8 +236,8 @@ def parse_cli_args():
         parser.add_argument("--automl-timeout", type=int, default=None, help="AutoML timeout in seconds")
         parser.add_argument("--test-augmentation", action="store_true", help="Enable data augmentation testing")
         parser.add_argument("--no-test-augmentation", dest="test_augmentation", action="store_false", help="Disable data augmentation testing")
-        parser.add_argument("--multi-class", action="store_true", help="Enable multi-class classification mode (combine all attacks)")
-        parser.add_argument("--binary", dest="multi_class", action="store_false", help="Enable binary classification mode (default)")
+        parser.add_argument("--multi-class", dest="multi_class", action="store_true", default=None, help="Enable multi-class evaluation mode (directory-based batch processing)")
+        parser.add_argument("--binary", dest="multi_class", action="store_false", help="Enable binary evaluation mode (single-file processing)")
         parser.add_argument("--both", action="store_true", help="Run both binary and multi-class pipelines sequentially")
         parser.add_argument("--stacking-results-dir", type=str, default=None, help="Directory to save stacking results (relative to dataset root)")
         parser.add_argument("--top-n-features", dest="top_n_features", type=int, default=None, help="Number of top features to show in heatmap (overrides config)")
@@ -285,6 +285,7 @@ def get_default_stacking_config():
                 "features_list", "Hardware",
             ],  # Column names for results CSV export
             "top_n_features_heatmap": 15,  # Number of top features to show in heatmap
+            "multi_class": True,  # Default: multi-class evaluation enabled; False = binary single-file evaluation
             "methods": {
                 "augmentation": True,  # Enable data augmentation combination by default
                 "feature_selection": True,  # Enable feature selection combination by default
@@ -543,8 +544,13 @@ def merge_configs(defaults, file_config, cli_args):
             config["execution"]["test_data_augmentation"] = cli_args.test_augmentation
         if hasattr(cli_args, "both") and cli_args.both:  # Both mode flag takes precedence
             config["execution"]["execution_mode"] = "both"
-        elif hasattr(cli_args, "multi_class"):  # Multi-class mode flag
-            config["execution"]["execution_mode"] = "multi-class" if cli_args.multi_class else "binary"
+        else:
+            cfg_multi_class = config.get("stacking", {}).get("multi_class", True)  # Read multi_class from stacking config (config.yaml), defaulting to True
+            if hasattr(cli_args, "multi_class") and cli_args.multi_class is not None:  # CLI explicitly set (--multi-class or --binary)
+                effective_multi_class = cli_args.multi_class  # CLI overrides config.yaml
+            else:
+                effective_multi_class = cfg_multi_class  # Fall back to config.yaml value
+            config["execution"]["execution_mode"] = "multi-class" if effective_multi_class else "binary"  # Map boolean to execution_mode string
 
         if hasattr(cli_args, "top_n_features") and cli_args.top_n_features is not None:  # CLI override for top-N features
             if not isinstance(cli_args.top_n_features, int) or cli_args.top_n_features <= 0:  # Validate positive integer
