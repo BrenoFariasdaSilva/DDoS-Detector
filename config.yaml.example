@@ -129,6 +129,8 @@ dataset: # Dataset-level settings and paths
     - "label"
     - "class"
     - "target"
+    - "y"
+    - "category"
   datasets: # Dictionary containing dataset paths
     CICDDoS2019-Dataset:
       - "./Datasets/CICDDoS2019/01-12/"
