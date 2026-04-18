@@ -184,7 +184,7 @@ DATASETS = {  # Dictionary containing dataset paths and feature files
 # SVM Performance Constants:
 HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION = None  # Optional float fraction for grid-search subsampling (None = use full training set; set to e.g. 0.05 for 5%)
 USE_LINEAR_SVC_FOR_LINEAR_KERNEL = False  # If True, substitute SVC(kernel='linear') with LinearSVC for faster equivalent linear training
-SVM_MAX_ITER = None  # Maximum solver iterations for SVC (None = unlimited; set to integer to cap iterations)
+SVM_MAX_ITER = -1  # Use -1 to disable iteration limit as required by sklearn SVC
 ENABLE_PARALLEL_FOR_NON_N_JOBS_CLASSIFIERS = True  # Enable custom parallel execution for classifiers that do not support n_jobs natively
 NON_N_JOBS_CLASSIFIERS = frozenset({"SVM", "Nearest Centroid", "Gradient Boosting", "MLP (Neural Net)"})  # Set of classifier names that do not support the n_jobs parameter
 
@@ -192,7 +192,7 @@ NON_N_JOBS_CLASSIFIERS = frozenset({"SVM", "Nearest Centroid", "Gradient Boostin
 WORKER_X_TRAIN = None  # Training features set in worker processes by init_combination_worker via pool initializer
 WORKER_Y_TRAIN = None  # Training labels set in worker processes by init_combination_worker via pool initializer
 WORKER_USE_LINEAR_SVC = False  # LinearSVC substitution flag set in worker processes by init_combination_worker
-WORKER_SVM_MAX_ITER = None  # SVM max iterations set in worker processes by init_combination_worker
+WORKER_SVM_MAX_ITER = -1  # Use -1 to disable iteration limit as required by sklearn SVC
 
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
@@ -233,7 +233,7 @@ def get_default_config() -> Dict[str, Any]:
                 "low_memory": False,  # Enable low memory mode for pandas CSV loading (forced True when verbose is active)
                 "sample_fraction": None,  # Optional float fraction for grid-search subsampling (None disables)
                 "use_linear_svc_for_linear_kernel": False,  # If True, substitute SVC(kernel='linear') with LinearSVC
-                "svm_max_iter": None,  # Maximum solver iterations for SVC (None = unlimited; set to integer to cap iterations)
+                "svm_max_iter": -1,  # Use -1 to disable iteration limit as required by sklearn SVC
                 "enable_parallel_for_non_n_jobs_classifiers": True,  # Enable custom parallel execution for classifiers that do not support n_jobs natively
             },
             "export": {
@@ -1279,7 +1279,7 @@ def get_thundersvm_estimator():
             else:  # If no GPU info was detected
                 print(f"{BackgroundColors.YELLOW}ThunderSVM not available; falling back to sklearn.SVC.{Style.RESET_ALL}")
 
-            return SVC(random_state=42, probability=True, max_iter=SVM_MAX_ITER)  # Return sklearn's SVC as fallback with configured max_iter (None = unlimited)
+            return SVC(random_state=42, probability=True, max_iter=SVM_MAX_ITER)  # Use -1 to disable iteration limit as required by sklearn SVC
 
         gpu_available = False  # Assume no GPU by default
         try:  # Try to run nvidia-smi
@@ -1320,7 +1320,7 @@ def get_thundersvm_estimator():
 
         if ThunderSVC is not None:
             return cast(Any, ThunderSVC)(random_state=42, probability=True)  # Return default ThunderSVC as final GPU/CPU fallback
-        return SVC(random_state=42, probability=True, max_iter=SVM_MAX_ITER)  # Return sklearn SVC with configured max_iter as last-resort fallback (None = unlimited)
+        return SVC(random_state=42, probability=True, max_iter=SVM_MAX_ITER)  # Use -1 to disable iteration limit as required by sklearn SVC
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -1749,7 +1749,7 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
 
                 if svm_linear_substitution:  # Verify if LinearSVC should replace SVC for this fold
                     linear_c = float(current_params.get("C", 1.0))  # Extract C regularization parameter for LinearSVC construction
-                    clf = LinearSVC(C=linear_c, max_iter=SVM_MAX_ITER, random_state=42)  # Instantiate a fresh LinearSVC as faster equivalent to SVC(kernel='linear')
+                    clf = LinearSVC(C=linear_c, max_iter=SVM_MAX_ITER, random_state=42)  # Use -1 to disable iteration limit as required by sklearn SVC
                     verbose_output(f"{BackgroundColors.GREEN}[DEBUG] LinearSVC fold instance: C={BackgroundColors.CYAN}{linear_c}{BackgroundColors.GREEN}, max_iter={BackgroundColors.CYAN}{SVM_MAX_ITER}{Style.RESET_ALL}")  # Log the fresh LinearSVC instance parameters for this fold
                 else:  # Use the standard clone-and-set-params path for all other models and kernels
                     clf = clone(model)  # Create a fresh model instance for this fold to prevent state leakage across folds and combinations
@@ -2496,7 +2496,7 @@ def execute_single_combination(task_tuple):
 
                 if svm_linear_substitution:  # Verify if LinearSVC substitution is active for this fold
                     linear_c = float(current_params.get("C", 1.0))  # Extract C regularization value for LinearSVC construction
-                    clf = LinearSVC(C=linear_c, max_iter=WORKER_SVM_MAX_ITER, random_state=42)  # Instantiate LinearSVC as faster equivalent to SVC(kernel='linear')
+                    clf = LinearSVC(C=linear_c, max_iter=WORKER_SVM_MAX_ITER, random_state=42)  # Use -1 to disable iteration limit as required by sklearn SVC
                 else:  # Use standard clone-and-set-params path for all other models and kernels
                     clf = clone(model_base)  # Clone base model to prevent state leakage across folds
                     clf.set_params(**current_params)  # Apply the current hyperparameter combination to the fresh clone
@@ -3593,9 +3593,9 @@ def main():
     sample_frac = exec_cfg.get("sample_fraction", None)  # Get raw subsampling fraction value from config
     HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION = float(sample_frac) if sample_frac is not None else None  # Convert to float when defined, or keep None to disable subsampling
     USE_LINEAR_SVC_FOR_LINEAR_KERNEL = bool(exec_cfg.get("use_linear_svc_for_linear_kernel", False))  # Set LinearSVC substitution flag from config
-    svm_max_iter_cfg = exec_cfg.get("svm_max_iter", None)  # Read svm_max_iter from config with None as unlimited default
-    SVM_MAX_ITER = int(svm_max_iter_cfg) if svm_max_iter_cfg is not None else None  # Use integer value when defined, or None for unlimited
-    verbose_output(f"{BackgroundColors.GREEN}[DEBUG] svm_max_iter resolved to: {BackgroundColors.CYAN}{SVM_MAX_ITER}{Style.RESET_ALL}")  # Log the final resolved svm_max_iter value; displays None when unlimited
+    svm_max_iter_cfg = exec_cfg.get("svm_max_iter", -1)  # Read svm_max_iter from config with -1 as default to disable iteration limit as required by sklearn SVC
+    SVM_MAX_ITER = int(svm_max_iter_cfg) if svm_max_iter_cfg is not None else -1  # Use -1 to disable iteration limit as required by sklearn SVC
+    verbose_output(f"{BackgroundColors.GREEN}[DEBUG] svm_max_iter resolved to: {BackgroundColors.CYAN}{SVM_MAX_ITER}{Style.RESET_ALL}")  # Log the final resolved svm_max_iter value when verbose output is active
 
     ENABLE_PARALLEL_FOR_NON_N_JOBS_CLASSIFIERS = bool(exec_cfg.get("enable_parallel_for_non_n_jobs_classifiers", True))  # Set parallel execution flag for non-n_jobs classifiers from config with True as default
     verbose_output(f"{BackgroundColors.GREEN}[DEBUG] enable_parallel_for_non_n_jobs_classifiers resolved to: {BackgroundColors.CYAN}{ENABLE_PARALLEL_FOR_NON_N_JOBS_CLASSIFIERS}{Style.RESET_ALL}")  # Log the final resolved parallel execution flag when verbose output is active
