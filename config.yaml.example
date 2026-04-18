@@ -55,6 +55,9 @@ hyperparameters_optimization:
     verbose: false
     n_jobs: -1
     skip_train_if_model_exists: false
+    sample_fraction: null # Optional float fraction for grid-search subsampling (null = use full training set; set to e.g. 0.05 for 5%)
+    use_linear_svc_for_linear_kernel: false # If true, substitute SVC(kernel='linear') with LinearSVC for faster equivalent linear training
+    svm_max_iter: 10000 # Maximum solver iterations for SVC to prevent unbounded training time on large datasets
 
   export:
     results_dir: "Hyperparameter_Optimization"
