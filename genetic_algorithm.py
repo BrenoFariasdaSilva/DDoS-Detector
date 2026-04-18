@@ -217,6 +217,30 @@ def build_genetic_algorithm_defaults():
             "max_pop": 20,  # Maximum population size
             "cxpb": 0.5,  # Crossover probability
             "mutpb": 0.01,  # Mutation probability
+            "early_stop": {
+                "acc_threshold": 0.75,  # Minimum acceptable accuracy for an individual
+                "folds": 3,  # Number of folds to verify before early stopping
+                "generations": 10,  # Number of generations without improvement before early stop
+            },  # Early stopping criteria for the genetic algorithm
+            "cross_validation": {
+                "n_folds": 10,  # Number of cross-validation folds
+            },  # Cross-validation settings for fitness evaluation
+            "multiprocessing": {
+                "n_jobs": -1,  # Number of parallel jobs for the estimator (-1 uses all processors)
+                "cpu_processes": None,  # Initial number of GA worker processes; None uses all available CPUs
+            },  # Parallelism settings for GA and estimator
+            "resource_monitor": build_resource_monitor_defaults(),  # Default resource monitor configuration
+            "model": {
+                "estimator": "RandomForestClassifier",  # Default estimator for GA fitness evaluation
+                "random_state": None,  # Random state for reproducibility (None for non-deterministic)
+            },  # Estimator model settings
+            "caching": {
+                "enabled": True,  # Enable fitness caching
+                "pickle_protocol": pickle.HIGHEST_PROTOCOL,  # Pickle protocol to use when saving state
+            },  # Fitness result caching settings
+            "progress": {
+                "state_dir_name": "ga_progress",  # Subfolder under Feature_Analysis to store progress files
+            },  # Progress persistence settings
             "export": {
                 "results_dir": "Feature_Analysis/Genetic_Algorithm",
                 "results_filename": "Genetic_Algorithm_Results.csv",
@@ -250,7 +274,7 @@ def build_genetic_algorithm_defaults():
                     "union_features_across_runs",
                     "rfe_ranking",
                 ],
-            },
+            },  # Export and results CSV settings
         }  # Return default genetic algorithm configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -276,6 +300,55 @@ def build_resource_monitor_defaults():
             "min_gens_before_update": 10,  # Minimum GA generations before updating workers
             "daemon": True,  # Whether the monitoring thread runs as daemon
         }  # Return default resource monitor configuration
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def resolve_n_jobs():
+    """
+    Resolve the effective n_jobs value for the fitness estimator from configuration.
+
+    When the GA runs with multiple worker processes (cpu_processes > 1) each worker
+    already occupies a CPU core, so the estimator must use n_jobs=1 to avoid CPU
+    oversubscription.  When the GA runs in a single process the full n_jobs value
+    from the multiprocessing config section is used, defaulting to -1 (all CPUs).
+
+    :return: Integer n_jobs value safe for the current parallelism mode.
+    """
+
+    try:
+        ga_mp_cfg = CONFIG.get("genetic_algorithm", {}).get("multiprocessing", {})  # Read GA multiprocessing sub-section from config
+        configured_n_jobs = ga_mp_cfg.get("n_jobs", -1)  # Read configured n_jobs; default -1 (all CPUs)
+
+        try:  # Safely coerce configured_n_jobs to int
+            configured_n_jobs = int(configured_n_jobs)  # Convert to integer for downstream use
+        except Exception:  # If coercion fails, fall back to -1
+            configured_n_jobs = -1  # Fall back to all-CPUs default
+
+        with global_state_lock:  # Read live CPU_PROCESSES under the lock for thread safety
+            live_cpu_processes = CPU_PROCESSES  # Capture live worker-process count set by resource monitor
+
+        try:  # Safely coerce live_cpu_processes to int
+            cpu_processes_int = int(live_cpu_processes) if live_cpu_processes is not None else 1  # Convert; treat None as 1
+        except Exception:  # If coercion fails, treat as single process
+            cpu_processes_int = 1  # Fall back to single-process mode
+
+        if cpu_processes_int > 1:  # GA pool is running with multiple worker processes
+            effective_n_jobs = 1  # Force estimator to single-threaded to avoid nested parallelism
+            logger.debug(  # Log the forced single-threaded mode
+                f"resolve_n_jobs: GA uses {cpu_processes_int} worker processes — "
+                f"forcing estimator n_jobs=1 to prevent CPU oversubscription"
+            )  # Debug log for forced n_jobs=1
+        else:  # GA is running in single-process mode
+            effective_n_jobs = configured_n_jobs  # Use the configured value directly
+            logger.debug(  # Log the resolved n_jobs value
+                f"resolve_n_jobs: GA runs in single-process mode — "
+                f"using configured estimator n_jobs={effective_n_jobs}"
+            )  # Debug log for configured n_jobs
+
+        return effective_n_jobs  # Return resolved n_jobs for estimator instantiation
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -310,31 +383,7 @@ def get_default_config():
             "max_test_fraction": 0.50,  # Maximum acceptable test fraction
             "remove_zero_variance": True,  # Remove zero-variance features during preprocessing
         },
-        "genetic_algorithm": build_genetic_algorithm_defaults(),  # Default genetic algorithm configuration
-        "early_stop": {
-            "acc_threshold": 0.75,  # Minimum acceptable accuracy for an individual
-            "folds": 3,  # Number of folds to verify before early stopping
-            "generations": 10,  # Number of generations without improvement before early stop
-        },
-        "cross_validation": {
-            "n_folds": 10,  # Number of cross-validation folds
-        },
-        "multiprocessing": {
-            "n_jobs": -1,  # Number of parallel jobs for GridSearchCV (-1 uses all processors)
-            "cpu_processes": None,  # Initial number of worker processes; None -> use all available CPUs
-        },
-        "resource_monitor": build_resource_monitor_defaults(),  # Default resource monitor configuration
-        "model": {
-            "estimator": "RandomForestClassifier",  # Default estimator for GA fitness evaluation
-            "random_state": None,  # Random state for reproducibility (None for non-deterministic)
-        },
-        "caching": {
-            "enabled": True,  # Enable fitness caching
-            "pickle_protocol": pickle.HIGHEST_PROTOCOL,  # Pickle protocol to use when saving state
-        },
-        "progress": {
-            "state_dir_name": "ga_progress",  # Subfolder under Feature_Analysis to store progress files
-        },
+        "genetic_algorithm": build_genetic_algorithm_defaults(),  # Default genetic algorithm configuration — includes early_stop, cross_validation, multiprocessing, resource_monitor, model, caching, progress, export
         
         "sound": {
             "commands": {  # The commands to play a sound for each operating system
@@ -481,7 +530,7 @@ def apply_cli_ga_and_dataset_overrides(config, cli_args):
             config["genetic_algorithm"]["mutpb"] = cli_args.mutpb  # Override mutation probability
 
         if cli_args.cv_folds is not None:  # If CV folds specified
-            config["cross_validation"]["n_folds"] = cli_args.cv_folds  # Override CV folds
+            config["genetic_algorithm"]["cross_validation"]["n_folds"] = cli_args.cv_folds  # Override CV folds
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -503,25 +552,25 @@ def apply_cli_infrastructure_overrides(config, cli_args):
 
     try:
         if cli_args.early_stop_acc is not None:  # If early stop accuracy specified
-            config["early_stop"]["acc_threshold"] = cli_args.early_stop_acc  # Override early stop threshold
+            config["genetic_algorithm"]["early_stop"]["acc_threshold"] = cli_args.early_stop_acc  # Override early stop threshold
 
         if cli_args.early_stop_folds is not None:  # If early stop folds specified
-            config["early_stop"]["folds"] = cli_args.early_stop_folds  # Override early stop folds
+            config["genetic_algorithm"]["early_stop"]["folds"] = cli_args.early_stop_folds  # Override early stop folds
 
         if cli_args.early_stop_gens is not None:  # If early stop generations specified
-            config["early_stop"]["generations"] = cli_args.early_stop_gens  # Override early stop generations
+            config["genetic_algorithm"]["early_stop"]["generations"] = cli_args.early_stop_gens  # Override early stop generations
 
         if cli_args.n_jobs is not None:  # If n jobs specified
-            config["multiprocessing"]["n_jobs"] = cli_args.n_jobs  # Override n jobs
+            config["genetic_algorithm"]["multiprocessing"]["n_jobs"] = cli_args.n_jobs  # Override n jobs
 
         if cli_args.cpu_processes is not None:  # If CPU processes specified
-            config["multiprocessing"]["cpu_processes"] = cli_args.cpu_processes  # Override CPU processes
+            config["genetic_algorithm"]["multiprocessing"]["cpu_processes"] = cli_args.cpu_processes  # Override CPU processes
 
         if cli_args.no_monitor:  # If no monitor flag set
-            config["resource_monitor"]["enabled"] = False  # Disable resource monitor
+            config["genetic_algorithm"]["resource_monitor"]["enabled"] = False  # Disable resource monitor
 
         if cli_args.monitor_interval is not None:  # If monitor interval specified
-            config["resource_monitor"]["interval_seconds"] = cli_args.monitor_interval  # Override monitor interval
+            config["genetic_algorithm"]["resource_monitor"]["interval_seconds"] = cli_args.monitor_interval  # Override monitor interval
 
         if hasattr(cli_args, "telegram_progress_pct") and cli_args.telegram_progress_pct is not None:  # If Telegram progress percent override provided
             try:  # Try to parse Telegram progress percentage
@@ -1695,7 +1744,7 @@ def print_ga_parameters(min_pop, max_pop, n_generations, feature_count):
             f"  {BackgroundColors.GREEN}Fitness evaluation: {BackgroundColors.CYAN}10-fold Stratified CV on training set{Style.RESET_ALL}"
         )
         print(
-            f"  {BackgroundColors.GREEN}Base estimator: {BackgroundColors.CYAN}RandomForestClassifier (n_estimators=100, n_jobs={CONFIG['multiprocessing']['n_jobs']}){Style.RESET_ALL}"
+            f"  {BackgroundColors.GREEN}Base estimator: {BackgroundColors.CYAN}RandomForestClassifier (n_estimators=100, n_jobs={resolve_n_jobs()}){Style.RESET_ALL}"
         )
         print(f"  {BackgroundColors.GREEN}Optimization goal: {BackgroundColors.CYAN}Maximize F1-Score while minimizing model complexity (number of features){Style.RESET_ALL}")
         print("")  # Empty line for spacing
@@ -1842,7 +1891,7 @@ def state_file_paths(output_dir, state_id):
     """
 
     try:  # Wrap full function logic to ensure production-safe execution
-        state_dir = os.path.join(output_dir, CONFIG["progress"]["state_dir_name"])  # Construct the state directory path
+        state_dir = os.path.join(output_dir, CONFIG["genetic_algorithm"]["progress"]["state_dir_name"])  # Construct the state directory path
         try:  # Try to create the state directory if it doesn't exist
             os.makedirs(state_dir, exist_ok=True)  # Create the directory, ignoring if it already exists
         except Exception:  # If directory creation fails
@@ -2014,7 +2063,7 @@ def instantiate_estimator(estimator_cls=None):
     
     try:
         try:  # Try to read multiprocessing configuration from global CONFIG
-            mp_cfg = CONFIG.get("multiprocessing", {})  # Get multiprocessing config or empty dict
+            mp_cfg = CONFIG.get("genetic_algorithm", {}).get("multiprocessing", {})  # Get GA multiprocessing sub-section or empty dict
         except Exception:  # If CONFIG access fails for any reason
             mp_cfg = {}  # Fallback to empty config
 
@@ -2024,7 +2073,11 @@ def instantiate_estimator(estimator_cls=None):
         if ga_parallel > 1:  # If GA uses multiple processes
             estimator_n_jobs = 1  # Force single-threaded estimator to avoid nested loky
         else:  # If GA is not parallelized across processes
-            estimator_n_jobs = CONFIG.get("model", {}).get("n_jobs", 1)  # Use configured model n_jobs
+            estimator_n_jobs = resolve_n_jobs()  # Resolve n_jobs from multiprocessing config
+
+        logger.debug(  # Log the resolved n_jobs value for the fitness estimator
+            f"instantiate_estimator: ga_parallel={ga_parallel}, resolved estimator n_jobs={estimator_n_jobs}"
+        )  # Debug log for instantiated estimator configuration
 
         if estimator_cls is None:  # If no estimator class provided by caller
             return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=estimator_n_jobs)  # Return default RandomForest
@@ -2102,7 +2155,7 @@ def run_cv_fold_loop(X_train_sel, y_train_np, splits, estimator_cls, n_cv_folds)
             metrics[fold_count] = [acc, prec, rec, f1, fpr, fnr]  # Write metrics directly to pre-allocated array
             fold_count += 1  # Increment fold counter
             if (
-                fold_idx < CONFIG["early_stop"]["folds"] and acc < CONFIG["early_stop"]["acc_threshold"]
+                fold_idx < CONFIG["genetic_algorithm"]["early_stop"]["folds"] and acc < CONFIG["genetic_algorithm"]["early_stop"]["acc_threshold"]
             ):  # Early stopping: If accuracy is below threshold in first few folds, break
                 early_stop_triggered = True  # Set flag
                 break  # Stop evaluating further folds for this individual
@@ -2180,7 +2233,7 @@ def evaluate_feature_mask(
         mask = np.array(feature_mask, dtype=bool)  # Create boolean mask from feature mask
         X_train_sel = X_train[:, mask]  # Select features based on the mask
 
-        n_cv_folds = CONFIG.get("cross_validation", {}).get("n_folds", 10)  # Use configurable constant
+        n_cv_folds = CONFIG.get("genetic_algorithm", {}).get("cross_validation", {}).get("n_folds", 10)  # Use configurable constant
 
         try:  # Try to create StratifiedKFold splits
             skf = StratifiedKFold(n_splits=n_cv_folds, shuffle=True, random_state=42)  # n_cv_folds-fold Stratified CV
@@ -2427,7 +2480,7 @@ def save_generation_state(output_dir, state_id, gen, population, hof_best, histo
                 "fitness_history": fitness_history_to_save,  # Extended history data (dict format)
             }  # End of payload dictionary
             with open(gen_path, "wb") as f:  # Open the file for writing in binary mode
-                pickle.dump(payload, f, protocol=CONFIG["caching"]["pickle_protocol"])  # Serialize and save the payload
+                pickle.dump(payload, f, protocol=CONFIG["genetic_algorithm"]["caching"]["pickle_protocol"])  # Serialize and save the payload
         except Exception:  # If any error occurs during saving
             pass  # Do nothing
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -2821,8 +2874,8 @@ def setup_ga_loop_state(toolbox, population, X_train, y_train, csv_path, pop_siz
         )  # Partial function for feature mask evaluation
         toolbox.register("evaluate", partial(ga_fitness, fitness_func=fitness_func))  # Register the global fitness function
 
-        early_stop_gens = CONFIG.get("early_stop", {}).get("generations", 10)  # Read configured early-stop patience from config
-        folds = CONFIG.get("cross_validation", {}).get("n_folds", 10)  # Read configured number of CV folds from config
+        early_stop_gens = CONFIG.get("genetic_algorithm", {}).get("early_stop", {}).get("generations", 10)  # Read configured early-stop patience from config
+        folds = CONFIG.get("genetic_algorithm", {}).get("cross_validation", {}).get("n_folds", 10)  # Read configured number of CV folds from config
 
         output_dir = resolve_ga_output_dir(csv_path)  # Resolve canonical GA output directory from configuration
         state_id = compute_state_id(
@@ -3950,7 +4003,7 @@ def save_run_result(output_dir, state_id, result):
         try:  # Attempt to save the run result
             _, run_path = state_file_paths(output_dir, state_id)  # Get the path for the run state file
             with open(run_path, "wb") as f:  # Open the file for writing in binary mode
-                pickle.dump(result, f, protocol=CONFIG["caching"]["pickle_protocol"])  # Serialize and save the result
+                pickle.dump(result, f, protocol=CONFIG["genetic_algorithm"]["caching"]["pickle_protocol"])  # Serialize and save the result
         except Exception:  # If any error occurs during saving
             pass  # Do nothing
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -6368,7 +6421,7 @@ def train_and_save_final_model(best_feats_local, X, y, feature_names, X_test, mo
         sel_indices_local = [i for i, f in enumerate(feature_names) if f in best_feats_local]  # Get indices of selected features
         X_final_local = X_scaled_local[:, sel_indices_local] if sel_indices_local else X_scaled_local  # Select only chosen feature columns from scaled data
         X_test_selected_local = X_test[:, sel_indices_local] if sel_indices_local and X_test is not None else X_test  # Select same feature columns from test data
-        model_local = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=CONFIG["multiprocessing"]["n_jobs"])  # Instantiate Random Forest classifier with 100 trees
+        model_local = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=resolve_n_jobs())  # Instantiate Random Forest classifier with 100 trees
         start_train_local = time.perf_counter()  # Record training start time
         model_local.fit(X_final_local, y)  # Train model on selected features
         training_time_local = time.perf_counter() - start_train_local  # Calculate training duration
@@ -7250,7 +7303,7 @@ def run_population_sweep(
 
         X_train, X_test, y_train, y_test, feature_names = data  # Unpack prepared data
 
-        folds = CONFIG.get("cross_validation", {}).get("n_folds", 10)  # Use configured constant for CV folds
+        folds = CONFIG.get("genetic_algorithm", {}).get("cross_validation", {}).get("n_folds", 10)  # Use configured constant for CV folds
 
         progress_state = compute_progress_state(
             min_pop, max_pop, n_generations, runs, progress_bar, folds=folds
@@ -7529,7 +7582,7 @@ def initialize_run_ga_config(config, csv_path):
 
         with global_state_lock:  # Thread-safe initialization
             if CPU_PROCESSES is None or CPU_PROCESSES == 1:  # If not initialized or default
-                CPU_PROCESSES = CONFIG["multiprocessing"]["cpu_processes"]  # Set from config
+                CPU_PROCESSES = CONFIG["genetic_algorithm"]["multiprocessing"]["cpu_processes"]  # Set from config
 
         if csv_path is None:  # If no path provided
             csv_path = "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv"  # Use default
@@ -7612,15 +7665,15 @@ def start_resource_monitor_if_enabled():
     """
 
     try:
-        if CONFIG.get("resource_monitor", {}).get("enabled", True):  # If resource monitor enabled
+        if CONFIG.get("genetic_algorithm", {}).get("resource_monitor", {}).get("enabled", True):  # If resource monitor enabled
             start_resource_monitor_safe(
-                interval_seconds=CONFIG.get("resource_monitor", {}).get("interval_seconds", 30),
-                reserve_cpu_frac=CONFIG.get("resource_monitor", {}).get("reserve_cpu_frac", 0.15),
-                reserve_mem_frac=CONFIG.get("resource_monitor", {}).get("reserve_mem_frac", 0.15),
-                min_procs=CONFIG.get("resource_monitor", {}).get("min_procs", 1),
-                max_procs=CONFIG.get("resource_monitor", {}).get("max_procs", None),
-                min_gens_before_update=CONFIG.get("resource_monitor", {}).get("min_gens_before_update", 10),
-                daemon=CONFIG.get("resource_monitor", {}).get("daemon", True),
+                interval_seconds=CONFIG.get("genetic_algorithm", {}).get("resource_monitor", {}).get("interval_seconds", 30),
+                reserve_cpu_frac=CONFIG.get("genetic_algorithm", {}).get("resource_monitor", {}).get("reserve_cpu_frac", 0.15),
+                reserve_mem_frac=CONFIG.get("genetic_algorithm", {}).get("resource_monitor", {}).get("reserve_mem_frac", 0.15),
+                min_procs=CONFIG.get("genetic_algorithm", {}).get("resource_monitor", {}).get("min_procs", 1),
+                max_procs=CONFIG.get("genetic_algorithm", {}).get("resource_monitor", {}).get("max_procs", None),
+                min_gens_before_update=CONFIG.get("genetic_algorithm", {}).get("resource_monitor", {}).get("min_gens_before_update", 10),
+                daemon=CONFIG.get("genetic_algorithm", {}).get("resource_monitor", {}).get("daemon", True),
             )  # Start resource monitor thread with configured parameters
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -7731,7 +7784,7 @@ def main():
 
         global CPU_PROCESSES  # Declare global CPU_PROCESSES
         with global_state_lock:  # Thread-safe initialization
-            CPU_PROCESSES = CONFIG["multiprocessing"]["cpu_processes"]  # Set initial CPU processes from config
+            CPU_PROCESSES = CONFIG["genetic_algorithm"]["multiprocessing"]["cpu_processes"]  # Set initial CPU processes from config
 
         if hasattr(cli_args, "csv_path") and cli_args.csv_path:  # If CSV path provided via CLI, use it; otherwise, use config or default
             csv_path = cli_args.csv_path  # Use CSV path from CLI arguments if provided
