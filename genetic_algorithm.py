@@ -2703,32 +2703,44 @@ def build_ga_history_data_dict(fitness_history, best_features_history, avg_f1_hi
         raise  # Re-raise to preserve original failure semantics
 
 
-def evaluate_feature_masks_verbose(invalid_feature_masks, toolbox):
+def evaluate_feature_masks_verbose(invalid_feature_masks, toolbox, run=None, runs=None, gen=None, n_generations=None, pop_size=None):
     """
     Evaluate feature masks (binary selection vectors) sequentially with a tqdm progress bar (verbose mode only).
 
     :param invalid_feature_masks: List of DEAP Individual instances (feature masks) with invalid fitness.
     :param toolbox: DEAP toolbox with the registered evaluate operator.
+    :param run: Current run index for structured logging context.
+    :param runs: Total number of runs for structured logging context.
+    :param gen: Current generation index for structured logging context.
+    :param n_generations: Total number of generations for structured logging context.
+    :param pop_size: Population size for structured logging context.
     :return: List of fitness tuples in the same order as invalid_feature_masks.
     """
 
     eval_bar = None  # Initialize progress bar reference before try block for safe cleanup
 
     try:
+        run_label = f"{run}" if run is not None else "?"  # Format run index for structured log label, use ? when unavailable
+        runs_label = f"{runs}" if runs is not None else "?"  # Format total runs for structured log label, use ? when unavailable
+        gen_label = f"{gen}" if gen is not None else "?"  # Format generation index for structured log label, use ? when unavailable
+        gens_label = f"{n_generations}" if n_generations is not None else "?"  # Format total generations for structured log label, use ? when unavailable
+        pop_label = f"{pop_size}" if pop_size is not None else "?"  # Format population size for structured log label, use ? when unavailable
+        total_batch = len(invalid_feature_masks)  # Total number of masks in this evaluation batch
+
         try:  # Attempt to initialize tqdm progress bar for feature mask evaluation tracking
             eval_bar = tqdm(
-                total=len(invalid_feature_masks),
-                desc="Evaluating feature masks",
+                total=total_batch,
+                desc=f"[GA][RUN {run_label}/{runs_label}][GEN {gen_label}/{gens_label}][POP {pop_label}][MASKS 0/{total_batch}] Evaluating feature masks batch",
                 unit="mask",
                 leave=False,
                 dynamic_ncols=True,
-            )  # Create tqdm progress bar with ETA for per-generation feature mask evaluation
+            )  # Create tqdm progress bar with structured GA context for per-generation feature mask evaluation
         except Exception:  # If tqdm initialization fails for any reason
             eval_bar = None  # Disable progress bar and fall back to plain sequential evaluation
 
         results = []  # Accumulate fitness results in input order
 
-        total_masks = len(invalid_feature_masks)  # Compute total number of masks for verbose progress display
+        total_masks = total_batch  # Reuse pre-computed total masks count for per-mask progress display
 
         for idx, feature_mask in enumerate(invalid_feature_masks, start=1):  # Iterate with index to report current/total
             fit = toolbox.evaluate(feature_mask)  # Evaluate feature mask and obtain fitness tuple via registered evaluator
@@ -2747,7 +2759,7 @@ def evaluate_feature_masks_verbose(invalid_feature_masks, toolbox):
             f1_display = f"{f1_val}" if f1_val is not None else "N/A"  # Format F1 for display, use N/A when missing
             feat_display = f"{n_features_val}" if n_features_val is not None else "N/A"  # Format feature count for display, use N/A when missing
 
-            verbose_output(f"[DEBUG] [{idx}/{total_masks}] Feature mask result -> fitness: f1: {f1_display}, N_features: {feat_display}", "")  # Output formatted debug line when verbose is enabled
+            verbose_output(f"[GA][RUN {run_label}/{runs_label}][GEN {gen_label}/{gens_label}][MASK {idx}/{total_masks}] Fitness evaluated -> fitness={f1_display}, selected_features={feat_display}, population={pop_label}", "")  # Output structured debug line with full GA context when verbose is enabled
 
             if eval_bar is not None:  # If progress bar was successfully initialized
                 eval_bar.update(1)  # Advance progress bar by one completed feature mask
@@ -2764,7 +2776,7 @@ def evaluate_feature_masks_verbose(invalid_feature_masks, toolbox):
         raise  # Re-raise to preserve original failure semantics
 
 
-def create_and_evaluate_offspring(population, toolbox, cxpb, mutpb):
+def create_and_evaluate_offspring(population, toolbox, cxpb, mutpb, run=None, runs=None, gen=None, n_generations=None, pop_size=None):
     """
     Apply crossover and mutation to produce offspring, then evaluate feature masks (binary selection vectors) with invalid fitness.
 
@@ -2772,6 +2784,11 @@ def create_and_evaluate_offspring(population, toolbox, cxpb, mutpb):
     :param toolbox: DEAP toolbox with registered operators.
     :param cxpb: Crossover probability.
     :param mutpb: Mutation probability.
+    :param run: Current run index for structured evaluation logging.
+    :param runs: Total number of runs for structured evaluation logging.
+    :param gen: Current generation index for structured evaluation logging.
+    :param n_generations: Total number of generations for structured evaluation logging.
+    :param pop_size: Population size for structured evaluation logging.
     :return: Tuple of (offspring list, number of feature masks that were evaluated).
     """
 
@@ -2783,8 +2800,16 @@ def create_and_evaluate_offspring(population, toolbox, cxpb, mutpb):
         if invalid_feature_masks:  # If there are feature masks to evaluate
             verbose = CONFIG.get("execution", {}).get("verbose", False) if CONFIG else False  # Read verbose flag from global config
 
+            run_label = f"{run}" if run is not None else "?"  # Format run index for structured evaluation log label
+            runs_label = f"{runs}" if runs is not None else "?"  # Format total runs for structured evaluation log label
+            gen_label = f"{gen}" if gen is not None else "?"  # Format generation index for structured evaluation log label
+            gens_label = f"{n_generations}" if n_generations is not None else "?"  # Format total generations for structured evaluation log label
+            pop_label = f"{pop_size}" if pop_size is not None else "?"  # Format population size for structured evaluation log label
+            n_invalid = len(invalid_feature_masks)  # Number of feature masks requiring fitness evaluation this generation
+            verbose_output(f"[GA][RUN {run_label}/{runs_label}][GEN {gen_label}/{gens_label}][POP {pop_label}][MASKS {n_invalid}/{n_invalid}] Evaluating feature masks batch | config: generations={gens_label}, runs={runs_label}, pop_size={pop_label}", "")  # Emit structured evaluation batch log with GA configuration snapshot when verbose is enabled
+
             if verbose:  # If verbose mode is enabled, use sequential evaluation with progress bar
-                invalid_fits = evaluate_feature_masks_verbose(invalid_feature_masks, toolbox)  # Evaluate feature masks sequentially with tqdm progress bar
+                invalid_fits = evaluate_feature_masks_verbose(invalid_feature_masks, toolbox, run=run, runs=runs, gen=gen, n_generations=n_generations, pop_size=pop_size)  # Evaluate feature masks sequentially with tqdm progress bar and structured GA context
             else:  # If verbose mode is disabled, use parallel map unchanged
                 invalid_fits = list(toolbox.map(toolbox.evaluate, invalid_feature_masks))  # Evaluate only invalid feature masks in parallel
 
@@ -3191,7 +3216,7 @@ def evolve_population_one_generation(
     :return: Tuple of (current_best_fitness_f1, current_best_num_features) extracted from the updated HOF.
     """
 
-    offspring, n_evaluated = create_and_evaluate_offspring(population, toolbox, cxpb, mutpb)  # Apply crossover, mutation, and evaluate offspring fitness
+    offspring, n_evaluated = create_and_evaluate_offspring(population, toolbox, cxpb, mutpb, run=run, runs=runs, gen=gen, n_generations=n_generations, pop_size=pop_size)  # Apply crossover, mutation, and evaluate offspring fitness with structured GA context
 
     apply_offspring_progress_update(
         progress_state, n_evaluated, folds, progress_bar,
@@ -3337,9 +3362,16 @@ def run_genetic_algorithm_loop(
     """
 
     try:
+        run_label = f"{run}" if run is not None else "?"  # Format run index for global GA context log label
+        runs_label = f"{runs}" if runs is not None else "?"  # Format total runs for global GA context log label
+        pop_label = f"{pop_size}" if pop_size is not None else "?"  # Format population size for global GA context log label
+        feature_count_label = f"{X_train.shape[1]}" if X_train is not None and hasattr(X_train, "shape") else "?"  # Extract feature count from training data shape when available
         verbose_output(
             f"{BackgroundColors.GREEN}Running Genetic Algorithm for {n_generations} generations.{Style.RESET_ALL}"
-        )  # Output the verbose message
+        )  # Output the verbose run start message
+        verbose_output(
+            f"[GA][RUN {run_label}/{runs_label}] GA context | dataset={dataset_name or 'N/A'}, features={feature_count_label}, pop_size={pop_label}, generations={n_generations}, runs={runs_label}, masks_per_gen~={pop_label}"
+        )  # Emit structured global GA context header once per run with all available configuration parameters
 
         (
             folds,
