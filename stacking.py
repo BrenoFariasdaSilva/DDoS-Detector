@@ -895,6 +895,32 @@ def get_dataset_name(input_path):
         raise  # Re-raise to preserve original failure semantics
 
 
+def detect_label_column(columns):
+    """
+    Try to guess the label column based on common naming conventions.
+
+    :param columns: List of column names.
+    :return: The name of the label column if found, else None.
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        candidates = ["label", "class", "target", "y", "category"]  # Common label column names to check for exact matches
+
+        for col in columns:  # First search for exact matches
+            if col.lower() in candidates:  # Verify match against candidate set
+                return col  # Return detected label column
+
+        for col in columns:  # Second search for partial matches
+            if "target" in col.lower() or "label" in col.lower():  # Verify partial match condition
+                return col  # Return detected label column
+
+        return None  # Return None if no label column is found
+    except Exception as e:  # Catch any exception for safe logging
+        print(str(e))  # Output error for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram
+        raise  # Preserve original failure behavior
+
+
 def process_single_file(f, config=None):
     """
     Process a single dataset file: load, preprocess, and extract target and features.
@@ -926,8 +952,10 @@ def process_single_file(f, config=None):
         if df_clean is None or df_clean.empty:  # If preprocessing failed or dataframe is empty
             return None  # Return None
 
-        target_col = df_clean.columns[-1]  # Get the last column as target
-        feat_cols = [c for c in df_clean.columns[:-1] if pd.api.types.is_numeric_dtype(df_clean[c])]  # Get numeric feature columns
+        target_col = detect_label_column(df_clean.columns.tolist())  # Detect label column using naming conventions
+        if target_col is None:  # If label column was not detected
+            target_col = df_clean.columns[-1]  # Fall back to last column as target
+        feat_cols = [c for c in df_clean.columns if c != target_col and pd.api.types.is_numeric_dtype(df_clean[c])]  # Get numeric feature columns excluding label column
         if not feat_cols:  # If no numeric features
             return None  # Return None
 
@@ -1215,7 +1243,7 @@ def concat_files_into_multiclass_df(processed_files_with_labels, common_features
 
     for idx, (f, df_clean, this_target, feat_cols, attack_label) in enumerate(processed_files_with_labels):  # Iterate over processed files with index
         df_subset = df_clean[common_features_list].copy()  # Select only common features as a copy for safe modification
-        df_subset['attack_type'] = attack_label  # Add attack type column with the extracted label
+        df_subset["attack_type"] = df_clean[this_target].values  # Preserve original label column values to maintain benign and attack class integrity
         combined_parts.append(df_subset)  # Append to combined parts list
 
         processed_files_with_labels[idx] = (f, None, this_target, feat_cols, attack_label)  # Release original full dataframe reference to free memory
@@ -1295,8 +1323,10 @@ def process_files_and_extract_labels(files_list, config):
         result = process_single_file(f, config=config)  # Process the single file
         if result is not None:  # If processing succeeded
             df_clean, target_col, feat_cols = result  # Unpack the result
-            attack_label = extract_attack_label_from_path(f)  # Extract attack type from filename
-            attack_types_set.add(attack_label)  # Add attack type to set
+            attack_label = extract_attack_label_from_path(f)  # Extract attack type from filename for tuple reference
+            classes = df_clean[target_col].unique()  # Extract all unique classes from the label column
+            for cls in classes:  # Iterate over all unique classes found in this file
+                attack_types_set.add(str(cls))  # Add each class to the global attack types set
             processed_files_with_labels.append((f, df_clean, target_col, feat_cols, attack_label))  # Add to processed list with label
         else:  # If processing failed
             verbose_output(
