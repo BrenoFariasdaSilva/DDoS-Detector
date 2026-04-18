@@ -2166,10 +2166,6 @@ def evaluate_individual(
     """
     
     try:
-        verbose_output(
-            f"{BackgroundColors.GREEN}Evaluating individual: {BackgroundColors.CYAN}{individual}{Style.RESET_ALL}"
-        )  # Output the verbose message
-
         num_features_selected = sum(individual)  # Count number of selected features for multi-objective optimization
 
         if num_features_selected == 0:  # If no features are selected
@@ -2640,6 +2636,50 @@ def build_ga_history_data_dict(fitness_history, best_features_history, avg_f1_hi
         raise  # Re-raise to preserve original failure semantics
 
 
+def evaluate_individuals_verbose(invalid_ind, toolbox):
+    """
+    Evaluate individuals sequentially with a tqdm progress bar (verbose mode only).
+
+    :param invalid_ind: List of DEAP Individual instances with invalid fitness.
+    :param toolbox: DEAP toolbox with the registered evaluate operator.
+    :return: List of fitness tuples in the same order as invalid_ind.
+    """
+
+    eval_bar = None  # Initialize progress bar reference before try block for safe cleanup
+
+    try:
+        try:  # Attempt to initialize tqdm progress bar for individual evaluation tracking
+            eval_bar = tqdm(
+                total=len(invalid_ind),
+                desc="Evaluating individuals",
+                unit="ind",
+                leave=False,
+                dynamic_ncols=True,
+            )  # Create tqdm progress bar with ETA for per-generation individual evaluation
+        except Exception:  # If tqdm initialization fails for any reason
+            eval_bar = None  # Disable progress bar and fall back to plain sequential evaluation
+
+        results = []  # Accumulate fitness results in input order
+
+        for ind in invalid_ind:  # Iterate over each individual requiring fitness evaluation
+            fit = toolbox.evaluate(ind)  # Evaluate individual and obtain fitness tuple
+            results.append(fit)  # Append fitness result to ordered results list
+
+            if eval_bar is not None:  # If progress bar was successfully initialized
+                eval_bar.update(1)  # Advance progress bar by one completed individual
+
+        if eval_bar is not None:  # If progress bar was created
+            eval_bar.close()  # Close and release progress bar resources
+
+        return results  # Return ordered list of fitness tuples for assignment to individuals
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        if eval_bar is not None:  # If progress bar is still open during exception
+            eval_bar.close()  # Close progress bar before propagating the exception
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def create_and_evaluate_offspring(population, toolbox, cxpb, mutpb):
     """
     Apply crossover and mutation to produce offspring, then evaluate individuals with invalid fitness.
@@ -2655,8 +2695,15 @@ def create_and_evaluate_offspring(population, toolbox, cxpb, mutpb):
         offspring = algorithms.varAnd(population, toolbox, cxpb=cxpb, mutpb=mutpb)  # Apply crossover and mutation
 
         invalid_ind = [ind for ind in offspring if not ind.fitness.valid]  # Filter to only individuals needing evaluation
+
         if invalid_ind:  # If there are individuals to evaluate
-            invalid_fits = list(toolbox.map(toolbox.evaluate, invalid_ind))  # Evaluate only invalid offspring in parallel
+            verbose = CONFIG.get("execution", {}).get("verbose", False) if CONFIG else False  # Read verbose flag from global config
+
+            if verbose:  # If verbose mode is enabled, use sequential evaluation with progress bar
+                invalid_fits = evaluate_individuals_verbose(invalid_ind, toolbox)  # Evaluate sequentially with tqdm progress bar
+            else:  # If verbose mode is disabled, use parallel map unchanged
+                invalid_fits = list(toolbox.map(toolbox.evaluate, invalid_ind))  # Evaluate only invalid offspring in parallel
+
             for ind, fit in zip(invalid_ind, invalid_fits):  # Assign fitness to evaluated individuals
                 ind.fitness.values = fit  # Set the fitness value
 
