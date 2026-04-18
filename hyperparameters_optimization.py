@@ -2471,6 +2471,12 @@ def execute_single_combination(task_tuple):
 
     try:
         current_params = dict(zip(keys, combo))  # Build hyperparameter dict from parameter names and combination values
+        print(
+            f"{BackgroundColors.GREEN}[INFO] Parallel task starting: "
+            f"{BackgroundColors.CYAN}{local_counter}/{total_combinations}"
+            f"{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{model_name} "
+            f"{BackgroundColors.GREEN}- params: {BackgroundColors.CYAN}{current_params}{Style.RESET_ALL}"
+        )  # Log the start of this parallel task with combination index, model name, and hyperparameters for observability
 
         if hasattr(model_base, "__class__") and model_base.__class__.__name__ == "LogisticRegression":  # Apply LogisticRegression-specific parameter cleanup before evaluation
             penalty = current_params.get("penalty")  # Extract penalty parameter from the current combination
@@ -2489,6 +2495,8 @@ def execute_single_combination(task_tuple):
             cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)  # Initialize 10-fold stratified cross-validator for robust evaluation
             fold_metrics_list = []  # Accumulate per-fold metric dictionaries for aggregation
             fold_elapsed = []  # Accumulate per-fold elapsed times for diagnostics
+            total_fit_time = 0.0  # Accumulate total fit time across all folds for this combination for performance analysis
+            total_predict_time = 0.0  # Accumulate total predict time across all folds for this combination for performance analysis
 
             for fold_idx, (train_idx, val_idx) in enumerate(cv.split(WORKER_X_TRAIN, y_train_arr), start=1):  # Generate stratified fold splits with per-fold index tracking
                 X_tr, X_val = WORKER_X_TRAIN[train_idx], WORKER_X_TRAIN[val_idx]  # Slice fold training and validation features using positional indices
@@ -2504,10 +2512,12 @@ def execute_single_combination(task_tuple):
                 t0 = time.time()  # Record fold fit start time for timing breakdown
                 clf.fit(X_tr, y_tr)  # Train the model instance on the current fold training split
                 elapsed_fit = time.time() - t0  # Measure fit elapsed time for this fold
+                total_fit_time += elapsed_fit  # Accumulate fit time for this fold into the total fit time for this combination
 
                 t1 = time.time()  # Record fold predict start time for timing breakdown
                 y_pred = clf.predict(X_val)  # Generate predictions on the validation fold split
                 elapsed_predict = time.time() - t1  # Measure predict elapsed time for this fold
+                total_predict_time += elapsed_predict  # Accumulate predict time for this fold into the total predict time for this combination
 
                 elapsed_fold = elapsed_fit + elapsed_predict  # Compute total fold elapsed as sum of fit and predict time
 
@@ -2548,9 +2558,9 @@ def execute_single_combination(task_tuple):
 
         elapsed = time.time() - start_time  # Compute total elapsed wall-clock time for this combination
 
-        return current_params, metrics, elapsed  # Return params, metrics, and elapsed to the calling process
-    except Exception:
-        return dict(zip(keys, combo)), None, 0.0  # Return safe failure tuple preserving params on any unexpected top-level error
+        return current_params, metrics, elapsed, total_fit_time, total_predict_time  # Return params, metrics, total elapsed, fit and predict times to the calling process
+    except Exception:  # Catch any unexpected exception that escaped the main evaluation logic to prevent worker crashes and return a safe failure tuple
+        return dict(zip(keys, combo)), None, 0.0, 0.0, 0.0  # Return safe failure tuple preserving params on any unexpected top-level error
 
 
 def run_parallel_grid_search(
@@ -2623,16 +2633,29 @@ def run_parallel_grid_search(
                 initargs=(X_train, y_train, USE_LINEAR_SVC_FOR_LINEAR_KERNEL, SVM_MAX_ITER),
             ) as pool:  # Launch worker pool with training data shared via initializer to minimize serialization overhead
                 for result in pool.imap_unordered(execute_single_combination, tasks):  # Process results in completion order for minimal latency
-                    current_params, metrics, elapsed = result  # Unpack result fields from completed worker
+                    current_params, metrics, elapsed, train_time, eval_time = result  # Unpack result fields from completed worker
 
                     local_counter += 1  # Increment local combination counter for this model
                     global_counter += 1  # Increment global combination counter across all models
 
-                    print(
-                        f"{BackgroundColors.GREEN}[INFO] Parallel task completed: "
-                        f"{BackgroundColors.CYAN}{local_counter}/{len(combinations_to_test)}"
-                        f"{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
-                    )  # Log per-task completion with running index and model name
+                    try:  # Attempt detailed logging of this combination's results with metrics and timing breakdowns for observability
+                        f1_val = metrics.get("f1_score") if isinstance(metrics, dict) else None  # Safely extract f1_score from metrics dict if available for logging
+                        print(
+                            f"{BackgroundColors.GREEN}[INFO] Parallel task completed: "
+                            f"{BackgroundColors.CYAN}{local_counter}/{len(combinations_to_test)}"
+                            f"{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{model_name} "
+                            f"{BackgroundColors.GREEN}- params: {BackgroundColors.CYAN}{current_params} \n"
+                            f"{BackgroundColors.GREEN}  f1_score: {BackgroundColors.CYAN}{f1_val}{BackgroundColors.GREEN}, "
+                            f"train_time_s: {BackgroundColors.CYAN}{train_time}{BackgroundColors.GREEN}, "
+                            f"eval_time_s: {BackgroundColors.CYAN}{eval_time}{BackgroundColors.GREEN}, "
+                            f"total_time_s: {BackgroundColors.CYAN}{int(elapsed)}{Style.RESET_ALL}"
+                        )  # Log combination completion with detailed metrics and timing information for operator insight
+                    except Exception:  # Guard against any logging failure to prevent masking real issues in the combination evaluation logic
+                        print(
+                            f"{BackgroundColors.GREEN}[INFO] Parallel task completed: "
+                            f"{BackgroundColors.CYAN}{local_counter}/{len(combinations_to_test)}"
+                            f"{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
+                        )  # Fallback simple log on formatting failure
 
                     if progress_bar is not None:  # Verify progress bar exists before attempting update
                         try:  # Guard against progress bar update errors to prevent masking real failures
