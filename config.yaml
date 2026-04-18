@@ -199,72 +199,72 @@ genetic_algorithm:
   cxpb: 0.5 # Crossover probability
   mutpb: 0.01 # Mutation probability
 
-early_stop:
-  acc_threshold: 0.75 # Minimum acceptable accuracy for an individual
-  folds: 3 # Number of folds to verify before early stopping
-  generations: 10 # Number of generations without improvement before early stop
+  early_stop:
+    acc_threshold: 0.75 # Minimum acceptable accuracy for an individual
+    folds: 3 # Number of folds to verify before early stopping
+    generations: 10 # Number of generations without improvement before early stop
 
-cross_validation:
-  n_folds: 10 # Number of cross-validation folds
+  cross_validation:
+    n_folds: 10 # Number of cross-validation folds
 
-multiprocessing:
-  n_jobs: -1 # Number of parallel jobs (-1 uses all processors)
-  cpu_processes: 1 # Initial number of worker processes
+  multiprocessing:
+    n_jobs: -1 # Number of parallel jobs (-1 uses all processors)
+    cpu_processes: 1 # Initial number of worker processes
 
-resource_monitor:
-  enabled: true # Enable resource monitoring
-  interval_seconds: 30 # Interval between monitoring cycles in seconds
-  reserve_cpu_frac: 0.15 # Fraction of CPU reserved from worker allocation
-  reserve_mem_frac: 0.15 # Fraction of memory reserved from worker allocation
-  min_procs: 1 # Minimum number of processes allowed
-  max_procs: null # Maximum number of processes allowed (null for unlimited)
-  min_gens_before_update: 10 # Minimum GA generations before updating workers
-  daemon: true # Whether the monitoring thread runs as daemon
+  resource_monitor:
+    enabled: true # Enable resource monitoring
+    interval_seconds: 30 # Interval between monitoring cycles in seconds
+    reserve_cpu_frac: 0.15 # Fraction of CPU reserved from worker allocation
+    reserve_mem_frac: 0.15 # Fraction of memory reserved from worker allocation
+    min_procs: 1 # Minimum number of processes allowed
+    max_procs: null # Maximum number of processes allowed (null for unlimited)
+    min_gens_before_update: 10 # Minimum GA generations before updating workers
+    daemon: true # Whether the monitoring thread runs as daemon
 
-model:
-  estimator: "RandomForestClassifier" # Default estimator for GA fitness evaluation
-  random_state: null # Random state for reproducibility (null for non-deterministic)
+  model:
+    estimator: "RandomForestClassifier" # Default estimator for GA fitness evaluation
+    random_state: null # Random state for reproducibility (null for non-deterministic)
 
-caching:
-  enabled: true # Enable fitness caching
-  pickle_protocol: 4 # Pickle protocol to use when saving state
+  caching:
+    enabled: true # Enable fitness caching
+    pickle_protocol: 4 # Pickle protocol to use when saving state
 
-progress:
-  state_dir_name: "ga_progress" # Subfolder under Feature_Analysis to store progress files
+  progress:
+    state_dir_name: "ga_progress" # Subfolder under Feature_Analysis to store progress files
 
-export:
-  results_dir: "Feature_Analysis/Genetic_Algorithm"
-  results_filename: "Genetic_Algorithm_Results.csv"
-  results_csv_columns: # Columns for the results CSV
-    - timestamp
-    - tool
-    - run_index
-    - model
-    - dataset
-    - hyperparameters
-    - cv_method
-    - train_test_split
-    - scaling
-    - cv_accuracy
-    - cv_precision
-    - cv_recall
-    - cv_f1_score
-    - cv_fpr
-    - cv_fnr
-    - test_accuracy
-    - test_precision
-    - test_recall
-    - test_f1_score
-    - test_fpr
-    - test_fnr
-    - feature_extraction_time_s
-    - training_time_s
-    - testing_time_s
-    - elapsed_run_time
-    - hardware
-    - best_features
-    - union_features_across_runs
-    - rfe_ranking
+  export:
+    results_dir: "Feature_Analysis/Genetic_Algorithm"
+    results_filename: "Genetic_Algorithm_Results.csv"
+    results_csv_columns: # Columns for the results CSV
+      - timestamp
+      - tool
+      - run_index
+      - model
+      - dataset
+      - hyperparameters
+      - cv_method
+      - train_test_split
+      - scaling
+      - cv_accuracy
+      - cv_precision
+      - cv_recall
+      - cv_f1_score
+      - cv_fpr
+      - cv_fnr
+      - test_accuracy
+      - test_precision
+      - test_recall
+      - test_f1_score
+      - test_fpr
+      - test_fnr
+      - feature_extraction_time_s
+      - training_time_s
+      - testing_time_s
+      - elapsed_run_time
+      - hardware
+      - best_features
+      - union_features_across_runs
+      - rfe_ranking
 
 
 # ==============================================================================
