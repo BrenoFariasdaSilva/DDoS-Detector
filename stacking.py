@@ -92,7 +92,7 @@ import time  # For measuring execution time
 import traceback  # For formatting and printing exception tracebacks
 import yaml  # Import YAML library
 from colorama import Style  # For terminal text styling
-from joblib import dump, load, parallel_backend  # For exporting and loading trained models, scalers, and parallel backend selection
+from joblib import dump, load  # For exporting and loading trained models and scalers
 from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
@@ -4047,8 +4047,8 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             if existing_metrics is not None:  # If a valid existing model was found and used
                 return existing_metrics  # Return cached metrics without retraining
 
-        with parallel_backend("loky"):  # Enable loky multiprocessing backend for parallel model training
-            model.fit(X_train, y_train)  # Fit the model on the training data
+        sys.stdout.flush()  # Flush stdout before model training to ensure logs are visible under nohup
+        model.fit(X_train, y_train)  # Fit the model on the training data using its internal n_jobs parallelism
 
         y_pred = model.predict(X_test)  # Predict the labels for the test set
 
@@ -4098,8 +4098,8 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
 
         start_time = time.time()  # Record the start time for timing training and prediction
 
-        with parallel_backend("loky"):  # Enable loky multiprocessing backend for parallel stacking training
-            model.fit(X_train, y_train)  # Fit the stacking model on the training data (accepts DataFrame or array)
+        sys.stdout.flush()  # Flush stdout before stacking training to ensure logs are visible under nohup
+        model.fit(X_train, y_train)  # Fit the stacking model on the training data (accepts DataFrame or array)
 
         y_pred = model.predict(X_test)  # Predict the labels for the test set
 
@@ -5469,8 +5469,7 @@ def automl_cross_validate_model(model, X_train, y_train, cv_folds, trial=None, c
             X_fold_val = X_train[val_idx]  # Get fold validation features
             y_fold_val = y_train[val_idx]  # Get fold validation target
 
-            with parallel_backend("loky"):  # Enable loky multiprocessing backend for parallel fold training
-                model.fit(X_fold_train, y_fold_train)  # Fit model on fold training data
+            model.fit(X_fold_train, y_fold_train)  # Fit model on fold training data using its internal n_jobs parallelism
             y_pred = model.predict(X_fold_val)  # Predict on fold validation data
             fold_f1 = f1_score(y_fold_val, y_pred, average="weighted", zero_division=0)  # Calculate fold F1
             f1_scores.append(fold_f1)  # Append fold F1 score
@@ -5655,8 +5654,8 @@ def automl_stacking_objective(trial, X_train, y_train, cv_folds, candidate_model
                 estimators=estimators,
                 final_estimator=meta_model,
                 cv=StratifiedKFold(n_splits=n_cv_splits, shuffle=True, random_state=automl_random_state),
-                n_jobs=n_jobs,
-            )  # Create stacking classifier
+                n_jobs=1,
+            )  # Create stacking classifier with sequential CV folds to prevent nested loky deadlock
 
             mean_f1 = automl_cross_validate_model(stacking, X_train, y_train, cv_folds, trial)  # Cross-validate stacking
             return mean_f1  # Return mean F1 score
@@ -5837,8 +5836,8 @@ def build_automl_stacking_model(best_config, config=None):
             cv=StratifiedKFold(
                 n_splits=best_config["stacking_cv_splits"], shuffle=True, random_state=config.get("automl", {}).get("random_state", 42)
             ),
-            n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
-        )  # Create stacking classifier with optimal configuration
+            n_jobs=1,
+        )  # Create stacking classifier with sequential CV folds to prevent nested loky deadlock
 
         return stacking_model  # Return configured stacking model
     except Exception as e:
@@ -5863,8 +5862,8 @@ def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y
     try:
         start_time = time.time()  # Record start time
 
-        with parallel_backend("loky"):  # Enable loky multiprocessing backend for parallel model training
-            model.fit(X_train, y_train)  # Train model on full training set
+        sys.stdout.flush()  # Flush stdout before model training to ensure logs are visible under nohup
+        model.fit(X_train, y_train)  # Train model on full training set using its internal n_jobs parallelism
         y_pred = model.predict(X_test)  # Generate predictions on test set
 
         elapsed = time.time() - start_time  # Calculate elapsed training time
@@ -6317,8 +6316,8 @@ def export_automl_pipeline_artifacts(model_study, stacking_study, stacking_confi
 
         if stacking_config is not None and stacking_metrics is not None:  # If stacking was successful
             best_stacking_model_final = build_automl_stacking_model(stacking_config, config=config)  # Rebuild stacking model for export
-            with parallel_backend("loky"):  # Enable loky multiprocessing backend for parallel stacking training
-                best_stacking_model_final.fit(X_train_scaled, y_train_arr)  # Fit stacking model on full training data
+            sys.stdout.flush()  # Flush stdout before stacking training to ensure logs are visible under nohup
+            best_stacking_model_final.fit(X_train_scaled, y_train_arr)  # Fit stacking model on full training data
             export_automl_best_model(
                 best_stacking_model_final, scaler, automl_output_dir, "AutoML_Stacking", feature_names, dataset_file=file
             )  # Export best stacking model to file
@@ -6604,8 +6603,8 @@ def build_evaluation_stacking_model(base_models, config=None):
             estimators=estimators,
             final_estimator=RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=config.get("evaluation", {}).get("n_jobs", -1)),
             cv=StratifiedKFold(n_splits=10, shuffle=True, random_state=42),
-            n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
-        )  # Define the Stacking Classifier model with cross-validated base estimators
+            n_jobs=1,
+        )  # Define the Stacking Classifier model with sequential CV folds to prevent nested loky deadlock
 
         return stacking_model  # Return the constructed stacking model
     except Exception as e:
@@ -6827,7 +6826,7 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
 
 def run_individual_classifiers_for_feature_set(name, individual_models, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, hyperparams_map, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=None):
     """
-    Submits all individual classifiers for a feature set to a thread pool, collects results, and runs explainability.
+    Evaluates all individual classifiers for a feature set sequentially, collects results, and runs explainability.
 
     :param name: Name of the current feature set being evaluated
     :param individual_models: Dictionary mapping model names to model objects
@@ -6862,11 +6861,61 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             f"{data_source_label} - {name} (Individual)"
         )  # Update progress bar description for individual model evaluations
 
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=config.get("evaluation", {}).get("threads_limit", 2)
-        ) as executor:  # Create a bounded thread pool for parallel model evaluation
-            future_to_model, current_combination = submit_classifier_evaluations_to_pool(executor, individual_models, current_combination, name, X_train_df, y_train, X_test_df, y_test, file, scaler, subset_feature_names, total_steps)  # Submit all classifiers to thread pool and get updated combination counter
-            results_dict = collect_classifier_results_from_futures(future_to_model, individual_models, name, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, y_train, y_test, hyperparams_map, subset_feature_names, total_steps, progress_bar, config)  # Collect results from all completed futures
+        results_dict = {}  # Accumulate result entries for this feature set
+
+        for model_name, model in individual_models.items():  # Iterate over each individual model sequentially to prevent loky deadlock
+            send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - {model_name}")  # Notify Telegram about evaluation start
+            sys.stdout.flush()  # Flush stdout before each classifier to ensure logs are visible under nohup
+
+            metrics = evaluate_individual_classifier(
+                model,
+                model_name,
+                X_train_df.values,
+                y_train,
+                X_test_df.values,
+                y_test,
+                file,
+                scaler,
+                subset_feature_names,
+                name,
+                config=config,
+            )  # Evaluate individual classifier sequentially using numpy arrays
+
+            model_class = model.__class__.__name__  # Retrieve model class name for result entry
+            result_entry = build_classifier_result_entry(
+                model_class, file, execution_mode_str, attack_types_combined, name, "Individual",
+                model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio,
+                X_train_n_cols, len(y_train), len(y_test), metrics, subset_feature_names,
+                hyperparams_map=hyperparams_map,
+            )  # Build standardized result entry for this individual classifier
+            results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
+
+            send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - {model_name} with F1: {truncate_value(metrics[3])} in {calculate_execution_time(0, metrics[6])}")  # Notify Telegram about completion
+            print(
+                f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(metrics[0])}{Style.RESET_ALL}"
+            )  # Output individual model accuracy
+            progress_bar.update(1)  # Advance progress bar by one step
+
+            if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run explainability on original data
+                try:  # Attempt to run explainability pipeline for this model
+                    run_explainability_pipeline(
+                        model,
+                        model_name,
+                        X_test_subset,
+                        y_test,
+                        subset_feature_names,
+                        file,
+                        name,
+                        execution_mode_str,
+                        config
+                    )  # Run explainability pipeline on original test data only
+                except Exception as e:  # If explainability fails
+                    verbose_output(
+                        f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
+                        config=config
+                    )  # Log error but continue evaluation
+
+            current_combination += 1  # Advance the global combination counter
 
         return (results_dict, current_combination)  # Return accumulated results and updated combination counter
     except Exception as e:
@@ -7183,6 +7232,7 @@ def evaluate_on_dataset(
     execution_mode_str="binary",
     attack_types_combined=None,
     df_augmented_for_training=None,
+    config=None,
 ):
     """
     Evaluate classifiers on a single dataset with optional training-only augmentation.
@@ -7202,10 +7252,14 @@ def evaluate_on_dataset(
     :param execution_mode_str: Execution mode string ('binary' or 'multi-class')
     :param attack_types_combined: List of attack types for multi-class or None for binary
     :param df_augmented_for_training: Optional augmented DataFrame to merge into training set only (test set remains original-only)
+    :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Dictionary mapping (feature_set, model_name) to results
     """
     
     try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
         ga_selected_features, rfe_selected_features = sanitize_and_verify_feature_selections(
             ga_selected_features, rfe_selected_features, feature_names, config=config
         )  # Sanitize and verify GA/RFE feature selections against available features
