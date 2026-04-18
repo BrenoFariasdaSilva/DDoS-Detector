@@ -825,7 +825,7 @@ def detect_label_column(columns):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        candidates = ["label", "class", "target"]  # Common label column names
+        candidates = ["label", "class", "target", "y", "category"]  # Common label column names to check for exact matchescandidates = ["label", "class", "target"]  # Common label column names
 
         for col in columns:  # First search for exact matches
             if col.lower() in candidates:  # Verify if the column name matches any candidate exactly
