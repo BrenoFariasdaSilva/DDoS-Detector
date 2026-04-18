@@ -140,6 +140,8 @@ IGNORE_DIRS = [
     "Feature_Analysis",
 ]  # List of directory names to ignore when searching for datasets
 HYPERPARAMETERS_RESULTS_CSV_COLUMNS = [  # Columns for the results CSV
+    "dataset_name",
+    "dataset_path",
     "base_csv",
     "model",
     "best_params",
@@ -271,6 +273,8 @@ def get_default_config() -> Dict[str, Any]:
             },
             "results_schema": {
                 "columns": [
+                    "dataset_name",
+                    "dataset_path",
                     "base_csv",
                     "model",
                     "best_params",
@@ -2895,7 +2899,7 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_nam
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
 
-def build_result_entry_from_best(csv_path, model_name, best_params, best_score, best_elapsed, all_results, X_train_ga, scaler=None, dataset_name=None, feature_names=None, best_estimator=None, feature_selection_method: str = "Genetic Algorithm"):
+def build_result_entry_from_best(csv_path, model_name, best_params, best_score, best_elapsed, all_results, X_train_ga, scaler=None, dataset_name=None, dataset_path=None, cfg_dataset_name: str = "", feature_names=None, best_estimator=None, feature_selection_method: str = "Genetic Algorithm"):
     """
     Build the ordered result dict for the best found parameters for a model.
 
@@ -2908,6 +2912,8 @@ def build_result_entry_from_best(csv_path, model_name, best_params, best_score, 
     :param X_train_ga: Training feature matrix used to determine feature count.
     :param scaler: Fitted scaler object for export (optional).
     :param dataset_name: Dataset directory name for model export path (optional).
+    :param dataset_path: Dataset directory path for the CSV result column (optional).
+    :param cfg_dataset_name: Config-level dataset key name for the CSV result column (optional).
     :param feature_names: Feature names list used during training (optional).
     :param best_estimator: Trained estimator instance for export (optional).
     :param feature_selection_method: Label indicating the feature selection strategy used.
@@ -2925,6 +2931,8 @@ def build_result_entry_from_best(csv_path, model_name, best_params, best_score, 
                 break  # Stop iteration once match is found
 
         result_dict: Dict[str, Any] = OrderedDict([  # Build ordered result dict with core fields
+            ("dataset_name", cfg_dataset_name),  # Config-level dataset key name for identification
+            ("dataset_path", dataset_path or ""),  # Dataset directory path being processed
             ("base_csv", os.path.basename(csv_path)),  # Base filename of the dataset CSV
             ("model", model_name),  # Model name identifier
             ("best_params", json.dumps(best_params)),  # Serialized best hyperparameter dict
@@ -2955,7 +2963,7 @@ def build_result_entry_from_best(csv_path, model_name, best_params, best_score, 
         raise
 
 
-def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=None, dataset_name=None, feature_names=None, feature_selection_method: str = "Genetic Algorithm"):
+def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=None, dataset_name=None, dataset_path=None, cfg_dataset_name: str = "", feature_names=None, feature_selection_method: str = "Genetic Algorithm"):
     """
     Runs optimization for all configured ML models using a progress bar and manual grid search.
 
@@ -2966,6 +2974,8 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
     :param dir_results_list: Accumulator list for storing optimization results
     :param scaler: Fitted scaler object for model export (optional)
     :param dataset_name: Dataset directory name used for model export path (optional)
+    :param dataset_path: Dataset directory path for the CSV result column (optional)
+    :param cfg_dataset_name: Config-level dataset key name for the CSV result column (optional)
     :param feature_names: Feature names list used during training (optional)
     :param feature_selection_method: Label indicating the feature selection strategy used
     :return: None
@@ -3020,7 +3030,7 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
                     best_estimator = clf
                     result_dict = build_result_entry_from_best(
                         csv_path, model_name, best_params, best_score, best_elapsed, all_results, X_train_ga,
-                        scaler=scaler, dataset_name=dataset_name, feature_names=feature_names, best_estimator=best_estimator,
+                        scaler=scaler, dataset_name=dataset_name, dataset_path=dataset_path, cfg_dataset_name=cfg_dataset_name, feature_names=feature_names, best_estimator=best_estimator,
                         feature_selection_method=feature_selection_method
                     )
                     dir_results_list.append(result_dict)
@@ -3034,13 +3044,15 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
         raise
 
 
-def process_single_csv_file(csv_path, dir_results_list):
+def process_single_csv_file(csv_path, dir_results_list, cfg_dataset_name: str = "", cfg_dataset_path: str = ""):
     """
     Processes a single CSV file: loads GA-selected features, prepares the dataset,
     applies GA-based column filtering, and runs model hyperparameter optimization.
 
     :param csv_path: Path to dataset CSV file
     :param dir_results_list: List to store optimization results for the directory
+    :param cfg_dataset_name: Config-level dataset key name for the CSV result column
+    :param cfg_dataset_path: Dataset directory path for the CSV result column
     :return: None
     """
 
@@ -3127,7 +3139,7 @@ def process_single_csv_file(csv_path, dir_results_list):
         models = list(models_and_grids.items())  # Convert dict to list
 
         dataset_name = os.path.basename(os.path.dirname(csv_path))  # Extract dataset directory name
-        run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=scaler, dataset_name=dataset_name, feature_names=valid_ga_features, feature_selection_method=feature_selection_method)  # Run optimizations with validated feature selection applied
+        run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=scaler, dataset_name=dataset_name, dataset_path=cfg_dataset_path, cfg_dataset_name=cfg_dataset_name, feature_names=valid_ga_features, feature_selection_method=feature_selection_method)  # Run optimizations with validated feature selection applied
 
         added_slice = dir_results_list[start_idx:]  # Extract slice
         print(
@@ -3482,7 +3494,7 @@ def run_optimization():
                     TELEGRAM_BOT,[f"Processing CSV file: {os.path.basename(csv_path)}"]
                 )  # Send CSV file processing message
                 try:  # Process the current csv_path inside a try/except to continue on errors
-                    process_single_csv_file(csv_path, dir_results_list)  # Process CSV end-to-end
+                    process_single_csv_file(csv_path, dir_results_list, cfg_dataset_name=dataset_name, cfg_dataset_path=dirpath)  # Process CSV end-to-end
                 except Exception as e:  # Catch any unhandled exceptions during CSV processing
                     print(
                         f"{BackgroundColors.RED}Unhandled error processing {csv_path}: {e}{Style.RESET_ALL}"
