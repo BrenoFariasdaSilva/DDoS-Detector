@@ -94,6 +94,8 @@ hyperparameters_optimization:
 
   results_schema:
     columns:
+      - "dataset_name"
+      - "dataset_path"
       - "base_csv"
       - "model"
       - "best_params"
