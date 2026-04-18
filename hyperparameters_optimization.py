@@ -1720,10 +1720,11 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
         try:
             y_train_arr = np.asarray(y_train)  # Convert y_train to numpy array to prevent pandas label-indexing KeyError on non-sequential Series index
             cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)  # Initialize stratified 10-fold cross-validator for robust evaluation
+            total_folds = cv.get_n_splits()  # Determine total number of folds for per-fold reporting
             fold_metrics_list = []  # Accumulate per-fold metric dicts for aggregation
             fold_elapsed = []  # Accumulate per-fold elapsed times for diagnostics
 
-            for train_idx, val_idx in cv.split(X_train, y_train_arr):  # Generate stratified fold indices using numpy-converted labels to avoid pandas label-indexing errors
+            for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X_train, y_train_arr), start=1):  # Generate stratified fold indices with index for reporting
                 X_tr, X_val = X_train[train_idx], X_train[val_idx]  # Slice training and validation features using positional indices
                 y_tr, y_val = y_train_arr[train_idx], y_train_arr[val_idx]  # Slice training and validation labels using safe positional numpy indexing
 
@@ -1744,7 +1745,6 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
                 elapsed_predict = time.time() - t1  # Measure fold predict elapsed time for the timing breakdown
 
                 elapsed_fold = elapsed_fit + elapsed_predict  # Compute total fold elapsed as the sum of fit and predict time
-                verbose_output(f"{BackgroundColors.GREEN}[DEBUG] Fold timing — Fit: {BackgroundColors.CYAN}{elapsed_fit:.3f}s{BackgroundColors.GREEN} | Predict: {BackgroundColors.CYAN}{elapsed_predict:.3f}s{BackgroundColors.GREEN} | Total: {BackgroundColors.CYAN}{elapsed_fold:.3f}s{Style.RESET_ALL}")  # Log per-fold timing breakdown for diagnosis of slow combinations
 
                 m = compute_metrics_from_predictions(clf, y_val, y_pred, X_val)  # Compute evaluation metrics for this fold
 
@@ -1752,6 +1752,15 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
                     fold_metrics_list.append(m)  # Accumulate valid fold metrics for aggregation
                     fold_elapsed.append(elapsed_fold)  # Accumulate fold elapsed time alongside its metrics
 
+                try:  # Try to extract per-fold f1 score for reporting
+                    fold_f1 = m.get("f1_score") if (m is not None and isinstance(m, dict)) else None  # Extract f1_score when available in metrics dict
+                except Exception:  # On any extraction error
+                    fold_f1 = None  # Fallback to None when extraction fails
+
+                f1_display = f"{fold_f1:.6f}" if (fold_f1 is not None and isinstance(fold_f1, (int, float))) else (str(fold_f1) if fold_f1 is not None else "N/A")  # Format f1 with 6 decimals when numeric, otherwise N/A
+
+                verbose_output(f"{BackgroundColors.GREEN}[DEBUG] {BackgroundColors.CYAN}{current_index}/{total_combinations} Combination: Fold [{fold_idx}/{total_folds}] — F1: {BackgroundColors.CYAN}{f1_display}{BackgroundColors.GREEN} Fit: {BackgroundColors.CYAN}{elapsed_fit:.3f}s{BackgroundColors.GREEN} | Predict: {BackgroundColors.CYAN}{elapsed_predict:.3f}s{BackgroundColors.GREEN} | Total: {BackgroundColors.CYAN}{elapsed_fold:.3f}s{Style.RESET_ALL}")  # Log per-fold timing and f1 with fold index for diagnosis of slow combinations
+                
             if len(fold_metrics_list) == 0:  # Verify if all folds failed to produce valid metrics
                 metrics = {"f1_score": 0.0}  # Set fallback metrics with zero F1 when no folds succeeded
             else:
