@@ -691,7 +691,7 @@ def build_default_runtime_config() -> Dict:
         },
         "dataset": {  # Dataset configuration
             "remove_zero_variance": True,  # Remove zero-variance features during preprocessing
-            "label_candidates": ["label", "class", "target"],  # Common label column names for auto-detection
+            "label_candidates": ["label", "class", "target", "y", "category"],  # Common label column names for auto-detection
             "datasets": {  # Dictionary containing dataset paths
                 "CICDDoS2019-Dataset": [  # List of paths to the CICDDoS2019 dataset
                     "./Datasets/CICDDoS2019/01-12/",
@@ -965,7 +965,7 @@ def detect_label_column(columns, config: Optional[Dict] = None):
         if config is None:  # If no config provided
             config = CONFIG or get_default_config()  # Use global or default config
         
-        candidates = config.get("dataset", {}).get("label_candidates", ["label", "class", "target"])  # Get label column candidates from config
+        candidates = config.get("dataset", {}).get("label_candidates", ["label", "class", "target", "y", "category"])  # Get label column candidates from config
 
         for col in columns:  # First search for exact matches
             if col.lower() in candidates:  # Verify if the column name matches any candidate exactly
