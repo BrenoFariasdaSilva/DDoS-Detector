@@ -2113,18 +2113,18 @@ def run_cv_fold_loop(X_train_sel, y_train_np, splits, estimator_cls, n_cv_folds)
         raise  # Re-raise to preserve original failure semantics
 
 
-def evaluate_individual_holdout(X_train_sel, y_train, estimator_cls, mask_tuple, num_features_selected):
+def evaluate_feature_mask_holdout(X_train_sel, y_train, estimator_cls, mask_tuple, num_features_selected):
     """
-    Evaluate a GA individual using a simple holdout split when StratifiedKFold fails.
+    Evaluate a feature mask (binary selection vector) using a simple holdout split when StratifiedKFold fails.
 
     Falls back to a single 80/20 train-validation split on the training data only,
     avoiding any data leakage from the held-out test set. The result is cached
     before returning.
 
-    :param X_train_sel: Feature-selected training array (selected by the individual binary mask).
+    :param X_train_sel: Feature-selected training array (selected by the feature mask binary vector).
     :param y_train: Full training labels.
     :param estimator_cls: Classifier class passed to "instantiate_estimator".
-    :param mask_tuple: Hashable tuple form of the individual (used as cache key).
+    :param mask_tuple: Hashable tuple form of the feature mask (used as cache key).
     :param num_features_selected: Number of active features (included in result tuple).
     :return: Result tuple (cv_acc, cv_prec, cv_rec, cv_f1, cv_fpr, cv_fnr,
              test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr, num_features).
@@ -2148,17 +2148,17 @@ def evaluate_individual_holdout(X_train_sel, y_train, estimator_cls, mask_tuple,
         raise  # Re-raise to preserve original failure semantics
 
 
-def evaluate_individual(
-    individual,
+def evaluate_feature_mask(
+    feature_mask,
     X_train,
     y_train,
     estimator_cls=None,
 ):
     """
-    Evaluate the fitness of an individual solution using N_CV_FOLDS-fold Stratified Cross-Validation
+    Evaluate the fitness of a feature mask (binary vector indicating selected features) using N_CV_FOLDS-fold Stratified Cross-Validation
     on the training set only (não combina train+test para evitar data leakage).
 
-    :param individual: A list representing the individual solution (binary mask for feature selection).
+    :param feature_mask: A list representing the feature mask (binary selection vector for feature selection).
     :param X_train: Training feature set.
     :param y_train: Training target variable.
     :param estimator_cls: Classifier class to use (default: RandomForestClassifier).
@@ -2166,18 +2166,18 @@ def evaluate_individual(
     """
     
     try:
-        num_features_selected = sum(individual)  # Count number of selected features for multi-objective optimization
+        num_features_selected = sum(feature_mask)  # Count number of selected features for multi-objective optimization
 
         if num_features_selected == 0:  # If no features are selected
             return 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, num_features_selected  # Return worst possible scores for CV and test, with feature count
 
-        mask_tuple = tuple(individual)  # Convert individual to tuple for hashing
+        mask_tuple = tuple(feature_mask)  # Convert feature mask to tuple for hashing
         
         with fitness_cache_lock:  # Thread-safe cache access
             if mask_tuple in fitness_cache:  # Verify if already evaluated
                 return fitness_cache[mask_tuple]  # Return cached result
 
-        mask = np.array(individual, dtype=bool)  # Create boolean mask from individual
+        mask = np.array(feature_mask, dtype=bool)  # Create boolean mask from feature mask
         X_train_sel = X_train[:, mask]  # Select features based on the mask
 
         n_cv_folds = CONFIG.get("cross_validation", {}).get("n_folds", 10)  # Use configurable constant
@@ -2189,7 +2189,7 @@ def evaluate_individual(
             print(
                 f"{BackgroundColors.YELLOW}Warning: StratifiedKFold failed ({type(e).__name__}: {str(e)}), using simple holdout validation on training data only.{Style.RESET_ALL}"
             )  # Output warning message
-            return evaluate_individual_holdout(X_train_sel, y_train, estimator_cls, mask_tuple, num_features_selected)  # Delegate to holdout fallback evaluation
+            return evaluate_feature_mask_holdout(X_train_sel, y_train, estimator_cls, mask_tuple, num_features_selected)  # Delegate to holdout fallback evaluation
 
         y_train_np = np.array(y_train)  # Convert y_train to numpy array for fast indexing
 
@@ -2218,17 +2218,17 @@ def evaluate_individual(
         raise  # Re-raise to preserve original failure semantics
 
 
-def ga_fitness(ind, fitness_func):
+def ga_fitness(feature_mask, fitness_func):
     """
     Global fitness function for GA multi-objective evaluation to avoid pickle issues with local functions.
 
-    :param ind: Individual to evaluate
-    :param fitness_func: Partial function for evaluation
+    :param feature_mask: Feature mask (binary selection vector) to evaluate.
+    :param fitness_func: Partial function for evaluation.
     :return: Tuple with (F1-score, -num_features) for multi-objective optimization (maximize F1, minimize features)
     """
     
     try:
-        evaluation_result = fitness_func(ind)  # Evaluate individual to get full metrics tuple
+        evaluation_result = fitness_func(feature_mask)  # Evaluate feature mask to get full metrics tuple
         f1_score = evaluation_result[3]  # Extract F1-score (index 3 in metrics tuple)
         num_features = evaluation_result[12]  # Extract number of selected features (index 12 in extended metrics tuple)
         return (f1_score, -num_features)  # Return multi-objective fitness: maximize F1-score, minimize feature count (via negative)
@@ -2238,16 +2238,16 @@ def ga_fitness(ind, fitness_func):
         raise  # Re-raise to preserve original failure semantics
 
 
-def evaluate_individual_with_test(individual, X_train, y_train, X_test, y_test, estimator_cls=None):
+def evaluate_feature_mask_with_test(feature_mask, X_train, y_train, X_test, y_test, estimator_cls=None):
     """
-    Evaluate an individual with FULL test-set metrics. Use this only for the
-    final best individual re-evaluation (not during GA evolution loop).
+    Evaluate a feature mask (binary selection vector) with FULL test-set metrics. Use this only for the
+    final best feature mask re-evaluation (not during GA evolution loop).
 
     This computes 10-fold CV metrics AND trains a model on full training
-    data to produce test-set metrics — unlike evaluate_individual() which
+    data to produce test-set metrics — unlike evaluate_feature_mask() which
     defers test evaluation to avoid waste during the GA loop.
 
-    :param individual: Binary mask (list) for feature selection.
+    :param feature_mask: Binary feature mask (list) for feature selection.
     :param X_train: Training feature set (numpy array).
     :param y_train: Training target variable (numpy array).
     :param X_test: Testing feature set (numpy array).
@@ -2258,13 +2258,13 @@ def evaluate_individual_with_test(individual, X_train, y_train, X_test, y_test, 
     """
     
     try:
-        if sum(individual) == 0:  # If no features are selected
+        if sum(feature_mask) == 0:  # If no features are selected
             return 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1  # Return worst possible scores
 
-        cv_result = evaluate_individual(individual, X_train, y_train, estimator_cls)  # Get CV metrics from the standard evaluation function (only 4 params)
+        cv_result = evaluate_feature_mask(feature_mask, X_train, y_train, estimator_cls)  # Get CV metrics from the standard feature mask evaluation function (only 4 params)
         cv_acc, cv_prec, cv_rec, cv_f1, cv_fpr, cv_fnr = cv_result[:6]  # Extract CV metrics
 
-        mask = np.array(individual, dtype=bool)  # Create boolean mask
+        mask = np.array(feature_mask, dtype=bool)  # Create boolean mask from feature mask
         X_train_sel = X_train[:, mask]  # Select training features
         X_test_sel = X_test[:, mask]  # Select test features
 
@@ -2636,42 +2636,42 @@ def build_ga_history_data_dict(fitness_history, best_features_history, avg_f1_hi
         raise  # Re-raise to preserve original failure semantics
 
 
-def evaluate_individuals_verbose(invalid_ind, toolbox):
+def evaluate_feature_masks_verbose(invalid_feature_masks, toolbox):
     """
-    Evaluate individuals sequentially with a tqdm progress bar (verbose mode only).
+    Evaluate feature masks (binary selection vectors) sequentially with a tqdm progress bar (verbose mode only).
 
-    :param invalid_ind: List of DEAP Individual instances with invalid fitness.
+    :param invalid_feature_masks: List of DEAP Individual instances (feature masks) with invalid fitness.
     :param toolbox: DEAP toolbox with the registered evaluate operator.
-    :return: List of fitness tuples in the same order as invalid_ind.
+    :return: List of fitness tuples in the same order as invalid_feature_masks.
     """
 
     eval_bar = None  # Initialize progress bar reference before try block for safe cleanup
 
     try:
-        try:  # Attempt to initialize tqdm progress bar for individual evaluation tracking
+        try:  # Attempt to initialize tqdm progress bar for feature mask evaluation tracking
             eval_bar = tqdm(
-                total=len(invalid_ind),
-                desc="Evaluating individuals",
-                unit="ind",
+                total=len(invalid_feature_masks),
+                desc="Evaluating feature masks",
+                unit="mask",
                 leave=False,
                 dynamic_ncols=True,
-            )  # Create tqdm progress bar with ETA for per-generation individual evaluation
+            )  # Create tqdm progress bar with ETA for per-generation feature mask evaluation
         except Exception:  # If tqdm initialization fails for any reason
             eval_bar = None  # Disable progress bar and fall back to plain sequential evaluation
 
         results = []  # Accumulate fitness results in input order
 
-        for ind in invalid_ind:  # Iterate over each individual requiring fitness evaluation
-            fit = toolbox.evaluate(ind)  # Evaluate individual and obtain fitness tuple
+        for feature_mask in invalid_feature_masks:  # Iterate over each feature mask requiring fitness evaluation
+            fit = toolbox.evaluate(feature_mask)  # Evaluate feature mask and obtain fitness tuple
             results.append(fit)  # Append fitness result to ordered results list
 
             if eval_bar is not None:  # If progress bar was successfully initialized
-                eval_bar.update(1)  # Advance progress bar by one completed individual
+                eval_bar.update(1)  # Advance progress bar by one completed feature mask
 
         if eval_bar is not None:  # If progress bar was created
             eval_bar.close()  # Close and release progress bar resources
 
-        return results  # Return ordered list of fitness tuples for assignment to individuals
+        return results  # Return ordered list of fitness tuples for assignment to feature masks
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         if eval_bar is not None:  # If progress bar is still open during exception
             eval_bar.close()  # Close progress bar before propagating the exception
@@ -2682,32 +2682,32 @@ def evaluate_individuals_verbose(invalid_ind, toolbox):
 
 def create_and_evaluate_offspring(population, toolbox, cxpb, mutpb):
     """
-    Apply crossover and mutation to produce offspring, then evaluate individuals with invalid fitness.
+    Apply crossover and mutation to produce offspring, then evaluate feature masks (binary selection vectors) with invalid fitness.
 
     :param population: Current population used as the basis for offspring.
     :param toolbox: DEAP toolbox with registered operators.
     :param cxpb: Crossover probability.
     :param mutpb: Mutation probability.
-    :return: Tuple of (offspring list, number of individuals that were evaluated).
+    :return: Tuple of (offspring list, number of feature masks that were evaluated).
     """
 
     try:
         offspring = algorithms.varAnd(population, toolbox, cxpb=cxpb, mutpb=mutpb)  # Apply crossover and mutation
 
-        invalid_ind = [ind for ind in offspring if not ind.fitness.valid]  # Filter to only individuals needing evaluation
+        invalid_feature_masks = [feature_mask for feature_mask in offspring if not feature_mask.fitness.valid]  # Filter to only feature masks needing evaluation
 
-        if invalid_ind:  # If there are individuals to evaluate
+        if invalid_feature_masks:  # If there are feature masks to evaluate
             verbose = CONFIG.get("execution", {}).get("verbose", False) if CONFIG else False  # Read verbose flag from global config
 
             if verbose:  # If verbose mode is enabled, use sequential evaluation with progress bar
-                invalid_fits = evaluate_individuals_verbose(invalid_ind, toolbox)  # Evaluate sequentially with tqdm progress bar
+                invalid_fits = evaluate_feature_masks_verbose(invalid_feature_masks, toolbox)  # Evaluate feature masks sequentially with tqdm progress bar
             else:  # If verbose mode is disabled, use parallel map unchanged
-                invalid_fits = list(toolbox.map(toolbox.evaluate, invalid_ind))  # Evaluate only invalid offspring in parallel
+                invalid_fits = list(toolbox.map(toolbox.evaluate, invalid_feature_masks))  # Evaluate only invalid feature masks in parallel
 
-            for ind, fit in zip(invalid_ind, invalid_fits):  # Assign fitness to evaluated individuals
-                ind.fitness.values = fit  # Set the fitness value
+            for feature_mask, fit in zip(invalid_feature_masks, invalid_fits):  # Assign fitness to evaluated feature masks
+                feature_mask.fitness.values = fit  # Set the fitness value
 
-        return offspring, len(invalid_ind)  # Return offspring and count of evaluated individuals
+        return offspring, len(invalid_feature_masks)  # Return offspring and count of evaluated feature masks
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -2800,8 +2800,8 @@ def setup_ga_loop_state(toolbox, population, X_train, y_train, csv_path, pop_siz
 
     try:
         fitness_func = partial(
-            evaluate_individual, X_train=X_train, y_train=y_train
-        )  # Partial function for evaluation
+            evaluate_feature_mask, X_train=X_train, y_train=y_train
+        )  # Partial function for feature mask evaluation
         toolbox.register("evaluate", partial(ga_fitness, fitness_func=fitness_func))  # Register the global fitness function
 
         early_stop_gens = CONFIG.get("early_stop", {}).get("generations", 10)  # Read configured early-stop patience from config
@@ -4213,7 +4213,7 @@ def finalize_and_cache_iteration_result(best_ind, feature_names, metrics, iterat
 
     :param best_ind: Best DEAP individual from the completed GA loop.
     :param feature_names: List of feature names corresponding to individual gene indices.
-    :param metrics: Tuple of evaluation metrics produced by evaluate_individual_with_test.
+    :param metrics: Tuple of evaluation metrics produced by evaluate_feature_mask_with_test.
     :param iteration_start_time: perf_counter timestamp recorded at the start of the iteration.
     :param history_data: Consolidated generation history dictionary produced by build_ga_history_data_dict.
     :param gens_ran: Number of generations actually executed before stopping.
@@ -4318,7 +4318,7 @@ def run_single_ga_iteration(
         if best_ind is None:  # If GA failed
             return None  # Exit early
 
-        metrics = evaluate_individual_with_test(best_ind, X_train, y_train, X_test, y_test)  # Evaluate best individual with full test metrics
+        metrics = evaluate_feature_mask_with_test(best_ind, X_train, y_train, X_test, y_test)  # Evaluate best feature mask with full test metrics
 
         finalize_iteration_progress(
             progress_state, n_generations, pop_size, gens_ran, folds,
@@ -6214,12 +6214,12 @@ def maybe_evaluate_on_test(rf_m, best_ind_local, X, y, X_test, y_test):
     :param y: Training labels.
     :param X_test: Optional test feature matrix.
     :param y_test: Optional test labels.
-    :return: RF metrics tuple (possibly produced by "evaluate_individual") or the original "rf_m".
+    :return: RF metrics tuple (possibly produced by "evaluate_feature_mask") or the original "rf_m".
     """
 
     try:
         if rf_m is None and X_test is not None and y_test is not None:  # Only perform evaluation if metrics are missing and a test set is available
-            return evaluate_individual(best_ind_local, X, y, X_test)  # Evaluate individual on test set to generate metrics
+            return evaluate_feature_mask(best_ind_local, X, y, X_test)  # Evaluate feature mask on test set to generate metrics
         return rf_m  # Return existing metrics if already available
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
