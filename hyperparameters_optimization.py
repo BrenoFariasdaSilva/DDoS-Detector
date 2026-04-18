@@ -50,10 +50,12 @@ import argparse  # For command-line arguments
 import atexit  # For playing a sound when the program finishes
 import copy  # For deep copying configuration dictionaries
 import dataframe_image as dfi  # For exporting DataFrame images (zebra-striped PNG)
+import gc  # For explicit garbage collection during parallel memory management
 import datetime  # For getting the current date and time
 import json  # For handling JSON strings
 import lightgbm as lgb  # For LightGBM model
 import math  # For mathematical operations
+import multiprocessing  # For parallel execution of non-n_jobs classifiers
 import numpy as np  # For numerical operations
 import os  # For running a command in the terminal
 import pandas as pd  # For data manipulation
@@ -183,6 +185,14 @@ DATASETS = {  # Dictionary containing dataset paths and feature files
 HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION = None  # Optional float fraction for grid-search subsampling (None = use full training set; set to e.g. 0.05 for 5%)
 USE_LINEAR_SVC_FOR_LINEAR_KERNEL = False  # If True, substitute SVC(kernel='linear') with LinearSVC for faster equivalent linear training
 SVM_MAX_ITER = None  # Maximum solver iterations for SVC (None = unlimited; set to integer to cap iterations)
+ENABLE_PARALLEL_FOR_NON_N_JOBS_CLASSIFIERS = True  # Enable custom parallel execution for classifiers that do not support n_jobs natively
+NON_N_JOBS_CLASSIFIERS = frozenset({"SVM", "Nearest Centroid", "Gradient Boosting", "MLP (Neural Net)"})  # Set of classifier names that do not support the n_jobs parameter
+
+# Multiprocessing Worker Globals:
+WORKER_X_TRAIN = None  # Training features set in worker processes by init_combination_worker via pool initializer
+WORKER_Y_TRAIN = None  # Training labels set in worker processes by init_combination_worker via pool initializer
+WORKER_USE_LINEAR_SVC = False  # LinearSVC substitution flag set in worker processes by init_combination_worker
+WORKER_SVM_MAX_ITER = None  # SVM max iterations set in worker processes by init_combination_worker
 
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
@@ -224,6 +234,7 @@ def get_default_config() -> Dict[str, Any]:
                 "sample_fraction": None,  # Optional float fraction for grid-search subsampling (None disables)
                 "use_linear_svc_for_linear_kernel": False,  # If True, substitute SVC(kernel='linear') with LinearSVC
                 "svm_max_iter": None,  # Maximum solver iterations for SVC (None = unlimited; set to integer to cap iterations)
+                "enable_parallel_for_non_n_jobs_classifiers": True,  # Enable custom parallel execution for classifiers that do not support n_jobs natively
             },
             "export": {
                 "results_dir": "Feature_Analysis/Hyperparameter_Optimization",
@@ -392,6 +403,9 @@ def apply_cli_overrides_to_cfg(cfg: Dict[str, Any], args: argparse.Namespace) ->
 
     if getattr(args, "svm_max_iter", None) is not None:  # Verify if svm_max_iter CLI argument was provided
         execution["svm_max_iter"] = int(args.svm_max_iter)  # Apply CLI svm_max_iter override to execution config
+
+    if getattr(args, "enable_parallel_for_non_n_jobs_classifiers", None) is not None:  # Verify if enable_parallel_for_non_n_jobs_classifiers CLI argument was provided
+        execution["enable_parallel_for_non_n_jobs_classifiers"] = bool(args.enable_parallel_for_non_n_jobs_classifiers)  # Apply CLI parallel execution override to execution config
 
     if getattr(args, "results_dir", None):
         export["results_dir"] = str(args.results_dir)
@@ -2334,6 +2348,353 @@ def apply_grid_search_subsampling(X_train, y_train):
         raise
 
 
+def should_use_custom_parallelization(model_name: str, enable_flag: bool) -> bool:
+    """
+    Determine whether custom parallel execution should be applied for the given classifier.
+
+    :param model_name: Name of the classifier to evaluate.
+    :param enable_flag: Global flag indicating whether custom parallelization is enabled.
+    :return: True when the classifier does not support n_jobs and custom parallelization is enabled.
+    """
+
+    if not enable_flag:  # Return immediately when custom parallelization is globally disabled
+        return False  # Parallelization is disabled regardless of classifier type
+
+    return model_name in NON_N_JOBS_CLASSIFIERS  # True only for classifiers that do not support n_jobs natively
+
+
+def compute_memory_per_job(model, keys, combo, X_train, y_train) -> float:
+    """
+    Estimate the memory consumption in megabytes for one hyperparameter combination evaluation.
+
+    :param model: Base model instance to clone and fit for memory measurement.
+    :param keys: List of hyperparameter names corresponding to values in combo.
+    :param combo: Tuple of hyperparameter values for the test combination.
+    :param X_train: Training feature matrix used to measure data footprint.
+    :param y_train: Training label vector used alongside X_train for footprint measurement.
+    :return: Estimated memory in megabytes required for one parallel worker job.
+    """
+
+    try:
+        gc.collect()  # Trigger garbage collection before measurement to reduce baseline noise
+
+        process = psutil.Process(os.getpid())  # Get current process handle for RSS measurement
+        rss_before = process.memory_info().rss  # Record RSS memory in bytes before test fit
+
+        sample_size = min(X_train.shape[0], 500)  # Limit sample to 500 rows for fast measurement without full fit
+        X_sample = X_train[:sample_size]  # Extract row sample from training features for fit measurement
+        y_sample = np.asarray(y_train)[:sample_size]  # Extract label sample from training labels for fit measurement
+
+        try:  # Attempt a small sample fit to trigger model memory allocation for measurement
+            clf = clone(model)  # Clone model to avoid mutating the base instance during measurement
+            clf.set_params(**dict(zip(keys, combo)))  # Apply the test combination to the fresh clone
+            clf.fit(X_sample, y_sample)  # Fit on sample to trigger realistic model memory allocation
+            del clf  # Delete fitted model immediately after measurement to release allocated memory
+        except Exception:  # Ignore fit errors since measurement is best-effort
+            pass  # Proceed to fallback estimation when sample fit fails
+
+        gc.collect()  # Trigger GC again to get an accurate post-fit RSS reading
+        rss_after = process.memory_info().rss  # Record RSS memory in bytes after test fit
+
+        delta_mb = (rss_after - rss_before) / (1024 ** 2)  # Compute RSS delta in megabytes from before and after fit
+        data_mb = (X_train.nbytes + np.asarray(y_train).nbytes) / (1024 ** 2)  # Compute total dataset footprint in megabytes
+        cv_folds = 10  # Expected CV fold count used during actual evaluation for scaling the memory estimate
+        estimated_mb = max(delta_mb * cv_folds * 1.5, data_mb * 3.0, 50.0)  # Scale delta by fold count and safety margin; enforce 50 MB minimum
+
+        return float(estimated_mb)  # Return estimated memory in megabytes for one parallel worker job
+    except Exception:
+        return 200.0  # Return 200 MB safe conservative fallback on any measurement failure
+
+
+def compute_max_parallel_jobs(memory_per_job_mb: float) -> int:
+    """
+    Compute the maximum number of safe parallel jobs based on available memory and CPU count.
+
+    :param memory_per_job_mb: Estimated memory in megabytes required per parallel worker job.
+    :return: Safe number of parallel jobs respecting both memory and CPU constraints.
+    """
+
+    try:
+        if memory_per_job_mb <= 0.0:  # Guard against invalid non-positive memory measurement
+            return 1  # Return minimum safe value to prevent division by zero
+
+        vm = psutil.virtual_memory()  # Retrieve current virtual memory statistics from the OS
+        swap = psutil.swap_memory()  # Retrieve current swap memory statistics from the OS
+        available_mb = (vm.available + swap.free) / (1024 ** 2)  # Total available memory including swap in megabytes
+
+        safety_margin = 0.75  # Reserve 25% of available memory for OS and non-worker process overhead
+        usable_mb = available_mb * safety_margin  # Apply safety margin to compute the usable memory budget
+
+        cpu_count = os.cpu_count() or 1  # Number of logical CPU cores available on this machine
+        max_by_memory = math.floor(usable_mb / memory_per_job_mb)  # Compute memory-constrained parallelism cap
+        max_jobs = max(1, min(max_by_memory, cpu_count))  # Final cap: at least 1 job, at most available CPU cores
+
+        print(
+            f"{BackgroundColors.GREEN}[INFO] Memory per job: {BackgroundColors.CYAN}{memory_per_job_mb:.1f}MB"
+            f"{BackgroundColors.GREEN} | Available: {BackgroundColors.CYAN}{available_mb:.1f}MB"
+            f"{BackgroundColors.GREEN} | Max parallel jobs: {BackgroundColors.CYAN}{max_jobs}{Style.RESET_ALL}"
+        )  # Log computed memory analysis and selected parallelism level for operator awareness
+
+        return int(max_jobs)  # Return the computed safe parallel job count
+    except Exception:
+        print(f"{BackgroundColors.YELLOW}[WARNING] Failed to compute max parallel jobs. Falling back to 1 worker.{Style.RESET_ALL}")  # Warn about computation failure and announce single-worker fallback
+        return 1  # Return minimum safe fallback of one worker on any computation failure
+
+
+def init_combination_worker(X_train, y_train, use_linear_svc, svm_max_iter):
+    """
+    Initialize shared worker process globals for multiprocessing pool combination evaluation.
+
+    :param X_train: Training feature matrix to share with all worker processes in this pool.
+    :param y_train: Training label vector to share with all worker processes in this pool.
+    :param use_linear_svc: LinearSVC substitution flag to propagate to all worker processes.
+    :param svm_max_iter: SVM maximum iteration count to propagate to all worker processes.
+    :return: None.
+    """
+
+    global WORKER_X_TRAIN, WORKER_Y_TRAIN, WORKER_USE_LINEAR_SVC, WORKER_SVM_MAX_ITER  # Declare worker-process globals for assignment
+    WORKER_X_TRAIN = X_train  # Set training features reference in this worker process
+    WORKER_Y_TRAIN = y_train  # Set training labels reference in this worker process
+    WORKER_USE_LINEAR_SVC = use_linear_svc  # Set LinearSVC substitution flag in this worker process
+    WORKER_SVM_MAX_ITER = svm_max_iter  # Set SVM max iterations limit in this worker process
+
+
+def execute_single_combination(task_tuple):
+    """
+    Multiprocessing-safe worker that evaluates one hyperparameter combination using stratified cross-validation.
+
+    :param task_tuple: Tuple of (model_base, model_name, keys, combo, local_counter, total_combinations).
+    :return: Tuple of (current_params, metrics_dict, elapsed) where metrics_dict is None on failure.
+    """
+
+    (model_base, model_name, keys, combo, local_counter, total_combinations) = task_tuple  # Unpack all task fields from the tuple
+
+    try:
+        current_params = dict(zip(keys, combo))  # Build hyperparameter dict from parameter names and combination values
+
+        if hasattr(model_base, "__class__") and model_base.__class__.__name__ == "LogisticRegression":  # Apply LogisticRegression-specific parameter cleanup before evaluation
+            penalty = current_params.get("penalty")  # Extract penalty parameter from the current combination
+            if penalty != "elasticnet" and "l1_ratio" in current_params:  # Remove l1_ratio for non-elasticnet penalties
+                current_params = {k: v for k, v in current_params.items() if k != "l1_ratio"}  # Strip l1_ratio from params dict when penalty is not elasticnet
+
+        svm_linear_substitution = (  # Determine whether LinearSVC substitution applies for this combination
+            WORKER_USE_LINEAR_SVC and current_params.get("kernel") == "linear"
+        )  # True only when worker flag is active and the current combination uses a linear kernel
+
+        start_time = time.time()  # Record evaluation start time for total elapsed measurement
+        metrics = None  # Initialize metrics as None before evaluation attempt
+
+        try:
+            y_train_arr = np.asarray(WORKER_Y_TRAIN)  # Convert worker training labels to numpy array for safe fold indexing
+            cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)  # Initialize 10-fold stratified cross-validator for robust evaluation
+            fold_metrics_list = []  # Accumulate per-fold metric dictionaries for aggregation
+            fold_elapsed = []  # Accumulate per-fold elapsed times for diagnostics
+
+            for fold_idx, (train_idx, val_idx) in enumerate(cv.split(WORKER_X_TRAIN, y_train_arr), start=1):  # Generate stratified fold splits with per-fold index tracking
+                X_tr, X_val = WORKER_X_TRAIN[train_idx], WORKER_X_TRAIN[val_idx]  # Slice fold training and validation features using positional indices
+                y_tr, y_val = y_train_arr[train_idx], y_train_arr[val_idx]  # Slice fold training and validation labels using safe numpy indexing
+
+                if svm_linear_substitution:  # Verify if LinearSVC substitution is active for this fold
+                    linear_c = float(current_params.get("C", 1.0))  # Extract C regularization value for LinearSVC construction
+                    clf = LinearSVC(C=linear_c, max_iter=WORKER_SVM_MAX_ITER, random_state=42)  # Instantiate LinearSVC as faster equivalent to SVC(kernel='linear')
+                else:  # Use standard clone-and-set-params path for all other models and kernels
+                    clf = clone(model_base)  # Clone base model to prevent state leakage across folds
+                    clf.set_params(**current_params)  # Apply the current hyperparameter combination to the fresh clone
+
+                t0 = time.time()  # Record fold fit start time for timing breakdown
+                clf.fit(X_tr, y_tr)  # Train the model instance on the current fold training split
+                elapsed_fit = time.time() - t0  # Measure fit elapsed time for this fold
+
+                t1 = time.time()  # Record fold predict start time for timing breakdown
+                y_pred = clf.predict(X_val)  # Generate predictions on the validation fold split
+                elapsed_predict = time.time() - t1  # Measure predict elapsed time for this fold
+
+                elapsed_fold = elapsed_fit + elapsed_predict  # Compute total fold elapsed as sum of fit and predict time
+
+                m = compute_metrics_from_predictions(clf, y_val, y_pred, X_val)  # Compute all evaluation metrics for this fold
+
+                if m is not None:  # Verify if metrics were successfully computed for this fold
+                    fold_metrics_list.append(m)  # Accumulate valid fold metrics for aggregation
+                    fold_elapsed.append(elapsed_fold)  # Accumulate fold elapsed time alongside metrics
+
+            if len(fold_metrics_list) == 0:  # Verify if all folds failed to produce valid metrics
+                metrics = {"f1_score": 0.0}  # Set zero-F1 fallback when no fold succeeded
+            else:
+                aggregated = {}  # Initialize aggregated metrics container for cross-fold results
+                keys_all = set().union(*(d.keys() for d in fold_metrics_list))  # Collect the union of all metric keys across all fold results
+
+                for k in keys_all:  # Aggregate each metric key across all valid folds
+                    vals = [d.get(k) for d in fold_metrics_list if d.get(k) is not None]  # Collect non-None values for this metric across all folds
+
+                    if len(vals) == 0:  # Verify if no folds produced a valid value for this metric key
+                        aggregated[k] = None  # Assign None when no valid values are present
+                    else:
+                        try:  # Attempt numeric mean aggregation for the metric across all valid folds
+                            aggregated[k] = float(np.mean(vals))  # Compute mean of valid fold values as the aggregated metric
+                        except Exception:  # Fall back to first value when mean computation fails
+                            aggregated[k] = vals[0]  # Use first available fold value as the fallback aggregate
+
+                metrics = aggregated  # Assign aggregated cross-fold metrics as the final evaluation result
+
+                if "f1_score" in metrics:  # Verify if f1_score is present in the aggregated metrics dict
+                    metrics["f1_score"] = metrics.get("f1_score", 0.0) if metrics.get("f1_score") is not None else 0.0  # Ensure f1_score is always a non-None float value
+
+        except MemoryError:
+            metrics = {"f1_score": 0.0}  # Set zero-F1 fallback on memory exhaustion during evaluation
+        except KeyboardInterrupt:
+            raise  # Propagate keyboard interrupt without suppression to allow graceful shutdown
+        except Exception:
+            metrics = {"f1_score": 0.0}  # Set zero-F1 fallback on any other evaluation failure
+
+        elapsed = time.time() - start_time  # Compute total elapsed wall-clock time for this combination
+
+        return current_params, metrics, elapsed  # Return params, metrics, and elapsed to the calling process
+    except Exception:
+        return dict(zip(keys, combo)), None, 0.0  # Return safe failure tuple preserving params on any unexpected top-level error
+
+
+def run_parallel_grid_search(
+    model_name,
+    model,
+    keys,
+    combinations_to_test,
+    X_train,
+    y_train,
+    n_parallel_jobs,
+    csv_path,
+    progress_bar,
+    total_combinations,
+    model_index,
+    total_combinations_all_models,
+    total_models,
+    hardware_specs,
+    global_counter,
+    best_score,
+    best_params,
+    best_elapsed,
+    all_results,
+):
+    """
+    Run parallel evaluation of hyperparameter combinations for classifiers without n_jobs support.
+
+    :param model_name: Name of the model being optimized.
+    :param model: Model instance to optimize.
+    :param keys: List of hyperparameter names corresponding to combination values.
+    :param combinations_to_test: List of hyperparameter value tuples to evaluate in parallel.
+    :param X_train: Training feature matrix passed to worker processes via pool initializer.
+    :param y_train: Training label vector passed to worker processes via pool initializer.
+    :param n_parallel_jobs: Number of parallel worker processes computed from available memory.
+    :param csv_path: Path to CSV dataset for progress bar description updates.
+    :param progress_bar: Optional tqdm progress bar instance for visual progress tracking.
+    :param total_combinations: Total hyperparameter combinations for the current model.
+    :param model_index: Current model index (1-based) for progress reporting.
+    :param total_combinations_all_models: Total combinations across all models for overall progress.
+    :param total_models: Total number of models being optimized for progress reporting.
+    :param hardware_specs: Dictionary of hardware specifications for logging context.
+    :param global_counter: Overall combination index across all models at entry.
+    :param best_score: Current best F1 score from cached or prior results.
+    :param best_params: Current best hyperparameter dict corresponding to best_score.
+    :param best_elapsed: Execution time of the current best combination in seconds.
+    :param all_results: Accumulated list of per-combination result entries.
+    :return: Tuple (best_params, best_score, best_elapsed, all_results, global_counter).
+    """
+
+    try:
+        if len(combinations_to_test) == 0:  # Verify if there are any combinations to evaluate in parallel
+            return best_params, best_score, best_elapsed, all_results, global_counter  # Return unchanged state when no combinations remain
+
+        print(
+            f"{BackgroundColors.GREEN}[INFO] Starting parallel evaluation for {BackgroundColors.CYAN}{model_name}"
+            f"{BackgroundColors.GREEN} with {BackgroundColors.CYAN}{n_parallel_jobs}"
+            f"{BackgroundColors.GREEN} worker(s) ({len(combinations_to_test)} combinations)...{Style.RESET_ALL}"
+        )  # Log parallel execution start with worker count and combination total
+
+        tasks = [  # Build task tuples for pool workers excluding X_train and y_train which are shared via initializer
+            (clone(model), model_name, keys, combo, idx + 1, len(combinations_to_test))
+            for idx, combo in enumerate(combinations_to_test)
+        ]  # Each task contains a fresh model clone, combination params, and index for per-task logging
+
+        local_counter = 0  # Initialize local combination counter for per-task progress tracking
+
+        try:  # Attempt parallel pool execution with automatic fallback to sequential on any failure
+            with multiprocessing.Pool(
+                processes=n_parallel_jobs,
+                initializer=init_combination_worker,
+                initargs=(X_train, y_train, USE_LINEAR_SVC_FOR_LINEAR_KERNEL, SVM_MAX_ITER),
+            ) as pool:  # Launch worker pool with training data shared via initializer to minimize serialization overhead
+                for result in pool.imap_unordered(execute_single_combination, tasks):  # Process results in completion order for minimal latency
+                    current_params, metrics, elapsed = result  # Unpack result fields from completed worker
+
+                    local_counter += 1  # Increment local combination counter for this model
+                    global_counter += 1  # Increment global combination counter across all models
+
+                    print(
+                        f"{BackgroundColors.GREEN}[INFO] Parallel task completed: "
+                        f"{BackgroundColors.CYAN}{local_counter}/{len(combinations_to_test)}"
+                        f"{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
+                    )  # Log per-task completion with running index and model name
+
+                    if progress_bar is not None:  # Verify progress bar exists before attempting update
+                        try:  # Guard against progress bar update errors to prevent masking real failures
+                            progress_bar.update(1)  # Advance progress bar by one completed combination
+                        except Exception:  # Ignore progress bar update errors silently
+                            pass  # Continue processing without halting on display errors
+
+                    if progress_bar is not None:  # Verify progress bar exists before updating description
+                        update_optimization_progress_bar(
+                            progress_bar,
+                            csv_path,
+                            model_name,
+                            param_grid=current_params,
+                            combo_current=local_counter,
+                            combo_total=total_combinations,
+                            current=model_index,
+                            total_combinations=total_combinations_all_models,
+                            total_models=total_models,
+                            overall=global_counter,
+                        )  # Update progress bar description with current combination state and indices
+
+                    result_entry = build_result_entry_with_metrics(current_params, elapsed, metrics)  # Build ordered result entry from params, elapsed time, and evaluation metrics
+                    all_results.append(result_entry)  # Append result entry to accumulated results list
+
+                    best_score, best_params, best_elapsed = update_best_if_improved(
+                        metrics, elapsed, current_params, best_score, best_params, best_elapsed, all_results
+                    )  # Update best score and params when current combination surpasses the current best
+
+        except Exception as parallel_err:  # Catch any failure in the parallel execution path
+            print(
+                f"{BackgroundColors.YELLOW}[WARNING] Parallel execution failed for {BackgroundColors.CYAN}{model_name}"
+                f"{BackgroundColors.YELLOW}: {parallel_err}. Falling back to sequential evaluation.{Style.RESET_ALL}"
+            )  # Warn about parallel failure and announce sequential fallback to preserve pipeline continuity
+
+            best_params, best_score, best_elapsed, all_results, global_counter = run_parallel_evaluation(
+                model_name,
+                model,
+                keys,
+                combinations_to_test,
+                X_train,
+                y_train,
+                csv_path,
+                progress_bar,
+                total_combinations,
+                model_index,
+                total_combinations_all_models,
+                total_models,
+                hardware_specs,
+                global_counter,
+                best_score,
+                best_params,
+                best_elapsed,
+                all_results,
+            )  # Fall back to sequential evaluation to guarantee all combinations are evaluated
+
+        return best_params, best_score, best_elapsed, all_results, global_counter  # Return final updated state to manual_grid_search
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def manual_grid_search(
     model_name,
     model,
@@ -2401,26 +2762,59 @@ def manual_grid_search(
 
         X_train_search, y_train_search = apply_grid_search_subsampling(X_train, y_train)  # Apply stratified subsampling to training data for grid search only; final model training uses the full dataset
 
-        best_params, best_score, best_elapsed, all_results, global_counter = run_parallel_evaluation(
-            model_name,
-            model,
-            keys,
-            combinations_to_test,
-            X_train_search,
-            y_train_search,
-            csv_path,
-            progress_bar,
-            total_combinations,
-            model_index,
-            total_combinations_all_models,
-            total_models,
-            hardware_specs,
-            global_counter,
-            best_score,
-            best_params,
-            best_elapsed,
-            all_results,
-        )  # Perform sequential evaluation (each model uses multiple cores internally)
+        use_parallel = should_use_custom_parallelization(model_name, ENABLE_PARALLEL_FOR_NON_N_JOBS_CLASSIFIERS)  # Determine whether to apply custom parallel execution for this classifier
+
+        if use_parallel and len(combinations_to_test) > 0:  # Verify parallel flag and non-empty combinations before dynamic memory measurement
+            first_combo = combinations_to_test[0]  # Take the first combination for memory footprint measurement
+            memory_per_job_mb = compute_memory_per_job(clone(model), keys, first_combo, X_train_search, y_train_search)  # Measure memory usage of one evaluation job for dynamic parallelism computation
+            n_parallel_jobs = compute_max_parallel_jobs(memory_per_job_mb)  # Compute safe number of parallel jobs based on available memory and CPU count
+            print(f"{BackgroundColors.GREEN}[INFO] Parallel execution enabled for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN} | Workers: {BackgroundColors.CYAN}{n_parallel_jobs}{Style.RESET_ALL}")  # Log parallel execution activation with computed worker count
+
+            best_params, best_score, best_elapsed, all_results, global_counter = run_parallel_grid_search(
+                model_name,
+                model,
+                keys,
+                combinations_to_test,
+                X_train_search,
+                y_train_search,
+                n_parallel_jobs,
+                csv_path,
+                progress_bar,
+                total_combinations,
+                model_index,
+                total_combinations_all_models,
+                total_models,
+                hardware_specs,
+                global_counter,
+                best_score,
+                best_params,
+                best_elapsed,
+                all_results,
+            )  # Execute parallel grid search for non-n_jobs classifier using computed worker count
+        else:
+            if use_parallel:  # Verify parallel flag is set but no combinations remain to run
+                verbose_output(f"{BackgroundColors.GREEN}[INFO] Parallel execution enabled for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN} but no combinations remain to evaluate.{Style.RESET_ALL}")  # Log that the parallel path was selected but skipped due to empty combinations list
+
+            best_params, best_score, best_elapsed, all_results, global_counter = run_parallel_evaluation(
+                model_name,
+                model,
+                keys,
+                combinations_to_test,
+                X_train_search,
+                y_train_search,
+                csv_path,
+                progress_bar,
+                total_combinations,
+                model_index,
+                total_combinations_all_models,
+                total_models,
+                hardware_specs,
+                global_counter,
+                best_score,
+                best_params,
+                best_elapsed,
+                all_results,
+            )  # Perform sequential evaluation for n_jobs classifiers or when parallel path has no combinations
 
         verbose_output(f"{BackgroundColors.GREEN}Completed optimization for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Best score: {BackgroundColors.CYAN}{truncate_value(best_score)}{Style.RESET_ALL}")  # Log completion
 
@@ -3151,6 +3545,19 @@ def main():
     parser.add_argument("--model_export_base_dir", type=str, help="Model export base directory (overrides config)")  # Model export directory override
     parser.add_argument("--cache_prefix", type=str, help="Cache file prefix (overrides config)")  # Cache prefix override
     parser.add_argument("--svm_max_iter", type=int, help="Maximum SVC solver iterations (overrides config)")  # SVM max iterations override
+    parser.add_argument(
+        "--enable_parallel_for_non_n_jobs_classifiers",
+        dest="enable_parallel_for_non_n_jobs_classifiers",
+        action="store_true",
+        default=None,
+        help="Enable parallel execution for non-n_jobs classifiers (overrides config)",
+    )  # Parallel execution enable flag for non-n_jobs classifiers
+    parser.add_argument(
+        "--no-enable_parallel_for_non_n_jobs_classifiers",
+        dest="enable_parallel_for_non_n_jobs_classifiers",
+        action="store_false",
+        help="Disable parallel execution for non-n_jobs classifiers (overrides config)",
+    )  # Parallel execution disable flag for non-n_jobs classifiers
     args = parser.parse_args()  # Parse CLI arguments
 
     defaults = get_default_config()  # Load hard-coded default configuration
@@ -3168,6 +3575,7 @@ def main():
     global IGNORE_FILES, IGNORE_DIRS, HYPERPARAMETERS_RESULTS_CSV_COLUMNS  # Declare global variables for ignore/columns config
     global ENABLED_MODELS, DATASETS  # Declare global variables for model and dataset config
     global HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION, USE_LINEAR_SVC_FOR_LINEAR_KERNEL, SVM_MAX_ITER  # Declare global variables for SVM performance config
+    global ENABLE_PARALLEL_FOR_NON_N_JOBS_CLASSIFIERS  # Declare global variable for non-n_jobs parallel execution flag
 
     hp = merged["hyperparameters_optimization"]  # Extract hyperparameters_optimization section
     exec_cfg = hp["execution"]  # Extract execution sub-section
@@ -3189,7 +3597,10 @@ def main():
     SVM_MAX_ITER = int(svm_max_iter_cfg) if svm_max_iter_cfg is not None else None  # Use integer value when defined, or None for unlimited
     verbose_output(f"{BackgroundColors.GREEN}[DEBUG] svm_max_iter resolved to: {BackgroundColors.CYAN}{SVM_MAX_ITER}{Style.RESET_ALL}")  # Log the final resolved svm_max_iter value; displays None when unlimited
 
-    print(f"{BackgroundColors.GREEN}[INFO] N_JOBS={BackgroundColors.CYAN}{N_JOBS}{BackgroundColors.GREEN} | SVM_MAX_ITER={BackgroundColors.CYAN}{SVM_MAX_ITER}{BackgroundColors.GREEN} | Sample fraction={BackgroundColors.CYAN}{HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION}{BackgroundColors.GREEN} | LinearSVC for linear={BackgroundColors.CYAN}{USE_LINEAR_SVC_FOR_LINEAR_KERNEL}{Style.RESET_ALL}")  # Log all SVM performance config values at startup
+    ENABLE_PARALLEL_FOR_NON_N_JOBS_CLASSIFIERS = bool(exec_cfg.get("enable_parallel_for_non_n_jobs_classifiers", True))  # Set parallel execution flag for non-n_jobs classifiers from config with True as default
+    verbose_output(f"{BackgroundColors.GREEN}[DEBUG] enable_parallel_for_non_n_jobs_classifiers resolved to: {BackgroundColors.CYAN}{ENABLE_PARALLEL_FOR_NON_N_JOBS_CLASSIFIERS}{Style.RESET_ALL}")  # Log the final resolved parallel execution flag when verbose output is active
+
+    print(f"{BackgroundColors.GREEN}[INFO] N_JOBS={BackgroundColors.CYAN}{N_JOBS}{BackgroundColors.GREEN} | SVM_MAX_ITER={BackgroundColors.CYAN}{SVM_MAX_ITER}{BackgroundColors.GREEN} | Sample fraction={BackgroundColors.CYAN}{HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION}{BackgroundColors.GREEN} | LinearSVC for linear={BackgroundColors.CYAN}{USE_LINEAR_SVC_FOR_LINEAR_KERNEL}{BackgroundColors.GREEN} | Parallel non-n_jobs={BackgroundColors.CYAN}{ENABLE_PARALLEL_FOR_NON_N_JOBS_CLASSIFIERS}{Style.RESET_ALL}")  # Log all performance config values at startup
 
     RESULTS_FILENAME = export["results_filename"]  # Set results CSV filename from config
     MODEL_EXPORT_BASE = export.get("model_export_base_dir")  # Set model export directory from config
