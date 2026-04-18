@@ -123,6 +123,7 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants:
 VERBOSE = False  # Default verbose setting (can be overridden via CLI args)
+LOW_MEMORY = False  # Default low_memory setting for pandas CSV loading (configurable; forced True when verbose is active)
 MODEL_EXPORT_BASE = "Feature_Analysis/Hyperparameter_Optimization/Models/"
 N_JOBS = -2  # Number of parallel jobs (-1 uses all cores, -2 leaves one core free, or set specific number like 4)
 SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, skip training when exported models exist for dataset
@@ -219,6 +220,7 @@ def get_default_config() -> Dict[str, Any]:
                 "verbose": False,
                 "n_jobs": -2,
                 "skip_train_if_model_exists": False,
+                "low_memory": False,  # Enable low memory mode for pandas CSV loading (forced True when verbose is active)
                 "sample_fraction": None,  # Optional float fraction for grid-search subsampling (None disables)
                 "use_linear_svc_for_linear_kernel": False,  # If True, substitute SVC(kernel='linear') with LinearSVC
                 "svm_max_iter": 10000,  # Maximum solver iterations for SVC
@@ -738,7 +740,7 @@ def load_dataset(csv_path):
             print(f"{BackgroundColors.RED}CSV file not found: {csv_path}{Style.RESET_ALL}")  # Print error message
             return None  # Return None
 
-        df = pd.read_csv(csv_path, low_memory=True)  # Load the dataset
+        df = pd.read_csv(csv_path, low_memory=LOW_MEMORY)  # Load the dataset using the configured low_memory setting
 
         df.columns = df.columns.str.strip()  # Clean column names by stripping leading/trailing whitespace
 
@@ -3157,7 +3159,7 @@ def main():
 
     init_logger_and_exception_hook()  # Initialize logger and global exception hook for Telegram notifications
 
-    global VERBOSE, MODEL_EXPORT_BASE, N_JOBS, SKIP_TRAIN_IF_MODEL_EXISTS  # Declare global variables for runtime config
+    global VERBOSE, LOW_MEMORY, MODEL_EXPORT_BASE, N_JOBS, SKIP_TRAIN_IF_MODEL_EXISTS  # Declare global variables for runtime config
     global RESULTS_FILENAME, CACHE_PREFIX, MATCH_FILENAMES_TO_PROCESS  # Declare global variables for file processing config
     global IGNORE_FILES, IGNORE_DIRS, HYPERPARAMETERS_RESULTS_CSV_COLUMNS  # Declare global variables for ignore/columns config
     global ENABLED_MODELS, DATASETS  # Declare global variables for model and dataset config
@@ -3172,10 +3174,14 @@ def main():
     N_JOBS = int(exec_cfg.get("n_jobs", -2))  # Set parallel jobs count from config
     SKIP_TRAIN_IF_MODEL_EXISTS = bool(exec_cfg.get("skip_train_if_model_exists", False))  # Set skip-train flag from config
 
+    low_memory_cfg = bool(exec_cfg.get("low_memory", False))  # Read low_memory setting from config with safe default of False
+    LOW_MEMORY = True if VERBOSE else low_memory_cfg  # Force low_memory when verbose is active; otherwise use config value
+    verbose_output(f"{BackgroundColors.GREEN}[DEBUG] low_memory resolved to: {BackgroundColors.CYAN}{LOW_MEMORY}{Style.RESET_ALL}")  # Log the final resolved low_memory value when verbose output is active
+
     sample_frac = exec_cfg.get("sample_fraction", None)  # Get raw subsampling fraction value from config
     HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION = float(sample_frac) if sample_frac is not None else None  # Convert to float when defined, or keep None to disable subsampling
     USE_LINEAR_SVC_FOR_LINEAR_KERNEL = bool(exec_cfg.get("use_linear_svc_for_linear_kernel", False))  # Set LinearSVC substitution flag from config
-    SVM_MAX_ITER = int(exec_cfg.get("svm_max_iter", 10000))  # Set SVM maximum solver iterations from config
+    SVM_MAX_ITER = int(exec_cfg.get("svm_max_iter", ))  # Set SVM maximum solver iterations from config
 
     print(f"{BackgroundColors.GREEN}[INFO] N_JOBS={BackgroundColors.CYAN}{N_JOBS}{BackgroundColors.GREEN} | SVM_MAX_ITER={BackgroundColors.CYAN}{SVM_MAX_ITER}{BackgroundColors.GREEN} | Sample fraction={BackgroundColors.CYAN}{HYPERPARAMETER_OPTIMIZATION_SAMPLE_FRACTION}{BackgroundColors.GREEN} | LinearSVC for linear={BackgroundColors.CYAN}{USE_LINEAR_SVC_FOR_LINEAR_KERNEL}{Style.RESET_ALL}")  # Log all SVM performance config values at startup
 
