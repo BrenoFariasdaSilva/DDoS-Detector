@@ -2661,9 +2661,26 @@ def evaluate_feature_masks_verbose(invalid_feature_masks, toolbox):
 
         results = []  # Accumulate fitness results in input order
 
-        for feature_mask in invalid_feature_masks:  # Iterate over each feature mask requiring fitness evaluation
-            fit = toolbox.evaluate(feature_mask)  # Evaluate feature mask and obtain fitness tuple
+        total_masks = len(invalid_feature_masks)  # Compute total number of masks for verbose progress display
+
+        for idx, feature_mask in enumerate(invalid_feature_masks, start=1):  # Iterate with index to report current/total
+            fit = toolbox.evaluate(feature_mask)  # Evaluate feature mask and obtain fitness tuple via registered evaluator
             results.append(fit)  # Append fitness result to ordered results list
+
+            try:  # Try to extract F1 and feature count from returned fitness tuple safely
+                f1_val = fit[0] if (hasattr(fit, "__len__") and len(fit) > 0) else None  # Extract F1 when available at index 0
+            except Exception:  # On any extraction error
+                f1_val = None  # Fallback to None when F1 cannot be extracted
+
+            try:  # Try to extract feature count from returned fitness tuple safely
+                n_features_val = -int(fit[1]) if (hasattr(fit, "__len__") and len(fit) > 1) else None  # Extract positive feature count from negative second element
+            except Exception:  # On any extraction error
+                n_features_val = None  # Fallback to None when feature count cannot be extracted
+
+            f1_display = f"{f1_val}" if f1_val is not None else "N/A"  # Format F1 for display, use N/A when missing
+            feat_display = f"{n_features_val}" if n_features_val is not None else "N/A"  # Format feature count for display, use N/A when missing
+
+            verbose_output(f"[DEBUG] [{idx}/{total_masks}] Feature mask result -> fitness: f1: {f1_display}, N_features: {feat_display}", "")  # Output formatted debug line when verbose is enabled
 
             if eval_bar is not None:  # If progress bar was successfully initialized
                 eval_bar.update(1)  # Advance progress bar by one completed feature mask
