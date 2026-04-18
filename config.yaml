@@ -53,7 +53,7 @@ execution: # Execution control and per-script overrides
 hyperparameters_optimization:
   execution:
     verbose: false
-    n_jobs: -2
+    n_jobs: -1
     skip_train_if_model_exists: false
 
   export:
