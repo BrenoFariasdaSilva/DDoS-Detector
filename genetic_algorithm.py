@@ -337,13 +337,13 @@ def resolve_n_jobs():
 
         if cpu_processes_int > 1:  # GA pool is running with multiple worker processes
             effective_n_jobs = 1  # Force estimator to single-threaded to avoid nested parallelism
-            logger.debug(  # Log the forced single-threaded mode
+            print(  # Log the forced single-threaded mode via stdout/logger
                 f"resolve_n_jobs: GA uses {cpu_processes_int} worker processes — "
                 f"forcing estimator n_jobs=1 to prevent CPU oversubscription"
             )  # Debug log for forced n_jobs=1
         else:  # GA is running in single-process mode
             effective_n_jobs = configured_n_jobs  # Use the configured value directly
-            logger.debug(  # Log the resolved n_jobs value
+            print(  # Log the resolved n_jobs value via stdout/logger
                 f"resolve_n_jobs: GA runs in single-process mode — "
                 f"using configured estimator n_jobs={effective_n_jobs}"
             )  # Debug log for configured n_jobs
@@ -2075,7 +2075,7 @@ def instantiate_estimator(estimator_cls=None):
         else:  # If GA is not parallelized across processes
             estimator_n_jobs = resolve_n_jobs()  # Resolve n_jobs from multiprocessing config
 
-        logger.debug(  # Log the resolved n_jobs value for the fitness estimator
+        print(  # Log the resolved n_jobs value for the fitness estimator via stdout/logger
             f"instantiate_estimator: ga_parallel={ga_parallel}, resolved estimator n_jobs={estimator_n_jobs}"
         )  # Debug log for instantiated estimator configuration
 
