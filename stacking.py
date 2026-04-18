@@ -3505,6 +3505,55 @@ def get_models(config=None):
         raise  # Re-raise to preserve original failure semantics
 
 
+def filter_matching_hyperparams(df: pd.DataFrame, csv_path: str, config: dict) -> pd.DataFrame:
+    """
+    Filter hyperparameter optimization rows using priority-based matching for multi-class mode.
+
+    :param df: DataFrame loaded from the hyperparameter optimization CSV file.
+    :param csv_path: Full path to the dataset CSV file being processed.
+    :param config: Configuration dictionary for verbose output.
+    :return: Filtered DataFrame of matching rows, or empty DataFrame if no match found.
+    """
+
+    try:
+        csv_path_str = str(csv_path)  # Ensure csv_path is a string for safe column comparison
+        base_filename = os.path.basename(csv_path_str)  # Extract base filename from the full path
+        inferred_dataset_name = get_dataset_name(csv_path_str)  # Infer dataset name from path using existing utility
+
+        if "dataset_path" in df.columns:  # Attempt dataset_path exact match (highest priority)
+            path_match = df[df["dataset_path"] == csv_path_str]  # Filter rows by exact dataset_path value
+            if not path_match.empty:  # If dataset_path match found
+                verbose_output(
+                    f"[DEBUG] filter_matching_hyperparams: matched {len(path_match)} row(s) by dataset_path",
+                    config=config
+                )  # Log matched row count for dataset_path strategy
+                return path_match  # Return highest-priority match
+
+        if "dataset_name" in df.columns:  # Attempt dataset_name fallback (secondary priority)
+            name_match = df[df["dataset_name"] == inferred_dataset_name]  # Filter rows by inferred dataset name
+            if not name_match.empty:  # If dataset_name match found
+                verbose_output(
+                    f"[DEBUG] filter_matching_hyperparams: matched {len(name_match)} row(s) by dataset_name",
+                    config=config
+                )  # Log matched row count for dataset_name strategy
+                return name_match  # Return secondary-priority match
+
+        if "base_csv" in df.columns:  # Attempt base_csv last resort fallback
+            base_match = df[df["base_csv"] == base_filename]  # Filter rows by base CSV filename
+            if not base_match.empty:  # If base_csv match found
+                verbose_output(
+                    f"[DEBUG] filter_matching_hyperparams: matched {len(base_match)} row(s) by base_csv",
+                    config=config
+                )  # Log matched row count for base_csv last-resort strategy
+                return base_match  # Return last-resort fallback match
+
+        return pd.DataFrame()  # Return empty DataFrame if no priority match found
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def extract_hyperparameter_optimization_results(csv_path, config=None):
     """
     Extract hyperparameter optimization results for a specific dataset file.
@@ -3556,7 +3605,29 @@ def extract_hyperparameter_optimization_results(csv_path, config=None):
             )
             return {}  # Return empty dict on failure
 
-        matching_rows = df[df["base_csv"] == base_filename]  # Filter by base_csv column
+        multi_class = config.get("stacking", {}).get("multi_class", True)  # Read multi_class mode from stacking config
+        verbose_output(
+            f"[DEBUG] extract_hyperparameter_optimization_results: mode={'multi-class' if multi_class else 'binary'}",
+            config=config
+        )  # Log selected execution mode
+
+        if multi_class:  # Route to priority-based matching for multi-class mode
+            verbose_output(
+                "[DEBUG] extract_hyperparameter_optimization_results: using priority-based matching strategy",
+                config=config
+            )  # Log selected matching strategy
+            matching_rows = filter_matching_hyperparams(df, csv_path, config)  # Apply priority-based filter for multi-class
+        else:  # Binary mode: only filter by base_csv column
+            verbose_output(
+                "[DEBUG] extract_hyperparameter_optimization_results: using legacy base_csv matching strategy",
+                config=config
+            )  # Log selected matching strategy
+            matching_rows = df[df["base_csv"] == base_filename]  # Filter by base_csv column (legacy binary mode only)
+
+        verbose_output(
+            f"[DEBUG] extract_hyperparameter_optimization_results: matched {len(matching_rows)} row(s)",
+            config=config
+        )  # Log total number of matched rows
 
         if matching_rows.empty:  # If no matching rows found
             verbose_output(
