@@ -1736,7 +1736,7 @@ def split_dataset(df, csv_path, test_size=0.2):
         raise  # Re-raise to preserve original failure semantics
 
 
-def print_ga_parameters(min_pop, max_pop, n_generations, feature_count):
+def print_ga_parameters(min_pop, max_pop, n_generations, feature_count, runs):
     """
     Print the genetic algorithm parameters in verbose output.
 
@@ -1744,6 +1744,7 @@ def print_ga_parameters(min_pop, max_pop, n_generations, feature_count):
     :param max_pop: Maximum population size.
     :param n_generations: Number of generations per run.
     :param feature_count: Number of features in the dataset.
+    :param runs: Number of runs.
     :return: None
     """
 
@@ -1752,6 +1753,7 @@ def print_ga_parameters(min_pop, max_pop, n_generations, feature_count):
         print(f"  {BackgroundColors.GREEN}Population sizes: {BackgroundColors.CYAN}{min_pop} to {max_pop}{Style.RESET_ALL}")
         print(f"  {BackgroundColors.GREEN}Generations per run: {BackgroundColors.CYAN}{n_generations}{Style.RESET_ALL}")
         print(f"  {BackgroundColors.GREEN}Number of features: {BackgroundColors.CYAN}{feature_count}{Style.RESET_ALL}")
+        print(f"  {BackgroundColors.GREEN}Number of runs: {BackgroundColors.CYAN}{runs}{Style.RESET_ALL}")
         print(f"  {BackgroundColors.GREEN}Crossover probability: {BackgroundColors.CYAN}0.5{Style.RESET_ALL}")
         print(f"  {BackgroundColors.GREEN}Mutation probability: {BackgroundColors.CYAN}0.05{Style.RESET_ALL}")
         print(f"  {BackgroundColors.GREEN}Tournament size: {BackgroundColors.CYAN}3{Style.RESET_ALL}")
@@ -1769,7 +1771,7 @@ def print_ga_parameters(min_pop, max_pop, n_generations, feature_count):
         raise  # Re-raise to preserve original failure semantics
 
 
-def prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations):
+def prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations, runs):
     """
     Load and preprocess dataset for GA sweep.
 
@@ -1778,6 +1780,7 @@ def prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations):
     :param min_pop: Minimum population size.
     :param max_pop: Maximum population size.
     :param n_generations: Number of generations.
+    :param runs: Number of runs.
     :return: Tuple (X_train, X_test, y_train, y_test, feature_names) or None if failed.
     """
 
@@ -1808,7 +1811,7 @@ def prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations):
             return None  # Exit early
 
         (
-            print_ga_parameters(min_pop, max_pop, n_generations, len(feature_names) if feature_names is not None else 0)
+            print_ga_parameters(min_pop, max_pop, n_generations, len(feature_names) if feature_names is not None else 0, runs)
             if CONFIG.get("execution", {}).get("verbose", False)
             else None
         )  # Print GA parameters if verbose
@@ -7308,7 +7311,7 @@ def run_population_sweep(
     try:
         runs = log_sweep_start(dataset_name, min_pop, max_pop, n_generations, runs)  # Resolve run count, log start, clear cache, send Telegram start notification
 
-        data = prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations)  # Prepare dataset
+        data = prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations, runs)  # Prepare dataset
         if data is None:  # If preparation failed
             return {}  # Exit early
 
