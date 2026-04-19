@@ -9259,11 +9259,6 @@ def process_dataset_paths(dataset_name, paths, config=None):
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        verbose_output(
-            f"{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}",
-            config=config
-        )  # Output the verbose message
-
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
         )  # Print dataset name
