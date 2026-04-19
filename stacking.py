@@ -8738,10 +8738,17 @@ def orchestrate_binary_combination(file, ga_sel, pca_n, rfe_sel, base_models, hp
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        df_original, feature_names = load_and_preprocess_dataset(file, None, config=config)  # Load original dataset
+        df_original, feature_names = load_and_preprocess_dataset(file, None, config=config)  # Load original dataset independently without combining
         if df_original is None:  # If loading failed
             print(f"{BackgroundColors.YELLOW}Skipping file {file} (failed to load).{Style.RESET_ALL}")  # Warn about load failure
             return False  # Signal failure
+
+        target_col = detect_label_column(df_original.columns.tolist())  # Detect target column for class distribution logging
+        if target_col:  # If target column was found
+            distribution = compute_class_distribution(df_original, target_col)  # Compute class distribution for this file
+            print(f"{BackgroundColors.GREEN}[SEPARATE_FILES] Class distribution for {os.path.basename(file)}:{Style.RESET_ALL}")  # Print distribution header
+            for label, count in distribution:  # Iterate over each class and its count
+                print(f"  - {BackgroundColors.CYAN}{label}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{count:,}{Style.RESET_ALL}")  # Print class name and sample count
 
         send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES] Starting evaluation | file: {os.path.basename(file)} | FS: {'ON' if feature_selection_enabled else 'OFF'} | HP: {'ON' if hyperparameters_enabled else 'OFF'} | DA: {'ON' if data_augmentation_enabled else 'OFF'}"])  # Notify Telegram about separate files evaluation start
 
@@ -9072,12 +9079,11 @@ def execute_both_mode_pipeline(files_to_process, local_dataset_name, config=None
             f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[STEP 1/2] Executing SEPARATE FILES Classification Pipeline{Style.RESET_ALL}\n"
         )  # Print separate files evaluation step header
 
-        combined_df, combined_file_for_features, files_for_binary = combine_dataset_if_needed(files_to_process, config=config)  # Combine dataset files if needed
-
-        for file in files_for_binary:  # For each file to process in separate files evaluation mode
+        for file_idx, file in enumerate(files_to_process, start=1):  # Iterate each file independently to avoid data leakage between files
+            print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[DEBUG] [SEPARATE_FILES] [{file_idx}/{len(files_to_process)}] Evaluating file: {os.path.basename(file)}{Style.RESET_ALL}")  # Log file index and name
+            send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES] [{file_idx}/{len(files_to_process)}] Evaluating: {os.path.basename(file)}"])  # Notify Telegram about per-file evaluation start
             orchestrate_all_combinations(file, dataset_name=local_dataset_name, config=config)  # Orchestrate all combinations for separate files evaluation mode
 
-        del combined_df, combined_file_for_features, files_for_binary  # Release separate files evaluation phase data to free memory before combined files evaluation
         gc.collect()  # Force garbage collection to reclaim memory from separate files evaluation phase before combined files evaluation loading
 
         print(
@@ -9205,9 +9211,9 @@ def execute_binary_mode_pipeline(files_to_process, local_dataset_name, config=No
             config=config
         )  # Output execution mode
 
-        combined_df, combined_file_for_features, files_to_process = combine_dataset_if_needed(files_to_process, config=config)  # Combine dataset files if needed
-
-        for file in files_to_process:  # For each file to process
+        for file_idx, file in enumerate(files_to_process, start=1):  # Iterate each file independently to avoid data leakage between files
+            print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[DEBUG] [SEPARATE_FILES] [{file_idx}/{len(files_to_process)}] Evaluating file: {os.path.basename(file)}{Style.RESET_ALL}")  # Log file index and name
+            send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES] [{file_idx}/{len(files_to_process)}] Evaluating: {os.path.basename(file)}"])  # Notify Telegram about per-file evaluation start
             orchestrate_all_combinations(file, dataset_name=local_dataset_name, config=config)  # Orchestrate all combinations for separate files evaluation mode
     except Exception as e:
         print(str(e))
