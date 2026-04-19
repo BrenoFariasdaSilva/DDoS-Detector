@@ -124,7 +124,7 @@ from sklearn.svm import SVC  # For Support Vector Machine model
 from sklearn.tree import DecisionTreeClassifier  # For Decision Tree classifier model
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
-from typing import Optional  # For optional typing hints
+from typing import Optional, List, Tuple  # For optional and collection typing hints
 from xgboost import XGBClassifier  # For XGBoost classifier
 
 
@@ -8421,6 +8421,24 @@ def process_multiclass_augmentation_testing(reference_file, original_files_list,
         raise
 
 
+def compute_class_distribution(combined_df: pd.DataFrame, target_col: str) -> List[Tuple[str, int]]:
+    """
+    Compute sorted class distribution for a target column.
+
+    :param combined_df: Combined DataFrame containing the target column.
+    :param target_col: Name of the target column to count values for.
+    :return: List of tuples (label, count) sorted descending by count.
+    """
+
+    try:
+        counts = combined_df[target_col].value_counts(dropna=False)  # Get value counts including NaN as a category
+        counts_sorted = counts.sort_values(ascending=False)  # Sort counts descending to show most frequent classes first
+        distribution = [(str(label), int(count)) for label, count in counts_sorted.items()]  # Build list of (label, count) tuples
+        return distribution  # Return the structured distribution result
+    except Exception as e:  # On exception, propagate for outer handlers to log and notify
+        raise
+
+
 def process_multiclass_evaluation(original_files_list, combined_multiclass_df, attack_types_list, dataset_name, config=None):
     """
     Process evaluation for multi-class classification mode with optional data augmentation.
@@ -8450,9 +8468,10 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing multi-class dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
         )  # Print dataset header
-        print(
-            f"{BackgroundColors.GREEN}Attack types: {BackgroundColors.CYAN}{attack_types_list}{Style.RESET_ALL}"
-        )  # Print attack types
+        distribution = compute_class_distribution(combined_multiclass_df, 'attack_type')  # Compute distribution from combined dataframe
+        print(f"{BackgroundColors.GREEN}Attack types:{Style.RESET_ALL}")  # Print attack types header
+        for label, count in distribution:  # Iterate over distribution entries sorted by count
+            print(f"- {BackgroundColors.CYAN}{label}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{count:,}{Style.RESET_ALL}")  # Print each class name and sample count
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
         )  # Print closing separator
