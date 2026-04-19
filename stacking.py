@@ -236,9 +236,9 @@ def parse_cli_args():
         parser.add_argument("--automl-timeout", type=int, default=None, help="AutoML timeout in seconds")
         parser.add_argument("--test-augmentation", action="store_true", help="Enable data augmentation testing")
         parser.add_argument("--no-test-augmentation", dest="test_augmentation", action="store_false", help="Disable data augmentation testing")
-        parser.add_argument("--multi-class", dest="multi_class", action="store_true", default=None, help="Enable multi-class evaluation mode (directory-based batch processing)")
-        parser.add_argument("--binary", dest="multi_class", action="store_false", help="Enable binary evaluation mode (single-file processing)")
-        parser.add_argument("--both", action="store_true", help="Run both binary and multi-class pipelines sequentially")
+        parser.add_argument("--multi-class", dest="multi_class", action="store_true", default=None, help="Enable combined_files evaluation mode (directory-based batch processing)")  # Sets combined_files mode (formerly multi-class)
+        parser.add_argument("--binary", dest="multi_class", action="store_false", help="Enable separate_files evaluation mode (single-file processing)")  # Sets separate_files mode (formerly binary)
+        parser.add_argument("--both", action="store_true", help="Run both separate_files and combined_files pipelines sequentially")  # Runs both modes in sequence
         parser.add_argument("--stacking-results-dir", type=str, default=None, help="Directory to save stacking results (relative to dataset root)")
         parser.add_argument("--top-n-features", dest="top_n_features", type=int, default=None, help="Number of top features to show in heatmap (overrides config)")
         parser.add_argument("--enable-augmentation", dest="enable_augmentation", action="store_true", default=None, help="Enable data augmentation method toggle")
@@ -521,7 +521,8 @@ def merge_configs(defaults, file_config, cli_args):
         
         classification_mode = config.get("execution", {}).get("classification_mode", None)  # Read classification_mode from config if present
         if classification_mode is not None:  # If classification_mode was explicitly set in config
-            config["execution"]["execution_mode"] = classification_mode  # Map classification_mode to execution_mode for internal use
+            _LEGACY_MODES = {"binary": "separate_files", "multiclass": "combined_files", "multi-class": "combined_files"}  # Backward compatibility map for legacy execution mode names
+            config["execution"]["execution_mode"] = _LEGACY_MODES.get(classification_mode, classification_mode)  # Normalize legacy mode name to canonical value before assigning
         
         if cli_args is None:  # If no CLI args
             return config  # Return merged config
@@ -550,7 +551,7 @@ def merge_configs(defaults, file_config, cli_args):
                 effective_multi_class = cli_args.multi_class  # CLI overrides config.yaml
             else:
                 effective_multi_class = cfg_multi_class  # Fall back to config.yaml value
-            config["execution"]["execution_mode"] = "multi-class" if effective_multi_class else "binary"  # Map boolean to execution_mode string
+            config["execution"]["execution_mode"] = "combined_files" if effective_multi_class else "separate_files"  # Map boolean to execution_mode string
 
         if hasattr(cli_args, "top_n_features") and cli_args.top_n_features is not None:  # CLI override for top-N features
             if not isinstance(cli_args.top_n_features, int) or cli_args.top_n_features <= 0:  # Validate positive integer
