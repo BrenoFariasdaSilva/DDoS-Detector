@@ -36,7 +36,7 @@ execution: # Execution control and per-script overrides
   csv_file: null # Optional single CSV file to process (null = process all)
   process_entire_dataset: false # Process all files in dataset (true) or single file (false)
   test_data_augmentation: true # Enable data augmentation testing experiments
-  classification_mode: "both" # Classification mode: "binary", "multiclass", or "both" (default: both)
+  classification_mode: "both" # Classification mode: "separate_files", "combined_files", or "both" (default: both)
   results_suffix: "_result" # Suffix to add to generated filenames
   match_filenames_to_process: [""] # List of specific filenames to match
   ignore_files: ["_data_augmented"] # List of filename substrings to ignore
@@ -277,8 +277,8 @@ genetic_algorithm:
 
 stacking: # Stacking experiment settings
   results_dir: "Stacking" # Directory to save stacking results (relative to Feature_Analysis)
-  results_filename: "Stacking_Classifiers_Results.csv" # Main results CSV filename for binary mode
-  multiclass_results_filename: "Stacking_Classifiers_MultiClass_Results.csv" # Results CSV filename for multi-class mode
+  results_filename: "Stacking_Classifiers_Results.csv" # Main results CSV filename for separate_files mode
+  multiclass_results_filename: "Stacking_Classifiers_MultiClass_Results.csv" # Results CSV filename for combined_files mode
   augmentation_comparison_filename: "Data_Augmentation_Comparison_Results.csv" # Data augmentation experiments results CSV
   hyperparameters_filename: "Hyperparameter_Optimization_Results.csv" # Hyperparameter tuning results filename
 
@@ -288,7 +288,7 @@ stacking: # Stacking experiment settings
   augmentation_ratios: [0.10, 0.25, 0.50, 0.75, 1.00] # Augmented-to-original sample ratios for experiments
 
   top_n_features_heatmap: 15 # Number of top features to show in generated heatmaps and CSV exports (int)
-  multi_class: true # Default: multi-class evaluation enabled. If false, runs binary single-file evaluation mode.
+  multi_class: true # Default: combined_files evaluation enabled. If false, runs separate_files single-file evaluation mode.
   
   methods: # Method toggles for stacking pipeline (overridable via CLI)
     augmentation: true # Enable data augmentation combination in pipeline
@@ -329,8 +329,8 @@ stacking: # Stacking experiment settings
   results_csv_columns: # Column ordering for results CSV export
     - "model" # Model identifier (e.g., "RandomForest", "SVM")
     - "dataset" # Dataset name extracted from file path
-    - "execution_mode" # Execution mode: "binary" or "multi-class"
-    - "attack_types_combined" # For multi-class: comma-separated attack types; for binary: same as dataset
+    - "execution_mode" # Execution mode: "separate_files" or "combined_files"
+    - "attack_types_combined" # For combined_files: comma-separated attack types; for separate_files: same as dataset
     - "feature_set" # Feature extraction method (e.g., "PCA", "RFE", "GA")
     - "classifier_type" # Classifier family (e.g., "tree", "ensemble", "neural")
     - "model_name" # Full model class name
@@ -387,7 +387,7 @@ models: # Model hyperparameters for classifiers
     random_state: 42 # Random seed for reproducibility
 
   xgboost: # XGBoost classifier hyperparameters
-    eval_metric: "mlogloss" # Evaluation metric: "mlogloss" for multi-class, "logloss" for binary
+    eval_metric: "mlogloss" # Evaluation metric: "mlogloss" for combined_files, "logloss" for separate_files
     random_state: 42 # Random seed for reproducibility
 
   logistic_regression: # Logistic Regression hyperparameters
@@ -604,7 +604,7 @@ wgangp:
   force_cpu: false # Force CPU usage even if CUDA available
   from_scratch: false # Force training from scratch, ignore checkpoints
   generating_order: "Ascending" # Dataset file processing order by file size: "off", "Ascending", or "Descending"
-  execution_mode: both # Execution mode: "both" (default, runs binary and multi-class sequentially), "binary" (one file per eval), or "multi-class" (combined attacks)
+  execution_mode: both # Execution mode: "both" (default, runs separate_files and combined_files sequentially), "separate_files" (one file per eval), or "combined_files" (combined attacks)
   results_suffix: "_data_augmented" # Suffix to add to generated filenames
   results_dir: "Feature_Analysis/PCA"
   results_filename: "PCA_Results.csv"
