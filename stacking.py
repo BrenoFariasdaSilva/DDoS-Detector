@@ -236,8 +236,8 @@ def parse_cli_args():
         parser.add_argument("--automl-timeout", type=int, default=None, help="AutoML timeout in seconds")
         parser.add_argument("--test-augmentation", action="store_true", help="Enable data augmentation testing")
         parser.add_argument("--no-test-augmentation", dest="test_augmentation", action="store_false", help="Disable data augmentation testing")
-        parser.add_argument("--multi-class", dest="multi_class", action="store_true", default=None, help="Enable combined_files evaluation mode (directory-based batch processing)")  # Sets combined_files mode (formerly multi-class)
-        parser.add_argument("--binary", dest="multi_class", action="store_false", help="Enable separate_files evaluation mode (single-file processing)")  # Sets separate_files mode (formerly binary)
+        parser.add_argument("--combined-files", dest="combined_files_flag", action="store_true", default=None, help="Enable combined files evaluation mode (directory-based batch processing)")  # Sets combined files evaluation mode
+        parser.add_argument("--separate-files", dest="combined_files_flag", action="store_false", help="Enable separate files evaluation mode (single-file processing)")  # Sets separate files evaluation mode
         parser.add_argument("--both", action="store_true", help="Run both separate_files and combined_files pipelines sequentially")  # Runs both modes in sequence
         parser.add_argument("--stacking-results-dir", type=str, default=None, help="Directory to save stacking results (relative to dataset root)")
         parser.add_argument("--top-n-features", dest="top_n_features", type=int, default=None, help="Number of top features to show in heatmap (overrides config)")
@@ -269,7 +269,7 @@ def get_default_stacking_config():
         return {
             "results_dir": "Stacking",  # Output subdirectory name for stacking results
             "results_filename": "Stacking_Classifiers_Results.csv",  # Separate files evaluation results CSV filename
-            "multiclass_results_filename": "Stacking_Classifiers_MultiClass_Results.csv",  # Combined files evaluation results CSV filename
+            "combined_files_results_filename": "Stacking_Classifiers_CombinedFiles_Results.csv",  # Combined files evaluation results CSV filename
             "augmentation_comparison_filename": "Data_Augmentation_Comparison_Results.csv",  # Augmentation comparison CSV filename
             "data_augmentation_suffix": "_data_augmented",  # File suffix for augmented data files
             "augmentation_ratios": [0.10, 0.25, 0.50, 0.75, 1.00],  # Ratios of augmented data to sample
@@ -285,7 +285,7 @@ def get_default_stacking_config():
                 "features_list", "Hardware",
             ],  # Column names for results CSV export
             "top_n_features_heatmap": 15,  # Number of top features to show in heatmap
-            "multi_class": True,  # Default: combined files evaluation enabled; False = separate files evaluation
+            "combined_files_evaluation": True,  # Default: combined files evaluation enabled; False = separate files evaluation
             "methods": {
                 "augmentation": True,  # Enable data augmentation combination by default
                 "feature_selection": True,  # Enable feature selection combination by default
@@ -546,12 +546,12 @@ def merge_configs(defaults, file_config, cli_args):
         if hasattr(cli_args, "both") and cli_args.both:  # Both mode flag takes precedence
             config["execution"]["execution_mode"] = "both"
         else:
-            cfg_multi_class = config.get("stacking", {}).get("multi_class", True)  # Read multi_class from stacking config (config.yaml), defaulting to True
-            if hasattr(cli_args, "multi_class") and cli_args.multi_class is not None:  # CLI explicitly set (--combined-files or --separate-files)
-                effective_multi_class = cli_args.multi_class  # CLI overrides config.yaml
+            cfg_combined_files = config.get("stacking", {}).get("combined_files_evaluation", True)  # Read combined_files_evaluation from stacking config (config.yaml), defaulting to True
+            if hasattr(cli_args, "combined_files_flag") and cli_args.combined_files_flag is not None:  # CLI explicitly set (--combined-files or --separate-files)
+                effective_combined_files = cli_args.combined_files_flag  # CLI overrides config.yaml
             else:
-                effective_multi_class = cfg_multi_class  # Fall back to config.yaml value
-            config["execution"]["execution_mode"] = "combined_files" if effective_multi_class else "separate_files"  # Map boolean to execution_mode string
+                effective_combined_files = cfg_combined_files  # Fall back to config.yaml value
+            config["execution"]["execution_mode"] = "combined_files" if effective_combined_files else "separate_files"  # Map boolean flag to execution_mode string
 
         if hasattr(cli_args, "top_n_features") and cli_args.top_n_features is not None:  # CLI override for top-N features
             if not isinstance(cli_args.top_n_features, int) or cli_args.top_n_features <= 0:  # Validate positive integer
@@ -1229,7 +1229,7 @@ def extract_attack_label_from_path(file_path):
         raise  # Re-raise to preserve original failure semantics
 
 
-def concat_files_into_multiclass_df(processed_files_with_labels, common_features_list, attack_types_set, config):
+def concat_files_into_combined_files_df(processed_files_with_labels, common_features_list, attack_types_set, config):
     """
     Align each processed file to the common feature set, assign attack type labels, concatenate into a single DataFrame, and clean infinite/NaN values.
 
@@ -1345,7 +1345,7 @@ def process_files_and_extract_labels(files_list, config):
     return processed_files_with_labels, attack_types_set  # Return processed data and attack types set
 
 
-def combine_files_for_multiclass(files_list, config=None):
+def combine_files_for_combined_evaluation(files_list, config=None):
     """
     Combine multiple dataset files into a single combined files evaluation dataset.
     Each file represents a different attack type and becomes a unique class label.
@@ -1380,7 +1380,7 @@ def combine_files_for_multiclass(files_list, config=None):
             return (None, None, None)  # Return failure tuple
         common_features_list, target_col_name = feature_result  # Unpack common features and target column name
         
-        concat_result = concat_files_into_multiclass_df(processed_files_with_labels, common_features_list, attack_types_set, config)  # Concatenate files into combined files evaluation dataframe
+        concat_result = concat_files_into_combined_files_df(processed_files_with_labels, common_features_list, attack_types_set, config)  # Concatenate files into combined files evaluation dataframe
 
         del processed_files_with_labels  # Release individual dataframes to free memory after concatenation
         gc.collect()  # Force garbage collection to reclaim memory from released individual dataframes
@@ -1389,8 +1389,8 @@ def combine_files_for_multiclass(files_list, config=None):
             return (None, None, None)  # Return failure tuple
         
         if not isinstance(concat_result, (list, tuple)) or len(concat_result) != 2:  # Verify concat_result is iterable and has exactly two items
-            print(f"{BackgroundColors.RED}Unexpected return from concat_files_into_multiclass_df: {type(concat_result)}{Style.RESET_ALL}")  # Log unexpected return type for diagnosis
-            err_val = ValueError("concat_files_into_multiclass_df returned unexpected format")  # Create ValueError to describe unexpected format
+            print(f"{BackgroundColors.RED}Unexpected return from concat_files_into_combined_files_df: {type(concat_result)}{Style.RESET_ALL}")  # Log unexpected return type for diagnosis
+            err_val = ValueError("concat_files_into_combined_files_df returned unexpected format")  # Create ValueError to describe unexpected format
             send_exception_via_telegram(type(err_val), err_val, err_val.__traceback__)  # Notify via Telegram about unexpected format
             return (None, None, None)  # Return failure tuple due to unexpected format
         
@@ -1460,7 +1460,7 @@ def find_data_augmentation_file(original_file_path, config=None):
         raise  # Re-raise to preserve original failure semantics
 
 
-def load_augmented_files_for_multiclass(original_files_list, config=None):
+def load_augmented_files_for_combined_evaluation(original_files_list, config=None):
     """
     Load augmented data files corresponding to original files for combined files evaluation mode.
     
@@ -3636,13 +3636,13 @@ def extract_hyperparameter_optimization_results(csv_path, config=None):
             )
             return {}  # Return empty dict on failure
 
-        multi_class = config.get("stacking", {}).get("multi_class", True)  # Read multi_class mode from stacking config
+        combined_files_enabled = config.get("stacking", {}).get("combined_files_evaluation", True)  # Read combined_files_evaluation mode from stacking config
         verbose_output(
-            f"[DEBUG] extract_hyperparameter_optimization_results: mode={'combined files evaluation' if multi_class else 'separate files evaluation'}",
+            f"[DEBUG] extract_hyperparameter_optimization_results: mode={'combined files evaluation' if combined_files_enabled else 'separate files evaluation'}",
             config=config
         )  # Log selected execution mode
 
-        if multi_class:  # Route to priority-based matching for combined files evaluation mode
+        if combined_files_enabled:  # Route to priority-based matching for combined files evaluation mode
             verbose_output(
                 "[DEBUG] extract_hyperparameter_optimization_results: using priority-based matching strategy",
                 config=config
@@ -8152,7 +8152,7 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
         raise
 
 
-def save_multiclass_results_to_csv(reference_file, results_list, config=None):
+def save_combined_files_results_to_csv(reference_file, results_list, config=None):
     """
     Save combined files evaluation results to the Feature_Analysis directory.
 
@@ -8166,13 +8166,13 @@ def save_multiclass_results_to_csv(reference_file, results_list, config=None):
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        multiclass_results_filename = config.get("stacking", {}).get("multiclass_results_filename", "Stacking_Classifiers_MultiClass_Results.csv")  # Get combined files evaluation results filename from config
+        combined_files_results_filename = config.get("stacking", {}).get("combined_files_results_filename", "Stacking_Classifiers_CombinedFiles_Results.csv")  # Get combined files evaluation results filename from config
         reference_file_path = Path(reference_file)  # Create Path object from reference file
         feature_analysis_dir = reference_file_path.parent / "Feature_Analysis"  # Build Feature_Analysis directory path
         os.makedirs(feature_analysis_dir, exist_ok=True)  # Ensure directory exists on disk
-        multiclass_results_path = feature_analysis_dir / multiclass_results_filename  # Build full combined files evaluation results file path
+        combined_files_results_path = feature_analysis_dir / combined_files_results_filename  # Build full combined files evaluation results file path
 
-        save_stacking_results(str(multiclass_results_path), results_list, config=config)  # Save combined files evaluation results to CSV
+        save_stacking_results(str(combined_files_results_path), results_list, config=config)  # Save combined files evaluation results to CSV
 
         return feature_analysis_dir  # Return Feature_Analysis directory path for reuse
     except Exception as e:
@@ -8181,7 +8181,7 @@ def save_multiclass_results_to_csv(reference_file, results_list, config=None):
         raise
 
 
-def save_multiclass_augmentation_comparison(results_original, all_ratio_results, feature_analysis_dir, config=None):
+def save_combined_files_augmentation_comparison(results_original, all_ratio_results, feature_analysis_dir, config=None):
     """
     Generates a ratio comparison report and saves it to a CSV file in the feature analysis directory.
 
@@ -8205,10 +8205,10 @@ def save_multiclass_augmentation_comparison(results_original, all_ratio_results,
         comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate comparison report across all evaluated augmentation ratios
 
         augmentation_comparison_filename = config.get("stacking", {}).get("augmentation_comparison_filename", "Data_Augmentation_Comparison_Results.csv")  # Get base comparison filename from config
-        multiclass_comparison_filename = augmentation_comparison_filename.replace(".csv", "_MultiClass.csv")  # Build combined files evaluation-specific comparison filename
-        multiclass_comparison_path = feature_analysis_dir / multiclass_comparison_filename  # Construct full output path inside Feature_Analysis directory
+        combined_files_comparison_filename = augmentation_comparison_filename.replace(".csv", "_CombinedFiles.csv")  # Build combined files evaluation-specific comparison filename
+        combined_files_comparison_path = feature_analysis_dir / combined_files_comparison_filename  # Construct full output path inside Feature_Analysis directory
 
-        save_augmentation_comparison_results(str(multiclass_comparison_path), comparison_results, config=config)  # Save comparison results to the CSV file
+        save_augmentation_comparison_results(str(combined_files_comparison_path), comparison_results, config=config)  # Save comparison results to the CSV file
 
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Combined files evaluation data augmentation ratio-based comparison complete!{Style.RESET_ALL}"
@@ -8219,12 +8219,12 @@ def save_multiclass_augmentation_comparison(results_original, all_ratio_results,
         raise
 
 
-def run_multiclass_augmentation_ratio_experiment(reference_file, combined_multiclass_df, combined_augmented_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, attack_types_list, ratio, ratio_idx, total_steps, dataset_name, config=None):
+def run_combined_files_augmentation_ratio_experiment(reference_file, combined_files_df, combined_augmented_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, attack_types_list, ratio, ratio_idx, total_steps, dataset_name, config=None):
     """
     Runs a single ratio-based augmentation experiment for combined files evaluation and returns the results.
 
     :param reference_file: Reference file path used for t-SNE visualization and experiment ID generation
-    :param combined_multiclass_df: Combined original combined files evaluation DataFrame with all attack types
+    :param combined_files_df: Combined original combined files evaluation DataFrame with all attack types
     :param combined_augmented_df: Combined augmented DataFrame used as the augmentation source
     :param feature_names: List of feature column names for the dataset
     :param ga_selected_features: List of features selected by the genetic algorithm
@@ -8251,7 +8251,7 @@ def run_multiclass_augmentation_ratio_experiment(reference_file, combined_multic
             f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx + 1}/{total_steps}] Evaluating with {ratio_pct}% augmented data (Combined Files Evaluation){Style.RESET_ALL}"
         )  # Print experiment step progress for this ratio
 
-        df_sampled = sample_augmented_by_ratio(combined_augmented_df, combined_multiclass_df, ratio)  # Sample augmented data proportionally to the requested ratio
+        df_sampled = sample_augmented_by_ratio(combined_augmented_df, combined_files_df, ratio)  # Sample augmented data proportionally to the requested ratio
 
         if df_sampled is None:  # If sampling failed for this ratio
             print(
@@ -8259,15 +8259,15 @@ def run_multiclass_augmentation_ratio_experiment(reference_file, combined_multic
             )  # Print warning about sampling failure
             return None  # Signal caller to skip this ratio
 
-        data_source_label = f"Original+Augmented@{ratio_pct}%_MultiClass"  # Build data source label for result traceability
-        experiment_id = generate_experiment_id(reference_file, "multiclass_original_plus_augmented", ratio)  # Generate unique experiment ID for this run
+        data_source_label = f"Original+Augmented@{ratio_pct}%_CombinedFiles"  # Build data source label for result traceability
+        experiment_id = generate_experiment_id(reference_file, "combined_files_original_plus_augmented", ratio)  # Generate unique experiment ID for this run
 
         print(
             f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
         )  # Print sampled dataset size for transparency
 
         generate_augmentation_tsne_visualization(
-            reference_file, combined_multiclass_df, df_sampled, ratio, "original_plus_augmented"
+            reference_file, combined_files_df, df_sampled, ratio, "original_plus_augmented"
         )  # Generate t-SNE visualization comparing original and augmented distributions
 
         send_telegram_message(
@@ -8275,7 +8275,7 @@ def run_multiclass_augmentation_ratio_experiment(reference_file, combined_multic
         )  # Send Telegram notification for ratio experiment start
 
         results_ratio = evaluate_on_dataset(
-            reference_file, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components,
+            reference_file, combined_files_df, feature_names, ga_selected_features, pca_n_components,
             rfe_selected_features, base_models, data_source_label=data_source_label,
             hyperparams_map=hp_params_map, experiment_id=experiment_id,
             experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
@@ -8294,7 +8294,7 @@ def run_multiclass_augmentation_ratio_experiment(reference_file, combined_multic
         raise
 
 
-def print_multiclass_augmentation_header(augmentation_ratios):
+def print_combined_files_augmentation_header(augmentation_ratios):
     """
     Prints the formatted header block announcing ratio-based data augmentation experiments for combined files evaluation mode.
 
@@ -8321,7 +8321,7 @@ def print_multiclass_augmentation_header(augmentation_ratios):
         raise
 
 
-def load_and_combine_augmented_multiclass_files(original_files_list, config=None):
+def load_and_combine_augmented_combined_files(original_files_list, config=None):
     """
     Loads augmented files for combined files evaluation mode and combines them into a single DataFrame.
 
@@ -8334,7 +8334,7 @@ def load_and_combine_augmented_multiclass_files(original_files_list, config=None
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        augmented_files_list = load_augmented_files_for_multiclass(original_files_list, config=config)  # Load the list of augmented file paths
+        augmented_files_list = load_augmented_files_for_combined_evaluation(original_files_list, config=config)  # Load the list of augmented file paths
 
         if not augmented_files_list:  # If no augmented files were found
             print(
@@ -8342,7 +8342,7 @@ def load_and_combine_augmented_multiclass_files(original_files_list, config=None
             )  # Print warning about missing augmented files
             return None  # Signal caller to exit early
 
-        combined_augmented_df, augmented_attack_types, augmented_target_col = combine_files_for_multiclass(augmented_files_list, config=config)  # Combine all augmented files into a single DataFrame
+        combined_augmented_df, augmented_attack_types, augmented_target_col = combine_files_for_combined_evaluation(augmented_files_list, config=config)  # Combine all augmented files into a single DataFrame
 
         if combined_augmented_df is None:  # If augmented file combination failed
             print(
@@ -8357,13 +8357,13 @@ def load_and_combine_augmented_multiclass_files(original_files_list, config=None
         raise
 
 
-def process_multiclass_augmentation_testing(reference_file, original_files_list, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, attack_types_list, results_original, augmentation_ratios, total_steps, feature_analysis_dir, dataset_name, config=None):
+def process_combined_files_augmentation_testing(reference_file, original_files_list, combined_files_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, attack_types_list, results_original, augmentation_ratios, total_steps, feature_analysis_dir, dataset_name, config=None):
     """
     Process combined files evaluation augmented data with ratio-based experiments.
 
     :param reference_file: Reference file path for feature metadata
     :param original_files_list: List of original file paths
-    :param combined_multiclass_df: Combined files evaluation DataFrame
+    :param combined_files_df: Combined files evaluation DataFrame
     :param feature_names: List of feature column names
     :param ga_selected_features: GA selected features
     :param pca_n_components: Number of PCA components
@@ -8390,22 +8390,22 @@ def process_multiclass_augmentation_testing(reference_file, original_files_list,
         )  # Output the verbose message
 
         generate_augmentation_tsne_visualization(
-            reference_file, combined_multiclass_df, None, None, "original_only"
+            reference_file, combined_files_df, None, None, "original_only"
         )  # Generate t-SNE visualization for original combined files evaluation data only
 
-        combined_augmented_df = load_and_combine_augmented_multiclass_files(original_files_list, config=config)  # Load and combine augmented files into a single DataFrame
+        combined_augmented_df = load_and_combine_augmented_combined_files(original_files_list, config=config)  # Load and combine augmented files into a single DataFrame
 
         if combined_augmented_df is None:  # If loading or combining augmented files failed
             return  # Exit function early as signaled by the loading function
 
-        print_multiclass_augmentation_header(augmentation_ratios)  # Print the section header for ratio-based combined files evaluation augmentation experiments
+        print_combined_files_augmentation_header(augmentation_ratios)  # Print the section header for ratio-based combined files evaluation augmentation experiments
         send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES] Starting ratio-based augmentation experiments | Dataset: {dataset_name} | ratios: {[f'{int(r * 100)}%' for r in augmentation_ratios]}"])  # Notify Telegram about combined files evaluation augmentation ratio experiments start
 
         all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
 
         for ratio_idx, ratio in enumerate(augmentation_ratios, start=1):  # Iterate over each augmentation ratio
-            results_ratio = run_multiclass_augmentation_ratio_experiment(
-                reference_file, combined_multiclass_df, combined_augmented_df, feature_names,
+            results_ratio = run_combined_files_augmentation_ratio_experiment(
+                reference_file, combined_files_df, combined_augmented_df, feature_names,
                 ga_selected_features, pca_n_components, rfe_selected_features, base_models,
                 hp_params_map, attack_types_list, ratio, ratio_idx, total_steps, dataset_name, config=config,
             )  # Run evaluation for this ratio and retrieve results or None if sampling failed
@@ -8416,7 +8416,7 @@ def process_multiclass_augmentation_testing(reference_file, original_files_list,
         del combined_augmented_df  # Release combined augmented dataframe to free memory after all ratio experiments
         gc.collect()  # Force garbage collection to reclaim memory from augmented data
 
-        save_multiclass_augmentation_comparison(results_original, all_ratio_results, feature_analysis_dir, config=config)  # Generate comparison report and save results to CSV
+        save_combined_files_augmentation_comparison(results_original, all_ratio_results, feature_analysis_dir, config=config)  # Generate comparison report and save results to CSV
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -8441,12 +8441,12 @@ def compute_class_distribution(combined_df: pd.DataFrame, target_col: str) -> Li
         raise
 
 
-def process_multiclass_evaluation(original_files_list, combined_multiclass_df, attack_types_list, dataset_name, config=None):
+def process_combined_files_evaluation(original_files_list, combined_files_df, attack_types_list, dataset_name, config=None):
     """
     Process evaluation for combined files evaluation mode with optional data augmentation.
     
     :param original_files_list: List of original file paths used for combined files evaluation
-    :param combined_multiclass_df: Combined files evaluation DataFrame with 'attack_type' column
+    :param combined_files_df: Combined files evaluation DataFrame with 'attack_type' column
     :param attack_types_list: List of unique attack type labels
     :param dataset_name: Name of the dataset being processed
     :param config: Configuration dictionary (uses global CONFIG if None)
@@ -8462,7 +8462,7 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
             config=config
         )  # Output the verbose message
     
-        reference_file = original_files_list[0] if original_files_list else "multiclass_combined"  # Get reference file for feature metadata
+        reference_file = original_files_list[0] if original_files_list else "combined_files_combined"  # Get reference file for feature metadata
         
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
@@ -8470,7 +8470,7 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing combined files evaluation dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
         )  # Print dataset header
-        distribution = compute_class_distribution(combined_multiclass_df, 'attack_type')  # Compute distribution from combined dataframe
+        distribution = compute_class_distribution(combined_files_df, 'attack_type')  # Compute distribution from combined dataframe
         print(f"{BackgroundColors.GREEN}Attack types:{Style.RESET_ALL}")  # Print attack types header
         for label, count in distribution:  # Iterate over distribution entries sorted by count
             print(f"- {BackgroundColors.CYAN}{label}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{count:,}{Style.RESET_ALL}")  # Print each class name and sample count
@@ -8490,7 +8490,7 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
             pca_n_components = None  # Suppress PCA components when feature selection is disabled
             rfe_selected_features = None  # Suppress RFE features when feature selection is disabled
         
-        feature_names = [col for col in combined_multiclass_df.columns if col != 'attack_type']  # Get feature column names
+        feature_names = [col for col in combined_files_df.columns if col != 'attack_type']  # Get feature column names
         
         verbose_output(
             f"{BackgroundColors.GREEN}Combined files evaluation dataset features: {BackgroundColors.CYAN}{len(feature_names)} features{Style.RESET_ALL}",
@@ -8503,7 +8503,7 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
             base_models = get_models(config=config)  # Instantiate base models without hyperparameter optimization
             hp_params_map = {}  # Initialize empty hyperparameters mapping when disabled
         
-        original_experiment_id = generate_experiment_id(reference_file, "multiclass_original_only")  # Generate unique experiment ID
+        original_experiment_id = generate_experiment_id(reference_file, "combined_files_original_only")  # Generate unique experiment ID
         
         test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", False)  # Get test data augmentation flag from config
 
@@ -8519,26 +8519,26 @@ def process_multiclass_evaluation(original_files_list, combined_multiclass_df, a
         )  # Print progress message with total step count
         
         results_original = evaluate_on_dataset(
-            reference_file, combined_multiclass_df, feature_names, ga_selected_features, pca_n_components,
-            rfe_selected_features, base_models, data_source_label="Original_MultiClass", hyperparams_map=hp_params_map,
+            reference_file, combined_files_df, feature_names, ga_selected_features, pca_n_components,
+            rfe_selected_features, base_models, data_source_label="Original_CombinedFiles", hyperparams_map=hp_params_map,
             experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
             execution_mode_str="combined_files", attack_types_combined=attack_types_list
         )  # Evaluate on original combined files evaluation data with execution mode tracking
         
         original_results_list = list(results_original.values())  # Convert results dict to list
-        feature_analysis_dir = save_multiclass_results_to_csv(reference_file, original_results_list, config=config)  # Save combined files evaluation results and get Feature_Analysis directory
+        feature_analysis_dir = save_combined_files_results_to_csv(reference_file, original_results_list, config=config)  # Save combined files evaluation results and get Feature_Analysis directory
         
         enable_automl = methods_cfg.get("automl", True)  # Resolve AutoML toggle from stacking methods config
         if enable_automl:  # If AutoML pipeline is enabled
             print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[DEBUG] AutoML pipeline is ENABLED. Running AutoML for combined files evaluation dataset.{Style.RESET_ALL}")  # Log AutoML execution start
             send_telegram_message(TELEGRAM_BOT, [f"Running AutoML pipeline for combined files evaluation dataset: {dataset_name}"])  # Notify Telegram about AutoML pipeline execution
-            run_automl_pipeline(reference_file, combined_multiclass_df, feature_names, data_source_label="Original_MultiClass", config=config)  # Run AutoML pipeline for combined files evaluation
+            run_automl_pipeline(reference_file, combined_files_df, feature_names, data_source_label="Original_CombinedFiles", config=config)  # Run AutoML pipeline for combined files evaluation
         else:  # AutoML pipeline is disabled via method toggle
             print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML pipeline is DISABLED (stacking.methods.automl=false). Skipping AutoML for combined files evaluation. Enable via config or --enable-automl flag.{Style.RESET_ALL}")  # Log AutoML skip reason
         
         if test_data_augmentation:  # If data augmentation testing is enabled
-            process_multiclass_augmentation_testing(
-                reference_file, original_files_list, combined_multiclass_df, feature_names,
+            process_combined_files_augmentation_testing(
+                reference_file, original_files_list, combined_files_df, feature_names,
                 ga_selected_features, pca_n_components, rfe_selected_features, base_models,
                 hp_params_map, attack_types_list, results_original, augmentation_ratios,
                 total_steps, feature_analysis_dir, dataset_name, config=config,
@@ -8795,7 +8795,7 @@ def orchestrate_binary_combination(file, ga_sel, pca_n, rfe_sel, base_models, hp
         raise
 
 
-def execute_original_multiclass_evaluation(files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config):
+def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config):
     """
     Combine files for combined files evaluation, evaluate the original-only dataset, annotate results, and persist them to disk.
 
@@ -8812,8 +8812,8 @@ def execute_original_multiclass_evaluation(files_to_process, ga_sel, pca_n, rfe_
     :return: Tuple of ("ok", (combined_df, attack_types, feature_names)) on success, or ("break", None)/("continue", None) on failure.
     """
 
-    try:  # Protect multiclass combine step
-        combined_df, attack_types, target_col = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for multiclass
+    try:  # Protect combined files evaluation combine step
+        combined_df, attack_types, target_col = combine_files_for_combined_evaluation(files_to_process, config=config)  # Combine files for combined files evaluation
     except Exception as e:  # If combining fails
         print(f"{BackgroundColors.RED}Failed to combine files for combined files evaluation: {e}{Style.RESET_ALL}")  # Error message
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
@@ -8827,10 +8827,10 @@ def execute_original_multiclass_evaluation(files_to_process, ga_sel, pca_n, rfe_
 
     try:  # Protect evaluation step
         results = evaluate_on_dataset(
-            "multiclass_combined", combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,
-            data_source_label="Original_MultiClass",
+            "combined_files_combined", combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,
+            data_source_label="Original_CombinedFiles",
             hyperparams_map=hp_params_map if hyperparameters_enabled else {},
-            experiment_id=generate_experiment_id("multiclass_combined", "multiclass_original_only"),
+            experiment_id=generate_experiment_id("combined_files_combined", "combined_files_original_only"),
             experiment_mode="original_only", augmentation_ratio=None,
             execution_mode_str="combined_files", attack_types_combined=attack_types,
             df_augmented_for_training=None,
@@ -8843,13 +8843,13 @@ def execute_original_multiclass_evaluation(files_to_process, ga_sel, pca_n, rfe_
     results_list = list(results.values())  # Convert results dict to list
     annotate_results_with_combination_flags(results_list, feature_selection_enabled, hyperparameters_enabled, False)  # Annotate results
     save_results_with_optional_suffix(
-        files_to_process[0], results_list, suffix, "multiclass_results_filename",
-        "Stacking_Classifiers_MultiClass_Results.csv", use_stacking_subdir=False, config=config,
+        files_to_process[0], results_list, suffix, "combined_files_results_filename",
+        "Stacking_Classifiers_CombinedFiles_Results.csv", use_stacking_subdir=False, config=config,
     )  # Save combined files evaluation results with optional suffix
     return "ok", (combined_df, attack_types, feature_names)  # Return success with data payload
 
 
-def execute_multiclass_augmentation(files_to_process, combined_df, attack_types, feature_names, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config):
+def execute_combined_files_augmentation(files_to_process, combined_df, attack_types, feature_names, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config):
     """
     Run augmented data experiments for each configured augmentation ratio using the combined files evaluation dataset.
 
@@ -8870,11 +8870,11 @@ def execute_multiclass_augmentation(files_to_process, combined_df, attack_types,
     """
 
     try:  # Protect augmentation orchestration
-        augmented_files_list = load_augmented_files_for_multiclass(files_to_process, config=config)  # Load augmented files per file
+        augmented_files_list = load_augmented_files_for_combined_evaluation(files_to_process, config=config)  # Load augmented files per file
         if not augmented_files_list:  # If none found
             print(f"{BackgroundColors.YELLOW}No augmented files found for combined files evaluation combo {suffix}. Skipping augmentation.{Style.RESET_ALL}")  # Warn
         else:  # Have augmented files to process
-            combined_aug_df, _, _ = combine_files_for_multiclass(augmented_files_list, config=config)  # Combine augmented files
+            combined_aug_df, _, _ = combine_files_for_combined_evaluation(augmented_files_list, config=config)  # Combine augmented files
             if combined_aug_df is None:  # If combine failed
                 print(f"{BackgroundColors.YELLOW}Failed to combine augmented files for combined files evaluation combo {suffix}. Skipping.{Style.RESET_ALL}")  # Warn
             else:  # Proceed with ratio experiments
@@ -8885,10 +8885,10 @@ def execute_multiclass_augmentation(files_to_process, combined_df, attack_types,
                         continue  # Next ratio
                     try:  # Evaluate with augmented training data
                         res = evaluate_on_dataset(
-                            "multiclass_combined", combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,
-                            data_source_label=f"Original+Augmented@{int(ratio*100)}%_MultiClass",
+                            "combined_files_combined", combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,
+                            data_source_label=f"Original+Augmented@{int(ratio*100)}%_CombinedFiles",
                             hyperparams_map=hp_params_map if hyperparameters_enabled else {},
-                            experiment_id=generate_experiment_id("multiclass_combined", "multiclass_original_plus_augmented", ratio),
+                            experiment_id=generate_experiment_id("combined_files_combined", "combined_files_original_plus_augmented", ratio),
                             experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
                             execution_mode_str="combined_files", attack_types_combined=attack_types,
                             df_augmented_for_training=df_sampled,
@@ -8909,7 +8909,7 @@ def execute_multiclass_augmentation(files_to_process, combined_df, attack_types,
     return None  # Signal success
 
 
-def orchestrate_multiclass_combination(files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, data_augmentation_enabled, suffix, config=None):
+def orchestrate_combined_files_combination(files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, data_augmentation_enabled, suffix, config=None):
     """
     Orchestrate evaluation for a single combined files evaluation combination of FS/HP/DA flags.
 
@@ -8931,7 +8931,7 @@ def orchestrate_multiclass_combination(files_to_process, ga_sel, pca_n, rfe_sel,
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        status, data = execute_original_multiclass_evaluation(files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config)  # Combine files, evaluate original dataset, and persist results
+        status, data = execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config)  # Combine files, evaluate original dataset, and persist results
         if status != "ok":  # If evaluation did not succeed
             return status  # Propagate flow control signal to caller
 
@@ -8942,7 +8942,7 @@ def orchestrate_multiclass_combination(files_to_process, ga_sel, pca_n, rfe_sel,
         combined_df, attack_types, feature_names = data  # Unpack evaluation results payload
 
         if data_augmentation_enabled:  # If augmentation requested
-            augmentation_signal = execute_multiclass_augmentation(files_to_process, combined_df, attack_types, feature_names, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config)  # Run augmented experiments for all configured ratios
+            augmentation_signal = execute_combined_files_augmentation(files_to_process, combined_df, attack_types, feature_names, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config)  # Run augmented experiments for all configured ratios
             if augmentation_signal is not None:  # If augmentation returned a flow control signal
                 return augmentation_signal  # Propagate signal to caller
 
@@ -8976,7 +8976,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     files_to_process = determine_files_to_process(config.get("execution", {}).get("csv_file", None), input_path, config=config)  # Determine files
 
     configured_mode = config.get("execution", {}).get("execution_mode", "both")  # Read configured mode
-    modes = [configured_mode] if configured_mode in ("binary", "multi-class") else ["binary", "multi-class"]  # Modes list
+    modes = [configured_mode] if configured_mode in ("separate_files", "combined_files") else ["separate_files", "combined_files"]  # Modes list
 
     methods_cfg = config.get("stacking", {}).get("methods", {})  # Retrieve method toggles from config
     fs_toggle = methods_cfg.get("feature_selection", True)  # Resolve feature selection toggle from config
@@ -9019,15 +9019,15 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     pca_n = fs_pca if feature_selection_enabled else None  # PCA components or None
                     rfe_sel = fs_rfe if feature_selection_enabled else None  # RFE features or None
 
-                    if mode == "binary":  # Separate files evaluation per-file
+                    if mode == "separate_files":  # Separate files evaluation per-file
                         if not orchestrate_binary_combination(
                             file, ga_sel, pca_n, rfe_sel, base_models, hp_params_map,
                             hyperparameters_enabled, feature_selection_enabled, data_augmentation_enabled, suffix, config=config,
                         ):  # If separate files evaluation combination evaluation failed
                             continue  # Skip to next combination
 
-                    elif mode == "multi-class":  # Combined files evaluation orchestration
-                        signal = orchestrate_multiclass_combination(
+                    elif mode == "combined_files":  # Combined files evaluation orchestration
+                        signal = orchestrate_combined_files_combination(
                             files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map,
                             hyperparameters_enabled, feature_selection_enabled, data_augmentation_enabled, suffix, config=config,
                         )  # Orchestrate combined files evaluation combination evaluation
@@ -9107,18 +9107,18 @@ def execute_both_mode_pipeline(files_to_process, local_dataset_name, config=None
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
         )  # Print closing separator
 
-        combined_multiclass_df, attack_types_list, target_col_name = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for combined files evaluation
+        combined_files_df, attack_types_list, target_col_name = combine_files_for_combined_evaluation(files_to_process, config=config)  # Combine files for combined files evaluation
 
-        if combined_multiclass_df is None:  # If combination failed
+        if combined_files_df is None:  # If combination failed
             print(
                 f"{BackgroundColors.RED}Failed to create combined files evaluation dataset. Skipping combined files evaluation.{Style.RESET_ALL}"
             )  # Print error about combination failure
         else:  # If combination succeeded
-            process_multiclass_evaluation(
-                files_to_process, combined_multiclass_df, attack_types_list, local_dataset_name, config=config
+            process_combined_files_evaluation(
+                files_to_process, combined_files_df, attack_types_list, local_dataset_name, config=config
             )  # Process combined files evaluation workflow
 
-            del combined_multiclass_df  # Release combined files evaluation dataframe to free memory after evaluation
+            del combined_files_df  # Release combined files evaluation dataframe to free memory after evaluation
             gc.collect()  # Force garbage collection to reclaim memory from combined files evaluation
 
             print(
@@ -9140,9 +9140,9 @@ def execute_both_mode_pipeline(files_to_process, local_dataset_name, config=None
         raise
 
 
-def execute_multiclass_mode_pipeline(files_to_process, local_dataset_name, config=None):
+def execute_combined_files_mode_pipeline(files_to_process, local_dataset_name, config=None):
     """
-    Execute multi-class classification pipeline only.
+    Execute combined files evaluation classification pipeline only.
 
     :param files_to_process: List of file paths to process
     :param local_dataset_name: Name of the dataset being processed
@@ -9172,19 +9172,19 @@ def execute_multiclass_mode_pipeline(files_to_process, local_dataset_name, confi
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
         )  # Print closing separator
 
-        combined_multiclass_df, attack_types_list, target_col_name = combine_files_for_multiclass(files_to_process, config=config)  # Combine files for combined files evaluation
+        combined_files_df, attack_types_list, target_col_name = combine_files_for_combined_evaluation(files_to_process, config=config)  # Combine files for combined files evaluation
 
-        if combined_multiclass_df is None:  # If combination failed
+        if combined_files_df is None:  # If combination failed
             print(
                 f"{BackgroundColors.RED}Failed to create combined files evaluation dataset. Skipping combined files evaluation.{Style.RESET_ALL}"
             )  # Print error about combination failure
             return  # Exit function early
 
-        process_multiclass_evaluation(
-            files_to_process, combined_multiclass_df, attack_types_list, local_dataset_name, config=config
+        process_combined_files_evaluation(
+            files_to_process, combined_files_df, attack_types_list, local_dataset_name, config=config
         )  # Process combined files evaluation workflow
 
-        del combined_multiclass_df  # Release combined files evaluation dataframe to free memory after evaluation
+        del combined_files_df  # Release combined files evaluation dataframe to free memory after evaluation
         gc.collect()  # Force garbage collection to reclaim memory from combined files evaluation
     except Exception as e:
         print(str(e))
@@ -9260,9 +9260,9 @@ def process_files_in_path(input_path, dataset_name, config=None):
         if execution_mode == "both":  # If BOTH execution modes are enabled (run separate files first, then combined files)
             print(f"{BackgroundColors.CYAN}[DEBUG] Running separate files and combined files classification pipelines sequentially{Style.RESET_ALL}")  # Log both mode execution
             execute_both_mode_pipeline(files_to_process, local_dataset_name, config=config)  # Run separate files + combined files pipelines sequentially
-        elif execution_mode == "multi-class":  # If combined files evaluation execution mode is enabled
+        elif execution_mode == "combined_files":  # If combined files evaluation execution mode is enabled
             print(f"{BackgroundColors.CYAN}[DEBUG] Running combined files evaluation classification pipeline{Style.RESET_ALL}")  # Log combined files evaluation pipeline start
-            execute_multiclass_mode_pipeline(files_to_process, local_dataset_name, config=config)  # Run combined files evaluation pipeline only
+            execute_combined_files_mode_pipeline(files_to_process, local_dataset_name, config=config)  # Run combined files evaluation pipeline only
         else:  # If separate files evaluation execution mode (default)
             print(f"{BackgroundColors.CYAN}[DEBUG] Running separate files evaluation classification pipeline{Style.RESET_ALL}")  # Log separate files evaluation pipeline start
             execute_binary_mode_pipeline(files_to_process, local_dataset_name, config=config)  # Run separate files evaluation pipeline only
