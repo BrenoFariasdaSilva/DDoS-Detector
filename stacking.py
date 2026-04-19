@@ -4142,10 +4142,23 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         
         skip_train_if_model_exists = config.get("execution", {}).get("skip_train_if_model_exists", False)  # Get skip train flag from config
 
+        try:  # Attempt to obtain a compact snapshot of model parameters for logging
+            params_raw = model.get_params() if hasattr(model, "get_params") else {}  # Get estimator parameters when available
+        except Exception:  # On any error retrieving params
+            params_raw = {}  # Fallback to empty dict when parameters cannot be read
+
+        try:  # Build a compact, truncated string representation of parameters for safe logging
+            items = list(params_raw.items())[:6]  # Limit to first N items to avoid excessive output
+            params_snapshot = ", ".join(f"{k}={v}" for k, v in items)  # Join key=value pairs for display
+            if len(params_snapshot) > 240:  # Truncate overly long snapshots for readability
+                params_snapshot = params_snapshot[:237] + "..."  # Truncate and append ellipsis
+        except Exception:  # On failure during snapshot formatting
+            params_snapshot = ""  # Use empty string when formatting fails
+
         verbose_output(
-            f"{BackgroundColors.GREEN}Training {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}...{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Training {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}...{Style.RESET_ALL} Params: {params_snapshot}",
             config=config,
-        )  # Output the verbose message
+        )  # Output the verbose message including a compact classifier parameter snapshot
 
         start_time = time.time()  # Record the start time
 
