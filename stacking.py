@@ -6675,7 +6675,8 @@ def prepare_evaluation_data_splits(df, df_augmented_for_training=None, config=No
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        X_full = df.select_dtypes(include=np.number).iloc[:, :-1]  # Extract numeric feature columns excluding the last (target)
+        target_col_name = df.columns[-1]  # Target is always the last column regardless of its dtype
+        X_full = df.drop(columns=[target_col_name]).select_dtypes(include=np.number)  # All numeric feature columns with the target explicitly excluded by name
         y = df.iloc[:, -1]  # Extract target column as the last column
 
         if len(np.unique(y)) < 2:  # Verify if there is more than one class
@@ -6685,7 +6686,8 @@ def prepare_evaluation_data_splits(df, df_augmented_for_training=None, config=No
             return None  # Return None to signal classification is not possible
 
         if df_augmented_for_training is not None:  # If augmented data provided for training enhancement
-            X_augmented = df_augmented_for_training.select_dtypes(include=np.number).iloc[:, :-1]  # Extract augmented features (numeric only)
+            aug_target_col_name = df_augmented_for_training.columns[-1]  # Target is always the last column in augmented data regardless of dtype
+            X_augmented = df_augmented_for_training.drop(columns=[aug_target_col_name]).select_dtypes(include=np.number)  # All numeric feature columns from augmented data with target explicitly excluded by name
             y_augmented = df_augmented_for_training.iloc[:, -1]  # Extract augmented target
             X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
                 X_full, y, config=config, X_augmented=X_augmented, y_augmented=y_augmented
