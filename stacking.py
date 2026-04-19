@@ -7076,9 +7076,22 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
+        try:  # Attempt to obtain a compact snapshot of stacking model parameters for logging
+            params_raw = stacking_model.get_params() if hasattr(stacking_model, "get_params") else {}  # Get model parameters when available
+        except Exception:  # On any error retrieving params
+            params_raw = {}  # Fallback to empty dict when parameters cannot be read
+
+        try:  # Build a compact, truncated string representation of parameters for safe printing
+            items = list(params_raw.items())[:6]  # Limit to first N items to avoid excessive output
+            params_snapshot = ", ".join(f"{k}={v}" for k, v in items)  # Join key=value pairs for display
+            if len(params_snapshot) > 240:  # Truncate overly long snapshots for readability
+                params_snapshot = params_snapshot[:237] + "..."  # Truncate and append ellipsis
+        except Exception:  # On failure during snapshot formatting
+            params_snapshot = ""  # Use empty string when formatting fails
+
         print(
-            f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL}"
-        )  # Announce the start of stacking classifier training and evaluation
+            f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL} Params: {params_snapshot}"
+        )  # Announce the start of stacking classifier training and evaluation with compact parameter snapshot
         progress_bar.set_description(
             f"{data_source_label} - {name} (Stacking)"
         )  # Update progress bar description for stacking classifier
