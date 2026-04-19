@@ -3,7 +3,7 @@
 # ================================================================================
 # Central configuration for ALL project scripts:
 #   - genetic_algorithm.py  (Genetic Algorithm Feature Selection)
-#   - stacking.py           (Stacking Ensemble Classifiers with Multi-class Support)
+#   - stacking.py           (Stacking Ensemble Classifiers with Combined Files Evaluation Support)
 #   - wgangp.py             (WGAN-GP Data Augmentation)
 #
 # Configuration priority (highest → lowest):
@@ -278,7 +278,7 @@ genetic_algorithm:
 stacking: # Stacking experiment settings
   results_dir: "Stacking" # Directory to save stacking results (relative to Feature_Analysis)
   results_filename: "Stacking_Classifiers_Results.csv" # Main results CSV filename for separate_files mode
-  multiclass_results_filename: "Stacking_Classifiers_MultiClass_Results.csv" # Results CSV filename for combined_files mode
+  combined_files_results_filename: "Stacking_Classifiers_CombinedFiles_Results.csv" # Results CSV filename for combined_files mode
   augmentation_comparison_filename: "Data_Augmentation_Comparison_Results.csv" # Data augmentation experiments results CSV
   hyperparameters_filename: "Hyperparameter_Optimization_Results.csv" # Hyperparameter tuning results filename
 
@@ -288,7 +288,7 @@ stacking: # Stacking experiment settings
   augmentation_ratios: [0.10, 0.25, 0.50, 0.75, 1.00] # Augmented-to-original sample ratios for experiments
 
   top_n_features_heatmap: 15 # Number of top features to show in generated heatmaps and CSV exports (int)
-  multi_class: true # Default: combined_files evaluation enabled. If false, runs separate_files single-file evaluation mode.
+  combined_files_evaluation: true # Default: combined files evaluation enabled. If false, runs separate_files single-file evaluation mode.
   
   methods: # Method toggles for stacking pipeline (overridable via CLI)
     augmentation: true # Enable data augmentation combination in pipeline
