@@ -4028,7 +4028,9 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_nam
             validate_output_path(stacking_output_dir, meta_path)
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, indent=2)
-            verbose_output(f"Exported model to {model_path} and scaler to {scaler_path}")
+            relative_model = os.path.relpath(model_path, stacking_output_dir)  # Make model path relative to stacking output dir
+            relative_scaler = os.path.relpath(scaler_path, stacking_output_dir)  # Make scaler path relative to stacking output dir
+            verbose_output(f"{BackgroundColors.GREEN}Exported model to {BackgroundColors.CYAN}{relative_model}{BackgroundColors.GREEN} and scaler to {BackgroundColors.CYAN}{relative_scaler}{Style.RESET_ALL}")  # Log relative export paths
         except Exception as e:
             print(f"{BackgroundColors.YELLOW}Warning: Failed to export model {model_name}: {e}{Style.RESET_ALL}")
     except Exception as e:
