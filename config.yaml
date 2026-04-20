@@ -447,6 +447,7 @@ explainability:
   lime_num_samples: 1000 # Number of samples for LIME neighborhood generation
   shap_max_samples: 100 # Maximum test samples to use for SHAP (reduces computation time)
   random_state: 42 # Random seed for explainability reproducibility
+  output_subdir: "Explainability"
 
 # ==============================================================================
 # PCA — Used by pca.py

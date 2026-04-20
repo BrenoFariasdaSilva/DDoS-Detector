@@ -330,7 +330,7 @@ stacking: # Stacking experiment settings
     - "model" # Model identifier (e.g., "RandomForest", "SVM")
     - "dataset" # Dataset name extracted from file path
     - "execution_mode" # Execution mode: "separate_files" or "combined_files"
-    - "attack_types_combined" # For combined files evaluation: comma-separated attack types; for separate files evaluation: same as dataset
+    - "attack_types_combined" # For combined_files: comma-separated attack types; for separate_files: same as dataset
     - "feature_set" # Feature extraction method (e.g., "PCA", "RFE", "GA")
     - "classifier_type" # Classifier family (e.g., "tree", "ensemble", "neural")
     - "model_name" # Full model class name
@@ -387,7 +387,7 @@ models: # Model hyperparameters for classifiers
     random_state: 42 # Random seed for reproducibility
 
   xgboost: # XGBoost classifier hyperparameters
-    eval_metric: "mlogloss" # Evaluation metric: "mlogloss" for combined files evaluation, "logloss" for separate files evaluation
+    eval_metric: "mlogloss" # Evaluation metric: "mlogloss" for combined_files, "logloss" for separate_files
     random_state: 42 # Random seed for reproducibility
 
   logistic_regression: # Logistic Regression hyperparameters
@@ -447,6 +447,7 @@ explainability:
   lime_num_samples: 1000 # Number of samples for LIME neighborhood generation
   shap_max_samples: 100 # Maximum test samples to use for SHAP (reduces computation time)
   random_state: 42 # Random seed for explainability reproducibility
+  output_subdir: "Explainability"
 
 # ==============================================================================
 # PCA — Used by pca.py
@@ -604,7 +605,7 @@ wgangp:
   force_cpu: false # Force CPU usage even if CUDA available
   from_scratch: false # Force training from scratch, ignore checkpoints
   generating_order: "Ascending" # Dataset file processing order by file size: "off", "Ascending", or "Descending"
-  execution_mode: both # Execution mode: "both" (default, runs separate files and combined files sequentially), "separate_files" (one file per eval), or "combined_files" (combined attacks)
+  execution_mode: both # Execution mode: "both" (default, runs separate_files and combined_files sequentially), "separate_files" (one file per eval), or "combined_files" (combined attacks)
   results_suffix: "_data_augmented" # Suffix to add to generated filenames
   results_dir: "Feature_Analysis/PCA"
   results_filename: "PCA_Results.csv"
