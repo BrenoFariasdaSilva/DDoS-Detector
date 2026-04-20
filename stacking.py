@@ -4143,23 +4143,33 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         
         skip_train_if_model_exists = config.get("execution", {}).get("skip_train_if_model_exists", False)  # Get skip train flag from config
 
-        try:  # Attempt to obtain a compact snapshot of model parameters for logging
-            params_raw = model.get_params() if hasattr(model, "get_params") else {}  # Get estimator parameters when available
+        try:  # Attempt to obtain only the model's own parameters for logging
+            params_raw = model.get_params(deep=False) if hasattr(model, "get_params") else {}  # Get top-level estimator params only
         except Exception:  # On any error retrieving params
             params_raw = {}  # Fallback to empty dict when parameters cannot be read
 
         try:  # Build a compact, truncated string representation of parameters for safe logging
-            items = list(params_raw.items())[:6]  # Limit to first N items to avoid excessive output
-            params_snapshot = ", ".join(f"{k}={v}" for k, v in items)  # Join key=value pairs for display
-            if len(params_snapshot) > 240:  # Truncate overly long snapshots for readability
-                params_snapshot = params_snapshot[:237] + "..."  # Truncate and append ellipsis
+            filtered_params = {}  # Prepare a filtered dict that replaces nested estimators with class names
+            for k, v in (params_raw.items() if isinstance(params_raw, dict) else []):  # Iterate over top-level params
+                if hasattr(v, "fit") or hasattr(v, "predict"):  # Detect estimator-like objects and replace with class name
+                    try:
+                        filtered_params[k] = v.__class__.__name__  # Use class name for estimator objects for readability
+                    except Exception:
+                        filtered_params[k] = str(type(v))  # Fallback to type string when class name retrieval fails
+                else:
+                    filtered_params[k] = v  # Preserve simple values as-is
+
+            # filtered_params = list(filtered_params.items())[:6]  # Limit to first N items to avoid excessive output
+            params_snapshot = ", ".join(f"{k}={v}" for k, v in filtered_params.items())  # Join key=value pairs for display
+            # if len(params_snapshot) > 240:  # Truncate overly long snapshots for readability
+            #     params_snapshot = params_snapshot[:237] + "..."  # Truncate and append ellipsis
         except Exception:  # On failure during snapshot formatting
             params_snapshot = ""  # Use empty string when formatting fails
 
-        verbose_output(
-            f"{BackgroundColors.GREEN}Training {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}...{Style.RESET_ALL} Params: {params_snapshot}",
-            config=config,
-        )  # Output the verbose message including a compact classifier parameter snapshot
+        verbose_output(  # Output the verbose message including a compact classifier parameter snapshot
+            f"{BackgroundColors.GREEN}Training {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN} Params:{BackgroundColors.CYAN}{params_snapshot}{Style.RESET_ALL}",  # Message with compact params snapshot
+            config=config,  # Configuration used for verbose output routing
+        )
 
         start_time = time.time()  # Record the start time
 
