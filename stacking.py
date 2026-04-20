@@ -3171,7 +3171,7 @@ def load_dataset(file_path: str, config=None) -> Optional[pd.DataFrame]:
             config = CONFIG  # Use global CONFIG
 
         verbose_output(
-            f"\n{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Loading dataset from: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
             config=config
         )  # Output the loading dataset message
 
