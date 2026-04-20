@@ -4934,6 +4934,41 @@ def generate_combined_importance_report(shap_result, lime_result, perm_result, m
         raise
 
 
+def get_explainability_dataset_label(input_path: str, execution_mode: str, config=None) -> str:
+    """
+    Build a mode-aware dataset label for explainability outputs.
+
+    :param input_path: Path to the dataset file or dataset directory used in the experiment.
+    :param execution_mode: Execution mode string, e.g., 'combined_files' or 'single_file'.
+    :return: Constructed dataset label string suitable for directory and file names.
+    """
+
+    try:
+        p = Path(input_path)  # Convert input_path to Path object for manipulations.
+        base = get_dataset_name(str(input_path))  # Get base dataset name using existing function.
+        parts = p.parts  # Extract path segments for post-processing.
+        label = base  # Initialize label with the base dataset name.
+        if execution_mode == "combined_files":  # Combined mode: derive dataset-level label.
+            try:
+                idx = parts.index(base)  # Locate base dataset name position in path parts.
+            except ValueError:
+                idx = None  # Fallback when base not present in path parts.
+            if idx is not None:  # Proceed only when base was found.
+                last_part = parts[-1]  # Inspect last segment to determine if it's a filename.
+                is_file_like = "." in last_part  # Heuristic: dot in segment suggests a filename.
+                if is_file_like:
+                    remaining = parts[idx+1:-1]  # Exclude filename from remaining segments.
+                else:
+                    remaining = parts[idx+1:]  # Include all trailing directory parts when no file present.
+                if remaining:  # If there are trailing segments, append them with underscores.
+                    label = base + "_" + "_".join([seg for seg in remaining])  # Build final label by joining segments.
+        else:
+            label = p.stem  # Single-file mode: use filename stem as label.
+        return label  # Return assembled label.
+    except Exception as e:
+        return Path(input_path).stem  # Fallback to stem on unexpected errors.
+
+
 def run_explainability_pipeline(model, model_name, X_test, y_test, feature_names, dataset_file, feature_set, execution_mode, config=None):
     """
     Run comprehensive explainability pipeline for a trained model.
@@ -4966,39 +5001,39 @@ def run_explainability_pipeline(model, model_name, X_test, y_test, feature_names
             config=config
         )  # Log pipeline start
 
-        dataset_name = Path(dataset_file).stem  # Get dataset name from file path
-        output_subdir = explainability_config.get("output_subdir", "explainability")  # Get output subdirectory name
-        stacking_output_dir = get_stacking_output_dir(dataset_file, config)
-        base_output_dir = Path(stacking_output_dir) / output_subdir / execution_mode / dataset_name
+        dataset_label = get_explainability_dataset_label(dataset_file, execution_mode, config)  # Build mode-aware dataset label
+        output_subdir = explainability_config.get("output_subdir", "Explainability")  # Get output subdirectory name
+        base_output_dir = Path(".") / output_subdir / execution_mode / dataset_label  # Use relative path root and mode-aware label
         output_dir = base_output_dir / feature_set.replace(" ", "_") / model_name.replace(" ", "_")  # Build full output directory
         output_dir = str(output_dir)  # Convert Path to string
+        Path(output_dir).mkdir(parents=True, exist_ok=True)  # Ensure output directories exist before writing
 
         all_results = {}  # Dictionary to store all explainability results
 
         if explainability_config.get("shap", True):  # If SHAP is enabled
             shap_result = generate_shap_explanations(
-                model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config
+                model, X_test, y_test, feature_names, output_dir, model_name, dataset_label, execution_mode, config
             )  # Generate SHAP explanations
             if shap_result:  # If SHAP results available
                 all_results.update(shap_result)  # Add SHAP results to all results
 
         if explainability_config.get("lime", True):  # If LIME is enabled
             lime_result = generate_lime_explanations(
-                model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config
+                model, X_test, y_test, feature_names, output_dir, model_name, dataset_label, execution_mode, config
             )  # Generate LIME explanations
             if lime_result:  # If LIME results available
                 all_results.update(lime_result)  # Add LIME results to all results
 
         if explainability_config.get("permutation_importance", True):  # If permutation importance is enabled
             perm_result = generate_permutation_importance(
-                model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, config
+                model, X_test, y_test, feature_names, output_dir, model_name, dataset_label, config
             )  # Generate permutation importance
             if perm_result:  # If permutation results available
                 all_results.update(perm_result)  # Add permutation results to all results
 
         if explainability_config.get("feature_importance", True):  # If feature importance extraction is enabled
             model_result = extract_model_feature_importance(
-                model, feature_names, output_dir, model_name, dataset_name, config
+                model, feature_names, output_dir, model_name, dataset_label, config
             )  # Extract model feature importance
             if model_result:  # If model importance available
                 all_results.update(model_result)  # Add model importance to all results
@@ -5009,7 +5044,7 @@ def run_explainability_pipeline(model, model_name, X_test, y_test, feature_names
         model_res = all_results if "model_importance" in all_results else None  # Get model importance or None
 
         report_path = generate_combined_importance_report(
-            shap_res, lime_res, perm_res, model_res, feature_names, output_dir, model_name, dataset_name, config
+            shap_res, lime_res, perm_res, model_res, feature_names, output_dir, model_name, dataset_label, config
         )  # Generate combined report
         if report_path:  # If report generated successfully
             all_results["combined_report_path"] = report_path  # Add report path to results
