@@ -4273,18 +4273,24 @@ def sample_shap_test_data(X_test, y_test, max_samples, random_state):
 
     try:
         if len(X_test) > max_samples:  # If test set exceeds the sample limit
-            np.random.seed(random_state)  # Set random seed for reproducible sampling
-            sample_indices = np.random.choice(len(X_test), size=max_samples, replace=False)  # Draw random sample indices
-            X_test_sampled = X_test[sample_indices]  # Slice test features to sampled indices
-            y_test_sampled = y_test.iloc[sample_indices] if hasattr(y_test, 'iloc') else y_test[sample_indices]  # Slice test labels using iloc for Series or index for arrays
+            rng = np.random.default_rng(random_state)  # Create explicit RNG to avoid using global RNG
+            sample_indices = rng.choice(len(X_test), size=max_samples, replace=False)  # Draw reproducible sample indices from RNG
+            if hasattr(X_test, 'iloc') and hasattr(X_test, 'iloc'):  # Verify pandas DataFrame/Series slicing is applicable
+                X_test_sampled = X_test.iloc[sample_indices]  # Slice test features via iloc for DataFrame/Series
+            else:  # Fallback to numpy-style indexing for arrays
+                X_test_sampled = X_test[sample_indices]  # Slice test features via numpy indexing
+            if hasattr(y_test, 'iloc'):  # If y_test is a pandas Series
+                y_test_sampled = y_test.iloc[sample_indices]  # Slice labels via iloc for pandas Series
+            else:  # If y_test is numpy array-like
+                y_test_sampled = y_test[sample_indices]  # Slice labels via numpy indexing for arrays
         else:  # Test set is within the sample limit
             X_test_sampled = X_test  # Use full test features without sampling
             y_test_sampled = y_test  # Use full test labels without sampling
         return (X_test_sampled, y_test_sampled)  # Return the sampled or full test data tuple
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+    except Exception as e:  # Handle unexpected errors
+        print(str(e))  # Print the exception string for diagnostics
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception details via Telegram if configured
+        raise  # Re-raise the exception to preserve original behavior
 
 
 def aggregate_mean_shap_importance(shap_values_summary, feature_names):
@@ -4300,12 +4306,15 @@ def aggregate_mean_shap_importance(shap_values_summary, feature_names):
         shap_array = np.array(shap_values_summary)  # Convert SHAP values to numpy array for consistent operations
         mean_shap_values = np.mean(np.abs(shap_array), axis=0)  # Compute mean absolute SHAP value per feature across samples
         mean_shap_list = mean_shap_values.tolist() if hasattr(mean_shap_values, 'tolist') else list(mean_shap_values)  # Convert numpy array to plain Python list
-        shap_importance = dict(zip(feature_names[:len(mean_shap_list)], mean_shap_list))  # Map feature names to their mean absolute importance values
+        if isinstance(feature_names, (list, tuple)) and len(feature_names) == len(mean_shap_list):  # Verify feature name length matches SHAP values
+            shap_importance = dict(zip(feature_names, mean_shap_list))  # Map feature names exactly to their mean absolute importance values
+        else:  # If mismatch detected
+            shap_importance = {f"f{idx}": val for idx, val in enumerate(mean_shap_list)}  # Fall back to index-based feature keys preserving values
         return shap_importance  # Return importance dictionary for downstream use
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+    except Exception as e:  # Handle unexpected errors
+        print(str(e))  # Print the exception string for diagnostics
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception details via Telegram if configured
+        raise  # Re-raise the exception to preserve original behavior
 
 
 def save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature_names, output_dir, dataset_name, model_name, max_display):
@@ -4323,29 +4332,46 @@ def save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature
     """
 
     try:
+        # Validate that X_test_sampled is non-empty and shaped correctly before plotting
+        if X_test_sampled is None or (hasattr(X_test_sampled, '__len__') and len(X_test_sampled) == 0):  # Verify sampled data is present
+            return  # Exit early if there is no data to plot
+
+        # Ensure feature_names matches X_test_sampled column count exactly when possible
+        if hasattr(X_test_sampled, 'shape') and hasattr(X_test_sampled, 'ndim'):
+            ncols = X_test_sampled.shape[1] if X_test_sampled.ndim == 2 else (len(feature_names) if hasattr(feature_names, '__len__') else None)  # Determine number of feature columns
+        else:
+            ncols = len(feature_names) if hasattr(feature_names, '__len__') else None  # Fallback to provided feature_names length
+
+        if ncols is not None and hasattr(feature_names, '__len__') and ncols != len(feature_names):  # If mismatch detected
+            feature_names_to_use = list(feature_names)[:ncols]  # Truncate or expand feature names defensively to match column count
+        else:
+            feature_names_to_use = feature_names  # Use feature names as provided when consistent
+
         try:  # Attempt to create SHAP summary plot
             plt.figure()  # Create new figure for summary plot
-            shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, show=False)  # Create summary plot
+            shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names_to_use, max_display=max_display, show=False)  # Create summary plot with explicit feature names
             summary_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_summary.png")  # Build summary plot file path
             plt.tight_layout()  # Adjust layout for tight fit
             ensure_figure_min_4k_and_save(fig=plt.gcf(), path=summary_plot_path, dpi=300, bbox_inches='tight')  # Save with minimum 4K resolution
             plt.close()  # Close summary figure
-        except Exception:  # If summary plot generation fails
+        except Exception as e:  # If summary plot generation fails
             plt.close()  # Close figure to avoid resource leak
+            raise e  # Re-raise so outer handler can notify via Telegram
 
         try:  # Attempt to create SHAP bar plot
             plt.figure()  # Create new figure for bar plot
-            shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names[:len(feature_names)], max_display=max_display, plot_type="bar", show=False)  # Create bar plot
+            shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names_to_use, max_display=max_display, plot_type="bar", show=False)  # Create bar plot with explicit feature names
             bar_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_bar.png")  # Build bar plot file path
             plt.tight_layout()  # Adjust layout for tight fit
             ensure_figure_min_4k_and_save(fig=plt.gcf(), path=bar_plot_path, dpi=300, bbox_inches='tight')  # Save with minimum 4K resolution
             plt.close()  # Close bar figure
-        except Exception:  # If bar plot generation fails
+        except Exception as e:  # If bar plot generation fails
             plt.close()  # Close figure to avoid resource leak
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+            raise e  # Re-raise so outer handler can notify via Telegram
+    except Exception as e:  # Handle unexpected errors
+        print(str(e))  # Print the exception string for diagnostics
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception details via Telegram if configured
+        raise  # Re-raise the exception to preserve original behavior
 
 
 def select_shap_explainer(model, X_test_sampled, random_state):
@@ -4365,11 +4391,18 @@ def select_shap_explainer(model, X_test_sampled, random_state):
         elif model_type in ["LogisticRegression", "LinearSVC", "SGDClassifier"]:  # Linear models
             return shap.LinearExplainer(model, X_test_sampled)  # Use LinearExplainer for linear models
         else:  # Other models that require a fallback explainer
-            return shap.KernelExplainer(model.predict_proba, shap.sample(X_test_sampled, 50, random_state=random_state))  # Use KernelExplainer as fallback
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+            rng = np.random.default_rng(random_state)  # Create explicit RNG for background sampling to avoid global seeding
+            bkg_size = min(50, len(X_test_sampled)) if hasattr(X_test_sampled, "__len__") else 50  # Determine background sample size defensively
+            indices = rng.choice(len(X_test_sampled), size=bkg_size, replace=False)  # Draw background sample indices reproducibly
+            if hasattr(X_test_sampled, "iloc"):  # If X_test_sampled is a pandas DataFrame/Series
+                background = X_test_sampled.iloc[indices]  # Build background as pandas slice
+            else:  # Otherwise assume numpy array-like
+                background = X_test_sampled[indices]  # Build background as numpy slice
+            return shap.KernelExplainer(model.predict_proba, background)  # Use KernelExplainer with explicit background sample
+    except Exception as e:  # Handle unexpected errors
+        print(str(e))  # Print the exception string for diagnostics
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception details via Telegram if configured
+        raise  # Re-raise the exception to preserve original behavior
 
 
 def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config=None):
@@ -4407,18 +4440,33 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
 
             X_test_sampled, y_test_sampled = sample_shap_test_data(X_test, y_test, max_samples, random_state)  # Sample test data for SHAP computation
 
+            if hasattr(X_test_sampled, 'columns'):  # If sampled data is a pandas DataFrame
+                sampled_feature_names = list(X_test_sampled.columns)  # Extract feature names from DataFrame columns to ensure exact ordering
+                X_test_for_shap = X_test_sampled.values  # Convert DataFrame to numpy array for SHAP where required
+            else:  # If sampled data is numpy array-like
+                X_test_for_shap = X_test_sampled  # Use numpy array directly for SHAP computations
+                sampled_feature_names = feature_names if hasattr(feature_names, '__len__') else [f"f{i}" for i in range(X_test_for_shap.shape[1])]  # Build feature name list defensively
+
+            if hasattr(X_test_for_shap, 'size') and X_test_for_shap.size == 0:  # Verify sampled data is not empty
+                verbose_output(f"{BackgroundColors.YELLOW}No data available for SHAP explanations for {model_name}.{Style.RESET_ALL}", config=config)  # Log empty data situation
+                return None  # Return None when there is nothing to explain
+
+            if np.isnan(np.sum(X_test_for_shap)) or np.isinf(np.sum(X_test_for_shap)):  # Detect NaN or infinite entries in numeric array
+                verbose_output(f"{BackgroundColors.YELLOW}NaN/Inf detected in SHAP input data for {model_name}; skipping SHAP.{Style.RESET_ALL}", config=config)  # Log problematic data state
+                return None  # Return None to avoid SHAP failures when data invalid
+
             explainer = select_shap_explainer(model, X_test_sampled, random_state)  # Select the appropriate SHAP explainer based on model type
 
-            shap_values = explainer.shap_values(X_test_sampled)  # Compute SHAP values
+            shap_values = explainer.shap_values(X_test_for_shap)  # Compute SHAP values using the prepared numpy input
 
-            if isinstance(shap_values, list):  # Combined files evaluation case
-                shap_values_summary = shap_values[0] if len(shap_values) > 0 else shap_values  # Use first class for summary
+            if isinstance(shap_values, list):  # Combined files evaluation case for multi-class classifiers
+                shap_values_summary = shap_values[0] if len(shap_values) > 0 else shap_values  # Use first class for summary to preserve existing behavior
             else:  # Separate files evaluation or regression case
-                shap_values_summary = shap_values  # Use SHAP values directly
+                shap_values_summary = shap_values  # Use SHAP values directly for single-output explainers
 
-            save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature_names, output_dir, dataset_name, model_name, max_display)  # Save both SHAP summary and bar plots to disk
+            save_shap_summary_and_bar_plots(shap_values_summary, X_test_for_shap, sampled_feature_names, output_dir, dataset_name, model_name, max_display)  # Save both SHAP summary and bar plots to disk
 
-            shap_importance = aggregate_mean_shap_importance(shap_values_summary, feature_names)  # Aggregate mean absolute SHAP values into a feature importance dictionary
+            shap_importance = aggregate_mean_shap_importance(shap_values_summary, sampled_feature_names)  # Aggregate mean absolute SHAP values into a feature importance dictionary
 
             verbose_output(
                 f"{BackgroundColors.GREEN}SHAP explanations saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
@@ -4428,7 +4476,7 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
             return {"shap_importance": shap_importance, "shap_values": shap_values}  # Return SHAP results
 
         except ImportError:  # If SHAP not installed
-            print(f"{BackgroundColors.YELLOW}SHAP library not installed. Skipping SHAP explanations. Install with: pip install shap{Style.RESET_ALL}")  # Warn user
+            print(f"{BackgroundColors.YELLOW}SHAP library not installed. Skipping SHAP explanations. Install with: pip install shap{Style.RESET_ALL}")  # Warn user about missing dependency
             return None  # Return None
         except Exception as e:  # If any other error
             verbose_output(
@@ -4478,17 +4526,25 @@ def generate_lime_explanations(model, X_test, y_test, feature_names, output_dir,
             mode = "classification"  # Default mode
             class_names = [str(c) for c in np.unique(y_test)]  # Get class names
 
+            # Prepare feature names to match X_test columns exactly for LIME
+            if hasattr(X_test, 'shape') and hasattr(feature_names, '__len__') and X_test.shape[1] == len(feature_names):
+                lime_feature_names = feature_names  # Use provided feature_names when they exactly match X_test columns
+            elif hasattr(X_test, 'columns'):
+                lime_feature_names = list(X_test.columns)  # Extract feature names from DataFrame columns when available
+            else:
+                lime_feature_names = feature_names[: X_test.shape[1]] if hasattr(feature_names, '__len__') else [f"f{i}" for i in range(X_test.shape[1])]  # Defensive fallback feature names
+
             explainer = LimeTabularExplainer(
                 X_test,
-                feature_names=feature_names[:X_test.shape[1]],
+                feature_names=lime_feature_names,
                 class_names=class_names,
                 mode=mode,
                 random_state=random_state
             )  # Initialize LIME explainer
 
-            np.random.seed(random_state)  # Set random seed
+            rng = np.random.default_rng(random_state)  # Create explicit RNG to avoid global seeding
             num_instances_to_explain = min(5, len(X_test))  # Explain up to 5 instances
-            instance_indices = np.random.choice(len(X_test), size=num_instances_to_explain, replace=False)  # Sample indices
+            instance_indices = rng.choice(len(X_test), size=num_instances_to_explain, replace=False)  # Sample indices reproducibly
 
             lime_explanations = []  # List to store LIME explanations
 
