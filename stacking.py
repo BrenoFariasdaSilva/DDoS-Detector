@@ -4207,7 +4207,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             evaluation_mode = mode_raw.replace("_", " ").title().replace(" ", "")  # Normalize to CamelCase style
         if evaluation_mode is None:  # If still not resolved
             evaluation_mode = "SeparateFiles"  # Default to SeparateFiles when unknown
-        msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score: {BackgroundColors.CYAN}{truncate_value(f1)}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{truncate_value(fpr)}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{truncate_value(fnr)}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{train_seconds}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{exec_seconds}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{total_seconds}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build final formatted classifier summary
+        msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(train_seconds)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(exec_seconds)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{int(total_seconds)}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build final formatted classifier summary using raw floats for metrics and integer times
         print(msg)  # Print the summary message to console
         send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
@@ -4272,7 +4272,7 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
             evaluation_mode = mode_raw.replace("_", " ").title().replace(" ", "")  # Normalize to CamelCase style
         if evaluation_mode is None:  # If still not resolved
             evaluation_mode = "SeparateFiles"  # Default to SeparateFiles when unknown
-        msg = f"{BackgroundColors.CYAN}StackingClassifier{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score: {BackgroundColors.CYAN}{truncate_value(f1)}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{truncate_value(fpr)}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{truncate_value(fnr)}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{train_seconds}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{exec_seconds}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{total_seconds}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build final formatted stacking summary with colors
+        msg = f"{BackgroundColors.CYAN}StackingClassifier{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(train_seconds)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(exec_seconds)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{int(total_seconds)}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build final formatted stacking summary with colors using raw floats and integer times
         print(msg)  # Print the summary message to console
         send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
@@ -5261,7 +5261,7 @@ def flatten_and_serialize_results(results_list):
 
             for metric in ["accuracy", "precision", "recall", "f1_score", "fpr", "fnr"]:  # Iterate over numeric metric field names
                 if metric in row and row[metric] is not None:  # If metric field is present and has a value
-                    row[metric] = truncate_value(row[metric])  # Truncate to consistent decimal precision
+                    row[metric] = row[metric]  # Preserve full float precision for classification metrics
 
             if "features_list" in row and not isinstance(row["features_list"], str):  # If features_list is not yet a JSON string
                 row["features_list"] = json.dumps(row["features_list"])  # Serialize features list to JSON string
@@ -5831,8 +5831,8 @@ def run_automl_model_search(X_train, y_train, file_path, config=None):
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}AutoML Best Model: {BackgroundColors.CYAN}{best_model_name}{Style.RESET_ALL}"
         )  # Output best model name
         print(
-            f"{BackgroundColors.GREEN}Best CV F1 Score: {BackgroundColors.CYAN}{truncate_value(study.best_value)}{Style.RESET_ALL}"
-        )  # Output best F1 score
+            f"{BackgroundColors.GREEN}Best CV F1 Score: {BackgroundColors.CYAN}{study.best_value}{Style.RESET_ALL}"
+        )  # Output best F1 score using raw float precision
         print(
             f"{BackgroundColors.GREEN}Best Parameters: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}"
         )  # Output best parameters
@@ -6039,8 +6039,8 @@ def run_automl_stacking_search(X_train, y_train, model_study, file_path, config=
             f"{BackgroundColors.GREEN}  CV splits: {BackgroundColors.CYAN}{best_config['stacking_cv_splits']}{Style.RESET_ALL}"
         )  # Output CV splits
         print(
-            f"{BackgroundColors.GREEN}  Best CV F1: {BackgroundColors.CYAN}{truncate_value(best_config['best_cv_f1'])}{Style.RESET_ALL}"
-        )  # Output best F1
+            f"{BackgroundColors.GREEN}  Best CV F1: {BackgroundColors.CYAN}{best_config['best_cv_f1']}{Style.RESET_ALL}"
+        )  # Output best F1 using raw float precision
 
         return (best_config, stacking_study)  # Return best config and study
     except Exception as e:
@@ -6148,7 +6148,7 @@ def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y
             evaluation_mode = "SeparateFiles"  # Use SeparateFiles for binary classification
         else:  # For multiclass predictions
             evaluation_mode = "MultiClass"  # Use MultiClass for multi-class evaluation
-        msg = f"{BackgroundColors.GREEN}{model_name}: Mode {evaluation_mode} | F1-Score: {BackgroundColors.CYAN}{truncate_value(f1)}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{truncate_value(fpr)}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{truncate_value(fnr)}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{train_seconds}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{exec_seconds}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{calculate_execution_time(elapsed)} ({total_seconds}s){Style.RESET_ALL}"  # Build colored summary
+        msg = f"{BackgroundColors.GREEN}{model_name}: Mode {evaluation_mode} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(train_seconds)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(exec_seconds)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{calculate_execution_time(elapsed)} ({total_seconds}s){Style.RESET_ALL}"  # Build colored summary using raw floats for metrics and integer times
         print(msg)  # Output test results to console
         send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
@@ -6255,9 +6255,9 @@ def export_automl_best_config(best_model_name, best_params, test_metrics, stacki
                 "model_name": best_model_name,  # Model name
                 "hyperparameters": best_params,  # Model hyperparameters
                 "test_metrics": {
-                    k: truncate_value(v) if isinstance(v, (int, float)) and v is not None else v
+                    k: v if not (isinstance(v, (int, float)) and v is None) else v
                     for k, v in test_metrics.items()
-                },  # Test metrics with truncation
+                },  # Test metrics preserved with raw numeric precision
             },
             "best_stacking_config": stacking_config,  # Stacking configuration (may be None)
             "automl_settings": {  # AutoML settings used
@@ -6395,12 +6395,12 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
             "n_features": len(feature_names),  # Number of features
             "n_samples_train": n_train,  # Training sample count
             "n_samples_test": n_test,  # Test sample count
-            "accuracy": truncate_value(individual_metrics["accuracy"]),  # Accuracy
-            "precision": truncate_value(individual_metrics["precision"]),  # Precision
-            "recall": truncate_value(individual_metrics["recall"]),  # Recall
-            "f1_score": truncate_value(individual_metrics["f1_score"]),  # F1 score
-            "fpr": truncate_value(individual_metrics["fpr"]),  # False positive rate
-            "fnr": truncate_value(individual_metrics["fnr"]),  # False negative rate
+                "accuracy": individual_metrics["accuracy"],  # Accuracy as raw float
+                "precision": individual_metrics["precision"],  # Precision as raw float
+                "recall": individual_metrics["recall"],  # Recall as raw float
+                "f1_score": individual_metrics["f1_score"],  # F1 score as raw float
+                "fpr": individual_metrics["fpr"],  # False positive rate as raw float
+                "fnr": individual_metrics["fnr"],  # False negative rate as raw float
             "elapsed_time_s": individual_metrics["elapsed_time_s"],  # Elapsed time
             "cv_method": f"Optuna({config.get("automl", {}).get("n_trials", 50)} trials, {config.get("automl", {}).get("cv_folds", 5)}-fold CV)",  # CV method description
             "top_features": json.dumps(feature_names),  # Feature names as JSON
@@ -6424,12 +6424,12 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
                 "n_features": len(feature_names),  # Number of features
                 "n_samples_train": n_train,  # Training sample count
                 "n_samples_test": n_test,  # Test sample count
-                "accuracy": truncate_value(stacking_metrics["accuracy"]),  # Accuracy
-                "precision": truncate_value(stacking_metrics["precision"]),  # Precision
-                "recall": truncate_value(stacking_metrics["recall"]),  # Recall
-                "f1_score": truncate_value(stacking_metrics["f1_score"]),  # F1 score
-                "fpr": truncate_value(stacking_metrics["fpr"]),  # False positive rate
-                "fnr": truncate_value(stacking_metrics["fnr"]),  # False negative rate
+                "accuracy": stacking_metrics["accuracy"],  # Accuracy as raw float
+                "precision": stacking_metrics["precision"],  # Precision as raw float
+                "recall": stacking_metrics["recall"],  # Recall as raw float
+                "f1_score": stacking_metrics["f1_score"],  # F1 score as raw float
+                "fpr": stacking_metrics["fpr"],  # False positive rate as raw float
+                "fnr": stacking_metrics["fnr"],  # False negative rate as raw float
                 "elapsed_time_s": stacking_metrics["elapsed_time_s"],  # Elapsed time
                 "cv_method": f"Optuna({config.get("automl", {}).get("stacking_trials", 20)} trials, {config.get("automl", {}).get("cv_folds", 5)}-fold CV)",  # CV method description
                 "top_features": json.dumps(feature_names),  # Feature names as JSON
@@ -6740,8 +6740,8 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
         )  # Output completion message
 
         send_telegram_message(
-            TELEGRAM_BOT, f"AutoML pipeline completed for {os.path.basename(file)} in {calculate_execution_time(0, automl_elapsed)}. Best model: {best_model_name} (F1: {truncate_value(individual_metrics['f1_score'])})"
-        )  # Send Telegram notification
+            TELEGRAM_BOT, f"AutoML pipeline completed for {os.path.basename(file)} in {calculate_execution_time(0, automl_elapsed)}. Best model: {best_model_name} (F1: {individual_metrics['f1_score']})"
+        )  # Send Telegram notification with raw F1 float precision
 
         return {  # Return AutoML results summary
             "best_model_name": best_model_name,  # Best model name
@@ -6958,12 +6958,12 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
             "n_features": n_features,  # Number of features used in evaluation
             "n_samples_train": n_samples_train,  # Number of training samples
             "n_samples_test": n_samples_test,  # Number of test samples
-            "accuracy": truncate_value(acc),  # Truncated accuracy metric
-            "precision": truncate_value(prec),  # Truncated precision metric
-            "recall": truncate_value(rec),  # Truncated recall metric
-            "f1_score": truncate_value(f1),  # Truncated F1 score metric
-            "fpr": truncate_value(fpr),  # Truncated false positive rate
-            "fnr": truncate_value(fnr),  # Truncated false negative rate
+            "accuracy": acc,  # Accuracy as raw float
+            "precision": prec,  # Precision as raw float
+            "recall": rec,  # Recall as raw float
+            "f1_score": f1,  # F1 score as raw float
+            "fpr": fpr,  # False positive rate as raw float
+            "fnr": fnr,  # False negative rate as raw float
             "elapsed_time_s": int(round(elapsed)),  # Rounded elapsed time in seconds
             "cv_method": f"StratifiedKFold(n_splits=10)",  # Cross-validation method description
             "top_features": json.dumps(subset_feature_names),  # JSON-serialized subset feature names
@@ -7054,7 +7054,7 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
             hyperparams_map=hyperparams_map,
         )  # Build standardized result entry for this individual classifier
         results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
-        send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} with F1: {truncate_value(metrics[3])} in {calculate_execution_time(0, metrics[6])}")  # Notify telegram about completion
+        send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} with F1: {metrics[3]} in {calculate_execution_time(0, metrics[6])}")  # Notify telegram about completion using raw F1 value
         progress_bar.update(1)  # Advance progress bar by one step
 
         if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run explainability on original data
@@ -7145,7 +7145,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             )  # Build standardized result entry for this individual classifier
             results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
 
-            send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - {model_name} with F1: {truncate_value(metrics[3])} in {calculate_execution_time(0, metrics[6])}")  # Notify Telegram about completion
+            send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - {model_name} with F1: {metrics[3]} in {calculate_execution_time(0, metrics[6])}")  # Notify Telegram about completion using raw F1 value
             pass  # Verify removal of duplicate individual model accuracy print
             progress_bar.update(1)  # Advance progress bar by one step
 
@@ -7256,7 +7256,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             "StackingClassifier", data_source_label, experiment_id, experiment_mode, augmentation_ratio,
             X_train_n_cols, len(y_train), len(y_test), stacking_metrics, subset_feature_names,
         )  # Build standardized result entry for the stacking classifier
-        send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier with F1: {truncate_value(stacking_metrics[3])} in {calculate_execution_time(0, stacking_metrics[6])}")  # Notify Telegram about stacking evaluation completion
+        send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier with F1: {stacking_metrics[3]} in {calculate_execution_time(0, stacking_metrics[6])}")  # Notify Telegram about stacking evaluation completion using raw F1 value
         pass  # Verify removal of duplicate stacking classifier accuracy print
         progress_bar.update(1)  # Advance progress bar after stacking evaluation
         current_combination += 1  # Advance the global combination counter
@@ -7896,40 +7896,54 @@ def print_model_comparison(feature_set, model_name, orig_metrics, aug_metrics, m
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Feature Set: {BackgroundColors.CYAN}{feature_set}{BackgroundColors.GREEN} | Model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
         )  # Print header with feature set and model name
 
-        print(f"  {BackgroundColors.YELLOW}Accuracy:{Style.RESET_ALL}")  # Print accuracy label
-        print(
-            f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[0])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[0])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[0])} | {BackgroundColors.CYAN}Improvement: {improvements['accuracy']:+.2f}%{Style.RESET_ALL}"
-        )  # Print accuracy comparison
+        acc_label = f"  {BackgroundColors.YELLOW}Accuracy:{Style.RESET_ALL}"  # Build accuracy label
+        print(acc_label)  # Print accuracy label
+        send_telegram_message(TELEGRAM_BOT, acc_label)  # Send accuracy label to Telegram to replicate console output
+        acc_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[0]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[0]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[0]} | {BackgroundColors.CYAN}Improvement: {improvements['accuracy']}%{Style.RESET_ALL}"  # Build accuracy comparison line using raw floats
+        print(acc_values)  # Print accuracy comparison
+        send_telegram_message(TELEGRAM_BOT, acc_values)  # Send accuracy comparison to Telegram
 
-        print(f"  {BackgroundColors.YELLOW}Precision:{Style.RESET_ALL}")  # Print precision label
-        print(
-            f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[1])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[1])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[1])} | {BackgroundColors.CYAN}Improvement: {improvements['precision']:+.2f}%{Style.RESET_ALL}"
-        )  # Print precision comparison
+        prec_label = f"  {BackgroundColors.YELLOW}Precision:{Style.RESET_ALL}"  # Build precision label
+        print(prec_label)  # Print precision label
+        send_telegram_message(TELEGRAM_BOT, prec_label)  # Send precision label to Telegram
+        prec_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[1]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[1]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[1]} | {BackgroundColors.CYAN}Improvement: {improvements['precision']}%{Style.RESET_ALL}"  # Build precision comparison line using raw floats
+        print(prec_values)  # Print precision comparison
+        send_telegram_message(TELEGRAM_BOT, prec_values)  # Send precision comparison to Telegram
 
-        print(f"  {BackgroundColors.YELLOW}Recall:{Style.RESET_ALL}")  # Print recall label
-        print(
-            f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[2])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[2])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[2])} | {BackgroundColors.CYAN}Improvement: {improvements['recall']:+.2f}%{Style.RESET_ALL}"
-        )  # Print recall comparison
+        recall_label = f"  {BackgroundColors.YELLOW}Recall:{Style.RESET_ALL}"  # Build recall label
+        print(recall_label)  # Print recall label
+        send_telegram_message(TELEGRAM_BOT, recall_label)  # Send recall label to Telegram
+        recall_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[2]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[2]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[2]} | {BackgroundColors.CYAN}Improvement: {improvements['recall']}%{Style.RESET_ALL}"  # Build recall comparison line using raw floats
+        print(recall_values)  # Print recall comparison
+        send_telegram_message(TELEGRAM_BOT, recall_values)  # Send recall comparison to Telegram
 
-        print(f"  {BackgroundColors.YELLOW}F1-Score:{Style.RESET_ALL}")  # Print F1 score label
-        print(
-            f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[3])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[3])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[3])} | {BackgroundColors.CYAN}Improvement: {improvements['f1_score']:+.2f}%{Style.RESET_ALL}"
-        )  # Print F1 score comparison
+        f1_label = f"  {BackgroundColors.YELLOW}F1-Score:{Style.RESET_ALL}"  # Build F1 score label
+        print(f1_label)  # Print F1 score label
+        send_telegram_message(TELEGRAM_BOT, f1_label)  # Send F1 score label to Telegram
+        f1_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[3]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[3]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[3]} | {BackgroundColors.CYAN}Improvement: {improvements['f1_score']}%{Style.RESET_ALL}"  # Build F1 score comparison using raw floats
+        print(f1_values)  # Print F1 score comparison
+        send_telegram_message(TELEGRAM_BOT, f1_values)  # Send F1 score comparison to Telegram
 
-        print(f"  {BackgroundColors.YELLOW}FPR (lower is better):{Style.RESET_ALL}")  # Print FPR label
-        print(
-            f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[4])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[4])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[4])} | {BackgroundColors.CYAN}Change: {improvements['fpr']:+.2f}%{Style.RESET_ALL}"
-        )  # Print FPR comparison
+        fpr_label = f"  {BackgroundColors.YELLOW}FPR (lower is better):{Style.RESET_ALL}"  # Build FPR label
+        print(fpr_label)  # Print FPR label
+        send_telegram_message(TELEGRAM_BOT, fpr_label)  # Send FPR label to Telegram
+        fpr_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[4]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[4]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[4]} | {BackgroundColors.CYAN}Change: {improvements['fpr']}%{Style.RESET_ALL}"  # Build FPR comparison using raw floats
+        print(fpr_values)  # Print FPR comparison
+        send_telegram_message(TELEGRAM_BOT, fpr_values)  # Send FPR comparison to Telegram
 
-        print(f"  {BackgroundColors.YELLOW}FNR (lower is better):{Style.RESET_ALL}")  # Print FNR label
-        print(
-            f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {truncate_value(orig_metrics[5])} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {truncate_value(aug_metrics[5])} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {truncate_value(merged_metrics[5])} | {BackgroundColors.CYAN}Change: {improvements['fnr']:+.2f}%{Style.RESET_ALL}"
-        )  # Print FNR comparison
+        fnr_label = f"  {BackgroundColors.YELLOW}FNR (lower is better):{Style.RESET_ALL}"  # Build FNR label
+        print(fnr_label)  # Print FNR label
+        send_telegram_message(TELEGRAM_BOT, fnr_label)  # Send FNR label to Telegram
+        fnr_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[5]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[5]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[5]} | {BackgroundColors.CYAN}Change: {improvements['fnr']}%{Style.RESET_ALL}"  # Build FNR comparison using raw floats
+        print(fnr_values)  # Print FNR comparison
+        send_telegram_message(TELEGRAM_BOT, fnr_values)  # Send FNR comparison to Telegram
 
-        print(f"  {BackgroundColors.YELLOW}Training Time (seconds, lower is better):{Style.RESET_ALL}")  # Print training time label
-        print(
-            f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[6]:.2f}s | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[6]:.2f}s | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[6]:.2f}s | {BackgroundColors.CYAN}Change: {improvements['training_time']:+.2f}%{Style.RESET_ALL}\n"
-        )  # Print training time comparison
+        time_label = f"  {BackgroundColors.YELLOW}Training Time (seconds, lower is better):{Style.RESET_ALL}"  # Build training time label
+        print(time_label)  # Print training time label
+        send_telegram_message(TELEGRAM_BOT, time_label)  # Send training time label to Telegram
+        time_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {int(orig_metrics[6])}s | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {int(aug_metrics[6])}s | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {int(merged_metrics[6])}s | {BackgroundColors.CYAN}Change: {improvements['training_time']}%{Style.RESET_ALL}\n"  # Build training time comparison line using integer seconds
+        print(time_values)  # Print training time comparison
+        send_telegram_message(TELEGRAM_BOT, time_values)  # Send training time comparison to Telegram
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -8039,15 +8053,15 @@ def generate_ratio_comparison_report(results_original, all_ratio_results):
                 )
             )  # Add original baseline entry to comparison results
 
-            print(
-                f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Feature Set: {BackgroundColors.CYAN}{feature_set}{BackgroundColors.GREEN} | Model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
-            )  # Print header with feature set and model name
+            header_msg = f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Feature Set: {BackgroundColors.CYAN}{feature_set}{BackgroundColors.GREEN} | Model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"  # Build header with feature set and model name
+            print(header_msg)  # Print header with feature set and model name
+            send_telegram_message(TELEGRAM_BOT, header_msg)  # Send header to Telegram to replicate console output
             cfg = config if config is not None else CONFIG  # Resolve config or fallback to global CONFIG
             mode_raw = cfg.get("execution", {}).get("execution_mode")  # Obtain execution mode from config if present
             evaluation_mode = mode_raw.replace("_", " ").title().replace(" ", "") if mode_raw else "SeparateFiles"  # Normalize or default
             total_seconds_orig = int(round(orig_metrics[6]))  # Total seconds from original metrics
             human_time_orig = calculate_execution_time(0, total_seconds_orig)  # Human-readable original elapsed time
-            msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.YELLOW}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score: {BackgroundColors.CYAN}{truncate_value(orig_metrics[3])}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{truncate_value(orig_metrics[0])}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{truncate_value(orig_metrics[4])}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{truncate_value(orig_metrics[5])}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{total_seconds_orig}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{total_seconds_orig}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time_orig} ({total_seconds_orig}s){Style.RESET_ALL}"  # Build colored original baseline summary
+            msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.YELLOW}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{orig_metrics[3]}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{orig_metrics[0]}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{orig_metrics[1]}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{orig_metrics[2]}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{orig_metrics[4]}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{orig_metrics[5]}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(total_seconds_orig)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(total_seconds_orig)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time_orig} ({total_seconds_orig}s){Style.RESET_ALL}"  # Build colored original baseline summary using raw floats and integer times
             print(msg)  # Print original baseline metrics summary
             send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
@@ -8079,7 +8093,7 @@ def generate_ratio_comparison_report(results_original, all_ratio_results):
                 improvement_color = BackgroundColors.GREEN if f1_improvement >= 0 else BackgroundColors.RED  # Choose color based on improvement direction
                 total_seconds_ratio = int(round(ratio_metrics[6]))  # Total seconds from ratio experiment metrics
                 human_time_ratio = calculate_execution_time(0, total_seconds_ratio)  # Human-readable ratio elapsed time
-                msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.YELLOW}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[3])}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[0])}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[4])}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[5])}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{total_seconds_ratio}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{total_seconds_ratio}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time_ratio} ({total_seconds_ratio}s){Style.RESET_ALL}"  # Build colored ratio summary
+                msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.YELLOW}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{ratio_metrics[3]}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{ratio_metrics[0]}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{ratio_metrics[1]}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{ratio_metrics[2]}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{ratio_metrics[4]}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{ratio_metrics[5]}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(total_seconds_ratio)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(total_seconds_ratio)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time_ratio} ({total_seconds_ratio}s){Style.RESET_ALL}"  # Build colored ratio summary using raw floats and integer times
                 print(msg)  # Print ratio result metrics with F1 improvement indicator
                 send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
