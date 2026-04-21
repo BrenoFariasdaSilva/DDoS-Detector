@@ -8626,7 +8626,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         
         results_original = evaluate_on_dataset(
             reference_file, combined_files_df, feature_names, ga_selected_features, pca_n_components,
-            rfe_selected_features, base_models, data_source_label="Original_CombinedFiles", hyperparams_map=hp_params_map,
+            rfe_selected_features, base_models, data_source_label="Original Combined Files", hyperparams_map=hp_params_map,  # Normalized data source label for log and CSV output
             experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
             execution_mode_str="combined_files", attack_types_combined=attack_types_list
         )  # Evaluate on original combined files evaluation data with execution mode tracking
@@ -8638,7 +8638,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         if enable_automl:  # If AutoML pipeline is enabled
             print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[DEBUG] AutoML pipeline is ENABLED. Running AutoML for combined files evaluation dataset.{Style.RESET_ALL}")  # Log AutoML execution start
             send_telegram_message(TELEGRAM_BOT, [f"Running AutoML pipeline for combined files evaluation dataset: {dataset_name}"])  # Notify Telegram about AutoML pipeline execution
-            run_automl_pipeline(reference_file, combined_files_df, feature_names, data_source_label="Original_CombinedFiles", config=config)  # Run AutoML pipeline for combined files evaluation
+            run_automl_pipeline(reference_file, combined_files_df, feature_names, data_source_label="Original Combined Files", config=config)  # Run AutoML pipeline for combined files evaluation with normalized label
         else:  # AutoML pipeline is disabled via method toggle
             print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML pipeline is DISABLED (stacking.methods.automl=false). Skipping AutoML for combined files evaluation. Enable via config or --enable-automl flag.{Style.RESET_ALL}")  # Log AutoML skip reason
         
@@ -8934,7 +8934,7 @@ def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, 
     try:  # Protect evaluation step
         results = evaluate_on_dataset(
             "combined_files_combined", combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,
-            data_source_label="Original_CombinedFiles",
+            data_source_label="Original Combined Files",  # Normalized data source label for log and CSV output
             hyperparams_map=hp_params_map if hyperparameters_enabled else {},
             experiment_id=generate_experiment_id("combined_files_combined", "combined_files_original_only"),
             experiment_mode="original_only", augmentation_ratio=None,
