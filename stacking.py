@@ -353,6 +353,7 @@ def get_default_explainability_config():
             "lime_num_samples": 1000,  # Number of perturbation samples for LIME
             "lime_num_features": 10,  # Number of features to show in LIME explanations
             "shap_max_samples": 100,  # Maximum samples for SHAP computation
+            "perm_max_samples": 5000,  # Maximum samples for permutation importance computation to prevent OOM on large datasets
             "random_state": 42,  # Random state for reproducibility
             "output_subdir": "explainability",  # Subdirectory for explainability outputs
         }  # Return default explainability configuration
@@ -4617,17 +4618,19 @@ def generate_permutation_importance(model, X_test, y_test, feature_names, output
 
             explainer_config = config.get("explainability", {})  # Get explainability config
             random_state = explainer_config.get("random_state", 42)  # Random state for permutation
-            n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Number of parallel jobs
+            perm_max_samples = explainer_config.get("perm_max_samples", 5000)  # Cap test samples to prevent OOM on large datasets
 
             os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
 
+            X_test_perm, y_test_perm = sample_shap_test_data(X_test, y_test, perm_max_samples, random_state)  # Sample test data to bounded size to prevent OOM during permutation importance
+
             perm_importance = permutation_importance(
                 model,
-                X_test,
-                y_test,
+                X_test_perm,  # Use sampled subset to prevent OOM on datasets with tens of millions of rows
+                y_test_perm,  # Use labels aligned to sampled subset
                 n_repeats=10,
                 random_state=random_state,
-                n_jobs=n_jobs
+                n_jobs=1  # Force single-threaded execution to prevent nested parallelism explosion with tree ensemble models
             )  # Compute permutation importance
 
             importances_mean = perm_importance['importances_mean']  # Extract mean importances from Bunch
