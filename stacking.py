@@ -4209,6 +4209,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             evaluation_mode = "SeparateFiles"  # Default to SeparateFiles when unknown
         msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score: {BackgroundColors.CYAN}{truncate_value(f1)}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{truncate_value(fpr)}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{truncate_value(fnr)}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{train_seconds}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{exec_seconds}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{total_seconds}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build final formatted classifier summary
         print(msg)  # Print the summary message to console
+        send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
         try:
             if dataset_file is not None:
@@ -4273,6 +4274,7 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
             evaluation_mode = "SeparateFiles"  # Default to SeparateFiles when unknown
         msg = f"{BackgroundColors.CYAN}StackingClassifier{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score: {BackgroundColors.CYAN}{truncate_value(f1)}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{truncate_value(fpr)}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{truncate_value(fnr)}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{train_seconds}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{exec_seconds}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{total_seconds}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build final formatted stacking summary with colors
         print(msg)  # Print the summary message to console
+        send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
         return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)), y_pred)  # Return the metrics tuple and predictions
     except Exception as e:
@@ -6148,6 +6150,7 @@ def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y
             evaluation_mode = "MultiClass"  # Use MultiClass for multi-class evaluation
         msg = f"{BackgroundColors.GREEN}{model_name}: Mode {evaluation_mode} | F1-Score: {BackgroundColors.CYAN}{truncate_value(f1)}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{truncate_value(fpr)}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{truncate_value(fnr)}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{train_seconds}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{exec_seconds}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{calculate_execution_time(elapsed)} ({total_seconds}s){Style.RESET_ALL}"  # Build colored summary
         print(msg)  # Output test results to console
+        send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
         return {  # Build and return metrics dictionary
             "accuracy": acc,  # Accuracy value
@@ -8046,6 +8049,7 @@ def generate_ratio_comparison_report(results_original, all_ratio_results):
             human_time_orig = calculate_execution_time(0, total_seconds_orig)  # Human-readable original elapsed time
             msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.YELLOW}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score: {BackgroundColors.CYAN}{truncate_value(orig_metrics[3])}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{truncate_value(orig_metrics[0])}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{truncate_value(orig_metrics[4])}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{truncate_value(orig_metrics[5])}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{total_seconds_orig}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{total_seconds_orig}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time_orig} ({total_seconds_orig}s){Style.RESET_ALL}"  # Build colored original baseline summary
             print(msg)  # Print original baseline metrics summary
+            send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
             for ratio in sorted(all_ratio_results.keys()):  # Iterate over each ratio in sorted order
                 ratio_results = all_ratio_results[ratio]  # Get results dict for this ratio
@@ -8077,6 +8081,7 @@ def generate_ratio_comparison_report(results_original, all_ratio_results):
                 human_time_ratio = calculate_execution_time(0, total_seconds_ratio)  # Human-readable ratio elapsed time
                 msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.YELLOW}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[3])}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[0])}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[4])}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[5])}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{total_seconds_ratio}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{total_seconds_ratio}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time_ratio} ({total_seconds_ratio}s){Style.RESET_ALL}"  # Build colored ratio summary
                 print(msg)  # Print ratio result metrics with F1 improvement indicator
+                send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
         return comparison_results  # Return list of all comparison result entries for CSV export
     except Exception as e:
