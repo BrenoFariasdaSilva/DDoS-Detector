@@ -4195,9 +4195,10 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
 
         fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute False Positive and False Negative rates
 
+        human_time = calculate_execution_time(elapsed_time)  # Convert elapsed duration to human-readable string using helper
         verbose_output(
-            f"{BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed_time))}s{Style.RESET_ALL}"
-        )  # Output result
+            f"{BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {human_time} ({int(round(elapsed_time))}s){Style.RESET_ALL}"
+        )  # Output result with human-readable and seconds time formats
 
         try:
             if dataset_file is not None:
@@ -4250,9 +4251,10 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
                 f"{BackgroundColors.YELLOW}Warning: Combined files evaluation FPR/FNR calculation simplified to 0.0.{Style.RESET_ALL}"
             )  # Warning about simplification
 
+        human_time = calculate_execution_time(elapsed_time)  # Convert elapsed duration to human-readable string using helper
         verbose_output(
-            f"{BackgroundColors.GREEN}Evaluation complete. Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed_time))}s{Style.RESET_ALL}"
-        )  # Output the final result summary
+            f"{BackgroundColors.GREEN}Evaluation complete. Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {human_time} ({int(round(elapsed_time))}s){Style.RESET_ALL}"
+        )  # Output the final result summary with human-readable and seconds time formats
 
         return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)), y_pred)  # Return the metrics tuple and predictions
     except Exception as e:
