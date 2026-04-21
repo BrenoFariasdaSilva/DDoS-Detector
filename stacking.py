@@ -4196,9 +4196,19 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute False Positive and False Negative rates
 
         human_time = calculate_execution_time(elapsed_time)  # Convert elapsed duration to human-readable string using helper
-        verbose_output(
-            f"{BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {human_time} ({int(round(elapsed_time))}s){Style.RESET_ALL}"
-        )  # Output result with human-readable and seconds time formats
+        total_seconds = int(round(elapsed_time))  # Reuse elapsed_time as total seconds for reporting
+        train_seconds = total_seconds  # Reuse total seconds as training time when only one timer exists
+        exec_seconds = total_seconds  # Reuse total seconds as execution time when only one timer exists
+        evaluation_mode = None  # Initialize evaluation mode string from config or global CONFIG
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG as fallback
+        mode_raw = config.get("execution", {}).get("execution_mode")  # Obtain execution mode from config if present
+        if mode_raw:  # If an execution mode string exists in config
+            evaluation_mode = mode_raw.replace("_", " ").title().replace(" ", "")  # Normalize to CamelCase style
+        if evaluation_mode is None:  # If still not resolved
+            evaluation_mode = "SeparateFiles"  # Default to SeparateFiles when unknown
+        msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score: {BackgroundColors.CYAN}{truncate_value(f1)}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{truncate_value(fpr)}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{truncate_value(fnr)}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{train_seconds}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{exec_seconds}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{total_seconds}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build final formatted classifier summary
+        print(msg)  # Print the summary message to console
 
         try:
             if dataset_file is not None:
@@ -4252,9 +4262,17 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
             )  # Warning about simplification
 
         human_time = calculate_execution_time(elapsed_time)  # Convert elapsed duration to human-readable string using helper
-        verbose_output(
-            f"{BackgroundColors.GREEN}Evaluation complete. Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, Time: {human_time} ({int(round(elapsed_time))}s){Style.RESET_ALL}"
-        )  # Output the final result summary with human-readable and seconds time formats
+        total_seconds = int(round(elapsed_time))  # Reuse elapsed_time as total seconds for reporting
+        train_seconds = total_seconds  # Reuse total seconds as training time when only one timer exists
+        exec_seconds = total_seconds  # Reuse total seconds as execution time when only one timer exists
+        evaluation_mode = None  # Initialize evaluation mode string from global CONFIG
+        mode_raw = CONFIG.get("execution", {}).get("execution_mode")  # Obtain execution mode from global CONFIG if present
+        if mode_raw:  # If an execution mode string exists in CONFIG
+            evaluation_mode = mode_raw.replace("_", " ").title().replace(" ", "")  # Normalize to CamelCase style
+        if evaluation_mode is None:  # If still not resolved
+            evaluation_mode = "SeparateFiles"  # Default to SeparateFiles when unknown
+        msg = f"{BackgroundColors.CYAN}StackingClassifier{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score: {BackgroundColors.CYAN}{truncate_value(f1)}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{truncate_value(fpr)}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{truncate_value(fnr)}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{train_seconds}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{exec_seconds}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{total_seconds}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build final formatted stacking summary with colors
+        print(msg)  # Print the summary message to console
 
         return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)), y_pred)  # Return the metrics tuple and predictions
     except Exception as e:
@@ -6121,9 +6139,15 @@ def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y
             fpr = 0.0  # Placeholder FPR
             fnr = 0.0  # Placeholder FNR
 
-        print(
-            f"{BackgroundColors.GREEN}AutoML {model_name} Test Results - Acc: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN}, F1: {BackgroundColors.CYAN}{truncate_value(f1)}{BackgroundColors.GREEN}, ROC-AUC: {BackgroundColors.CYAN}{truncate_value(roc_auc)}{BackgroundColors.GREEN}, Time: {BackgroundColors.CYAN}{int(round(elapsed))}s{Style.RESET_ALL}"
-        )  # Output test results
+        total_seconds = int(round(elapsed))  # Reuse elapsed as total seconds for reporting
+        train_seconds = total_seconds  # Reuse total seconds as training time when only one timer exists
+        exec_seconds = total_seconds  # Reuse total seconds as execution time when only one timer exists
+        if len(np.unique(y_test)) == 2:  # Determine evaluation mode from label cardinality when CONFIG not available
+            evaluation_mode = "SeparateFiles"  # Use SeparateFiles for binary classification
+        else:  # For multiclass predictions
+            evaluation_mode = "MultiClass"  # Use MultiClass for multi-class evaluation
+        msg = f"{BackgroundColors.GREEN}{model_name}: Mode {evaluation_mode} | F1-Score: {BackgroundColors.CYAN}{truncate_value(f1)}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{truncate_value(acc)}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{truncate_value(fpr)}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{truncate_value(fnr)}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{train_seconds}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{exec_seconds}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{calculate_execution_time(elapsed)} ({total_seconds}s){Style.RESET_ALL}"  # Build colored summary
+        print(msg)  # Output test results to console
 
         return {  # Build and return metrics dictionary
             "accuracy": acc,  # Accuracy value
@@ -8015,9 +8039,13 @@ def generate_ratio_comparison_report(results_original, all_ratio_results):
             print(
                 f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Feature Set: {BackgroundColors.CYAN}{feature_set}{BackgroundColors.GREEN} | Model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"
             )  # Print header with feature set and model name
-            print(
-                f"  {BackgroundColors.GREEN}Original baseline - Acc: {BackgroundColors.CYAN}{truncate_value(orig_metrics[0])}{BackgroundColors.GREEN}, F1: {BackgroundColors.CYAN}{truncate_value(orig_metrics[3])}{Style.RESET_ALL}"
-            )  # Print original baseline metrics summary
+            cfg = config if config is not None else CONFIG  # Resolve config or fallback to global CONFIG
+            mode_raw = cfg.get("execution", {}).get("execution_mode")  # Obtain execution mode from config if present
+            evaluation_mode = mode_raw.replace("_", " ").title().replace(" ", "") if mode_raw else "SeparateFiles"  # Normalize or default
+            total_seconds_orig = int(round(orig_metrics[6]))  # Total seconds from original metrics
+            human_time_orig = calculate_execution_time(0, total_seconds_orig)  # Human-readable original elapsed time
+            msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.YELLOW}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score: {BackgroundColors.CYAN}{truncate_value(orig_metrics[3])}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{truncate_value(orig_metrics[0])}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{truncate_value(orig_metrics[4])}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{truncate_value(orig_metrics[5])}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{total_seconds_orig}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{total_seconds_orig}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time_orig} ({total_seconds_orig}s){Style.RESET_ALL}"  # Build colored original baseline summary
+            print(msg)  # Print original baseline metrics summary
 
             for ratio in sorted(all_ratio_results.keys()):  # Iterate over each ratio in sorted order
                 ratio_results = all_ratio_results[ratio]  # Get results dict for this ratio
@@ -8045,9 +8073,10 @@ def generate_ratio_comparison_report(results_original, all_ratio_results):
 
                 f1_improvement = improvements.get("f1_score", 0.0)  # Extract F1 improvement for display
                 improvement_color = BackgroundColors.GREEN if f1_improvement >= 0 else BackgroundColors.RED  # Choose color based on improvement direction
-                print(
-                    f"  {BackgroundColors.YELLOW}@{ratio_pct}%:{Style.RESET_ALL} Acc: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[0])}{Style.RESET_ALL}, F1: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[3])}{Style.RESET_ALL}, F1 change: {improvement_color}{f1_improvement:+.2f}%{Style.RESET_ALL}"
-                )  # Print ratio result metrics with F1 improvement indicator
+                total_seconds_ratio = int(round(ratio_metrics[6]))  # Total seconds from ratio experiment metrics
+                human_time_ratio = calculate_execution_time(0, total_seconds_ratio)  # Human-readable ratio elapsed time
+                msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.YELLOW}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[3])}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[0])}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[4])}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{truncate_value(ratio_metrics[5])}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{total_seconds_ratio}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{total_seconds_ratio}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time_ratio} ({total_seconds_ratio}s){Style.RESET_ALL}"  # Build colored ratio summary
+                print(msg)  # Print ratio result metrics with F1 improvement indicator
 
         return comparison_results  # Return list of all comparison result entries for CSV export
     except Exception as e:
