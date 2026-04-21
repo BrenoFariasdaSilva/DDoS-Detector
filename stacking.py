@@ -2253,9 +2253,9 @@ def generate_csv_and_image(df, csv_path, is_visualizable=True, config=None, **to
     """
     
     try:
-        out_path = Path(csv_path)
-        base = get_stacking_output_dir(csv_path, config or CONFIG)
-        validate_output_path(base, str(out_path))
+        out_path = Path(csv_path).resolve()  # Resolve to absolute path to normalize any traversal sequences
+        base = str(out_path.parent)  # Derive safe base from the resolved output file's own parent directory
+        validate_output_path(base, str(out_path))  # Validate target is within its own resolved parent directory
 
         df.to_csv(csv_path, **to_csv_kwargs)  # Save DataFrame to CSV with original kwargs
         if is_visualizable and len(df) <= 100:  # Generate image only when visualizable and within the safe row limit
