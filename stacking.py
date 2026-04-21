@@ -7026,9 +7026,6 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
         )  # Build standardized result entry for this individual classifier
         results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
         send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} with F1: {truncate_value(metrics[3])} in {calculate_execution_time(0, metrics[6])}")  # Notify telegram about completion
-        print(
-            f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(metrics[0])}{Style.RESET_ALL}"
-        )  # Output individual model accuracy
         progress_bar.update(1)  # Advance progress bar by one step
 
         if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run explainability on original data
@@ -7120,9 +7117,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
 
             send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - {model_name} with F1: {truncate_value(metrics[3])} in {calculate_execution_time(0, metrics[6])}")  # Notify Telegram about completion
-            print(
-                f"    {BackgroundColors.GREEN}{model_name} Accuracy: {BackgroundColors.CYAN}{truncate_value(metrics[0])}{Style.RESET_ALL}"
-            )  # Output individual model accuracy
+            pass  # Verify removal of duplicate individual model accuracy print
             progress_bar.update(1)  # Advance progress bar by one step
 
             if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run explainability on original data
@@ -7233,9 +7228,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             X_train_n_cols, len(y_train), len(y_test), stacking_metrics, subset_feature_names,
         )  # Build standardized result entry for the stacking classifier
         send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier with F1: {truncate_value(stacking_metrics[3])} in {calculate_execution_time(0, stacking_metrics[6])}")  # Notify Telegram about stacking evaluation completion
-        print(
-            f"    {BackgroundColors.GREEN}Stacking Accuracy: {BackgroundColors.CYAN}{truncate_value(stacking_metrics[0])}{Style.RESET_ALL}"
-        )  # Output stacking classifier accuracy
+        pass  # Verify removal of duplicate stacking classifier accuracy print
         progress_bar.update(1)  # Advance progress bar after stacking evaluation
         current_combination += 1  # Advance the global combination counter
 
