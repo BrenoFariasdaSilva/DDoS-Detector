@@ -2250,6 +2250,26 @@ def process_cached_combinations(
         raise
 
 
+def get_partial_trial_cache_path(csv_path):
+    """
+    Generate the per-trial partial cache file path for a specific dataset.
+
+    :param csv_path: Path to the CSV dataset file.
+    :return: Absolute path to the per-trial partial cache CSV file.
+    """
+
+    try:
+        file_dir = os.path.dirname(csv_path)  # Directory containing the dataset file
+        dataset_stem = os.path.splitext(os.path.basename(csv_path))[0]  # Dataset filename without extension
+        cache_filename = f"{PARTIAL_TRIAL_CACHE_PREFIX}{dataset_stem}.csv"  # Partial trial cache filename built from prefix and dataset stem
+        cache_dir = os.path.join(file_dir, "Classifiers_Hyperparameters")  # Shared cache directory alongside the main results
+        return os.path.join(cache_dir, cache_filename)  # Return the full partial trial cache file path
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def log_resource_information(X_train, y_train):
     """
     Log the available RAM, dataset size, and core count before beginning combination evaluation.
