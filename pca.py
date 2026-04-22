@@ -1061,7 +1061,7 @@ def run_cv_folds(model: RandomForestClassifier, X_train_pca, y_train, skf: Strat
             cv_f1s.append(f1_fold)  # Store F1
             pred_elapsed = round(time.perf_counter() - start_pred, 6)  # Stop timer after prediction+metrics and round
             total_testing_time += pred_elapsed  # Accumulate testing durations for CV
-            send_telegram_message(TELEGRAM_BOT, f"Finished CV fold {fold_idx}/{n_folds} for n_components={n_components} with F1: {truncate_value(f1_fold)}")  # Notify fold completion
+            send_telegram_message(TELEGRAM_BOT, f"Finished CV fold {fold_idx}/{n_folds} for n_components={n_components} with F1: {f1_fold}")  # Notify fold completion
 
         return cv_accs, cv_precs, cv_recs, cv_f1s, total_training_time, total_testing_time  # Return all accumulated CV metrics
     except Exception as e:
@@ -1156,7 +1156,7 @@ def apply_pca_and_evaluate(X_train, y_train, X_test, y_test, n_components, cv_fo
         cv_rec_mean = np.mean(cv_recs)  # Mean CV recall
         cv_f1_mean = np.mean(cv_f1s)  # Mean CV f1
 
-        send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} with CV F1: {truncate_value(cv_f1_mean)}")  # Notify completion
+        send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} with CV F1: {cv_f1_mean}")  # Notify completion
 
         acc, prec, rec, f1, fpr, fnr, final_fit_elapsed, test_pred_elapsed = compute_test_metrics(
             model, X_train_pca, y_train, X_test_pca, y_test
@@ -1212,36 +1212,36 @@ def print_pca_results(results):
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}PCA Results (n_components={results['n_components']}):{Style.RESET_ALL}"
         )  # Print PCA results header with n_components
         print(
-            f"  {BackgroundColors.GREEN}Explained Variance Ratio: {BackgroundColors.CYAN}{truncate_value(results['explained_variance'])} ({truncate_value(results['explained_variance']*100)}%){Style.RESET_ALL}"
+            f"  {BackgroundColors.GREEN}Explained Variance Ratio: {BackgroundColors.CYAN}{results['explained_variance']} ({results['explained_variance']*100}%){Style.RESET_ALL}"
         )  # Print explained variance ratio
         print(
             f"\n  {BackgroundColors.BOLD}{BackgroundColors.GREEN}10-Fold Cross-Validation Metrics (Training Set):{Style.RESET_ALL}"
         )  # Print cross-validation section header
         print(
-            f"  {BackgroundColors.GREEN}CV Accuracy: {BackgroundColors.CYAN}{truncate_value(results['cv_accuracy'])}{Style.RESET_ALL}"
+            f"  {BackgroundColors.GREEN}CV Accuracy: {BackgroundColors.CYAN}{results['cv_accuracy']}{Style.RESET_ALL}"
         )  # Print CV accuracy
         print(
-            f"  {BackgroundColors.GREEN}CV Precision: {BackgroundColors.CYAN}{truncate_value(results['cv_precision'])}{Style.RESET_ALL}"
+            f"  {BackgroundColors.GREEN}CV Precision: {BackgroundColors.CYAN}{results['cv_precision']}{Style.RESET_ALL}"
         )  # Print CV precision
-        print(f"  {BackgroundColors.GREEN}CV Recall: {BackgroundColors.CYAN}{truncate_value(results['cv_recall'])}{Style.RESET_ALL}")  # Print CV recall
+        print(f"  {BackgroundColors.GREEN}CV Recall: {BackgroundColors.CYAN}{results['cv_recall']}{Style.RESET_ALL}")  # Print CV recall
         print(
-            f"  {BackgroundColors.GREEN}CV F1-Score: {BackgroundColors.CYAN}{truncate_value(results['cv_f1_score'])}{Style.RESET_ALL}"
+            f"  {BackgroundColors.GREEN}CV F1-Score: {BackgroundColors.CYAN}{results['cv_f1_score']}{Style.RESET_ALL}"
         )  # Print CV F1-score
         print(f"\n  {BackgroundColors.BOLD}{BackgroundColors.GREEN}Test Set Metrics:{Style.RESET_ALL}")  # Print test set section header
         print(
-            f"  {BackgroundColors.GREEN}Test Accuracy: {BackgroundColors.CYAN}{truncate_value(results['test_accuracy'])}{Style.RESET_ALL}"
+            f"  {BackgroundColors.GREEN}Test Accuracy: {BackgroundColors.CYAN}{results['test_accuracy']}{Style.RESET_ALL}"
         )  # Print test accuracy
         print(
-            f"  {BackgroundColors.GREEN}Test Precision: {BackgroundColors.CYAN}{truncate_value(results['test_precision'])}{Style.RESET_ALL}"
+            f"  {BackgroundColors.GREEN}Test Precision: {BackgroundColors.CYAN}{results['test_precision']}{Style.RESET_ALL}"
         )  # Print test precision
         print(
-            f"  {BackgroundColors.GREEN}Test Recall: {BackgroundColors.CYAN}{truncate_value(results['test_recall'])}{Style.RESET_ALL}"
+            f"  {BackgroundColors.GREEN}Test Recall: {BackgroundColors.CYAN}{results['test_recall']}{Style.RESET_ALL}"
         )  # Print test recall
         print(
-            f"  {BackgroundColors.GREEN}Test F1-Score: {BackgroundColors.CYAN}{truncate_value(results['test_f1_score'])}{Style.RESET_ALL}"
+            f"  {BackgroundColors.GREEN}Test F1-Score: {BackgroundColors.CYAN}{results['test_f1_score']}{Style.RESET_ALL}"
         )  # Print test F1-score
-        print(f"  {BackgroundColors.GREEN}Test FPR: {BackgroundColors.CYAN}{truncate_value(results['test_fpr'])}{Style.RESET_ALL}")  # Print test false positive rate
-        print(f"  {BackgroundColors.GREEN}Test FNR: {BackgroundColors.CYAN}{truncate_value(results['test_fnr'])}{Style.RESET_ALL}")  # Print test false negative rate
+        print(f"  {BackgroundColors.GREEN}Test FPR: {BackgroundColors.CYAN}{results['test_fpr']}{Style.RESET_ALL}")  # Print test false positive rate
+        print(f"  {BackgroundColors.GREEN}Test FNR: {BackgroundColors.CYAN}{results['test_fnr']}{Style.RESET_ALL}")  # Print test false negative rate
         print(
             f"  {BackgroundColors.GREEN}Training Time: {BackgroundColors.CYAN}{int(round(results['training_time_s']))}s  Testing Time: {BackgroundColors.CYAN}{int(round(results['testing_time_s']))}s{Style.RESET_ALL}"
         )  # Print training and testing elapsed times
@@ -1549,17 +1549,17 @@ def build_result_rows(all_results: list, csv_path: str) -> list:
             "train_test_split": train_test_split_desc,  # Train/test split descriptor
             "scaling": scaling,  # Scaling descriptor
             "n_components": validated_n_components,  # Validated integer or None
-            "explained_variance": truncate_value(results.get("explained_variance")),  # Explained variance formatted
-            "cv_accuracy": truncate_value(results.get("cv_accuracy")),  # CV accuracy formatted
-            "cv_precision": truncate_value(results.get("cv_precision")),  # CV precision formatted
-            "cv_recall": truncate_value(results.get("cv_recall")),  # CV recall formatted
-            "cv_f1_score": truncate_value(results.get("cv_f1_score")),  # CV f1 formatted
-            "test_accuracy": truncate_value(results.get("test_accuracy")),  # Test accuracy formatted
-            "test_precision": truncate_value(results.get("test_precision")),  # Test precision formatted
-            "test_recall": truncate_value(results.get("test_recall")),  # Test recall formatted
-            "test_f1_score": truncate_value(results.get("test_f1_score")),  # Test f1 formatted
-            "test_fpr": truncate_value(results.get("test_fpr")),  # Test FPR formatted
-            "test_fnr": truncate_value(results.get("test_fnr")),  # Test FNR formatted
+            "explained_variance": results.get("explained_variance"),  # Explained variance formatted
+            "cv_accuracy": results.get("cv_accuracy"),  # CV accuracy preserved at full precision
+            "cv_precision": results.get("cv_precision"),  # CV precision preserved at full precision
+            "cv_recall": results.get("cv_recall"),  # CV recall preserved at full precision
+            "cv_f1_score": results.get("cv_f1_score"),  # CV F1 preserved at full precision
+            "test_accuracy": results.get("test_accuracy"),  # Test accuracy preserved at full precision
+            "test_precision": results.get("test_precision"),  # Test precision preserved at full precision
+            "test_recall": results.get("test_recall"),  # Test recall preserved at full precision
+            "test_f1_score": results.get("test_f1_score"),  # Test F1 preserved at full precision
+            "test_fpr": results.get("test_fpr"),  # Test FPR preserved at full precision
+            "test_fnr": results.get("test_fnr"),  # Test FNR preserved at full precision
             "training_time_s": results.get("training_time_s") if results.get("training_time_s") is not None else None,  # Training time or None
             "testing_time_s": results.get("testing_time_s") if results.get("testing_time_s") is not None else None,  # Testing time or None
             "feature_extraction_time_s": results.get("feature_extraction_time_s") if results.get("feature_extraction_time_s") is not None else None,  # Feature extraction time or None
@@ -1973,7 +1973,7 @@ def execute_pca_sequential(X_train, y_train, X_test, y_test, n_components_list: 
             random_state=random_state,
         )  # Apply PCA and evaluate (single worker)
         comp_elapsed = time.perf_counter() - comp_start  # Compute elapsed duration
-        send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} with CV F1: {truncate_value(results['cv_f1_score'])} in {calculate_execution_time(comp_start, time.perf_counter())}")  # Notify completion with metrics
+        send_telegram_message(TELEGRAM_BOT, f"Finished PCA training for n_components={n_components} with CV F1: {results['cv_f1_score']} in {calculate_execution_time(comp_start, time.perf_counter())}")  # Notify completion with metrics
         all_results.append(results)  # Append results to the list
         print_pca_results(results) if VERBOSE else None  # Print verbose results if configured
 
@@ -1996,10 +1996,10 @@ def print_best_pca_configuration(all_results: list) -> None:
             f"  {BackgroundColors.GREEN}n_components = {BackgroundColors.CYAN}{best_result['n_components']}{Style.RESET_ALL}"
         )  # Print best n_components
         print(
-            f"  {BackgroundColors.GREEN}CV F1-Score = {BackgroundColors.CYAN}{truncate_value(best_result['cv_f1_score'])}{Style.RESET_ALL}"
+            f"  {BackgroundColors.GREEN}CV F1-Score = {BackgroundColors.CYAN}{best_result['cv_f1_score']}{Style.RESET_ALL}"
         )  # Print best CV F1-Score
         print(
-            f"  {BackgroundColors.GREEN}Explained Variance = {BackgroundColors.CYAN}{truncate_value(best_result['explained_variance'])}{Style.RESET_ALL}"
+            f"  {BackgroundColors.GREEN}Explained Variance = {BackgroundColors.CYAN}{best_result['explained_variance']}{Style.RESET_ALL}"
         )  # Print best explained variance
     except Exception as e:
         print(str(e))
