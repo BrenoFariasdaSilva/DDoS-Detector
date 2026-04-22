@@ -2270,6 +2270,27 @@ def get_partial_trial_cache_path(csv_path):
         raise
 
 
+def compute_trial_hash(classifier_name, params_json, dataset_name, file_name, feature_set):
+    """
+    Compute a deterministic SHA-256 hash for a hyperparameter trial.
+
+    :param classifier_name: Name of the classifier model for this trial.
+    :param params_json: JSON string of hyperparameter values with sorted keys.
+    :param dataset_name: Config-level dataset name key for identification.
+    :param file_name: Base filename of the dataset CSV being processed.
+    :param feature_set: Feature selection strategy label used in this trial.
+    :return: Deterministic 16-character hexadecimal hash string for this trial.
+    """
+
+    try:
+        raw = f"{classifier_name}|{params_json}|{dataset_name}|{file_name}|{feature_set}"  # Concatenate all identity fields with a pipe separator to ensure global uniqueness
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]  # Return the first 16 hex characters of the SHA-256 digest as the trial hash
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def log_resource_information(X_train, y_train):
     """
     Log the available RAM, dataset size, and core count before beginning combination evaluation.
