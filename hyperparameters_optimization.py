@@ -2393,6 +2393,34 @@ def build_partial_trial_row(csv_path, model_name, current_params, metrics, elaps
         raise
 
 
+def persist_partial_trial_result(csv_path, row_dict):
+    """
+    Append a single trial result row to the per-trial partial cache file.
+
+    :param csv_path: Path to the CSV dataset file being processed.
+    :param row_dict: OrderedDict containing the trial row fields to persist.
+    :return: None.
+    """
+
+    try:
+        cache_path = get_partial_trial_cache_path(csv_path)  # Resolve the target partial trial cache file path
+        cache_dir = os.path.dirname(cache_path)  # Extract the cache directory from the resolved path
+        try:  # Guard all file operations against I/O errors to prevent pipeline interruption on write failure
+            os.makedirs(cache_dir, exist_ok=True)  # Ensure the cache directory exists before attempting to write
+            row_df = pd.DataFrame([row_dict])  # Wrap the row dict in a single-row DataFrame for CSV export
+            if os.path.exists(cache_path):  # Verify if the partial trial cache file already exists
+                row_df.to_csv(cache_path, mode="a", header=False, index=False)  # Append row without header to preserve all existing trial rows
+            else:  # Create a new partial trial cache file with header when none exists
+                row_df.to_csv(cache_path, mode="w", header=True, index=False)  # Write header and first trial row to the new partial cache file
+            verbose_output(f"{BackgroundColors.GREEN}[DEBUG] Persisted trial result to partial cache: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Log persistence confirmation when verbose is active
+        except Exception as write_err:  # Handle write failures without aborting the pipeline execution
+            print(f"{BackgroundColors.YELLOW}[WARNING] Failed to persist trial to partial cache: {write_err}{Style.RESET_ALL}")  # Warn about persistence failure without propagating the exception
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def log_resource_information(X_train, y_train):
     """
     Log the available RAM, dataset size, and core count before beginning combination evaluation.
