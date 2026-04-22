@@ -54,9 +54,9 @@ hyperparameters_optimization:
   execution:
     verbose: false
     n_jobs: -1
-    skip_train_if_model_exists: false
+    skip_train_if_model_exists: true
     sample_fraction: null # Optional float fraction for grid-search subsampling (null = use full training set; set to e.g. 0.05 for 5%)
-    use_linear_svc_for_linear_kernel: false # If true, substitute SVC(kernel='linear') with LinearSVC for faster equivalent linear training
+    use_linear_svc_for_linear_kernel: true # If true, substitute SVC(kernel='linear') with LinearSVC for faster equivalent linear training
     svm_max_iter: -1  # Use -1 to disable iteration limit as required by sklearn SVC
     enable_parallel_for_non_n_jobs_classifiers: true # Enable custom parallel execution for classifiers without n_jobs support (SVM, NearestCentroid, GradientBoosting, MLP)
     low_memory: false # Enable low memory mode for pandas CSV loading (forced to true when verbose is active)
