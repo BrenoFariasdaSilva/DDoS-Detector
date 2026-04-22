@@ -965,13 +965,10 @@ def process_single_file(f, config=None):
         
         progress_idx = config.get("execution", {}).get("progress_index", None)  # Get progress index from config when provided
         progress_total = config.get("execution", {}).get("progress_total", None)  # Get progress total from config when provided
-        display_f = f  # Default display uses original file path
         if progress_idx is not None and progress_total is not None:  # If both progress values are present
-            display_f = f"[{progress_idx}/{progress_total}]: {f}"  # Prepend progress indicator to file path for display
-        verbose_output(
-            f"{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{display_f}{Style.RESET_ALL}",
-            config=config
-        )  # Output the verbose message with optional progress indicator
+            verbose_output(f"{BackgroundColors.GREEN}Processing file [{progress_idx}/{progress_total}]: {BackgroundColors.CYAN}{f}{Style.RESET_ALL}", config=config)  # Output the verbose message with index
+        else:  # If no progress metadata is available
+            verbose_output(f"{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{f}{Style.RESET_ALL}", config=config)  # Output the verbose message without index
 
         df = load_dataset(f, config=config)  # Load the dataset from the file
         if df is None:  # If loading failed
@@ -8861,20 +8858,18 @@ def print_file_processing_header(file, config=None):
 
         progress_idx = config.get("execution", {}).get("progress_index", None)  # Get progress index from config when provided
         progress_total = config.get("execution", {}).get("progress_total", None)  # Get progress total from config when provided
-        display_file = file  # Default display uses original file path
         if progress_idx is not None and progress_total is not None:  # If both progress values are present
-            display_file = f"[{progress_idx}/{progress_total}]: {file}"  # Prepend progress indicator to file path for header
-        verbose_output(
-            f"{BackgroundColors.GREEN}Printing file processing header for: {BackgroundColors.CYAN}{display_file}{Style.RESET_ALL}",
-            config=config
-        )  # Output the verbose message for header with optional progress indicator
+            verbose_output(f"{BackgroundColors.GREEN}Printing file processing header for: {BackgroundColors.CYAN}[{progress_idx}/{progress_total}]: {file}{Style.RESET_ALL}", config=config)  # Output the verbose message with index
+        else:  # If no progress metadata is available
+            verbose_output(f"{BackgroundColors.GREEN}Printing file processing header for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}", config=config)  # Output the verbose message without index
 
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
         )  # Print separator line
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{display_file}{Style.RESET_ALL}"
-        )  # Print file being processed with optional progress indicator
+        if progress_idx is not None and progress_total is not None:  # If both progress values are present
+            print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file [{progress_idx}/{progress_total}]: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}")  # Print file being processed with index
+        else:  # If no progress metadata is available
+            print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}")  # Print file being processed without index
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
         )  # Print separator line
