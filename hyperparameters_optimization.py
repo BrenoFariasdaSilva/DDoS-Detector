@@ -2331,6 +2331,68 @@ def load_partial_trial_cache(csv_path):
         raise
 
 
+def build_partial_trial_row(csv_path, model_name, current_params, metrics, elapsed, dataset_name_cfg, feature_set, n_samples_train, n_samples_test, n_features):
+    """
+    Build an OrderedDict row for a single trial to persist in the per-trial partial cache.
+
+    :param csv_path: Path to the CSV dataset file being processed.
+    :param model_name: Name of the classifier model being evaluated.
+    :param current_params: Dictionary of hyperparameter names and values for this trial.
+    :param metrics: Dictionary of evaluation metrics, or None if evaluation failed.
+    :param elapsed: Elapsed wall-clock time in seconds for this trial.
+    :param dataset_name_cfg: Config-level dataset name key for identification.
+    :param feature_set: Feature selection strategy label used in this trial.
+    :param n_samples_train: Number of training samples used in this trial.
+    :param n_samples_test: Number of test samples available for this trial.
+    :param n_features: Number of features used in this trial.
+    :return: OrderedDict with all required trial fields for per-trial partial cache persistence.
+    """
+
+    try:
+        params_json = json.dumps(current_params, sort_keys=True)  # Serialize params with sorted keys for deterministic composite key matching
+        file_name = os.path.basename(csv_path)  # Extract the base filename from the dataset path
+        dataset_path = os.path.dirname(csv_path)  # Extract the dataset directory from the dataset path
+        trial_hash = compute_trial_hash(model_name, params_json, dataset_name_cfg, file_name, feature_set)  # Compute deterministic hash for deduplication and resume matching
+        now = datetime.datetime.now()  # Capture the current timestamp for trial metadata fields
+        row = OrderedDict([  # Build the ordered trial row with all required identification, model, config, metric, and timestamp fields
+            ("dataset_name", dataset_name_cfg),  # Config-level dataset name for identification
+            ("dataset_path", dataset_path),  # Dataset directory path for context
+            ("file_name", file_name),  # Base CSV filename for composite key matching
+            ("base_csv", file_name),  # Alias matching the main results schema column name
+            ("execution_mode", "separate_files"),  # Execution mode is always separate_files for this script
+            ("attack_types_combined", None),  # Not applicable for separate_files execution mode
+            ("classifier_name", model_name),  # Classifier name for identification and lookup
+            ("classifier_type", model_name),  # Classifier type matching classifier_name
+            ("model_name", model_name),  # Model name for identification
+            ("params", params_json),  # Serialized hyperparameter combination with sorted keys
+            ("feature_set", feature_set),  # Feature selection strategy label for composite key matching
+            ("feature_selection_enabled", True),  # Feature selection is always enabled in this pipeline
+            ("hyperparameters_enabled", True),  # Hyperparameter optimization is always enabled in this pipeline
+            ("data_augmentation_enabled", False),  # Data augmentation is not applicable for this script
+            ("cv_method", "StratifiedKFold"),  # Cross-validation method used for all evaluations in this script
+            ("train_test_split_ratio", "80/20"),  # Train/test split ratio used during dataset preparation
+            ("n_features", n_features),  # Number of features used for this trial
+            ("n_samples_train", n_samples_train),  # Number of training samples used for this trial
+            ("n_samples_test", n_samples_test),  # Number of test samples available for this trial
+            ("accuracy", metrics.get("accuracy") if metrics else None),  # Accuracy metric value or None on evaluation failure
+            ("precision", metrics.get("precision") if metrics else None),  # Precision metric value or None on evaluation failure
+            ("recall", metrics.get("recall") if metrics else None),  # Recall metric value or None on evaluation failure
+            ("f1_score", metrics.get("f1_score") if metrics else None),  # F1 score metric value or None on evaluation failure
+            ("fpr", metrics.get("false_positive_rate") if metrics else None),  # False positive rate or None on evaluation failure
+            ("fnr", metrics.get("false_negative_rate") if metrics else None),  # False negative rate or None on evaluation failure
+            ("elapsed_time_s", int(round(float(elapsed or 0.0)))),  # Elapsed time rounded to the nearest second
+            ("timestamp_full", now.strftime("%Y-%m-%d %H:%M:%S")),  # Full ISO-format timestamp of trial completion
+            ("timestamp_date", now.strftime("%Y-%m-%d")),  # Date component of the trial completion timestamp
+            ("timestamp_time", now.strftime("%H:%M:%S")),  # Time component of the trial completion timestamp
+            ("trial_hash", trial_hash),  # Deterministic hash for deduplication and exact resume matching
+        ])  # Return the fully assembled trial row OrderedDict
+        return row  # Return assembled trial row to the caller
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def log_resource_information(X_train, y_train):
     """
     Log the available RAM, dataset size, and core count before beginning combination evaluation.
