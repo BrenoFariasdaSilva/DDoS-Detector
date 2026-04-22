@@ -3133,11 +3133,11 @@ def dispatch_format_loader(file_path: str, file_format: str, config=None) -> pd.
             return load_parquet_file(file_path, config=config)  # Load and return Parquet file
         elif file_format == "txt":  # If the file format is TXT
             return load_txt_file(file_path, config=config)  # Load and return TXT file
+        return pd.DataFrame()  # Return empty DataFrame to satisfy return contract
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
         raise  # Re-raise to preserve original failure semantics
-
 
 def load_augmented_dataset(file_path: str, config=None) -> Optional[pd.DataFrame]:
     """
