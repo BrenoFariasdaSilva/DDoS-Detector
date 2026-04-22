@@ -3229,6 +3229,27 @@ def load_dataset(file_path: str, config=None) -> Optional[pd.DataFrame]:
         raise
 
 
+def sanitize_feature_name(name: str) -> str:
+    """
+    Normalize a single feature name for whitespace-agnostic, case-insensitive comparison only.
+
+    :param name: Raw feature name string to normalize for comparison.
+    :return: Normalized lowercase feature name string suitable for comparison only.
+    """
+
+    try:
+        if not isinstance(name, str):  # Verify the input is a string before processing
+            name = str(name)  # Convert non-string input to string for safe normalization
+        name = re.sub(r"[\u200b\u200c\u200d\ufeff\u00a0\u2060\u2028\u2029]", "", name)  # Remove invisible and zero-width unicode characters
+        name = name.strip()  # Strip leading and trailing whitespace from the name
+        name = re.sub(r" +", " ", name)  # Collapse multiple consecutive spaces into a single space
+        return name.lower()  # Return lowercase form for case-insensitive comparison only
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def sanitize_feature_names(columns):
     r"""
     Sanitize column names by removing special JSON characters that LightGBM doesn't support.
@@ -3258,58 +3279,55 @@ def verify_selected_features_exist(selected_features: list, dataset_columns: lis
     """
     Verify that features selected by a feature-selection method exist in the dataset columns.
 
-    - Prints a structured warning if any selected features are missing.
-    - Returns the filtered list of valid features (preserving original order, removing duplicates).
-    - Raises ValueError if ALL selected features are missing, or if inputs are invalid/empty.
-
     :param selected_features: list of selected feature names (strings)
     :param dataset_columns: list of dataset column names (strings)
     :param method_name: human-friendly method name (e.g., 'GA', 'RFE', 'PCA')
-    :return: filtered list of valid feature names
+    :return: filtered list of valid feature names mapped to original dataset column names
     """
 
-    if selected_features is None:
-        raise ValueError(f"No selected features provided for {method_name}.")
-    if not isinstance(selected_features, (list, tuple)):
-        raise ValueError("selected_features must be a list or tuple")
-    if not selected_features:
-        raise ValueError(f"selected_features is empty for {method_name}")
-    if dataset_columns is None or not isinstance(dataset_columns, (list, tuple)):
-        raise ValueError("dataset_columns must be a non-empty list or tuple")
-    if not dataset_columns:
-        raise ValueError("dataset_columns is empty")
+    if selected_features is None:  # Verify selected_features is not None before processing
+        raise ValueError(f"No selected features provided for {method_name}.")  # Raise with method context for diagnostics
+    if not isinstance(selected_features, (list, tuple)):  # Verify selected_features is a list or tuple
+        raise ValueError("selected_features must be a list or tuple")  # Raise with type mismatch details
+    if not selected_features:  # Verify selected_features is not empty
+        raise ValueError(f"selected_features is empty for {method_name}")  # Raise with method context for diagnostics
+    if dataset_columns is None or not isinstance(dataset_columns, (list, tuple)):  # Verify dataset_columns is a valid sequence
+        raise ValueError("dataset_columns must be a non-empty list or tuple")  # Raise with type mismatch details
+    if not dataset_columns:  # Verify dataset_columns is not empty
+        raise ValueError("dataset_columns is empty")  # Raise with empty list details
 
-    mn = (method_name or "").strip().lower()
-    is_pca = mn == "pca"
-    if is_pca:
-        if all(isinstance(f, str) and f.strip().upper().startswith("PC") for f in selected_features):
-            return list(dict.fromkeys(selected_features))  # Preserve order, remove duplicates
+    mn = (method_name or "").strip().lower()  # Normalize method name for PCA detection
+    is_pca = mn == "pca"  # Determine if this is a PCA feature set
+    if is_pca:  # If PCA, return component names as-is since they are synthetic
+        if all(isinstance(f, str) and f.strip().upper().startswith("PC") for f in selected_features):  # Verify all selected are valid PC component names
+            return list(dict.fromkeys(selected_features))  # Preserve order and remove duplicates for PCA components
 
-    dataset_set = set(dataset_columns)
-    valid_features = []
-    seen = set()
-    for f in selected_features:
-        if f in dataset_set and f not in seen:
-            valid_features.append(f)
-            seen.add(f)
+    sanitized_col_map = {sanitize_feature_name(col): col for col in dataset_columns}  # Build sanitized-to-original column mapping for whitespace-agnostic comparison
+    valid_features = []  # Accumulate valid features mapped to original dataset column names
+    seen_sanitized = set()  # Track sanitized keys already resolved to prevent duplicates
+    for f in selected_features:  # Iterate over each selected feature for sanitized lookup
+        sf = sanitize_feature_name(f)  # Normalize selected feature name for comparison
+        if sf in sanitized_col_map and sf not in seen_sanitized:  # Verify sanitized match exists and not yet resolved
+            valid_features.append(sanitized_col_map[sf])  # Append original dataset column name for this feature
+            seen_sanitized.add(sf)  # Mark this sanitized key as seen to prevent duplicates
 
-    missing = [f for f in selected_features if f not in dataset_set]
+    missing = [f for f in selected_features if sanitize_feature_name(f) not in sanitized_col_map]  # Identify features absent even after sanitized comparison
 
-    if missing and len(valid_features) > 0:
-        print(f"{BackgroundColors.YELLOW}Missing features detected for {BackgroundColors.CYAN}{method_name}{Style.RESET_ALL}:")
-        for m in missing:
-            print(f"- {m}")
-        print(f"{BackgroundColors.GREEN}Proceeding with {len(valid_features)} valid features for {BackgroundColors.CYAN}{method_name}{Style.RESET_ALL}.")
-        return valid_features
+    if missing and len(valid_features) > 0:  # If partial mismatch detected (some valid, some missing)
+        print(f"{BackgroundColors.YELLOW}[WARNING] Missing features detected for {BackgroundColors.CYAN}{method_name}{BackgroundColors.YELLOW}:{Style.RESET_ALL}")  # Print partial-missing warning header
+        for m in missing:  # Iterate over each missing feature name
+            print(f"  - {m}")  # Print individual missing feature name
+        print(f"{BackgroundColors.GREEN}Proceeding with {BackgroundColors.CYAN}{len(valid_features)}{BackgroundColors.GREEN} valid features for {BackgroundColors.CYAN}{method_name}{BackgroundColors.GREEN}.{Style.RESET_ALL}")  # Print valid-features continuation message
+        return valid_features  # Return only the valid features mapped to original dataset column names
 
-    if missing and len(valid_features) == 0:
-        print(f"{BackgroundColors.RED}All selected features for {method_name} are missing from dataset columns.{Style.RESET_ALL}")
-        for m in missing:
-            print(f"- {m}")
-        print(f"{BackgroundColors.YELLOW}Using 0 out of {len(selected_features)} selected features for {BackgroundColors.CYAN}{method_name}{Style.RESET_ALL}.{Style.RESET_ALL}")
-        raise ValueError(f"All selected features for {method_name} are missing from dataset columns")
+    if missing and len(valid_features) == 0:  # If all features are missing from dataset columns
+        print(f"{BackgroundColors.RED}[WARNING] All selected features for {BackgroundColors.CYAN}{method_name}{BackgroundColors.RED} are missing from dataset columns.{Style.RESET_ALL}")  # Print all-missing warning
+        for m in missing:  # Iterate over each missing feature name
+            print(f"  - {m}")  # Print individual missing feature name
+        print(f"{BackgroundColors.YELLOW}Using 0 out of {BackgroundColors.CYAN}{len(selected_features)}{BackgroundColors.YELLOW} selected features for {BackgroundColors.CYAN}{method_name}{BackgroundColors.YELLOW}.{Style.RESET_ALL}")  # Print zero-valid fallback message
+        raise ValueError(f"All selected features for {method_name} are missing from dataset columns")  # Raise to signal complete mismatch
 
-    return list(dict.fromkeys(selected_features))
+    return list(dict.fromkeys(valid_features))  # Preserve order and remove any residual duplicates from valid features
 
 
 def preprocess_dataframe(df, remove_zero_variance=True, config=None):
@@ -6943,19 +6961,40 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
                 f"{BackgroundColors.GREEN}Explicit feature set enabled with {len(explicit_features)} feature(s).{Style.RESET_ALL}", config=config
             )  # Log explicit feature set activation with feature count
 
-            feature_names_list = list(feature_names)  # Normalize feature names to list for index lookup
-            missing = [f for f in explicit_features if f not in feature_names_list]  # Identify feature names absent from the dataset columns
+            feature_names_list = list(feature_names)  # Normalize feature names to list for safe index lookup
+            sanitized_col_map = {sanitize_feature_name(col): col for col in feature_names_list}  # Build sanitized-to-original column mapping for whitespace-agnostic comparison
+            verbose_output(
+                f"{BackgroundColors.GREEN}Sanitized column name mapping built with {BackgroundColors.CYAN}{len(sanitized_col_map)}{BackgroundColors.GREEN} entries for explicit feature comparison.{Style.RESET_ALL}", config=config
+            )  # Log sanitized mapping size for diagnostics
 
-            if missing:  # If any explicit feature names are missing from the dataset
+            valid_explicit = []  # Accumulate valid explicit features mapped to original dataset column names
+            missing_explicit = []  # Accumulate explicit feature names not found in dataset columns
+            seen_sanitized = set()  # Track sanitized keys already resolved to prevent duplicates
+            for ef in explicit_features:  # Iterate over each requested explicit feature for sanitized lookup
+                sef = sanitize_feature_name(ef)  # Normalize explicit feature name for comparison
+                if sef in sanitized_col_map and sef not in seen_sanitized:  # Verify sanitized match exists and not yet resolved
+                    valid_explicit.append(sanitized_col_map[sef])  # Append original dataset column name for this feature
+                    seen_sanitized.add(sef)  # Mark sanitized key as seen to prevent duplicates
+                elif sef not in sanitized_col_map:  # If no match found even after sanitization
+                    missing_explicit.append(ef)  # Record original feature name as missing
+
+            if missing_explicit and not valid_explicit:  # If ALL explicit features are absent from dataset columns
                 raise ValueError(
-                    f"Explicit features not found in dataset columns: {missing}"
-                )  # Raise fast with explicit mismatch details
+                    f"Explicit features not found in dataset columns: {missing_explicit}"
+                )  # Raise with explicit mismatch details to preserve original error semantics
 
-            feature_indices = [feature_names_list.index(f) for f in explicit_features]  # Map each explicit feature name to its column index
-            X_train_explicit = X_train_scaled[:, feature_indices]  # Extract training columns matching the explicit feature list
-            X_test_explicit = X_test_scaled[:, feature_indices]  # Extract test columns matching the explicit feature list
+            if missing_explicit and valid_explicit:  # If PARTIAL mismatch detected (some valid, some missing)
+                print(f"{BackgroundColors.YELLOW}[WARNING] Explicit feature(s) not found in dataset columns and will be skipped: {BackgroundColors.CYAN}{missing_explicit}{Style.RESET_ALL}")  # Log missing explicit features as warning
+                print(f"{BackgroundColors.GREEN}Proceeding with {BackgroundColors.CYAN}{len(valid_explicit)}{BackgroundColors.GREEN} valid explicit feature(s): {BackgroundColors.CYAN}{valid_explicit}{Style.RESET_ALL}")  # Log valid features proceeding with original column names
 
-            feature_sets["Explicit Features"] = (X_train_explicit, X_test_explicit, explicit_features)  # Add explicit feature set as an additional strategy entry
+            if valid_explicit:  # If at least one explicit feature resolved to a valid original dataset column
+                verbose_output(
+                    f"{BackgroundColors.GREEN}Resolved explicit features to original column names: {BackgroundColors.CYAN}{valid_explicit}{Style.RESET_ALL}", config=config
+                )  # Log resolved original column names for diagnostics
+                feature_indices = [feature_names_list.index(f) for f in valid_explicit]  # Map each resolved original feature name to its column index
+                X_train_explicit = X_train_scaled[:, feature_indices]  # Extract training columns matching the resolved explicit feature list
+                X_test_explicit = X_test_scaled[:, feature_indices]  # Extract test columns matching the resolved explicit feature list
+                feature_sets["Explicit Features"] = (X_train_explicit, X_test_explicit, valid_explicit)  # Add explicit feature set using original column names as an additional strategy entry
 
         if use_pca:  # Compute PCA transformation only when PCA strategy is enabled
             X_train_pca, X_test_pca = apply_pca_transformation(
