@@ -2421,6 +2421,46 @@ def persist_partial_trial_result(csv_path, row_dict):
         raise
 
 
+def filter_combinations_by_partial_cache(combinations_to_test, keys, model_name, csv_path, dataset_name_cfg, feature_set, partial_cache_lookup):
+    """
+    Filter hyperparameter combinations already present in the per-trial partial cache.
+
+    :param combinations_to_test: List of hyperparameter value tuples to evaluate.
+    :param keys: List of hyperparameter parameter names corresponding to combination values.
+    :param model_name: Name of the classifier model being evaluated.
+    :param csv_path: Path to the CSV dataset file being processed.
+    :param dataset_name_cfg: Config-level dataset name key for composite key matching.
+    :param feature_set: Feature selection strategy label for composite key matching.
+    :param partial_cache_lookup: Dictionary keyed by composite tuples from load_partial_trial_cache.
+    :return: Tuple (filtered_combinations, skipped_count) with uncached combinations and the skip count.
+    """
+
+    try:
+        if not partial_cache_lookup:  # Return all combinations unchanged when the partial trial cache is empty
+            return combinations_to_test, 0  # No filtering to apply when no cached entries exist
+
+        file_name = os.path.basename(csv_path)  # Extract base filename from the dataset path for lookup key construction
+        filtered = []  # Accumulate combinations not found in the partial trial cache for evaluation
+        skipped = 0  # Count combinations skipped due to a partial trial cache hit
+
+        for combo in combinations_to_test:  # Iterate each combination to test against the partial trial cache
+            params_dict = dict(zip(keys, combo))  # Build hyperparameter dict from parameter names and combination values
+            params_json = json.dumps(params_dict, sort_keys=True)  # Serialize params with sorted keys for deterministic lookup matching
+            lookup_key = (dataset_name_cfg, file_name, model_name, feature_set, params_json)  # Build composite key matching the five-field structure stored by build_partial_trial_row
+
+            if lookup_key in partial_cache_lookup:  # Verify if this combination was already evaluated and persisted in the partial cache
+                verbose_output(f"{BackgroundColors.GREEN}[DEBUG] Skipping cached combination for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{params_json}{Style.RESET_ALL}")  # Log the skipped combination for traceability when verbose is active
+                skipped += 1  # Increment the skip counter for this model
+            else:  # Combination not found in the partial cache; schedule it for evaluation
+                filtered.append(combo)  # Add the uncached combination to the evaluation list
+
+        return filtered, skipped  # Return the filtered combination list and the total skip count to the caller
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def log_resource_information(X_train, y_train):
     """
     Log the available RAM, dataset size, and core count before beginning combination evaluation.
