@@ -1482,12 +1482,12 @@ def evaluate_and_display_loaded_model(model, X_test_sel, y_test):
             
             if eval_m and eval_m[0] is not None:  # Verify if evaluation returned valid metrics
                 print(f"\n{BackgroundColors.GREEN}Test Metrics (loaded model):{Style.RESET_ALL}")  # Print metrics header
-                print(f"   {BackgroundColors.GREEN}Accuracy:  {BackgroundColors.CYAN}{truncate_value(eval_m[0])}{Style.RESET_ALL}")  # Display accuracy
-                print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{truncate_value(eval_m[1])}{Style.RESET_ALL}")  # Display precision
-                print(f"   {BackgroundColors.GREEN}Recall:    {BackgroundColors.CYAN}{truncate_value(eval_m[2])}{Style.RESET_ALL}")  # Display recall
-                print(f"   {BackgroundColors.GREEN}F1-Score:  {BackgroundColors.CYAN}{truncate_value(eval_m[3])}{Style.RESET_ALL}")  # Display F1 score
-                print(f"   {BackgroundColors.GREEN}FPR:       {BackgroundColors.CYAN}{truncate_value(eval_m[4])}{Style.RESET_ALL}")  # Display false positive rate
-                print(f"   {BackgroundColors.GREEN}FNR:       {BackgroundColors.CYAN}{truncate_value(eval_m[5])}{Style.RESET_ALL}")  # Display false negative rate
+                print(f"   {BackgroundColors.GREEN}Accuracy:  {BackgroundColors.CYAN}{eval_m[0]}{Style.RESET_ALL}")  # Display full-precision accuracy
+                print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{eval_m[1]}{Style.RESET_ALL}")  # Display full-precision precision
+                print(f"   {BackgroundColors.GREEN}Recall:    {BackgroundColors.CYAN}{eval_m[2]}{Style.RESET_ALL}")  # Display full-precision recall
+                print(f"   {BackgroundColors.GREEN}F1-Score:  {BackgroundColors.CYAN}{eval_m[3]}{Style.RESET_ALL}")  # Display full-precision F1 score
+                print(f"   {BackgroundColors.GREEN}FPR:       {BackgroundColors.CYAN}{eval_m[4]}{Style.RESET_ALL}")  # Display full-precision false positive rate
+                print(f"   {BackgroundColors.GREEN}FNR:       {BackgroundColors.CYAN}{eval_m[5]}{Style.RESET_ALL}")  # Display full-precision false negative rate
         
         except Exception as e:  # Catch any evaluation errors
             print(f"{BackgroundColors.YELLOW}Could not evaluate loaded model: {e}{Style.RESET_ALL}")  # Display error message
@@ -3302,7 +3302,7 @@ def finalize_generation_and_notify(
     send_telegram_message(
         TELEGRAM_BOT,
         [
-            f"Pop Size {pop_size}: Generation {gen}/{n_generations}, Best F1-Score: {truncate_value(best_fitness)}, Features: {int(current_best_num_features) if current_best_num_features is not None else 'N/A'}"
+            f"Pop Size {pop_size}: Generation {gen}/{n_generations}, Best F1-Score: {best_fitness}, Features: {int(current_best_num_features) if current_best_num_features is not None else 'N/A'}"
         ],
         should_send,
     )  # Send periodic updates to Telegram with multi-objective fitness values at configured percent milestones
@@ -4488,7 +4488,7 @@ def aggregate_sweep_results(results, min_pop, max_pop, dataset_name):
                 best_result = (pop_size, runs_list, common_features)  # Update best result
 
             print(
-                f"{BackgroundColors.GREEN}Pop {BackgroundColors.CYAN}{pop_size}{BackgroundColors.GREEN}: AVG F1 {BackgroundColors.GREEN}{truncate_value(f1_avg)}{BackgroundColors.GREEN}, Common Features {BackgroundColors.CYAN}{len(common_features)}{Style.RESET_ALL}"
+                f"{BackgroundColors.GREEN}Pop {BackgroundColors.CYAN}{pop_size}{BackgroundColors.GREEN}: AVG F1 {BackgroundColors.GREEN}{f1_avg}{BackgroundColors.GREEN}, Common Features {BackgroundColors.CYAN}{len(common_features)}{Style.RESET_ALL}"
             )  # Print summary
             for i, run_data in enumerate(runs_list):  # For each run
                 unique = set(run_data["best_features"]) - common_features  # Unique features
@@ -4497,7 +4497,7 @@ def aggregate_sweep_results(results, min_pop, max_pop, dataset_name):
                 )  # Print unique features count
 
             send_telegram_message(TELEGRAM_BOT, [
-                f"Completed {len(runs_list)} runs for population size {pop_size} on {dataset_name} -> AVG F1-Score: {truncate_value(f1_avg)}"
+                f"Completed {len(runs_list)} runs for population size {pop_size} on {dataset_name} -> AVG F1-Score: {f1_avg}"
             ])  # Send progress message
 
         return best_score, best_result, best_metrics, results  # Return aggregated results
@@ -5644,21 +5644,21 @@ def print_metrics(metrics):
         print(
             f"\n{BackgroundColors.GREEN}CV Performance Metrics for the Random Forest Classifier using the best feature subset ({int(num_features)} features):{Style.RESET_ALL}"
         )
-        print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{truncate_value(cv_acc)}{Style.RESET_ALL}")
-        print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{truncate_value(cv_prec)}{Style.RESET_ALL}")
-        print(f"   {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{truncate_value(cv_rec)}{Style.RESET_ALL}")
-        print(f"   {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{truncate_value(cv_f1)}{Style.RESET_ALL}")
-        print(f"   {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{truncate_value(cv_fpr)}{Style.RESET_ALL}")
-        print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{truncate_value(cv_fnr)}{Style.RESET_ALL}")
+        print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{cv_acc}{Style.RESET_ALL}")  # Output full-precision CV accuracy
+        print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{cv_prec}{Style.RESET_ALL}")  # Output full-precision CV precision
+        print(f"   {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{cv_rec}{Style.RESET_ALL}")  # Output full-precision CV recall
+        print(f"   {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{cv_f1}{Style.RESET_ALL}")  # Output full-precision CV F1 score
+        print(f"   {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{cv_fpr}{Style.RESET_ALL}")  # Output full-precision CV false positive rate
+        print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{cv_fnr}{Style.RESET_ALL}")  # Output full-precision CV false negative rate
         print(
             f"\n{BackgroundColors.GREEN}Test Performance Metrics for the Random Forest Classifier using the best feature subset ({int(num_features)} features):{Style.RESET_ALL}"
         )
-        print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{truncate_value(test_acc)}{Style.RESET_ALL}")
-        print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{truncate_value(test_prec)}{Style.RESET_ALL}")
-        print(f"   {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{truncate_value(test_rec)}{Style.RESET_ALL}")
-        print(f"   {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{truncate_value(test_f1)}{Style.RESET_ALL}")
-        print(f"   {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{truncate_value(test_fpr)}{Style.RESET_ALL}")
-        print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{truncate_value(test_fnr)}{Style.RESET_ALL}")
+        print(f"   {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{test_acc}{Style.RESET_ALL}")  # Output full-precision test accuracy
+        print(f"   {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{test_prec}{Style.RESET_ALL}")  # Output full-precision test precision
+        print(f"   {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{test_rec}{Style.RESET_ALL}")  # Output full-precision test recall
+        print(f"   {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{test_f1}{Style.RESET_ALL}")  # Output full-precision test F1 score
+        print(f"   {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{test_fpr}{Style.RESET_ALL}")  # Output full-precision test false positive rate
+        print(f"   {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{test_fnr}{Style.RESET_ALL}")  # Output full-precision test false negative rate
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -6256,10 +6256,8 @@ def write_consolidated_csv(rows, output_dir):
                     col_l = col.lower()  # Lowercase column name for case-insensitive verification
                     if "time" in col_l or "elapsed" in col_l or col in ("hardware", "timestamp"):  # Skip time-related and special columns
                         df_out[col] = df_out[col].apply(lambda v: int(v) if pd.notnull(v) and str(v).isdigit() else v)  # Convert time-related columns to int if possible
-                    try:  # Try to truncate values in the column
-                        df_out[col] = df_out[col].apply(lambda v: truncate_value(v) if pd.notnull(v) else v)  # Truncate numeric values
-                    except Exception:  # On any error
-                        pass  # Ignore errors and continue
+                    if any(m in col_l for m in ("accuracy", "precision", "recall", "f1", "fpr", "fnr", "auc", "roc")):  # Verify if column holds a classification metric that must preserve full precision
+                        continue  # Preserve full-precision classification metric column without truncation
 
                 generate_csv_and_image(df_out, csv_out, is_visualizable=True)  # Persist consolidated CSV and generate PNG image
                 print(
@@ -6608,18 +6606,18 @@ def build_and_write_run_results(
             "cv_method": cv_method_local,  # Cross-validation method used
             "train_test_split": f"{1-test_frac_local:.0%}/{test_frac_local:.0%}" if test_frac_local is not None else "80/20",  # Train/test ratio as percentage string
             "scaling": "StandardScaler",  # Scaler applied to training features
-            "cv_accuracy": truncate_value(rf_metrics_local[0]) if rf_metrics_local and len(rf_metrics_local) > 0 else None,  # Cross-validation accuracy score
-            "cv_precision": truncate_value(rf_metrics_local[1]) if rf_metrics_local and len(rf_metrics_local) > 1 else None,  # Cross-validation precision score
-            "cv_recall": truncate_value(rf_metrics_local[2]) if rf_metrics_local and len(rf_metrics_local) > 2 else None,  # Cross-validation recall score
-            "cv_f1_score": truncate_value(rf_metrics_local[3]) if rf_metrics_local and len(rf_metrics_local) > 3 else None,  # Cross-validation F1 score
-            "cv_fpr": truncate_value(rf_metrics_local[4]) if rf_metrics_local and len(rf_metrics_local) > 4 else None,  # Cross-validation false positive rate
-            "cv_fnr": truncate_value(rf_metrics_local[5]) if rf_metrics_local and len(rf_metrics_local) > 5 else None,  # Cross-validation false negative rate
-            "test_accuracy": truncate_value(rf_metrics_local[6]) if rf_metrics_local and len(rf_metrics_local) > 6 else None,  # Test set accuracy score
-            "test_precision": truncate_value(rf_metrics_local[7]) if rf_metrics_local and len(rf_metrics_local) > 7 else None,  # Test set precision score
-            "test_recall": truncate_value(rf_metrics_local[8]) if rf_metrics_local and len(rf_metrics_local) > 8 else None,  # Test set recall score
-            "test_f1_score": truncate_value(rf_metrics_local[9]) if rf_metrics_local and len(rf_metrics_local) > 9 else None,  # Test set F1 score
-            "test_fpr": truncate_value(rf_metrics_local[10]) if rf_metrics_local and len(rf_metrics_local) > 10 else None,  # Test set false positive rate
-            "test_fnr": truncate_value(rf_metrics_local[11]) if rf_metrics_local and len(rf_metrics_local) > 11 else None,  # Test set false negative rate
+            "cv_accuracy": rf_metrics_local[0] if rf_metrics_local and len(rf_metrics_local) > 0 else None,  # Cross-validation accuracy score
+            "cv_precision": rf_metrics_local[1] if rf_metrics_local and len(rf_metrics_local) > 1 else None,  # Cross-validation precision score
+            "cv_recall": rf_metrics_local[2] if rf_metrics_local and len(rf_metrics_local) > 2 else None,  # Cross-validation recall score
+            "cv_f1_score": rf_metrics_local[3] if rf_metrics_local and len(rf_metrics_local) > 3 else None,  # Cross-validation F1 score
+            "cv_fpr": rf_metrics_local[4] if rf_metrics_local and len(rf_metrics_local) > 4 else None,  # Cross-validation false positive rate
+            "cv_fnr": rf_metrics_local[5] if rf_metrics_local and len(rf_metrics_local) > 5 else None,  # Cross-validation false negative rate
+            "test_accuracy": rf_metrics_local[6] if rf_metrics_local and len(rf_metrics_local) > 6 else None,  # Test set accuracy score
+            "test_precision": rf_metrics_local[7] if rf_metrics_local and len(rf_metrics_local) > 7 else None,  # Test set precision score
+            "test_recall": rf_metrics_local[8] if rf_metrics_local and len(rf_metrics_local) > 8 else None,  # Test set recall score
+            "test_f1_score": rf_metrics_local[9] if rf_metrics_local and len(rf_metrics_local) > 9 else None,  # Test set F1 score
+            "test_fpr": rf_metrics_local[10] if rf_metrics_local and len(rf_metrics_local) > 10 else None,  # Test set false positive rate
+            "test_fnr": rf_metrics_local[11] if rf_metrics_local and len(rf_metrics_local) > 11 else None,  # Test set false negative rate
             "feature_extraction_time_s": round(float(feature_extraction_time_s), 6) if feature_extraction_time_s is not None else None,  # Time spent on feature scaling in seconds
             "training_time_s": round(float(training_time_local), 6) if training_time_local is not None else None,  # Model training duration in seconds
             "testing_time_s": round(float(testing_time_local), 6) if testing_time_local is not None else None,  # Model testing duration in seconds
