@@ -301,7 +301,7 @@ stacking: # Stacking experiment settings
     use_pca: true # Enable PCA Components strategy (dimensionality reduction)
     use_rfe: true # Enable RFE Features strategy (recursive feature elimination)
     use_ga: true # Enable GA Features strategy (genetic algorithm selection)
-    explicit_features: [] # Optional explicit feature list; when non-empty, overrides all strategies
+    explicit_features: [] # Optional explicit feature list; when non-empty, added as an additional "Explicit Features" set alongside all enabled strategies. Use this carefully, as when analyzing multiple datasets, you must put features common between the datasets.
 
   enabled_classifiers: # List of classifier names to include in stacking pipeline (comment entries to disable)
     - Random Forest
