@@ -9821,6 +9821,22 @@ def log_resolved_configuration(config: dict) -> None:
         print(f"{BackgroundColors.GREEN}[INFO] Method toggle — Data Augmentation: {BackgroundColors.CYAN}{da_enabled}{Style.RESET_ALL}")  # Log data augmentation toggle state
         print(f"{BackgroundColors.GREEN}[INFO] Method toggle — AutoML: {BackgroundColors.CYAN}{automl_enabled}{Style.RESET_ALL}")  # Log AutoML toggle state
 
+        feature_sets_cfg = config.get("stacking", {}).get("feature_sets_config", {})  # Get resolved feature sets configuration
+        full_features_flag = feature_sets_cfg.get("full_features", False)  # Resolve Full Features flag from feature sets config
+        pca_flag = feature_sets_cfg.get("pca_components", False)  # Resolve PCA Components flag from feature sets config
+        rfe_flag = feature_sets_cfg.get("rfe_features", False)  # Resolve RFE Features flag from feature sets config
+        ga_flag = feature_sets_cfg.get("ga_features", False)  # Resolve GA Features flag from feature sets config
+        explicit_features = feature_sets_cfg.get("explicit_features", [])  # Retrieve explicit features list from feature sets config
+
+        print(f"{BackgroundColors.GREEN}[INFO] Feature set — Full Features: {BackgroundColors.CYAN}{full_features_flag}{Style.RESET_ALL}")  # Log Full Features state
+        print(f"{BackgroundColors.GREEN}[INFO] Feature set — PCA Components: {BackgroundColors.CYAN}{pca_flag}{Style.RESET_ALL}")  # Log PCA Components state
+        print(f"{BackgroundColors.GREEN}[INFO] Feature set — RFE Features: {BackgroundColors.CYAN}{rfe_flag}{Style.RESET_ALL}")  # Log RFE Features state
+        print(f"{BackgroundColors.GREEN}[INFO] Feature set — GA Features: {BackgroundColors.CYAN}{ga_flag}{Style.RESET_ALL}")  # Log GA Features state
+        if explicit_features:  # If explicit features list is non-empty
+            print(f"{BackgroundColors.GREEN}[INFO] Feature set — Explicit Features: Enabled ({BackgroundColors.CYAN}{len(explicit_features)} features{BackgroundColors.GREEN}){Style.RESET_ALL}")  # Log explicit features enabled with count
+        else:  # If explicit features list is empty or not provided
+            print(f"{BackgroundColors.GREEN}[INFO] Feature set — Explicit Features: Disabled{Style.RESET_ALL}")  # Log explicit features disabled
+
         overrides = []  # Initialize list for override source tracking
 
         if dataset_path_cli is not None:  # Verify if dataset path came from CLI
