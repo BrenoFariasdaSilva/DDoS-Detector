@@ -1185,10 +1185,8 @@ def save_to_cache(csv_path, result_entry):
                 key_l = k.lower()  # Lowercase key for verification
                 if "time" in key_l or "execution" in key_l or k in ("params", "hyperparameters", "hardware"):  # Skip time/execution/hardware/params fields
                     continue  # Continue to next item
-                try:  # Try to truncate value
-                    save_entry[k] = truncate_value(v)  # Truncate value if necessary
-                except Exception:  # If truncation fails
-                    pass  # Keep original value
+                if any(m in key_l for m in ("accuracy", "precision", "recall", "f1", "fpr", "fnr", "auc", "roc")):  # Verify if key holds a classification metric that must preserve full precision
+                    continue  # Preserve full-precision classification metric without truncation
 
             result_df = pd.DataFrame([save_entry])  # Create DataFrame from entry
 
@@ -1816,7 +1814,7 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
 
         elapsed = time.time() - start_time
         
-        send_telegram_message(TELEGRAM_BOT, [f"Completed {model_name} combination {current_index}/{total_combinations} with F1: {truncate_value(metrics.get('f1_score')) if metrics is not None and metrics.get('f1_score') is not None else 'N/A'} in {calculate_execution_time(start_time, time.time())}"])  # Log completion reporting N/A only when F1 is genuinely unavailable
+        send_telegram_message(TELEGRAM_BOT, [f"Completed {model_name} combination {current_index}/{total_combinations} with F1: {metrics.get('f1_score') if metrics is not None and metrics.get('f1_score') is not None else 'N/A'} in {calculate_execution_time(start_time, time.time())}"])  # Log completion reporting N/A only when F1 is genuinely unavailable
         
         return current_params, metrics, elapsed
     except Exception as e:
@@ -2008,7 +2006,7 @@ def update_best_if_improved(metrics, elapsed, current_params, best_score, best_p
         best_score = f1  # Update the best F1 score
         best_params = current_params  # Record the params that achieved the best score
         best_elapsed = elapsed  # Record the execution time of the new best combination
-        verbose_output(f"{BackgroundColors.GREEN}New best F1 score: {BackgroundColors.CYAN}{truncate_value(best_score)}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}")  # Log the new best for observability
+        verbose_output(f"{BackgroundColors.GREEN}New best F1 score: {BackgroundColors.CYAN}{best_score}{BackgroundColors.GREEN} with params: {BackgroundColors.CYAN}{best_params}{Style.RESET_ALL}")  # Log the new best for observability
     return best_score, best_params, best_elapsed  # Return the possibly updated best values to the caller
 
 
@@ -2024,8 +2022,8 @@ def build_result_entry_with_metrics(current_params, elapsed, metrics):
 
     result_entry = OrderedDict([("params", json.dumps(current_params)), ("execution_time", int(round(float(elapsed))))])  # Build base result entry with serialized params and rounded execution time
     if metrics is not None:  # Append formatted metric values when evaluation succeeded
-        formatted_metrics = {k: truncate_value(v) for k, v in metrics.items()}  # Truncate each metric value for consistent output formatting
-        result_entry.update(formatted_metrics)  # Merge truncated metrics into the result entry
+        formatted_metrics = dict(metrics)  # Preserve full-precision metric values without truncation
+        result_entry.update(formatted_metrics)  # Merge full-precision metrics into the result entry
     return result_entry  # Return the fully built result entry to the caller
 
 
@@ -2843,7 +2841,7 @@ def manual_grid_search(
                 all_results,
             )  # Perform sequential evaluation for n_jobs classifiers or when parallel path has no combinations
 
-        verbose_output(f"{BackgroundColors.GREEN}Completed optimization for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Best score: {BackgroundColors.CYAN}{truncate_value(best_score)}{Style.RESET_ALL}")  # Log completion
+        verbose_output(f"{BackgroundColors.GREEN}Completed optimization for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Best score: {BackgroundColors.CYAN}{best_score}{Style.RESET_ALL}")  # Log completion
 
         return best_params, best_score, best_elapsed, all_results, global_counter  # Return final results
     except Exception as e:
@@ -2936,7 +2934,7 @@ def build_result_entry_from_best(csv_path, model_name, best_params, best_score, 
             ("base_csv", os.path.basename(csv_path)),  # Base filename of the dataset CSV
             ("model", model_name),  # Model name identifier
             ("best_params", json.dumps(best_params)),  # Serialized best hyperparameter dict
-            ("best_cv_f1_score", truncate_value(best_score)),  # Truncated best cross-validation F1 score
+            ("best_cv_f1_score", best_score),  # Best cross-validation F1 score
             ("n_features", X_train_ga.shape[1]),  # Number of features used during training
             ("feature_selection_method", feature_selection_method),  # Feature selection strategy label
             ("dataset", os.path.basename(csv_path)),  # Dataset filename for identification
@@ -2949,7 +2947,7 @@ def build_result_entry_from_best(csv_path, model_name, best_params, best_score, 
                 "true_positive_rate", "true_negative_rate", "matthews_corrcoef", "roc_auc_score", "cohen_kappa"
             ]:
                 if metric_key in best_result:  # Verify if metric exists in result
-                    result_dict[metric_key] = truncate_value(best_result[metric_key])  # Truncate and store metric value
+                    result_dict[metric_key] = best_result[metric_key]  # Preserve full-precision metric value
 
         if best_estimator is not None and scaler is not None and dataset_name is not None and feature_names is not None:  # Verify all export components are available
             export_model_and_scaler(best_estimator, scaler, dataset_name, model_name, feature_names, best_params)  # Export trained model and scaler to disk
@@ -3155,7 +3153,7 @@ def process_single_csv_file(csv_path, dir_results_list, cfg_dataset_name: str = 
                 f"{BackgroundColors.GREEN}Best model: {BackgroundColors.CYAN}{best_model['model']}{Style.RESET_ALL}"
             )  # Output model name
             print(
-                f"{BackgroundColors.GREEN}Best CV F1 Score: {BackgroundColors.CYAN}{truncate_value(best_model['best_cv_f1_score'])}{Style.RESET_ALL}"
+                f"{BackgroundColors.GREEN}Best CV F1 Score: {BackgroundColors.CYAN}{best_model['best_cv_f1_score']}{Style.RESET_ALL}"
             )  # Output best score
     except Exception as e:
         print(str(e))
@@ -3314,10 +3312,8 @@ def save_optimization_results(csv_path, results_list):
             col_l = col.lower()  # Lowercase column name
             if "time" in col_l or "execution" in col_l or col in ("params", "hyperparameters", "hardware"):  # Skip time and params columns
                 continue  # Skip time and params columns
-            try:  # Try to truncate value
-                df_results[col] = df_results[col].apply(lambda v: truncate_value(v) if pd.notnull(v) else v)  # Truncate values
-            except Exception:  # If truncation fails
-                pass  # Keep original value
+            if any(m in col_l for m in ("accuracy", "precision", "recall", "f1", "fpr", "fnr", "auc", "roc")):  # Verify if column holds a classification metric that must preserve full precision
+                continue  # Preserve full-precision classification metric column without truncation
 
         migrate_results_csv_schema(output_path)  # Migrate existing results CSV to the new schema before appending new rows
 
