@@ -2073,6 +2073,10 @@ def run_parallel_evaluation(
     best_params,
     best_elapsed,
     all_results,
+    feature_set="",
+    dataset_name_cfg="",
+    n_samples_test=0,
+    partial_cache_lookup=None,
 ):
     """
     Run sequential evaluation of combinations and return updated results.
@@ -2095,6 +2099,10 @@ def run_parallel_evaluation(
     :param best_params: Current best hyperparameters
     :param best_elapsed: Execution time of the best combination
     :param all_results: List of all results collected so far
+    :param feature_set: Feature selection strategy label for partial trial cache row construction.
+    :param dataset_name_cfg: Config-level dataset name key for partial trial cache row construction.
+    :param n_samples_test: Number of test samples for partial trial cache row construction.
+    :param partial_cache_lookup: Pre-loaded partial trial cache lookup dict (reserved for interface symmetry).
     :return: Tuple (best_params, best_score, best_elapsed, all_results, global_counter)
     """
     
@@ -2152,6 +2160,9 @@ def run_parallel_evaluation(
 
             result_entry = build_result_entry_with_metrics(current_params, elapsed, metrics)  # Build an OrderedDict result entry from params, execution time, and metrics
             all_results.append(result_entry)  # Append to list
+            if csv_path:  # Persist trial to partial cache when a dataset path is available
+                trial_row = build_partial_trial_row(csv_path, model_name, current_params, metrics, elapsed, dataset_name_cfg, feature_set, X_train.shape[0], n_samples_test, X_train.shape[1])  # Build the per-trial cache row with all identification, pipeline config, and metric fields
+                persist_partial_trial_result(csv_path, trial_row)  # Persist the trial result immediately after metrics computation to guarantee recovery on interruption
 
             best_score, best_params, best_elapsed = update_best_if_improved(metrics, elapsed, current_params, best_score, best_params, best_elapsed, all_results)  # Update best score, params, and elapsed time when the current combination improves on the best seen so far
 
@@ -2798,6 +2809,10 @@ def run_parallel_grid_search(
     best_params,
     best_elapsed,
     all_results,
+    feature_set="",
+    dataset_name_cfg="",
+    n_samples_test=0,
+    partial_cache_lookup=None,
 ):
     """
     Run parallel evaluation of hyperparameter combinations for classifiers without n_jobs support.
@@ -2821,6 +2836,10 @@ def run_parallel_grid_search(
     :param best_params: Current best hyperparameter dict corresponding to best_score.
     :param best_elapsed: Execution time of the current best combination in seconds.
     :param all_results: Accumulated list of per-combination result entries.
+    :param feature_set: Feature selection strategy label for partial trial cache row construction.
+    :param dataset_name_cfg: Config-level dataset name key for partial trial cache row construction.
+    :param n_samples_test: Number of test samples for partial trial cache row construction.
+    :param partial_cache_lookup: Pre-loaded partial trial cache lookup dict (reserved for interface symmetry).
     :return: Tuple (best_params, best_score, best_elapsed, all_results, global_counter).
     """
 
@@ -2894,6 +2913,9 @@ def run_parallel_grid_search(
 
                     result_entry = build_result_entry_with_metrics(current_params, elapsed, metrics)  # Build ordered result entry from params, elapsed time, and evaluation metrics
                     all_results.append(result_entry)  # Append result entry to accumulated results list
+                    if csv_path:  # Persist trial to partial cache when a dataset path is available
+                        trial_row = build_partial_trial_row(csv_path, model_name, current_params, metrics, elapsed, dataset_name_cfg, feature_set, X_train.shape[0], n_samples_test, X_train.shape[1])  # Build the per-trial cache row with all identification, pipeline config, and metric fields
+                        persist_partial_trial_result(csv_path, trial_row)  # Persist the trial result immediately after metrics computation to guarantee recovery on interruption
 
                     best_score, best_params, best_elapsed = update_best_if_improved(
                         metrics, elapsed, current_params, best_score, best_params, best_elapsed, all_results
@@ -2924,6 +2946,9 @@ def run_parallel_grid_search(
                 best_params,
                 best_elapsed,
                 all_results,
+                feature_set=feature_set,
+                dataset_name_cfg=dataset_name_cfg,
+                n_samples_test=n_samples_test,
             )  # Fall back to sequential evaluation to guarantee all combinations are evaluated
 
         return best_params, best_score, best_elapsed, all_results, global_counter  # Return final updated state to manual_grid_search
@@ -2946,6 +2971,9 @@ def manual_grid_search(
     model_index=None,
     total_models=None,
     hardware_specs=None,
+    feature_set="",
+    dataset_name_cfg="",
+    n_samples_test=0,
 ):
     """
     Performs manual grid search hyperparameter optimization with integrated progress bar.
@@ -2967,6 +2995,9 @@ def manual_grid_search(
     :param total_combinations_all_models: Total number of parameter combinations across all models
     :param total_models: Total number of models being optimized
     :param hardware_specs: Dictionary of hardware specifications (optional)
+    :param feature_set: Feature selection strategy label for partial trial cache integration.
+    :param dataset_name_cfg: Config-level dataset name key for partial trial cache integration.
+    :param n_samples_test: Number of test samples for partial trial cache row construction.
     :return: Tuple (best_params, best_score, all_results, global_counter_end)
     """
 
@@ -2979,6 +3010,7 @@ def manual_grid_search(
         keys, param_combinations, total_combinations = expand_parameter_grid(param_grid)  # Expand param grid into ordered list of all combinations
 
         cache_dict = load_cache_results(csv_path) if csv_path else {}  # Load cache
+        partial_cache_lookup = load_partial_trial_cache(csv_path) if csv_path else {}  # Load per-trial partial cache for robust resume support
         
         best_score, best_params, best_elapsed, all_results, global_counter = initialize_grid_search_state(global_counter_start)  # Initialize grid search bookkeeping state
         
@@ -2995,6 +3027,10 @@ def manual_grid_search(
         )
 
         report_combination_search_progress(cached_count, combinations_to_test, model_name)  # Print cached count and remaining combinations to test
+
+        combinations_to_test, partial_skipped = filter_combinations_by_partial_cache(combinations_to_test, keys, model_name, csv_path or "", dataset_name_cfg, feature_set, partial_cache_lookup)  # Filter combinations already present in the per-trial partial cache to enable true resume
+        if partial_skipped > 0:  # Log skipped count only when at least one combination was filtered by the partial trial cache
+            print(f"{BackgroundColors.GREEN}Skipped {BackgroundColors.CYAN}{partial_skipped}{BackgroundColors.GREEN} combinations already in partial trial cache for {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}")  # Report the number of combinations skipped due to partial cache resume
 
         log_resource_information(X_train, y_train)  # Log available ram, dataset size, and core count before evaluation
 
@@ -3028,6 +3064,9 @@ def manual_grid_search(
                 best_params,
                 best_elapsed,
                 all_results,
+                feature_set=feature_set,
+                dataset_name_cfg=dataset_name_cfg,
+                n_samples_test=n_samples_test,
             )  # Execute parallel grid search for non-n_jobs classifier using computed worker count
         else:
             if use_parallel:  # Verify parallel flag is set but no combinations remain to run
@@ -3052,6 +3091,10 @@ def manual_grid_search(
                 best_params,
                 best_elapsed,
                 all_results,
+                feature_set=feature_set,
+                dataset_name_cfg=dataset_name_cfg,
+                n_samples_test=n_samples_test,
+                partial_cache_lookup=partial_cache_lookup,
             )  # Perform sequential evaluation for n_jobs classifiers or when parallel path has no combinations
 
         verbose_output(f"{BackgroundColors.GREEN}Completed optimization for {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}. Best score: {BackgroundColors.CYAN}{best_score}{Style.RESET_ALL}")  # Log completion
@@ -3174,7 +3217,7 @@ def build_result_entry_from_best(csv_path, model_name, best_params, best_score, 
         raise
 
 
-def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=None, dataset_name=None, dataset_path=None, cfg_dataset_name: str = "", feature_names=None, feature_selection_method: str = "Genetic Algorithm"):
+def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=None, dataset_name=None, dataset_path=None, cfg_dataset_name: str = "", feature_names=None, feature_selection_method: str = "Genetic Algorithm", n_samples_test: int = 0):
     """
     Runs optimization for all configured ML models using a progress bar and manual grid search.
 
@@ -3189,6 +3232,7 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
     :param cfg_dataset_name: Config-level dataset key name for the CSV result column (optional)
     :param feature_names: Feature names list used during training (optional)
     :param feature_selection_method: Label indicating the feature selection strategy used
+    :param n_samples_test: Number of test samples for partial trial cache row construction.
     :return: None
     """
 
@@ -3228,6 +3272,9 @@ def run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_l
                         model_index=model_index,
                         total_models=len(models),
                         hardware_specs=hardware_specs,
+                        feature_set=feature_selection_method,
+                        dataset_name_cfg=cfg_dataset_name,
+                        n_samples_test=n_samples_test,
                     )
                 except Exception as model_err:
                     print(f"{BackgroundColors.RED}Error optimizing {model_name}: {model_err}{Style.RESET_ALL}")
@@ -3340,6 +3387,7 @@ def process_single_csv_file(csv_path, dir_results_list, cfg_dataset_name: str = 
             valid_ga_features = feature_names  # Reset feature list to all features for the emergency fallback
             feature_selection_method = "All Features (Emergency Fallback)"  # Update label for tracking the emergency fallback path
 
+        n_samples_test = X_test_ga.shape[0]  # Compute test set sample count for partial trial cache row construction
         models_and_grids = get_models_and_param_grids()  # Get model grids
 
         start_idx = len(dir_results_list)  # Track result insertion index
@@ -3350,7 +3398,7 @@ def process_single_csv_file(csv_path, dir_results_list, cfg_dataset_name: str = 
         models = list(models_and_grids.items())  # Convert dict to list
 
         dataset_name = os.path.basename(os.path.dirname(csv_path))  # Extract dataset directory name
-        run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=scaler, dataset_name=dataset_name, dataset_path=cfg_dataset_path, cfg_dataset_name=cfg_dataset_name, feature_names=valid_ga_features, feature_selection_method=feature_selection_method)  # Run optimizations with validated feature selection applied
+        run_model_optimizations(models, csv_path, X_train_ga, y_train, dir_results_list, scaler=scaler, dataset_name=dataset_name, dataset_path=cfg_dataset_path, cfg_dataset_name=cfg_dataset_name, feature_names=valid_ga_features, feature_selection_method=feature_selection_method, n_samples_test=n_samples_test)  # Run optimizations with validated feature selection applied
 
         added_slice = dir_results_list[start_idx:]  # Extract slice
         print(
