@@ -251,7 +251,7 @@ def parse_cli_args():
         parser.add_argument("--dataset-file-format", type=str, default=None, dest="dataset_file_format", help="File format for dataset files: arff, csv, parquet, txt")  # Dataset file format CLI override
         parser.add_argument("--augmentation-file-format", type=str, default=None, dest="augmentation_file_format", help="File format for augmentation files: arff, csv, parquet, txt")  # Augmentation file format CLI override
         parser.add_argument("--feature-sets", type=str, default=None, dest="feature_sets", help="Comma-separated feature set strategies to enable: full,pca,rfe,ga (overrides config toggles)")  # Feature set strategies CLI override
-        parser.add_argument("--features", type=str, default=None, dest="explicit_features", help="Comma-separated explicit feature names; when provided, overrides all feature set strategies")  # Explicit feature list CLI override
+        parser.add_argument("--features", type=str, default=None, dest="explicit_features", help="Comma-separated explicit feature names")  # Explicit feature list CLI override
         
         return parser.parse_args()  # Return parsed arguments
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -307,7 +307,7 @@ def get_default_stacking_config():
                 "use_pca": True,  # Enable PCA Components strategy (dimensionality reduction)
                 "use_rfe": True,  # Enable RFE Features strategy (recursive feature elimination)
                 "use_ga": True,  # Enable GA Features strategy (genetic algorithm selection)
-                "explicit_features": [],  # Optional explicit feature list (overrides all strategies when non-empty)
+                "explicit_features": [],  # Optional explicit feature list; when non-empty, added as an additional "Explicit Features" set alongside all enabled strategies. Use this carefully, as when analyzing multiple datasets, you must put features common between the datasets.
             },  # Configurable feature set strategies for evaluation
         }  # Return default stacking configuration
     except Exception as e:
@@ -6902,9 +6902,10 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
     """
     Build feature sets dictionary from configurable feature selection strategies.
 
-    Supports an explicit feature override list and per-strategy toggles (full, GA,
-    PCA, RFE). When explicit_features is non-empty all strategy toggles are ignored
-    and only the explicit feature subset is returned.
+    Supports an additive explicit feature set alongside independent per-strategy
+    toggles (full, GA, PCA, RFE). When explicit_features is non-empty it is
+    included as an additional entry; all strategy toggles remain fully independent.
+    To evaluate ONLY the explicit feature set the caller must disable all toggles.
 
     :param X_train_scaled: Scaled training features
     :param X_test_scaled: Scaled test features
@@ -6926,11 +6927,21 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
             feature_sets_config = {}  # Use empty dict as fallback
 
         explicit_features = feature_sets_config.get("explicit_features", []) or []  # Retrieve explicit features list (empty list if not set or None)
+        use_full = feature_sets_config.get("use_full", True)  # Toggle for full features strategy (default: enabled)
+        use_ga = feature_sets_config.get("use_ga", True)  # Toggle for GA features strategy (default: enabled)
+        use_pca = feature_sets_config.get("use_pca", True)  # Toggle for PCA features strategy (default: enabled)
+        use_rfe = feature_sets_config.get("use_rfe", True)  # Toggle for RFE features strategy (default: enabled)
 
-        if explicit_features:  # If explicit features override is active
+        verbose_output(
+            f"{BackgroundColors.GREEN}Feature strategies enabled: Full={use_full}, PCA={use_pca}, RFE={use_rfe}, GA={use_ga}.{Style.RESET_ALL}", config=config
+        )  # Log which feature strategies are active for this evaluation
+
+        feature_sets = {}  # Initialize empty feature sets dictionary
+
+        if explicit_features:  # If explicit feature set is provided as an additive strategy
             verbose_output(
-                f"{BackgroundColors.GREEN}Feature strategy: Explicit override active with {len(explicit_features)} feature(s).{Style.RESET_ALL}", config=config
-            )  # Log explicit features override activation
+                f"{BackgroundColors.GREEN}Explicit feature set enabled with {len(explicit_features)} feature(s).{Style.RESET_ALL}", config=config
+            )  # Log explicit feature set activation with feature count
 
             feature_names_list = list(feature_names)  # Normalize feature names to list for index lookup
             missing = [f for f in explicit_features if f not in feature_names_list]  # Identify feature names absent from the dataset columns
@@ -6940,24 +6951,11 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
                     f"Explicit features not found in dataset columns: {missing}"
                 )  # Raise fast with explicit mismatch details
 
-            indices = [feature_names_list.index(f) for f in explicit_features]  # Map each explicit feature name to its column index
-            X_train_subset = X_train_scaled[:, indices]  # Extract training columns matching the explicit feature list
-            X_test_subset = X_test_scaled[:, indices]  # Extract test columns matching the explicit feature list
+            feature_indices = [feature_names_list.index(f) for f in explicit_features]  # Map each explicit feature name to its column index
+            X_train_explicit = X_train_scaled[:, feature_indices]  # Extract training columns matching the explicit feature list
+            X_test_explicit = X_test_scaled[:, feature_indices]  # Extract test columns matching the explicit feature list
 
-            verbose_output(
-                f"{BackgroundColors.GREEN}Feature strategy: Explicit override resolved to {len(indices)} column(s).{Style.RESET_ALL}", config=config
-            )  # Log resolved column count for explicit features
-
-            return {"Explicit Features": (X_train_subset, X_test_subset, explicit_features)}  # Return only the explicit feature set
-
-        use_full = feature_sets_config.get("use_full", True)  # Toggle for full features strategy (default: enabled)
-        use_ga = feature_sets_config.get("use_ga", True)  # Toggle for GA features strategy (default: enabled)
-        use_pca = feature_sets_config.get("use_pca", True)  # Toggle for PCA features strategy (default: enabled)
-        use_rfe = feature_sets_config.get("use_rfe", True)  # Toggle for RFE features strategy (default: enabled)
-
-        verbose_output(
-            f"{BackgroundColors.GREEN}Feature strategy: full={use_full}, ga={use_ga}, pca={use_pca}, rfe={use_rfe}.{Style.RESET_ALL}", config=config
-        )  # Log which feature strategies are active for this evaluation
+            feature_sets["Explicit Features"] = (X_train_explicit, X_test_explicit, explicit_features)  # Add explicit feature set as an additional strategy entry
 
         if use_pca:  # Compute PCA transformation only when PCA strategy is enabled
             X_train_pca, X_test_pca = apply_pca_transformation(
@@ -6977,8 +6975,6 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
             X_test_rfe, _ = get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)  # Get RFE feature subset for testing
         else:  # RFE strategy is disabled
             X_train_rfe, X_test_rfe, rfe_actual_features = None, None, []  # Skip RFE subset computation when strategy is disabled
-
-        feature_sets = {}  # Initialize empty feature sets dictionary
 
         if use_full:  # Include full features set when strategy is enabled
             feature_sets["Full Features"] = (X_train_scaled, X_test_scaled, feature_names)  # All features with names
