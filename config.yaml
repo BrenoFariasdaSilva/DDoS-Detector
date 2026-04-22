@@ -296,7 +296,14 @@ stacking: # Stacking experiment settings
     feature_selection: true # Enable feature selection combination in pipeline
     hyperparameter_optimization: true # Enable hyperparameter optimization combination in pipeline
 
-  enabled_classifiers: # List of classifier names to include in stacking pipeline (remove entries to disable)
+  feature_sets_config: # Configurable feature set strategies (overridable via CLI)
+    use_full: true # Enable Full Features strategy (all dataset features)
+    use_pca: true # Enable PCA Components strategy (dimensionality reduction)
+    use_rfe: true # Enable RFE Features strategy (recursive feature elimination)
+    use_ga: true # Enable GA Features strategy (genetic algorithm selection)
+    explicit_features: [] # Optional explicit feature list; when non-empty, overrides all strategies
+
+  enabled_classifiers: # List of classifier names to include in stacking pipeline (comment entries to disable)
     - Random Forest
     - SVM
     - XGBoost
