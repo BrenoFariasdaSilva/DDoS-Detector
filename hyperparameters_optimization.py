@@ -52,6 +52,7 @@ import copy  # For deep copying configuration dictionaries
 import dataframe_image as dfi  # For exporting DataFrame images (zebra-striped PNG)
 import gc  # For explicit garbage collection during parallel memory management
 import datetime  # For getting the current date and time
+import hashlib  # For computing deterministic SHA-256 trial hashes
 import json  # For handling JSON strings
 import lightgbm as lgb  # For LightGBM model
 import math  # For mathematical operations
