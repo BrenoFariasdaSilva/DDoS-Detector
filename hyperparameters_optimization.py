@@ -132,6 +132,7 @@ N_JOBS = -2  # Number of parallel jobs (-1 uses all cores, -2 leaves one core fr
 SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, skip training when exported models exist for dataset
 RESULTS_FILENAME = "Hyperparameter_Optimization_Results.csv"  # Filename for saving results
 CACHE_PREFIX = "Cache_"  # Prefix for cache filenames
+PARTIAL_TRIAL_CACHE_PREFIX = "Cache_Hyperparameter_Trials_"  # Prefix for per-trial partial cache filenames enabling robust resume support
 MATCH_FILENAMES_TO_PROCESS = [""]  # List of specific filenames to search for a match (set to None to process all files)
 IGNORE_FILES = [RESULTS_FILENAME]  # List of filenames to ignore when searching for datasets
 IGNORE_DIRS = [
