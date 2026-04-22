@@ -963,10 +963,15 @@ def process_single_file(f, config=None):
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
         
+        progress_idx = config.get("execution", {}).get("progress_index", None)  # Get progress index from config when provided
+        progress_total = config.get("execution", {}).get("progress_total", None)  # Get progress total from config when provided
+        display_f = f  # Default display uses original file path
+        if progress_idx is not None and progress_total is not None:  # If both progress values are present
+            display_f = f"[{progress_idx}/{progress_total}]: {f}"  # Prepend progress indicator to file path for display
         verbose_output(
-            f"{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{f}{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{display_f}{Style.RESET_ALL}",
             config=config
-        )  # Output the verbose message
+        )  # Output the verbose message with optional progress indicator
 
         df = load_dataset(f, config=config)  # Load the dataset from the file
         if df is None:  # If loading failed
@@ -1196,8 +1201,14 @@ def combine_dataset_files(files_list, config=None):
         )  # Output the verbose message
 
         processed_files = []  # Initialize list for processed file data
-        for f in files_list:  # Iterate over each file in the list
-            result = process_single_file(f, config=config)  # Process the single file
+        total_files = len(files_list)  # Compute total number of files for progress reporting
+        for idx, f in enumerate(files_list, start=1):  # Iterate over each file with index for progress
+            cfg = dict(config)  # Create shallow copy of config to avoid mutating caller config
+            exec_cfg = dict(cfg.get("execution", {}))  # Copy nested execution config for modification
+            exec_cfg["progress_index"] = idx  # Set current file index in execution config
+            exec_cfg["progress_total"] = total_files  # Set total files count in execution config
+            cfg["execution"] = exec_cfg  # Assign modified execution config back into config copy
+            result = process_single_file(f, config=cfg)  # Process the single file with progress info in config
             if result is not None:  # If processing succeeded
                 df_clean, target_col, feat_cols = result  # Unpack the result
                 processed_files.append((f, df_clean, target_col, feat_cols))  # Add to processed list
@@ -1348,8 +1359,14 @@ def process_files_and_extract_labels(files_list, config):
     processed_files_with_labels = []  # Initialize list for processed file data with attack labels
     attack_types_set = set()  # Initialize set to track unique attack types
 
-    for f in files_list:  # Iterate over each file in the list
-        result = process_single_file(f, config=config)  # Process the single file
+    total_files = len(files_list)  # Compute total number of files for progress reporting
+    for idx, f in enumerate(files_list, start=1):  # Iterate over each file with index for progress
+        cfg = dict(config)  # Create shallow copy of config to avoid mutating caller config
+        exec_cfg = dict(cfg.get("execution", {}))  # Copy nested execution config for modification
+        exec_cfg["progress_index"] = idx  # Set current file index in execution config
+        exec_cfg["progress_total"] = total_files  # Set total files count in execution config
+        cfg["execution"] = exec_cfg  # Assign modified execution config back into config copy
+        result = process_single_file(f, config=cfg)  # Process the single file with progress info in config
         if result is not None:  # If processing succeeded
             df_clean, target_col, feat_cols = result  # Unpack the result
             attack_label = extract_attack_label_from_path(f)  # Extract attack type from filename for tuple reference
@@ -1360,8 +1377,8 @@ def process_files_and_extract_labels(files_list, config):
         else:  # If processing failed
             verbose_output(
                 f"{BackgroundColors.YELLOW}Skipping file due to processing failure: {BackgroundColors.CYAN}{f}{Style.RESET_ALL}",
-                config=config
-            )  # Output warning message
+                config=cfg
+            )  # Output warning message including progress when available
 
     if not processed_files_with_labels:  # If no files were processed successfully
         print(f"{BackgroundColors.RED}No compatible files found to combine for combined files evaluation dataset.{Style.RESET_ALL}")  # Print error message
@@ -1508,17 +1525,18 @@ def load_augmented_files_for_combined_evaluation(original_files_list, config=Non
 
         augmented_files = []  # Prepare list to preserve alignment with originals (None = missing)
         found_count = 0  # Counter for how many augmented files were found
+        total_originals = len(original_files_list)  # Compute total count for progress
 
-        for original_file in original_files_list:  # Iterate originals to locate augmented counterparts
+        for idx, original_file in enumerate(original_files_list, start=1):  # Iterate originals with index for progress
             augmented_file = find_data_augmentation_file(original_file, config=config)  # Locate augmented file path or None
             if augmented_file is not None:  # If an augmented file exists for this original
                 augmented_files.append(augmented_file)  # Append the found augmented file path
                 found_count += 1  # Increment found counter
             else:  # If no augmented file exists for this original
-                verbose_output(  # Emit a per-file informative warning to verbose output
-                    f"{BackgroundColors.YELLOW}No augmented file found for: {BackgroundColors.CYAN}{original_file}{Style.RESET_ALL}",
+                verbose_output(  # Emit a per-file informative warning to verbose output including progress
+                    f"{BackgroundColors.YELLOW}No augmented file found for: {BackgroundColors.CYAN}[{idx}/{total_originals}] {original_file}{Style.RESET_ALL}",
                     config=config,
-                )
+                )  # Output missing-augmented-file warning with progress indicator
                 augmented_files.append(None)  # Preserve index alignment with None placeholder
 
         if found_count == 0:  # If none were found across all originals
@@ -8841,17 +8859,22 @@ def print_file_processing_header(file, config=None):
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
+        progress_idx = config.get("execution", {}).get("progress_index", None)  # Get progress index from config when provided
+        progress_total = config.get("execution", {}).get("progress_total", None)  # Get progress total from config when provided
+        display_file = file  # Default display uses original file path
+        if progress_idx is not None and progress_total is not None:  # If both progress values are present
+            display_file = f"[{progress_idx}/{progress_total}]: {file}"  # Prepend progress indicator to file path for header
         verbose_output(
-            f"{BackgroundColors.GREEN}Printing file processing header for: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Printing file processing header for: {BackgroundColors.CYAN}{display_file}{Style.RESET_ALL}",
             config=config
-        )  # Output the verbose message
+        )  # Output the verbose message for header with optional progress indicator
 
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
         )  # Print separator line
         print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}"
-        )  # Print file being processed
+            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{display_file}{Style.RESET_ALL}"
+        )  # Print file being processed with optional progress indicator
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
         )  # Print separator line
@@ -9268,7 +9291,8 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     da_options = [True, False] if da_toggle else [False]  # Build data augmentation iteration options based on toggle
 
     for mode in modes:  # For each mode
-        for file in files_to_process:  # For each file in the input path
+        total_files = len(files_to_process)  # Compute total number of files for progress reporting
+        for idx, file in enumerate(files_to_process, start=1):  # For each file in the input path with index for progress
             try:  # Protect individual-file orchestration
                 artifacts = locate_and_verify_artifacts(file, config=config)  # Locate feature/HP/DA artifacts
                 fs_ga, fs_pca, fs_rfe = artifacts.get("ga"), artifacts.get("pca"), artifacts.get("rfe")  # Unpack feature artifacts
@@ -9285,7 +9309,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
 
                     suffix = f"_fs_{'on' if feature_selection_enabled else 'off'}_hp_{'on' if hyperparameters_enabled else 'off'}_da_{'on' if data_augmentation_enabled else 'off'}"  # Suffix
 
-                    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}Orchestrating: mode={mode}, file={file}, combo={suffix}{Style.RESET_ALL}")  # Log orchestration
+                    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}Orchestrating: mode={mode}, file=[{idx}/{total_files}] {file}, combo={suffix}{Style.RESET_ALL}")  # Log orchestration with progress indicator
                     send_telegram_message(TELEGRAM_BOT, [f"[{mode.upper()}] Starting combination: {suffix} | file: {os.path.basename(file)}"])  # Notify Telegram about FS/HP/DA combination start
 
                     if hyperparameters_enabled:  # If we should use hyperparameters
