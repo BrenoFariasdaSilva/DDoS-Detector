@@ -955,16 +955,16 @@ def print_metrics(metrics_tuple):
     
     try:
         print(f"\n{BackgroundColors.BOLD}Average Metrics:{Style.RESET_ALL}")
-        print(f"  {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{truncate_value(metrics_tuple[0])}{Style.RESET_ALL}")
-        print(f"  {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{truncate_value(metrics_tuple[1])}{Style.RESET_ALL}")
-        print(f"  {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{truncate_value(metrics_tuple[2])}{Style.RESET_ALL}")
-        print(f"  {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{truncate_value(metrics_tuple[3])}{Style.RESET_ALL}")
+        print(f"  {BackgroundColors.GREEN}Accuracy: {BackgroundColors.CYAN}{metrics_tuple[0]}{Style.RESET_ALL}")  # Output full-precision accuracy
+        print(f"  {BackgroundColors.GREEN}Precision: {BackgroundColors.CYAN}{metrics_tuple[1]}{Style.RESET_ALL}")  # Output full-precision precision
+        print(f"  {BackgroundColors.GREEN}Recall: {BackgroundColors.CYAN}{metrics_tuple[2]}{Style.RESET_ALL}")  # Output full-precision recall
+        print(f"  {BackgroundColors.GREEN}F1-Score: {BackgroundColors.CYAN}{metrics_tuple[3]}{Style.RESET_ALL}")  # Output full-precision F1 score
         print(
-            f"  {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{truncate_value(metrics_tuple[4])}{Style.RESET_ALL}"
-        )
+            f"  {BackgroundColors.GREEN}False Positive Rate (FPR): {BackgroundColors.CYAN}{metrics_tuple[4]}{Style.RESET_ALL}"
+        )  # Output full-precision false positive rate
         print(
-            f"  {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{truncate_value(metrics_tuple[5])}{Style.RESET_ALL}"
-        )
+            f"  {BackgroundColors.GREEN}False Negative Rate (FNR): {BackgroundColors.CYAN}{metrics_tuple[5]}{Style.RESET_ALL}"
+        )  # Output full-precision false negative rate
         try:
             if len(metrics_tuple) >= 8:  # If tuple has training and testing times
                 displayed_elapsed = int(round(float(metrics_tuple[6]) + float(metrics_tuple[7])))  # Sum training+testing
@@ -979,12 +979,12 @@ def print_metrics(metrics_tuple):
             TELEGRAM_BOT,
             [
                 f"Average Metrics:\n"
-                f"  Accuracy: {truncate_value(metrics_tuple[0])}\n"
-                f"  Precision: {truncate_value(metrics_tuple[1])}\n"
-                f"  Recall: {truncate_value(metrics_tuple[2])}\n"
-                f"  F1-Score: {truncate_value(metrics_tuple[3])}\n"
-                f"  False Positive Rate (FPR): {truncate_value(metrics_tuple[4])}\n"
-                f"  False Negative Rate (FNR): {truncate_value(metrics_tuple[5])}\n"
+                f"  Accuracy: {metrics_tuple[0]}\n"
+                f"  Precision: {metrics_tuple[1]}\n"
+                f"  Recall: {metrics_tuple[2]}\n"
+                f"  F1-Score: {metrics_tuple[3]}\n"
+                f"  False Positive Rate (FPR): {metrics_tuple[4]}\n"
+                f"  False Negative Rate (FNR): {metrics_tuple[5]}\n"
                 f"  Elapsed Time: {displayed_elapsed}s"
             ],
         )  # Send metrics to Telegram
@@ -1332,10 +1332,10 @@ def extract_metric_values_into_row(r: Dict[str, Any], data: Dict[str, Optional[A
                     val = sec.get(key)  # Extract metric value from nested section dict
 
             if val is not None:  # Verify a value was resolved before formatting
-                try:  # Safely truncate numeric value to 4 decimal places
-                    data[col] = truncate_value(float(val))  # Format as truncated float string
-                except Exception:  # On float conversion or truncation failure
-                    data[col] = val  # Preserve raw value when formatting fails
+                try:  # Safely convert numeric value to full-precision float
+                    data[col] = float(val)  # Preserve full-precision metric value
+                except Exception:  # On float conversion failure
+                    data[col] = val  # Preserve raw value when conversion fails
 
         return data  # Return updated data row with populated metric values
     except Exception as e:
@@ -1615,9 +1615,9 @@ def print_run_summary(run_results):
         print(f"  Model: {res.get('model')}")
         print(f"  CV Method: {res.get('cv_method')}")
         print(
-            f"  Accuracy: {truncate_value(res.get('test_accuracy', res.get('accuracy')))}  Precision: {truncate_value(res.get('test_precision', res.get('precision')))}  Recall: {truncate_value(res.get('test_recall', res.get('recall')))}  F1: {truncate_value(res.get('test_f1_score', res.get('f1_score')))}"
+            f"  Accuracy: {res.get('test_accuracy', res.get('accuracy'))}  Precision: {res.get('test_precision', res.get('precision'))}  Recall: {res.get('test_recall', res.get('recall'))}  F1: {res.get('test_f1_score', res.get('f1_score'))}"
         )
-        print(f"  FPR: {truncate_value(res.get('test_fpr', res.get('fpr')))}  FNR: {truncate_value(res.get('test_fnr', res.get('fnr')))}  Elapsed: {res.get('elapsed_time_s')}s")
+        print(f"  FPR: {res.get('test_fpr', res.get('fpr'))}  FNR: {res.get('test_fnr', res.get('fnr'))}  Elapsed: {res.get('elapsed_time_s')}s")
         print(f"  Top features: {res.get('top_features')}")
         if res.get("hyperparameters"):
             try:
@@ -1828,22 +1828,22 @@ def build_run_results(final_model, csv_path, hyperparameters, cv_method, cv_metr
 
         if cv_metrics is not None:
             result.update({
-                "cv_accuracy": truncate_value(cv_metrics[0]),
-                "cv_precision": truncate_value(cv_metrics[1]) or "0.0",
-                "cv_recall": truncate_value(cv_metrics[2]) or "0.0",
-                "cv_f1_score": truncate_value(cv_metrics[3]) or "0.0",
-                "cv_fpr": truncate_value(cv_metrics[4]) or "0.0",
-                "cv_fnr": truncate_value(cv_metrics[5]) or "0.0",
+                "cv_accuracy": cv_metrics[0],
+                "cv_precision": cv_metrics[1] if cv_metrics[1] is not None else 0.0,
+                "cv_recall": cv_metrics[2] if cv_metrics[2] is not None else 0.0,
+                "cv_f1_score": cv_metrics[3] if cv_metrics[3] is not None else 0.0,
+                "cv_fpr": cv_metrics[4] if cv_metrics[4] is not None else 0.0,
+                "cv_fnr": cv_metrics[5] if cv_metrics[5] is not None else 0.0,
             })
 
         if test_metrics is not None:
             result.update({
-                "test_accuracy": truncate_value(test_metrics[0]) or "0.0",
-                "test_precision": truncate_value(test_metrics[1]) or "0.0",
-                "test_recall": truncate_value(test_metrics[2]) or "0.0",
-                "test_f1_score": truncate_value(test_metrics[3]) or "0.0",
-                "test_fpr": truncate_value(test_metrics[4]) or "0.0",
-                "test_fnr": truncate_value(test_metrics[5]) or "0.0",
+                "test_accuracy": test_metrics[0] if test_metrics[0] is not None else 0.0,
+                "test_precision": test_metrics[1] if test_metrics[1] is not None else 0.0,
+                "test_recall": test_metrics[2] if test_metrics[2] is not None else 0.0,
+                "test_f1_score": test_metrics[3] if test_metrics[3] is not None else 0.0,
+                "test_fpr": test_metrics[4] if test_metrics[4] is not None else 0.0,
+                "test_fnr": test_metrics[5] if test_metrics[5] is not None else 0.0,
                 "testing_time_s": round(float(test_metrics[6]), 6),
             })
 
@@ -2066,7 +2066,7 @@ def run_cv_fold_loop(X_train_scaled: np.ndarray, y_train_array: np.ndarray, n_sp
 
             send_telegram_message(
                 TELEGRAM_BOT,
-                f"RFE: Finished fold {fold_idx}/{n_splits} for dataset {Path(csv_path).stem} with F1: {truncate_value(metrics_tuple[3])} in {calculate_execution_time(0, metrics_tuple[6])}"
+                f"RFE: Finished fold {fold_idx}/{n_splits} for dataset {Path(csv_path).stem} with F1: {metrics_tuple[3]} in {calculate_execution_time(0, metrics_tuple[6])}"
             )  # Notify fold completion via Telegram
 
         return fold_metrics, fold_rankings, fold_supports, total_elapsed, total_feature_extraction  # Return collected fold results and timing
