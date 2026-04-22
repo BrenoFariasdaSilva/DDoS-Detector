@@ -886,10 +886,10 @@ def build_extended_metrics(conf_matrix, labels, duration_str):
             prec_val = TP / (TP + FP) if (TP + FP) > 0 else 0  # Precision value
             rec_val = TP / (TP + FN) if (TP + FN) > 0 else 0  # Recall value
             f1_val = 2 * prec_val * rec_val / (prec_val + rec_val) if (prec_val + rec_val) > 0 else 0  # F1-Score value
-            accuracy = truncate_value(acc_val)  # Truncated accuracy
-            precision = truncate_value(prec_val)  # Truncated precision
-            recall = truncate_value(rec_val)  # Truncated recall
-            f1 = truncate_value(f1_val)  # Truncated F1-Score
+            accuracy = acc_val  # Full-precision accuracy
+            precision = prec_val  # Full-precision precision
+            recall = rec_val  # Full-precision recall
+            f1 = f1_val  # Full-precision F1-Score
 
             metrics_list.append(
                 {  # Append the metrics for the class to the list
@@ -1260,9 +1260,9 @@ def generate_feature_selection_comparison(
                     {  # Append comparison data
                         "Dataset": dataset_name,  # Dataset name
                         "Model": model_name,  # Model name
-                        "F1-Score (Baseline)": truncate_value(baseline_f1),  # Truncated baseline F1-Score
-                        "F1-Score (Feat. Selection)": truncate_value(feature_f1),  # Truncated feature-selected F1-Score
-                        "Improvement (%)": truncate_value(improvement),  # Truncated improvement percentage
+                        "F1-Score (Baseline)": baseline_f1,  # Full-precision baseline F1-Score
+                        "F1-Score (Feat. Selection)": feature_f1,  # Full-precision feature-selected F1-Score
+                        "Improvement (%)": improvement,  # Full-precision improvement percentage
                         "Training Duration (Baseline)": baseline.get("Training Duration", ""),  # Baseline training duration
                         "Training Duration (Feat. Selection)": feature_selected.get(
                             "Training Duration", ""
@@ -1468,7 +1468,7 @@ def train_and_evaluate_models(
                 mean_score, std_score = cross_validate_model(model, X_train, y_train)  # Perform cross-validation
                 duration = [0, "CV"]  # CV is not timed here
                 tqdm.write(
-                    f"{BackgroundColors.GREEN}✓ {name} - F1: {truncate_value(mean_score)} ± {truncate_value(std_score)}{Style.RESET_ALL}"
+                    f"{BackgroundColors.GREEN}✓ {name} - F1: {mean_score} ± {std_score}{Style.RESET_ALL}"
                 )  # Output cross-validation results
             else:  # If not using cross-validation
                 metrics_dict = train_evaluate_and_build_metrics(
