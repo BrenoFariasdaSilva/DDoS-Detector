@@ -2291,6 +2291,46 @@ def compute_trial_hash(classifier_name, params_json, dataset_name, file_name, fe
         raise
 
 
+def load_partial_trial_cache(csv_path):
+    """
+    Load the per-trial partial cache for a dataset into a lookup dictionary.
+
+    :param csv_path: Path to the CSV dataset file being processed.
+    :return: Dictionary keyed by (dataset_name, file_name, classifier_name, feature_set, params_json) tuples mapping to cached row dicts.
+    """
+
+    try:
+        cache_path = get_partial_trial_cache_path(csv_path)  # Resolve the partial trial cache file path for this dataset
+        if not os.path.exists(cache_path):  # Return empty lookup when no partial cache file exists yet
+            verbose_output(f"{BackgroundColors.YELLOW}[DEBUG] No partial trial cache found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Log absence of the partial cache file
+            return {}  # Return empty dict indicating no prior trial results were persisted
+
+        try:  # Attempt to load and parse the partial trial cache CSV
+            cache_df = pd.read_csv(cache_path)  # Load the partial trial cache CSV into a DataFrame
+            cache_df.columns = cache_df.columns.str.strip()  # Remove leading/trailing whitespace from all column names
+            lookup = {}  # Initialize the lookup dictionary for O(1) resume queries
+            for _, row in cache_df.iterrows():  # Iterate over each persisted trial row to populate the lookup
+                key = (
+                    str(row.get("dataset_name", "")),  # Dataset name component of the composite lookup key
+                    str(row.get("file_name", "")),  # File name component of the composite lookup key
+                    str(row.get("classifier_name", "")),  # Classifier name component of the composite lookup key
+                    str(row.get("feature_set", "")),  # Feature set component of the composite lookup key
+                    str(row.get("params", "")),  # Serialized params component of the composite lookup key
+                )  # Five-field composite tuple matching the key structure used in filter_combinations_by_partial_cache
+                lookup[key] = row.to_dict()  # Map the composite key to the full cached row dict for metric retrieval
+
+            print(f"{BackgroundColors.GREEN}[DEBUG] Loaded partial cache with {BackgroundColors.CYAN}{len(lookup)}{BackgroundColors.GREEN} entries from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Log the number of loaded partial cache entries
+            return lookup  # Return the populated lookup dictionary to the caller
+
+        except Exception as load_err:  # Handle corrupted or malformed partial cache files gracefully without aborting
+            print(f"{BackgroundColors.YELLOW}[WARNING] Partial trial cache corrupted or unreadable at {cache_path}: {load_err}. Continuing without resume.{Style.RESET_ALL}")  # Warn about corruption and announce safe continuation
+            return {}  # Return empty dict to allow full re-evaluation without crashing
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def log_resource_information(X_train, y_train):
     """
     Log the available RAM, dataset size, and core count before beginning combination evaluation.
