@@ -2242,7 +2242,7 @@ def apply_zebra_style(df):
         raise  # Propagate exception without swallowing
 
 
-def ensure_playwright_chromium():  # Ensure playwright chromium is available locally
+def ensure_playwright_chromium():
     """
     Ensure Playwright Chromium is installed locally.
 
