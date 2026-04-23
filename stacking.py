@@ -68,6 +68,7 @@ import dataframe_image as dfi  # For exporting DataFrame styled tables as PNG im
 import datetime  # For getting the current date and time
 import gc  # For explicit garbage collection to reclaim memory from deleted objects
 import glob  # For file pattern matching
+import importlib  # Import importlib for dynamic module import
 import itertools  # For generating combinations of FS/HP/DA
 import json  # Import json for handling JSON strings within the CSV
 import lightgbm as lgb  # For LightGBM model
@@ -2242,21 +2243,72 @@ def apply_zebra_style(df):
         raise  # Propagate exception without swallowing
 
 
-def ensure_playwright_chromium():
+def is_playwright_installed() -> bool:
     """
-    Ensure Playwright Chromium is installed locally.
+    Verify if Playwright package is importable.
+
+    :return: Boolean indicating whether Playwright is installed.
+    """
+
+    try:  # Attempt dynamic import of Playwright to verify installation
+        importlib.import_module("playwright")  # Try to import the Playwright package
+        return True  # Return True when Playwright is importable
+    except Exception:  # Handle import failure gracefully
+        return False  # Return False when Playwright is not available
+
+
+def install_playwright_if_missing() -> None:
+    """
+    Install Playwright package into the active Python interpreter when missing.
 
     :return: None
     """
 
-    try:  # Attempt to import Playwright and install chromium if needed
-        from playwright.sync_api import sync_playwright  # Import playwright to verify installation
-        import subprocess  # Import subprocess for command execution
+    try:  # Wrap installation attempt in try/except to avoid interrupting pipeline
+        if is_playwright_installed():  # Verify if Playwright already installed
+            return  # Return early when Playwright is already present
 
-        subprocess.run(["playwright", "install", "chromium"], check=False)  # Attempt local chromium installation without sudo
+        subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=False)  # Install Playwright using the active interpreter
         return  # Return after attempting installation
-    except Exception as e:  # If any error occurs during installation attempt
-        print(str(e))  # Log the exception string to terminal
+    except Exception as e:  # Handle any errors during Playwright installation
+        print(str(e))  # Print the exception string for diagnostics
+        try:  # Attempt to notify via Telegram if configured
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception via Telegram hook
+        except Exception:  # Swallow any Telegram send errors silently
+            pass  # No-op when Telegram notification fails
+
+
+def install_playwright_chromium() -> None:
+    """
+    Install Playwright Chromium browser using the current Python interpreter.
+
+    :return: None
+    """
+
+    try:  # Attempt to install Chromium using Playwright module invocation
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False)  # Invoke Playwright install via the active interpreter
+        return  # Return after attempting Chromium installation
+    except Exception as e:  # Handle installation errors without raising
+        print(str(e))  # Print the exception string for diagnostics
+        try:  # Attempt to notify via Telegram if configured
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception via Telegram hook
+        except Exception:  # Swallow any Telegram send errors silently
+            pass  # No-op when Telegram notification fails
+
+
+def ensure_playwright_chromium() -> None:
+    """
+    Ensure Playwright and Chromium are installed for PNG exports.
+
+    :return: None
+    """
+
+    try:  # Orchestrate Playwright installation steps safely
+        install_playwright_if_missing()  # Install Playwright into the active interpreter when needed
+        install_playwright_chromium()  # Install Chromium via Playwright using the active interpreter
+        return  # Return after attempting orchestration
+    except Exception as e:  # Handle unexpected orchestration errors gracefully
+        print(str(e))  # Print the exception string for diagnostics
         try:  # Attempt to notify via Telegram if configured
             send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception via Telegram hook
         except Exception:  # Swallow any Telegram send errors silently
