@@ -60,6 +60,7 @@ from colorama import Style  # For coloring the terminal output
 from fastparquet import ParquetFile  # For handling Parquet file format
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
+from scapy.all import PcapReader  # For memory-efficient PCAP reading using Scapy
 from scipy.io import arff as scipy_arff  # Used to read ARFF files
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For Telegram utilities and global exception hook
 from tqdm import tqdm  # For showing a progress bar
@@ -114,7 +115,7 @@ def get_default_config() -> dict:  # Return default configuration for dataset_co
     return {
         "dataset_converter": {
             "verbose": False,  # Whether to enable verbose messages
-            "input_file_formats": ["arff", "csv", "parquet", "txt"],  # Input formats to discover during dataset scanning
+            "input_file_formats": ["arff", "csv", "parquet", "pcap", "stats", "txt"],  # Input formats to discover during dataset scanning
             "output_file_formats": ["arff", "csv", "parquet", "txt"],  # Output formats to generate during conversion
             "input_directory": "./Datasets/",  # Default input directory
             "output_directory": "./Converted",  # Default output directory
@@ -723,7 +724,7 @@ def resolve_input_file_formats(formats_list: Optional[list]) -> list:
             return formats_list or ["arff", "csv", "parquet", "txt"]  # Return provided formats_list or all formats as default
 
         norm = [str(file).lower() for file in (in_formats or [])]  # Normalize configured entries to lowercase strings
-        allowed = ["arff", "csv", "parquet", "txt"]  # Allowed input formats list
+        allowed = ["arff", "csv", "parquet", "pcap", "stats", "txt"]  # Allowed input formats list
         final = [file for file in norm if file in allowed]  # Filter configured formats to allowed set
 
         if not final:  # If no valid configured formats remain after filtering
@@ -1125,6 +1126,25 @@ def write_cleaned_lines_to_file(cleaned_path, cleaned_lines):
         raise  # Re-raise to preserve original failure semantics
 
 
+def clean_pcap_file(input_path: str, cleaned_path: str) -> None:
+    """
+    Copy a PCAP binary file to the cleaned path without textual modification.
+
+    :param input_path: Path to the input PCAP binary file.
+    :param cleaned_path: Path where the copied PCAP file will be saved.
+    :return: None
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        required_bytes = os.path.getsize(input_path) if os.path.isfile(input_path) else 0  # Estimate required bytes from the source file size on disk
+        ensure_enough_space(cleaned_path, required_bytes)  # Ensure enough space to write the copied PCAP file
+        shutil.copy2(input_path, cleaned_path)  # Copy the PCAP binary file to the cleaned path preserving all metadata
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def clean_file(input_path, cleaned_path):
     """
     Cleans ARFF, TXT, CSV, and Parquet files by removing unnecessary spaces in
@@ -1147,13 +1167,17 @@ def clean_file(input_path, cleaned_path):
             clean_parquet_file(input_path, cleaned_path)  # Clean parquet file
             return  # Exit early after handling parquet
 
+        if file_extension == ".pcap":  # Handle PCAP binary files by copying without textual modification
+            clean_pcap_file(input_path, cleaned_path)  # Copy PCAP file to cleaned path without modification
+            return  # Exit early after handling pcap
+
         with open(input_path, "r", encoding="utf-8") as f:  # Open the input file for reading
             lines = f.readlines()  # Read all lines from the file
 
         if file_extension == ".arff":  # Cleaning logic for ARFF files
             cleaned_lines = clean_arff_lines(lines)  # Clean ARFF lines
-        elif file_extension in [".txt", ".csv"]:  # Cleaning logic for TXT and CSV files
-            cleaned_lines = clean_csv_or_txt_lines(lines)  # Clean TXT/CSV lines
+        elif file_extension in [".txt", ".csv", ".stats"]:  # Cleaning logic for TXT, CSV, and stats files
+            cleaned_lines = clean_csv_or_txt_lines(lines)  # Clean TXT, CSV, and stats lines
         else:  # If the file extension is not supported
             raise ValueError(
                 f"{BackgroundColors.RED}Unsupported file extension: {BackgroundColors.CYAN}{file_extension}{Style.RESET_ALL}"
@@ -1289,6 +1313,141 @@ def load_txt_file(input_path):
         raise  # Re-raise to preserve original failure semantics
 
 
+def extract_packet_fields(pkt) -> dict:
+    """
+    Extract all fields from all layers of a Scapy packet dynamically.
+
+    :param pkt: A Scapy Packet instance to extract fields from.
+    :return: Dictionary with keys formatted as "LayerName.field_name".
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        row = {}  # Initialize empty row dict to accumulate this packet's field values
+
+        for layer_class in pkt.layers():  # Iterate each protocol layer class present in the packet
+            layer_name = layer_class.__name__  # Retrieve the layer class name as the column prefix
+            layer_instance = pkt.getlayer(layer_class)  # Retrieve the layer instance from the packet
+
+            if layer_instance is None:  # Verify the layer instance is present before field extraction
+                continue  # Skip missing layer instances safely
+
+            for field_name, field_value in layer_instance.fields.items():  # Iterate all fields in this layer instance
+                column_key = f"{layer_name}.{field_name}"  # Compose column key as "LayerName.field_name"
+
+                try:  # Attempt to normalize field value to a safe serializable type
+                    row[column_key] = field_value if isinstance(field_value, (int, float, str, type(None))) else str(field_value)  # Normalize non-primitive field values to string representation
+                except Exception:  # Fallback when value conversion fails for any reason
+                    row[column_key] = None  # Assign None as safe fallback for unconvertible field values
+
+        return row  # Return the extracted field dict representing this packet as a row
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def convert_pcap_to_dataframe(input_path: str) -> pd.DataFrame:
+    """
+    Read a PCAP file packet by packet using Scapy and construct a pandas DataFrame.
+
+    :param input_path: Path to the PCAP binary file to parse.
+    :return: pandas DataFrame where each row represents one network packet.
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Reading PCAP file: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
+        )  # Output the verbose message
+
+        rows = []  # Initialize list to accumulate per-packet row dictionaries
+
+        with PcapReader(input_path) as reader:  # Open PcapReader in context manager for memory-efficient sequential iteration
+            for pkt in reader:  # Iterate each packet from the PCAP file one at a time
+                row = extract_packet_fields(pkt)  # Extract all layer fields from the current packet dynamically
+                rows.append(row)  # Append the extracted row dict to the accumulator list
+
+        df = pd.DataFrame(rows)  # Construct DataFrame from the accumulated list of per-packet dicts
+        return df  # Return the fully constructed packet DataFrame
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def load_pcap_stats_file(input_path: str) -> pd.DataFrame:
+    """
+    Load a PCAP statistics text file into a pandas DataFrame using safe multi-strategy parsing.
+
+    :param input_path: Path to the PCAP statistics text file to parse.
+    :return: pandas DataFrame parsed from the statistics file content.
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Loading PCAP stats file: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
+        )  # Output the verbose message
+
+        try:  # Attempt CSV-style parsing as the first strategy using auto-detected delimiter
+            df = pd.read_csv(input_path, sep=None, engine="python", low_memory=False)  # Parse using Python's auto-delimiter detection
+            if not df.empty and len(df.columns) > 1:  # Verify successful multi-column parse before accepting result
+                df.columns = df.columns.str.strip()  # Strip whitespace from all column names
+                return df  # Return the DataFrame when CSV-style parse succeeds with multiple columns
+        except Exception:  # Fallback when CSV-style parsing fails or yields an unusable single-column result
+            pass  # Continue to the next parsing strategy without raising
+
+        rows = []  # Initialize list to accumulate parsed key-value row dicts
+
+        with open(input_path, "r", encoding="utf-8", errors="replace") as fh:  # Open file with error replacement to handle non-UTF-8 bytes robustly
+            for line in fh:  # Iterate each line in the stats file sequentially
+                stripped = line.strip()  # Strip surrounding whitespace from each line
+
+                if not stripped or stripped.startswith("#"):  # Skip empty lines and comment lines beginning with hash
+                    continue  # Move to the next line when line is empty or a comment
+
+                if ":" in stripped:  # Verify line contains a colon delimiter indicating a key-value pair
+                    parts = stripped.split(":", 1)  # Split on the first colon only to preserve value content intact
+                    key = parts[0].strip()  # Strip whitespace from the extracted key portion
+                    value = parts[1].strip() if len(parts) > 1 else ""  # Strip whitespace from the extracted value portion
+                    rows.append({"key": key, "value": value})  # Append structured key-value dict to the rows list
+                else:  # Handle lines that contain no colon delimiter as raw content entries
+                    rows.append({"key": stripped, "value": None})  # Append line as key with None value for unstructured lines
+
+        if rows:  # Verify rows were successfully parsed before constructing the DataFrame
+            df = pd.DataFrame(rows)  # Construct DataFrame from the list of parsed key-value dicts
+            return df  # Return the constructed key-value DataFrame
+
+        with open(input_path, "r", encoding="utf-8", errors="replace") as fh:  # Re-open file for fallback line-by-line parsing as last resort
+            all_lines = [line.rstrip("\n") for line in fh if line.strip()]  # Read all non-empty lines stripped of trailing newlines
+
+        df = pd.DataFrame({"line": all_lines})  # Construct single-column fallback DataFrame from raw line content
+        return df  # Return the fallback single-column DataFrame
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def load_pcap_dataset(input_path: str) -> pd.DataFrame:
+    """
+    Load a PCAP binary file into a pandas DataFrame using Scapy's PcapReader.
+
+    :param input_path: Path to the PCAP file to parse into a DataFrame.
+    :return: pandas DataFrame where each row represents one network packet.
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Loading PCAP dataset from: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}"
+        )  # Output the verbose message
+
+        df = convert_pcap_to_dataframe(input_path)  # Convert the PCAP binary file to a DataFrame using Scapy
+        return df  # Return the loaded packet DataFrame
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def load_dataset(input_path):
     """
     Load a dataset from a file in CSV, ARFF, TXT, or Parquet format into a pandas DataFrame.
@@ -1313,6 +1472,10 @@ def load_dataset(input_path):
             df = load_parquet_file(input_path)
         elif ext == ".txt":  # If the file is in TXT format
             df = load_txt_file(input_path)
+        elif ext == ".pcap":  # If the file is in PCAP binary format
+            df = load_pcap_dataset(input_path)
+        elif ext == ".stats":  # If the file is a PCAP statistics text file
+            df = load_pcap_stats_file(input_path)
         else:  # Unsupported file format
             raise ValueError(f"Unsupported file format: {ext}")
 
