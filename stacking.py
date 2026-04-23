@@ -4481,6 +4481,31 @@ def save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature
         raise  # Re-raise the exception to preserve original behavior
 
 
+def supports_predict_proba(model):  # Verify model supports predict_proba at module level
+    """
+    Verify if model supports predict_proba.
+
+    :param model: Model instance.
+    :return: Boolean indicating support.
+    """
+
+    return hasattr(model, "predict_proba")  # Verify presence of predict_proba method
+
+
+def get_shap_prediction_function(model):  # Resolve prediction function for SHAP/LIME at module level
+    """
+    Resolve prediction function for SHAP based on model capabilities.
+
+    :param model: Model instance.
+    :return: Callable prediction function.
+    """
+
+    if supports_predict_proba(model):  # Verify if model supports predict_proba
+        return model.predict_proba  # Use probability predictions when available
+
+    return model.predict  # Fallback to class prediction when probabilities unavailable
+
+
 def select_shap_explainer(model, X_test_sampled, random_state):
     """
     Selects and instantiates the appropriate SHAP explainer based on model type.
@@ -4505,7 +4530,8 @@ def select_shap_explainer(model, X_test_sampled, random_state):
                 background = X_test_sampled.iloc[indices]  # Build background as pandas slice
             else:  # Otherwise assume numpy array-like
                 background = X_test_sampled[indices]  # Build background as numpy slice
-            return shap.KernelExplainer(model.predict_proba, background)  # Use KernelExplainer with explicit background sample
+            prediction_fn = get_shap_prediction_function(model)  # Resolve SHAP-compatible prediction function for model
+            return shap.KernelExplainer(prediction_fn, background)  # Use KernelExplainer with resolved prediction function
     except Exception as e:  # Handle unexpected errors
         print(str(e))  # Print the exception string for diagnostics
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception details via Telegram if configured
@@ -4649,6 +4675,8 @@ def generate_lime_explanations(model, X_test, y_test, feature_names, output_dir,
                 random_state=random_state
             )  # Initialize LIME explainer
 
+            predictor_fn = get_shap_prediction_function(model)  # Resolve prediction function for LIME usage
+
             rng = np.random.default_rng(random_state)  # Create explicit RNG to avoid global seeding
             num_instances_to_explain = min(5, len(X_test))  # Explain up to 5 instances
             instance_indices = rng.choice(len(X_test), size=num_instances_to_explain, replace=False)  # Sample indices reproducibly
@@ -4659,10 +4687,10 @@ def generate_lime_explanations(model, X_test, y_test, feature_names, output_dir,
                 instance = X_test[idx]  # Get instance
                 explanation = explainer.explain_instance(
                     instance,
-                    model.predict_proba,
+                    predictor_fn,
                     num_features=num_features,
                     num_samples=num_samples
-                )  # Generate LIME explanation
+                )  # Generate LIME explanation using resolved prediction function
 
                 try:  # Try to save explanation figure
                     fig = explanation.as_pyplot_figure()  # Get matplotlib figure
