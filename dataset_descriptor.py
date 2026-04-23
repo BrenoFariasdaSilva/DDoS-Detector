@@ -1893,6 +1893,19 @@ def get_augmented_sample_count(original_csv_path, config=None) -> int:
         raise  # Re-raise to preserve original failure semantics
 
 
+def format_percentage(p: float) -> str:
+    """
+    Format a float as a percentage string without unnecessary trailing zeros.
+
+    :param p: Float value to format.
+    :return: Formatted percentage string.
+    """
+    
+    string = f"{p:.4f}"  # Format with 4 decimal places
+    string = string.rstrip("0").rstrip(".") if "." in string else string  # Trim trailing zeros and dot
+    return string  # Return the cleaned percentage string
+
+
 def extract_classes_and_distribution(df: "pd.DataFrame") -> tuple:
     """
     Identify label column and extract classes and their distribution.
@@ -1903,13 +1916,13 @@ def extract_classes_and_distribution(df: "pd.DataFrame") -> tuple:
 
     try:  # Guard logic with module-standard exception handling
         if df is None or df.empty:  # Handle empty DataFrame edge case
-            return None, "None", "None"  # No label, return explicit None strings
+            return None, None, None  # No label and no class info
 
         found_col = detect_label_column(df.columns)  # Use existing detector to find label column when possible
 
         if found_col is None:  # If detector failed, fallback heuristics
             last_col = df.columns[-1] if len(df.columns) > 0 else None  # Determine last column when available
-            if last_col is not None and (  # Only accept last column when it appears categorical
+            if last_col is not None and (  # Only accept last column when it appears categorical/object/bool
                 pd.api.types.is_object_dtype(df[last_col].dtype)
                 or pd.api.types.is_categorical_dtype(df[last_col].dtype)
                 or pd.api.types.is_bool_dtype(df[last_col].dtype)
@@ -1917,16 +1930,30 @@ def extract_classes_and_distribution(df: "pd.DataFrame") -> tuple:
                 found_col = last_col  # Use last column as fallback label
 
         if found_col is None:  # When still no label candidate found
-            return None, "None", "None"  # No class information available
+            return None, None, None  # No class information available
 
-        series = df[found_col].astype(object)  # Cast to object to stabilize mixed types without copying data when possible
-        value_counts = series.value_counts(dropna=False)  # Compute counts including NaN as a separate class if present
-        classes_list = list(map(lambda x: str(x), value_counts.index.tolist()))  # Convert class labels to strings
-        classes_str = ", ".join(classes_list) if classes_list else "None"  # Join into comma-separated string or "None"
-        class_dist = {str(k): int(v) for k, v in value_counts.to_dict().items()}  # Build simple dict of counts with string keys
-        class_dist_str = str(class_dist) if class_dist else "None"  # Serialize distribution dict to string
+        series = df[found_col]  # Reference label series directly to avoid copy
+        counts = series.value_counts(dropna=False)  # Counts including NaN as a key when present
+        total = int(counts.sum())  # Total samples as int
 
-        return found_col, classes_str, class_dist_str  # Return label column and serialized results
+        if total == 0:  # Handle degenerate case with zero total
+            return found_col, None, None  # Return label column but no class info
+
+        counts_sorted = counts.sort_values(ascending=False)  # Ensure highest-to-lowest ordering
+
+        classes_list = [str(x) for x in counts_sorted.index.tolist()]  # Convert index values to strings
+        classes_str = ", ".join(classes_list) if classes_list else None  # Comma-separated classes string or None
+
+        parts = []  # Accumulate formatted parts for distribution
+        for cls, cnt in counts_sorted.items():  # Iterate in descending count order
+            cls_key = str(cls)  # Convert class label to string
+            pct = (float(cnt) / float(total)) * 100.0  # Compute percentage
+            pct_str = format_percentage(pct)  # Format percentage
+            parts.append(f"{cls_key}: {int(cnt)} ({pct_str}%)")  # Append formatted part
+
+        class_dist_str = "{" + ", ".join(parts) + "}" if parts else None  # Join into final dictionary-like string
+
+        return found_col, classes_str, class_dist_str  # Return detected label col and formatted class info
     except Exception as e:  # Preserve exception reporting pattern
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
