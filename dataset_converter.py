@@ -65,6 +65,7 @@ from scipy.io import arff as scipy_arff  # Used to read ARFF files
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For Telegram utilities and global exception hook
 from tqdm import tqdm  # For showing a progress bar
 from typing import Optional  # For optional typing hints
+import numpy as np  # For NaN representation and numeric coercion
 
 
 # Macros:
@@ -1335,7 +1336,12 @@ def extract_packet_fields(pkt) -> dict:
                 column_key = f"{layer_name}.{field_name}"  # Compose column key as "LayerName.field_name"
 
                 try:  # Attempt to normalize field value to a safe serializable type
-                    row[column_key] = field_value if isinstance(field_value, (int, float, str, type(None))) else str(field_value)  # Normalize non-primitive field values to string representation
+                    if isinstance(field_value, (bytes, bytearray)):  # If the value is raw bytes or bytearray
+                        row[column_key] = field_value.decode("utf-8", errors="replace")  # Decode bytes to string using utf-8 with replacement on errors
+                    elif isinstance(field_value, (int, float, bool, type(None))):  # If value is a numeric, boolean, or None
+                        row[column_key] = field_value  # Preserve numeric, boolean, and None values as-is
+                    else:  # For any other object types not directly serializable
+                        row[column_key] = str(field_value)  # Convert object to its string representation to preserve semantics
                 except Exception:  # Fallback when value conversion fails for any reason
                     row[column_key] = None  # Assign None as safe fallback for unconvertible field values
 
@@ -1368,6 +1374,59 @@ def convert_pcap_to_dataframe(input_path: str) -> pd.DataFrame:
 
         df = pd.DataFrame(rows)  # Construct DataFrame from the accumulated list of per-packet dicts
         return df  # Return the fully constructed packet DataFrame
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def normalize_dataframe_types(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize DataFrame column types to ensure homogeneous, PyArrow-compatible types.
+
+    :param df: pandas DataFrame to normalize.
+    :return: pandas DataFrame with enforced homogeneous column types.
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        if df is None:  # If DataFrame is None
+            return df  # Return as-is when there is no DataFrame to normalize
+
+        for col in list(df.columns):  # Iterate over a static list of columns to avoid mutation issues
+            series = df[col]  # Extract the column series for inspection and transformation
+
+            try:  # Attempt to decode any bytes-like entries in this column
+                if series.map(lambda x: isinstance(x, (bytes, bytearray))).any():  # If any bytes-like objects present
+                    series = series.map(lambda x: x.decode("utf-8", errors="replace") if isinstance(x, (bytes, bytearray)) else x)  # Decode bytes while preserving non-bytes
+            except Exception:  # If decoding attempt fails for unexpected reasons
+                series = series.map(lambda x: x.decode("utf-8", errors="replace") if isinstance(x, (bytes, bytearray)) else x)  # Best-effort decode fallback
+
+            non_null = series[~series.isna()]  # Slice non-null values for type inspection
+
+            if non_null.empty:  # If column contains only nulls
+                df[col] = series  # Preserve column as-is when empty of values
+                continue  # Move to next column when nothing to infer
+
+            types = set(type(v) for v in non_null.tolist())  # Collect concrete Python types present in the column
+
+            if all(t in (int, float, np.integer, np.floating) for t in types):  # Numeric-only column detected
+                df[col] = pd.to_numeric(series, errors="coerce")  # Coerce entire column to numeric, preserving NaN for invalid entries
+                continue  # Column normalized to numeric, continue to next
+
+            if all(t is bool for t in types):  # Boolean-only column detected
+                try:  # Attempt to cast to pandas nullable boolean dtype
+                    df[col] = series.astype("boolean")  # Use pandas nullable boolean to preserve NaN
+                except Exception:  # Fallback when astype fails due to unexpected values
+                    df[col] = series.map(lambda x: True if x else False)  # Best-effort boolean coercion
+                continue  # Move to next column after boolean handling
+
+            if all(t is str for t in types):  # String-only column detected
+                df[col] = series.map(lambda x: np.nan if pd.isna(x) else str(x))  # Convert non-null entries to string while preserving NaN
+                continue  # Move to next column after string normalization
+
+            df[col] = series.map(lambda x: np.nan if pd.isna(x) else str(x))  # Convert all non-null values to string while preserving NaN for mixed-type columns
+
+        return df  # Return the normalized DataFrame
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -1441,7 +1500,8 @@ def load_pcap_dataset(input_path: str) -> pd.DataFrame:
         )  # Output the verbose message
 
         df = convert_pcap_to_dataframe(input_path)  # Convert the PCAP binary file to a DataFrame using Scapy
-        return df  # Return the loaded packet DataFrame
+        df = normalize_dataframe_types(df)  # Normalize DataFrame column types to ensure homogeneous types for downstream writers
+        return df  # Return the loaded and normalized packet DataFrame
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -2064,6 +2124,7 @@ def perform_conversions(df, formats_list: Optional[list], dest_dir: Optional[str
     """
 
     formats = formats_list or []  # Ensure formats is a list to avoid issues with None
+    df = normalize_dataframe_types(df)  # Normalize DataFrame types before any conversion to ensure homogeneous column types
     dest_dir_str = str(dest_dir) if dest_dir is not None else ""  # Ensure os.path.join receives a string
     dest_dir_str = os.path.abspath(os.path.normpath(dest_dir_str))  # Normalize and absolutize dest_dir to ensure consistent writes and space verifies
     name_str = str(name) if name is not None else ""  # Ensure filename component is a string
