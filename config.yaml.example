@@ -698,11 +698,16 @@ dataset_converter:
   output_file_formats: ["arff", "csv", "parquet", "txt"] # Supported output formats: arff,csv,parquet,txt. Defaults to all
   output_directory: "Converted" # Default output directory for converted datasets; use "in-place" to save converted files in the same directory as the input file
   datasets: # Dictionary containing dataset paths
+    CAIDA-2007:
+    - "./Datasets/ddostrace.20070804_145436.pcap.stats"
+    - "./Datasets/ddostrace.20070804_145436.pcap"
     CICDDoS2019-Dataset:
       - "./Datasets/CICDDoS2019/01-12/"
       - "./Datasets/CICDDoS2019/03-11/"
     CIC-IDS2017-Dataset:
       - "./Datasets/CICIDS2017/TrafficLabelling/"
+    ISCX-IDS-2012:
+      - "./Datasets/ISCX IDS 2012/data/CSV/" 
     KDD-Dataset:
       - "./Datasets/KDD-Dataset/"
     LATAM-DDoS-IoT:
