@@ -2085,13 +2085,21 @@ def instantiate_estimator(estimator_cls=None):
         except Exception:  # If CONFIG access fails for any reason
             mp_cfg = {}  # Fallback to empty config
 
-        ga_parallel = (
-            int(mp_cfg.get("cpu_processes", 1)) if isinstance(mp_cfg.get("cpu_processes", 1), int) else 1
-        )  # Determine GA worker count from config
-        if ga_parallel > 1:  # If GA uses multiple processes
-            estimator_n_jobs = 1  # Force single-threaded estimator to avoid nested loky
-        else:  # If GA is not parallelized across processes
-            estimator_n_jobs = resolve_n_jobs(log=False)  # Resolve n_jobs from multiprocessing config (silent)
+        try:  # Verify if running inside a pool worker process to prevent nested parallelism
+            is_pool_worker = multiprocessing.current_process().name != "MainProcess"  # Pool workers are named by multiprocessing (e.g., "ForkPoolWorker-1")
+        except Exception:  # Fall back to non-worker assumption on any process-name access error
+            is_pool_worker = False  # Treat as main process if process name is unavailable
+
+        if is_pool_worker:  # If inside a pool worker process
+            estimator_n_jobs = 1  # Force single-threaded RF to eliminate nested joblib parallelism inside workers
+        else:  # If in the main process, use configured parallelism
+            ga_parallel = (
+                int(mp_cfg.get("cpu_processes", 1)) if isinstance(mp_cfg.get("cpu_processes", 1), int) else 1
+            )  # Determine GA worker count from config
+            if ga_parallel > 1:  # If GA uses multiple processes
+                estimator_n_jobs = 1  # Force single-threaded estimator to avoid nested loky
+            else:  # If GA is not parallelized across processes
+                estimator_n_jobs = resolve_n_jobs(log=False)  # Resolve n_jobs from multiprocessing config (silent)
 
         if estimator_cls is None:  # If no estimator class provided by caller
             return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=estimator_n_jobs)  # Return default RandomForest
@@ -2137,6 +2145,40 @@ def compute_fold_metrics(y_true, y_pred):
         raise  # Re-raise to preserve original failure semantics
 
 
+def safe_cv_predict(model, X_val, y_train_np):
+    """
+    Predict class labels using explicit class-space alignment to prevent shape broadcast errors.
+
+    Iterates each tree in the forest and accumulates probability predictions into a
+    full-class-space matrix using searchsorted-based column mapping, preventing
+    ValueError when bootstrap-sampled trees have fewer classes than the forest.
+
+    :param model: Fitted RandomForestClassifier instance to use for prediction.
+    :param X_val: Validation feature matrix of shape (n_samples, n_features).
+    :param y_train_np: Full training label array used to derive the complete class space.
+    :return: Predicted class label array of shape (n_samples,).
+    """
+
+    try:
+        all_classes = np.unique(y_train_np)  # Derive full class space from complete training labels
+        n_samples = X_val.shape[0]  # Number of validation samples for probability matrix allocation
+        n_all_classes = len(all_classes)  # Total number of unique classes for probability matrix width
+        proba_sum = np.zeros((n_samples, n_all_classes), dtype=np.float64)  # Pre-allocate aligned probability accumulation matrix
+
+        for tree in model.estimators_:  # Iterate each tree to accumulate class-aligned probabilities
+            tree_proba = tree.predict_proba(X_val)  # Obtain per-tree probability array (may have fewer columns than full class space)
+            tree_classes = tree.classes_  # Retrieve the class labels this specific tree was trained on
+            col_idx = np.searchsorted(all_classes, tree_classes)  # Map each tree class to its index in the full class space
+            proba_sum[:, col_idx] += tree_proba  # Accumulate aligned tree probabilities into the full-class matrix
+
+        proba_sum /= len(model.estimators_)  # Normalize accumulated probabilities by total number of trees
+        return all_classes[np.argmax(proba_sum, axis=1)]  # Return predicted class labels via argmax over aligned probabilities
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def run_cv_fold_loop(X_train_sel, y_train_np, splits, estimator_cls, n_cv_folds):
     """
     Execute the cross-validation fold loop for individual fitness evaluation.
@@ -2164,7 +2206,7 @@ def run_cv_fold_loop(X_train_sel, y_train_np, splits, estimator_cls, n_cv_folds)
             y_train_fold = y_train_np[train_idx]  # Get training fold labels
             y_val_fold = y_train_np[val_idx]  # Get validation fold labels
             model.fit(X_train_sel[train_idx], y_train_fold)  # Fit the model on the training fold
-            y_pred = model.predict(X_train_sel[val_idx])  # Predict on the validation fold
+            y_pred = safe_cv_predict(model, X_train_sel[val_idx], y_train_np)  # Predict on the validation fold using class-aligned safe prediction
             acc, prec, rec, f1, fpr, fnr = compute_fold_metrics(y_val_fold, y_pred)  # Compute all six classification metrics for this CV fold
             metrics[fold_count] = [acc, prec, rec, f1, fpr, fnr]  # Write metrics directly to pre-allocated array
             fold_count += 1  # Increment fold counter
