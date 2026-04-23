@@ -2080,37 +2080,18 @@ def instantiate_estimator(estimator_cls=None):
     """
     
     try:
-        try:  # Try to read multiprocessing configuration from global CONFIG
-            mp_cfg = CONFIG.get("genetic_algorithm", {}).get("multiprocessing", {})  # Get GA multiprocessing sub-section or empty dict
-        except Exception:  # If CONFIG access fails for any reason
-            mp_cfg = {}  # Fallback to empty config
-
-        try:  # Verify if running inside a pool worker process to prevent nested parallelism
-            is_pool_worker = multiprocessing.current_process().name != "MainProcess"  # Pool workers are named by multiprocessing (e.g., "ForkPoolWorker-1")
-        except Exception:  # Fall back to non-worker assumption on any process-name access error
-            is_pool_worker = False  # Treat as main process if process name is unavailable
-
-        if is_pool_worker:  # If inside a pool worker process
-            estimator_n_jobs = 1  # Force single-threaded RF to eliminate nested joblib parallelism inside workers
-        else:  # If in the main process, use configured parallelism
-            ga_parallel = (
-                int(mp_cfg.get("cpu_processes", 1)) if isinstance(mp_cfg.get("cpu_processes", 1), int) else 1
-            )  # Determine GA worker count from config
-            if ga_parallel > 1:  # If GA uses multiple processes
-                estimator_n_jobs = 1  # Force single-threaded estimator to avoid nested loky
-            else:  # If GA is not parallelized across processes
-                estimator_n_jobs = resolve_n_jobs(log=False)  # Resolve n_jobs from multiprocessing config (silent)
+        n_jobs_config = CONFIG.get("genetic_algorithm", {}).get("multiprocessing", {}).get("n_jobs", -1)  # Get n_jobs from config with default -1
 
         if estimator_cls is None:  # If no estimator class provided by caller
-            return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=estimator_n_jobs)  # Return default RandomForest
+            return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=n_jobs_config)  # Return default RandomForest
 
         try:  # Try instantiating the provided estimator class
             try:  # Try to construct with n_jobs parameter when supported
-                return estimator_cls(n_jobs=estimator_n_jobs)  # Instantiate estimator with n_jobs
+                return estimator_cls(n_jobs=n_jobs_config)  # Instantiate estimator with n_jobs
             except TypeError:  # If provided class doesn't accept n_jobs
                 return estimator_cls()  # Instantiate using no-arg constructor
         except Exception:  # If instantiation fails for any other reason
-            return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=estimator_n_jobs)  # Fallback to RandomForest
+            return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=n_jobs_config)  # Fallback to RandomForest
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
