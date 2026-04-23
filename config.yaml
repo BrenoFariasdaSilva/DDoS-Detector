@@ -530,11 +530,15 @@ dataset_descriptor:
   compute_feature_statistics: true # Compute feature-level summary statistics
   round_decimals: 4 # Number of decimal places for floats
   datasets: # Dictionary containing dataset paths
+    CAIDA-2007:
+    - "./Datasets/CAIDA 2007/Converted/"
     CICDDoS2019-Dataset:
       - "./Datasets/CICDDoS2019/01-12/"
       - "./Datasets/CICDDoS2019/03-11/"
     CIC-IDS2017-Dataset:
       - "./Datasets/CICIDS2017/TrafficLabelling/"
+    ISCX-IDS-2012:
+      - "./Datasets/ISCX IDS 2012/data/CSV/" 
     KDD-Dataset:
       - "./Datasets/KDD-Dataset/Converted/"
     LATAM-DDoS-IoT:
