@@ -1906,6 +1906,41 @@ def format_percentage(p: float) -> str:
     return string  # Return the cleaned percentage string
 
 
+def build_class_distribution_string(counts: "pd.Series") -> str:
+    """
+    Build a dictionary-like class distribution string from a pandas Series of counts.
+
+    The returned string follows the exact format used in dataset reports:
+    "{ClassA: 100 (62.5%), ClassB: 50 (31.25%), ClassC: 10 (6.25%)}"
+
+    :param counts: pandas Series where index are class labels and values are counts.
+    :return: Formatted distribution string or None when counts is empty/None.
+    """
+
+    try:
+        if counts is None or counts.empty:  # Return None when counts is missing or empty
+            return None  # No distribution can be built
+
+        total = int(counts.sum())  # Compute total number of samples from counts
+        if total == 0:  # Guard against division by zero when total is zero
+            return None  # No distribution to build for zero total
+
+        counts_sorted = counts.sort_values(ascending=False)  # Sort classes by count descending
+
+        parts = []  # Initialize list to accumulate formatted class parts
+        for cls, cnt in counts_sorted.items():  # Iterate over (class, count) pairs in sorted order
+            cls_key = str(cls)  # Convert class label to string for stable formatting
+            pct = (float(cnt) / float(total)) * 100.0  # Compute percentage of total for this class
+            pct_str = format_percentage(pct)  # Format percentage to trimmed string representation
+            parts.append(f"{cls_key}: {int(cnt)} ({pct_str}%)")  # Append formatted entry to parts list
+
+        return "{" + ", ".join(parts) + "}" if parts else None  # Join parts into final dictionary-like string or return None
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def extract_classes_and_distribution(df: "pd.DataFrame") -> tuple:
     """
     Identify label column and extract classes and their distribution.
@@ -1944,14 +1979,7 @@ def extract_classes_and_distribution(df: "pd.DataFrame") -> tuple:
         classes_list = [str(x) for x in counts_sorted.index.tolist()]  # Convert index values to strings
         classes_str = ", ".join(classes_list) if classes_list else None  # Comma-separated classes string or None
 
-        parts = []  # Accumulate formatted parts for distribution
-        for cls, cnt in counts_sorted.items():  # Iterate in descending count order
-            cls_key = str(cls)  # Convert class label to string
-            pct = (float(cnt) / float(total)) * 100.0  # Compute percentage
-            pct_str = format_percentage(pct)  # Format percentage
-            parts.append(f"{cls_key}: {int(cnt)} ({pct_str}%)")  # Append formatted part
-
-        class_dist_str = "{" + ", ".join(parts) + "}" if parts else None  # Join into final dictionary-like string
+        class_dist_str = build_class_distribution_string(counts_sorted)  # Build class distribution string in the exact format used in reports
 
         return found_col, classes_str, class_dist_str  # Return detected label col and formatted class info
     except Exception as e:  # Preserve exception reporting pattern
