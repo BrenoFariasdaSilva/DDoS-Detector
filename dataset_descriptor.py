@@ -1893,6 +1893,46 @@ def get_augmented_sample_count(original_csv_path, config=None) -> int:
         raise  # Re-raise to preserve original failure semantics
 
 
+def extract_classes_and_distribution(df: "pd.DataFrame") -> tuple:
+    """
+    Identify label column and extract classes and their distribution.
+
+    :param df: pandas DataFrame to inspect for label column and classes.
+    :return: Tuple (label_col_or_None, classes_str_or_None, class_dist_str_or_None).
+    """
+
+    try:  # Guard logic with module-standard exception handling
+        if df is None or df.empty:  # Handle empty DataFrame edge case
+            return None, "None", "None"  # No label, return explicit None strings
+
+        found_col = detect_label_column(df.columns)  # Use existing detector to find label column when possible
+
+        if found_col is None:  # If detector failed, fallback heuristics
+            last_col = df.columns[-1] if len(df.columns) > 0 else None  # Determine last column when available
+            if last_col is not None and (  # Only accept last column when it appears categorical
+                pd.api.types.is_object_dtype(df[last_col].dtype)
+                or pd.api.types.is_categorical_dtype(df[last_col].dtype)
+                or pd.api.types.is_bool_dtype(df[last_col].dtype)
+            ):  # Accept last column as label when non-numeric
+                found_col = last_col  # Use last column as fallback label
+
+        if found_col is None:  # When still no label candidate found
+            return None, "None", "None"  # No class information available
+
+        series = df[found_col].astype(object)  # Cast to object to stabilize mixed types without copying data when possible
+        value_counts = series.value_counts(dropna=False)  # Compute counts including NaN as a separate class if present
+        classes_list = list(map(lambda x: str(x), value_counts.index.tolist()))  # Convert class labels to strings
+        classes_str = ", ".join(classes_list) if classes_list else "None"  # Join into comma-separated string or "None"
+        class_dist = {str(k): int(v) for k, v in value_counts.to_dict().items()}  # Build simple dict of counts with string keys
+        class_dist_str = str(class_dist) if class_dist else "None"  # Serialize distribution dict to string
+
+        return found_col, classes_str, class_dist_str  # Return label column and serialized results
+    except Exception as e:  # Preserve exception reporting pattern
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def get_dataset_file_info(filepath, df=None, low_memory=True):
     """
     Extract dataset information from a CSV file and return it as a dictionary.
@@ -1975,12 +2015,11 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
         features_after_preprocessing = cleaned_df.shape[1] if hasattr(cleaned_df, "shape") else 0  # Capture features after preprocessing
         preprocessing_step_metrics = cleaned_df.attrs.get("preprocessing_metrics", {}) if hasattr(cleaned_df, "attrs") else {}  # Capture structured preprocessing step metrics from DataFrame metadata
 
-        label_col = detect_label_column(cleaned_df.columns)  # Try to detect the label column
+        label_col, classes_str, class_dist_str = extract_classes_and_distribution(cleaned_df)  # Identify label column and extract classes/distribution
         n_samples, n_features, n_numeric, n_int, n_categorical, n_other, categorical_cols_str = summarize_features(
             cleaned_df
         )  # Summarize features
         missing_summary = summarize_missing_values(cleaned_df)  # Summarize missing values
-        classes_str, class_dist_str = summarize_classes(cleaned_df, label_col)  # Summarize classes and distributions
 
         num_labels, labels_list = extract_labels_info(cleaned_df)  # Extract number of unique labels and the sorted labels list
 
