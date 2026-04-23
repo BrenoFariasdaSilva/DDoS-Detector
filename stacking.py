@@ -2242,6 +2242,27 @@ def apply_zebra_style(df):
         raise  # Propagate exception without swallowing
 
 
+def ensure_playwright_chromium():  # Ensure playwright chromium is available locally
+    """
+    Ensure Playwright Chromium is installed locally.
+
+    :return: None
+    """
+
+    try:  # Attempt to import Playwright and install chromium if needed
+        from playwright.sync_api import sync_playwright  # Import playwright to verify installation
+        import subprocess  # Import subprocess for command execution
+
+        subprocess.run(["playwright", "install", "chromium"], check=False)  # Attempt local chromium installation without sudo
+        return  # Return after attempting installation
+    except Exception as e:  # If any error occurs during installation attempt
+        print(str(e))  # Log the exception string to terminal
+        try:  # Attempt to notify via Telegram if configured
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception via Telegram hook
+        except Exception:  # Swallow any Telegram send errors silently
+            pass  # No-op when Telegram notification fails
+
+
 def export_dataframe_image(styled_df, output_path):
     """
     Export a pandas Styler object to a PNG file using dataframe_image.
@@ -2260,6 +2281,7 @@ def export_dataframe_image(styled_df, output_path):
         if not os.access(str(parent), os.W_OK):  # Verify write permission on parent
             raise PermissionError(f"Directory not writable: {parent}")  # Raise if not writable
 
+        ensure_playwright_chromium()  # Ensure Playwright Chromium is installed before exporting PNG
         dfi.export(styled_df, str(out_path))  # Use dataframe_image to export styled DataFrame to PNG
         return  # Return None explicitly
     except Exception:
@@ -4435,6 +4457,7 @@ def save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature
             shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names_to_use, max_display=max_display, show=False)  # Create summary plot with explicit feature names
             summary_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_summary.png")  # Build summary plot file path
             plt.tight_layout()  # Adjust layout for tight fit
+            ensure_playwright_chromium()  # Ensure Playwright Chromium is installed before saving PNG
             ensure_figure_min_4k_and_save(fig=plt.gcf(), path=summary_plot_path, dpi=300, bbox_inches='tight')  # Save with minimum 4K resolution
             plt.close()  # Close summary figure
         except Exception as e:  # If summary plot generation fails
@@ -4446,6 +4469,7 @@ def save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature
             shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names_to_use, max_display=max_display, plot_type="bar", show=False)  # Create bar plot with explicit feature names
             bar_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_bar.png")  # Build bar plot file path
             plt.tight_layout()  # Adjust layout for tight fit
+            ensure_playwright_chromium()  # Ensure Playwright Chromium is installed before saving PNG
             ensure_figure_min_4k_and_save(fig=plt.gcf(), path=bar_plot_path, dpi=300, bbox_inches='tight')  # Save with minimum 4K resolution
             plt.close()  # Close bar figure
         except Exception as e:  # If bar plot generation fails
@@ -4644,6 +4668,7 @@ def generate_lime_explanations(model, X_test, y_test, feature_names, output_dir,
                     fig = explanation.as_pyplot_figure()  # Get matplotlib figure
                     explanation_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_lime_instance_{idx}.png")  # Build plot path
                     plt.tight_layout()  # Adjust layout
+                    ensure_playwright_chromium()  # Ensure Playwright Chromium is installed before saving PNG
                     ensure_figure_min_4k_and_save(fig=plt.gcf(), path=explanation_plot_path, dpi=300, bbox_inches='tight')  # Save plot
                     plt.close()  # Close plot
                 except Exception:  # If plot save fails
