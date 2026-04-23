@@ -703,8 +703,7 @@ dataset_converter:
   output_directory: "Converted" # Default output directory for converted datasets; use "in-place" to save converted files in the same directory as the input file
   datasets: # Dictionary containing dataset paths
     CAIDA-2007:
-    - "./Datasets/ddostrace.20070804_145436.pcap.stats"
-    - "./Datasets/ddostrace.20070804_145436.pcap"
+    - "./Datasets/CAIDA 2007/"
     CICDDoS2019-Dataset:
       - "./Datasets/CICDDoS2019/01-12/"
       - "./Datasets/CICDDoS2019/03-11/"
