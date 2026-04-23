@@ -1811,7 +1811,8 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
         except KeyboardInterrupt:
             raise  # Propagate keyboard interrupt without suppression
         except Exception as e:
-            verbose_output(f"{BackgroundColors.YELLOW}Error evaluating params {current_params}: {type(e).__name__}: {e}{Style.RESET_ALL}")  # Log evaluation failure with exception context
+            print(f"{BackgroundColors.RED}[ERROR] evaluate_single_combination: evaluation failure for {model_name} params {current_params}: {type(e).__name__}: {e}{Style.RESET_ALL}")  # Log the real exception unconditionally regardless of VERBOSE so failures are always visible in logs
+            traceback.print_exc()  # Print full traceback to stdout so the exact failing line is recorded in the log file
             metrics = {"f1_score": 0.0}  # Set fallback metrics with zero F1 score on evaluation failure
 
         elapsed = time.time() - start_time
@@ -2715,14 +2716,14 @@ def execute_single_combination(task_tuple):
 
         start_time = time.time()  # Record evaluation start time for total elapsed measurement
         metrics = None  # Initialize metrics as None before evaluation attempt
+        total_fit_time = 0.0  # Initialize total fit time before the inner try block to prevent NameError if exception fires before the variable assignment inside try
+        total_predict_time = 0.0  # Initialize total predict time before the inner try block for the same NameError-prevention reason
 
         try:
             y_train_arr = np.asarray(WORKER_Y_TRAIN)  # Convert worker training labels to numpy array for safe fold indexing
             cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)  # Initialize 10-fold stratified cross-validator for robust evaluation
             fold_metrics_list = []  # Accumulate per-fold metric dictionaries for aggregation
             fold_elapsed = []  # Accumulate per-fold elapsed times for diagnostics
-            total_fit_time = 0.0  # Accumulate total fit time across all folds for this combination for performance analysis
-            total_predict_time = 0.0  # Accumulate total predict time across all folds for this combination for performance analysis
 
             for fold_idx, (train_idx, val_idx) in enumerate(cv.split(WORKER_X_TRAIN, y_train_arr), start=1):  # Generate stratified fold splits with per-fold index tracking
                 X_tr, X_val = WORKER_X_TRAIN[train_idx], WORKER_X_TRAIN[val_idx]  # Slice fold training and validation features using positional indices
@@ -2779,13 +2780,17 @@ def execute_single_combination(task_tuple):
             metrics = {"f1_score": 0.0}  # Set zero-F1 fallback on memory exhaustion during evaluation
         except KeyboardInterrupt:
             raise  # Propagate keyboard interrupt without suppression to allow graceful shutdown
-        except Exception:
-            metrics = {"f1_score": 0.0}  # Set zero-F1 fallback on any other evaluation failure
+        except Exception as _cv_err:  # Catch any evaluation exception and log it unconditionally before setting the fallback
+            print(f"{BackgroundColors.RED}[ERROR] execute_single_combination: evaluation failure for {model_name} params {current_params}: {type(_cv_err).__name__}: {_cv_err}{Style.RESET_ALL}")  # Log the real exception with model name and params so the root cause is always visible
+            traceback.print_exc()  # Print full traceback to stdout so the exact failing line is recorded in the log file
+            metrics = {"f1_score": 0.0}  # Set zero-F1 fallback after logging so the pipeline can continue
 
         elapsed = time.time() - start_time  # Compute total elapsed wall-clock time for this combination
 
         return current_params, metrics, elapsed, total_fit_time, total_predict_time  # Return params, metrics, total elapsed, fit and predict times to the calling process
-    except Exception:  # Catch any unexpected exception that escaped the main evaluation logic to prevent worker crashes and return a safe failure tuple
+    except Exception as _outer_err:  # Catch any unexpected exception that escaped the main evaluation logic to prevent worker crashes and return a safe failure tuple
+        print(f"{BackgroundColors.RED}[ERROR] execute_single_combination: outer exception for params {dict(zip(keys, combo))}: {type(_outer_err).__name__}: {_outer_err}{Style.RESET_ALL}")  # Log the outer exception with params so worker-level failures are always visible
+        traceback.print_exc()  # Print full traceback so the exact failing line is recorded in the log file
         return dict(zip(keys, combo)), None, 0.0, 0.0, 0.0  # Return safe failure tuple preserving params on any unexpected top-level error
 
 
