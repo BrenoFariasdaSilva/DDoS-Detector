@@ -935,6 +935,46 @@ def summarize_classes(df, label_col):
         raise  # Re-raise to preserve original failure semantics
 
 
+def extract_labels_info(df: pd.DataFrame) -> tuple:  # Define function to extract label info with type hints
+    """
+    Extract number of unique labels and label list.
+
+    :param df: pandas DataFrame containing potential label column.
+    :return: Tuple of (num_labels, labels_list).
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        label_col = detect_label_column(df.columns)  # Detect potential label column using existing heuristic
+        if label_col and label_col in df.columns:  # If label column exists in the DataFrame
+            labels = df[label_col].dropna().unique().tolist()  # Extract unique non-NaN labels preserving types
+            labels_sorted = sorted(labels, key=lambda x: str(x))  # Sort labels deterministically by string representation
+            return int(len(labels_sorted)), labels_sorted  # Return integer count and sorted list of labels
+        return 0, []  # Return zero and empty list when no label column is detected
+    except Exception as e:  # Catch any exception to preserve existing telemetry behavior
+        print(str(e))  # Print exception to terminal for visibility
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception via Telegram hook for monitoring
+        raise  # Re-raise exception to maintain original semantics
+
+
+def format_labels_list(labels_list: list) -> str:  # Define function to format labels list into stable CSV string
+    """
+    Format labels list into stable CSV string.
+
+    :param labels_list: List of labels to format.
+    :return: String representation suitable for CSV.
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        if not labels_list:  # If the provided labels list is empty
+            return "[]"  # Return empty list representation for CSV
+        escaped = ", ".join(repr(x) for x in labels_list)  # Create comma-separated repr string to preserve types and quoting
+        return f"[{escaped}]"  # Return bracketed representation suitable for CSV ingestion
+    except Exception as e:  # Catch any exception to preserve existing telemetry behavior
+        print(str(e))  # Print exception to terminal for visibility
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception via Telegram hook for monitoring
+        raise  # Re-raise exception to maintain original semantics
+
+
 def coerce_numeric_columns(df):
     """
     Try to extract numeric columns from `df`. If no numeric columns are
@@ -1942,6 +1982,10 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
         missing_summary = summarize_missing_values(cleaned_df)  # Summarize missing values
         classes_str, class_dist_str = summarize_classes(cleaned_df, label_col)  # Summarize classes and distributions
 
+        num_labels, labels_list = extract_labels_info(cleaned_df)  # Extract number of unique labels and the sorted labels list
+
+        labels_list_str = format_labels_list(labels_list)  # Format labels list into stable string for CSV inclusion
+
         feature_view_df = cleaned_df.drop(columns=[label_col], errors="ignore") if label_col else cleaned_df  # Build feature-only frame by excluding the label column when available
         numeric_feature_view = feature_view_df.select_dtypes(include=["number"])  # Extract numeric features for cast-to-float64/int64 accounting
         categorical_feature_view = feature_view_df.select_dtypes(exclude=["number"])  # Extract non-numeric features for categorical encoding accounting
@@ -1965,6 +2009,8 @@ def get_dataset_file_info(filepath, df=None, low_memory=True):
             "Size (GB)": size_gb_str,
             "Number of Samples": f"{n_samples:,}",  # Format with commas for readability
             "Number of Features": f"{n_features:,}",  # Format with commas for readability
+            "Number of Labels": f"{num_labels:,}",  # Format with commas for readability for label count
+            "Labels List": labels_list_str,  # Stable string representation of detected labels
             "original_num_rows": original_num_rows,  # Rows immediately after reading CSV
             "rows_after_nan_removal": rows_after_nan_removal,  # Rows remaining after removing NaN/null values only
             "removed_rows_nan": removed_rows_nan,  # Rows removed by NaN/null filtering step
