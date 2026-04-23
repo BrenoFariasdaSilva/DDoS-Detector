@@ -1753,8 +1753,9 @@ def evaluate_single_combination(model, model_name, keys, combination, X_train, y
 
                 if svm_linear_substitution:  # Verify if LinearSVC should replace SVC for this fold
                     linear_c = float(current_params.get("C", 1.0))  # Extract C regularization parameter for LinearSVC construction
-                    clf = LinearSVC(C=linear_c, max_iter=SVM_MAX_ITER, random_state=42)  # Use -1 to disable iteration limit as required by sklearn SVC
-                    verbose_output(f"{BackgroundColors.GREEN}[DEBUG] LinearSVC fold instance: C={BackgroundColors.CYAN}{linear_c}{BackgroundColors.GREEN}, max_iter={BackgroundColors.CYAN}{SVM_MAX_ITER}{Style.RESET_ALL}")  # Log the fresh LinearSVC instance parameters for this fold
+                    linear_max_iter = SVM_MAX_ITER if SVM_MAX_ITER >= 0 else 10000  # Translate SVC's unlimited sentinel (-1) to a large finite limit because LinearSVC requires max_iter >= 0
+                    clf = LinearSVC(C=linear_c, max_iter=linear_max_iter, random_state=42)  # LinearSVC does not accept -1; use translated finite limit
+                    verbose_output(f"{BackgroundColors.GREEN}[DEBUG] LinearSVC fold instance: C={BackgroundColors.CYAN}{linear_c}{BackgroundColors.GREEN}, max_iter={BackgroundColors.CYAN}{linear_max_iter}{Style.RESET_ALL}")  # Log the fresh LinearSVC instance parameters for this fold
                 else:  # Use the standard clone-and-set-params path for all other models and kernels
                     clf = clone(model)  # Create a fresh model instance for this fold to prevent state leakage across folds and combinations
                     clf.set_params(**current_params)  # Apply the exact current hyperparameter combination to the fresh clone
@@ -2731,7 +2732,8 @@ def execute_single_combination(task_tuple):
 
                 if svm_linear_substitution:  # Verify if LinearSVC substitution is active for this fold
                     linear_c = float(current_params.get("C", 1.0))  # Extract C regularization value for LinearSVC construction
-                    clf = LinearSVC(C=linear_c, max_iter=WORKER_SVM_MAX_ITER, random_state=42)  # Use -1 to disable iteration limit as required by sklearn SVC
+                    worker_linear_max_iter = WORKER_SVM_MAX_ITER if WORKER_SVM_MAX_ITER >= 0 else 10000  # Translate SVC's unlimited sentinel (-1) to a large finite limit because LinearSVC requires max_iter >= 0
+                    clf = LinearSVC(C=linear_c, max_iter=worker_linear_max_iter, random_state=42)  # LinearSVC does not accept -1; use translated finite limit
                 else:  # Use standard clone-and-set-params path for all other models and kernels
                     clf = clone(model_base)  # Clone base model to prevent state leakage across folds
                     clf.set_params(**current_params)  # Apply the current hyperparameter combination to the fresh clone
