@@ -543,6 +543,8 @@ dataset_descriptor:
       - "./Datasets/KDD-Dataset/Converted/"
     LATAM-DDoS-IoT:
       - "./Datasets/LATAM DDoS IoT/Converted/"
+    UGR-16:
+      - "./Datasets/UGR\'16/uniq/"
     UNSW-NB15-Dataset:
       - "./Datasets/UNSW-NB15-Dataset/Converted/"
 
@@ -715,6 +717,8 @@ dataset_converter:
       - "./Datasets/KDD-Dataset/"
     LATAM-DDoS-IoT:
       - "./Datasets/LATAM DDoS IoT/"
+    UGR-16:
+      - "./Datasets/UGR\'16/uniq/"
     UNSW-NB15-Dataset:
       - "./Datasets/UNSW-NB15-Dataset/"
   ignore_dirs:
