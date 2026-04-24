@@ -10018,6 +10018,8 @@ def main(config=None):
             datasets = config.get("dataset", {}).get("datasets", {})  # Get datasets from config
 
         for dataset_name, paths in datasets.items():  # For each dataset in the datasets dictionary
+            dataset_name = str(dataset_name).strip()  # Normalize dataset name by removing leading and trailing spaces
+            paths = [p.strip() if isinstance(p, str) else p for p in paths] if isinstance(paths, list) else paths  # Normalize paths list by stripping each string entry
             process_dataset_paths(dataset_name, paths, config=config)  # Process all paths for this dataset
 
         finish_time = datetime.datetime.now()  # Get the finish time of the program
