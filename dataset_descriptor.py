@@ -2139,24 +2139,25 @@ def extract_classes_and_distribution(df: "pd.DataFrame") -> tuple:
         raise  # Re-raise to preserve original failure semantics
 
 
-def get_process_cpu_usage(process: psutil.Process) -> tuple[int, float]:
+def get_process_cpu_usage(process: psutil.Process) -> tuple[int, int, float]:
     """
     Compute CPU usage and logical CPU count for a given process.
 
     :param process: psutil process instance.
-    :return: Tuple containing number of logical CPUs used and average CPU usage percentage.
+    :return: Tuple containing (used_cpu_cores, total_cpu_cores, cpu_percent)
     """
 
     cpu_times = process.cpu_times()  # Retrieve CPU time statistics for process
 
     cpu_percent = process.cpu_percent(interval=0.1)  # Compute CPU usage over short sampling interval
 
-    cpu_count = len(process.cpu_affinity()) if hasattr(process, "cpu_affinity") else os.cpu_count()  # Detect assigned CPU cores or fallback to system count
+    total_cpu_cores = os.cpu_count() or 1  # Detect total system logical CPU cores
 
-    if cpu_count is None:  # Verify CPU count resolution fallback safety
-        cpu_count = 1  # Default to single core when detection fails
+    cpu_affinity = process.cpu_affinity() if hasattr(process, "cpu_affinity") else None  # Retrieve CPU affinity if available
 
-    return cpu_count, cpu_percent  # Return CPU core usage estimate and utilization percentage
+    used_cpu_cores = len(cpu_affinity) if cpu_affinity else total_cpu_cores  # Estimate active/assigned cores or fallback to total
+
+    return used_cpu_cores, total_cpu_cores, cpu_percent  # Return CPU usage metrics
 
 
 def format_bytes_to_best_unit(byte_value: int) -> tuple[float, str]:
@@ -2190,20 +2191,15 @@ def format_bytes_to_best_unit(byte_value: int) -> tuple[float, str]:
     return float(byte_value), "B"  # Return raw bytes when below kilobyte threshold
 
 
-def report_resources_usage(stage: str, filepath: str) -> tuple[int, int, float, int, float]:
+def report_resources_usage(stage: str, filepath: str) -> tuple[int, int, float, int, int, float]:
     """
-    Report and return the current process memory usage, system RAM percentage, CPU cores, and CPU usage.
+    Report and return process memory usage, system RAM percentage, CPU core usage, and CPU utilization.
 
     Prints a verbose output line with CPU usage and memory usage for the given stage and file.
 
-    :param stage: Description of the memory measurement stage (e.g., "Before loading").
+    :param stage: Description of the measurement stage (e.g., "Before loading").
     :param filepath: Path to the file being processed (for output context).
-    :return: Tuple (rss_bytes, total_bytes, percent_used, cpu_cores, cpu_percent)
-             where rss_bytes is process memory usage in bytes,
-             total_bytes is system RAM in bytes,
-             percent_used is RAM percentage,
-             cpu_cores is logical CPU cores used/available,
-             cpu_percent is CPU utilization percentage.
+    :return: Tuple (rss_bytes, total_bytes, percent_used, used_cpu_cores, total_cpu_cores, cpu_percent)
     """
 
     process = psutil.Process(os.getpid())  # Get current process
@@ -2214,16 +2210,17 @@ def report_resources_usage(stage: str, filepath: str) -> tuple[int, int, float, 
 
     percent = (mem_bytes / total_bytes) * 100 if total_bytes else 0.0  # Compute percent of RAM used
 
-    mem_value, mem_unit = format_bytes_to_best_unit(mem_bytes)  # Convert memory usage to best human-readable unit
-    cpu_cores, cpu_percent = get_process_cpu_usage(process)  # Retrieve CPU core count and CPU usage percentage
+    mem_value, mem_unit = format_bytes_to_best_unit(mem_bytes)  # Convert memory usage to best unit
+
+    used_cpu_cores, total_cpu_cores, cpu_percent = get_process_cpu_usage(process)  # Retrieve CPU metrics
 
     verbose_output(
         f"{BackgroundColors.YELLOW}[MEMORY]{Style.RESET_ALL} {stage} {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}: "
-        f"{cpu_percent:.2f}% CPU across {cpu_cores} cores | "
+        f"{cpu_percent:.2f}% CPU using {used_cpu_cores}/{total_cpu_cores} cores | "
         f"{mem_value:.2f} {mem_unit} ({percent:.4f}%) RAM."
-    )  # Print CPU usage first and memory usage second with formatted output
+    )  # Print CPU first, then memory usage with structured format
 
-    return mem_bytes, total_bytes, percent, cpu_cores, cpu_percent  # Return full resource usage metrics
+    return mem_bytes, total_bytes, percent, used_cpu_cores, total_cpu_cores, cpu_percent  # Return full resource metrics
 
 
 def get_dataset_file_info(filepath, df=None, low_memory=None):
@@ -2242,7 +2239,7 @@ def get_dataset_file_info(filepath, df=None, low_memory=None):
         )  # Output start message for dataset info extraction
         send_telegram_message(TELEGRAM_BOT, [f"Extracting dataset information from: {os.path.basename(filepath)}"])  # Send Telegram notification indicating start of dataset info extraction
         
-        mem_before, total_mem, percent_before, cpu_cores_before, cpu_percent_before = report_resources_usage(f"Before Loading Dataset File", filepath)  # Report full resource usage before loading dataset
+        mem_before, total_mem, percent_before, used_cores_before, total_cores_before, cpu_percent_before = report_resources_usage(f"Before Loading Dataset File", filepath)  # Capture full resource state before dataset load
         
         if df is None:
             df = load_dataset(filepath, low_memory)  # Load the dataset
@@ -2250,7 +2247,7 @@ def get_dataset_file_info(filepath, df=None, low_memory=None):
         if df is None:  # If the dataset could not be loaded
             return None  # Return None
         
-        mem_after, total_mem_after, percent_after, cpu_cores_after, cpu_percent_after = report_resources_usage(f"After Loading Dataset File", filepath)  # Report full resource usage after loading dataset
+        mem_after, total_mem_after, percent_after, used_cores_after, total_cores_after, cpu_percent_after = report_resources_usage(f"After Loading Dataset File", filepath)  # Capture full resource state after dataset load
 
         original_num_rows = len(df)  # Capture original number of rows immediately after read
         original_num_features = df.shape[1] if hasattr(df, "shape") else 0  # Capture original feature count
