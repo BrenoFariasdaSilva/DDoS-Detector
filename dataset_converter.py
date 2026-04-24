@@ -120,6 +120,7 @@ def get_default_config() -> dict:  # Return default configuration for dataset_co
     return {
         "dataset_converter": {
             "verbose": False,  # Whether to enable verbose messages
+            "low_memory": True,  # Whether to enable low memory mode for large datasets
             "input_file_formats": ["arff", "csv", "parquet", "pcap", "stats", "txt"],  # Input formats to discover during dataset scanning
             "output_file_formats": ["arff", "csv", "parquet", "txt"],  # Output formats to generate during conversion
             "input_directory": "./Datasets/",  # Default input directory
@@ -323,26 +324,26 @@ def resolve_low_memory(cli_args: "argparse.Namespace", config: Optional[dict]) -
         cli_low = bool(getattr(cli_args, "low_memory", False))  # Verify if --low-memory flag was provided in CLI arguments
         cli_no_low = bool(getattr(cli_args, "no_low_memory", False))  # Verify if --no-low-memory flag was provided in CLI arguments
 
-        if cli_low and cli_no_low:  # If both flags are provided, this is a conflict that cannot be resolved
+        if cli_low and cli_no_low:  # If both flags are provided, this is a conflict
             raise ValueError("Conflicting CLI options: --low-memory and --no-low-memory were both provided")  # Report the conflict as an error
 
-        if cli_low:  # If --low-memory flag was provided, it takes precedence and enables low memory mode
-            return True  # Return True to enable low memory mode when --low-memory is specified in CLI arguments
-        if cli_no_low:  # If --no-low-memory flag was provided, it takes precedence and disables low memory mode
-            return False  # Return False to disable low memory mode when --no-low-memory is specified in CLI arguments
+        if cli_low:  # --low-memory takes precedence
+            return True  # Enable low memory mode
+        if cli_no_low:  # --no-low-memory takes precedence
+            return False  # Disable low memory mode
 
-        try:  # If no CLI flags were provided, attempt to resolve low_memory from the configuration file
-            cfg_section = config.get("dataset_converter", {}) if isinstance(config, dict) else {}  # Safely access the dataset_converter section of the configuration
-            cfg_value = cfg_section.get("low_memory")  # Attempt to retrieve the low_memory setting from the configuration
-            if isinstance(cfg_value, bool):  # If the retrieved configuration value is a boolean, return it directly
-                return cfg_value  # Return the boolean value from the configuration if it is already a boolean
-        except Exception:  # If there is any issue accessing the configuration or the expected keys, we will catch the exception and fall back to the default behavior without crashing
-            pass  # Silently ignore configuration access issues and fall back to default behavior
+        try:  # Attempt to access low_memory setting from configuration if CLI flags were not provided
+            cfg_section = config.get("dataset_converter", {}) if isinstance(config, dict) else {}  # Safely access config section
+            cfg_value = cfg_section.get("low_memory")  # Retrieve low_memory from config
+            if isinstance(cfg_value, bool):  # Only accept boolean
+                return cfg_value  # Use config value if valid
+        except Exception:  # Ignore config access issues
+            pass  # Fallback to default
 
-        return False  # Default to False (disable low memory mode) when no CLI flags are provided and configuration does not specify a valid boolean value for low_memory
-    except Exception:  # Catch any exception to ensure logging and Telegram alert, then re-raise to preserve failure semantics
-        send_exception_via_telegram(*sys.exc_info())  # Send full exception info via Telegram
-        raise  # Re-raise the exception to preserve original failure semantics
+        return False  # Default: disable low memory mode if not specified
+    except Exception as e:  # Catch any exception to ensure logging
+        print(str(e))  # Print error to terminal for server logs
+        raise  # Re-raise to preserve original failure semantics
 
 
 def resolve_entry_with_trailing_space(current_path: str, entry: str, stripped_part: str) -> str:
