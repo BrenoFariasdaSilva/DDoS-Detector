@@ -2049,6 +2049,7 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
 
         for index, (dataset_key, dataset_info) in enumerate(sorted_datasets, start=1):  # Iterate datasets
             dataset_key = str(dataset_key).strip()  # Normalize dataset key by removing leading/trailing spaces
+            dataset_info = {k: v.strip() if isinstance(v, str) else v for k, v in dataset_info.items()} if isinstance(dataset_info, dict) else dataset_info  # Normalize dataset info values when dictionary by stripping string entries
             result = process_single_dataset_entry(index, dataset_key, dataset_info, sorted_datasets, extract_features, compare_feature_selection, use_cv)  # Execute full evaluation pipeline for this dataset
 
             if result is None:  # If dataset was skipped due to missing files or label resolution failure
