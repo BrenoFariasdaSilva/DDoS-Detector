@@ -2048,6 +2048,7 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
         feature_selected_metrics = []  # Metrics from Feature Selection-enabled runs
 
         for index, (dataset_key, dataset_info) in enumerate(sorted_datasets, start=1):  # Iterate datasets
+            dataset_key = str(dataset_key).strip()  # Normalize dataset key by removing leading/trailing spaces
             result = process_single_dataset_entry(index, dataset_key, dataset_info, sorted_datasets, extract_features, compare_feature_selection, use_cv)  # Execute full evaluation pipeline for this dataset
 
             if result is None:  # If dataset was skipped due to missing files or label resolution failure
@@ -2062,7 +2063,7 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
 
             baseline_metrics.extend(baseline_scores) if baseline_scores else None  # Accumulate baseline scores when present
 
-        feat_extraction_method = build_overall_feature_extraction_method_tag(features_to_use, features_file_used)  # Map the features file to a method tag string for summary output and file naming
+        feat_extraction_method = build_overall_feature_extraction_method_tag(str(features_to_use).strip() if features_to_use is not None else features_to_use, str(features_file_used).strip() if features_file_used is not None else features_file_used)  # Map the features file to a method tag string for summary output and file naming
 
         (
             generate_overall_performance_summary(all_model_scores, feat_extraction_method=feat_extraction_method)
@@ -2079,7 +2080,7 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
         )  # Output the end of the program message
-        
+
         send_telegram_message(TELEGRAM_BOT, [f"{BackgroundColors.GREEN}DDoS Detector main.py execution finished. Execution time: {calculate_execution_time(start_time, finish_time)}"])  # Notify Telegram about program completion
 
         atexit.register(play_sound) if RUN_FUNCTIONS["Play Sound"] else None  # Register sound on exit if enabled
