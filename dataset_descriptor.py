@@ -118,6 +118,7 @@ def get_default_config() -> dict:
     
     return {
         "dataset_descriptor": {
+            "low_memory": False,
             "include_preprocessing_metrics": True,
             "include_data_augmentation_info": True,
             "generate_table_image": True,
@@ -189,6 +190,9 @@ def parse_cli_args(argv=None) -> dict:
     """
 
     parser = argparse.ArgumentParser(add_help=False)  # Create argument parser without default help option
+    low_memory_group = parser.add_mutually_exclusive_group()
+    low_memory_group.add_argument("--low-memory", dest="low_memory", action="store_true", default=None)
+    low_memory_group.add_argument("--no-low-memory", dest="low_memory", action="store_false", default=None)
     parser.add_argument("--include_preprocessing_metrics", dest="include_preprocessing_metrics", action="store_true", default=None)
     parser.add_argument("--no-include_preprocessing_metrics", dest="include_preprocessing_metrics", action="store_false", default=None)
     parser.add_argument("--include_data_augmentation_info", dest="include_data_augmentation_info", action="store_true", default=None)
@@ -226,6 +230,7 @@ def get_config(file_path: str = "config.yaml", cli_args: dict | None = None) -> 
     if cli_args:  # Apply CLI overrides when provided
         dd = merged.setdefault("dataset_descriptor", {})  # Access or create dataset_descriptor section
         for key in [
+            "low_memory",
             "include_preprocessing_metrics",
             "include_data_augmentation_info",
             "generate_table_image",
@@ -242,6 +247,35 @@ def get_config(file_path: str = "config.yaml", cli_args: dict | None = None) -> 
         if "verbose" in cli_args and cli_args["verbose"] is not None:  # Verify verbose CLI arg is present and non-None
             merged.setdefault("execution", {})["verbose"] = cli_args["verbose"]  # Apply verbose CLI override to execution section
     return merged  # Return the fully merged configuration dictionary
+
+
+def resolve_low_memory(cli_args: "argparse.Namespace", config: dict) -> bool:
+    """
+    Resolve the effective low_memory boolean using CLI overrides and config.
+
+    Priority: CLI (if provided) -> config.dataset_descriptor.low_memory -> default
+
+    :param cli_args: argparse.Namespace or dict of parsed CLI args (may be partial)
+    :param config: merged configuration dict
+    :return: final boolean for low_memory
+    """
+    
+    try:  # Wrap full function logic to ensure production-safe monitoring and fallback to defaults on any error
+        cli_val = None  # Initialize cli_val to None to detect if it was provided in CLI arguments
+        if isinstance(cli_args, dict):  # Support both argparse.Namespace and dict for CLI arguments to allow flexible calling contexts
+            cli_val = cli_args.get("low_memory", None)  # Attempt to get low_memory from dict, defaulting to None if not present
+        else:  # Assume argparse.Namespace and attempt to get low_memory attribute, defaulting to None if not present
+            cli_val = getattr(cli_args, "low_memory", None)  # Attempt to get low_memory from argparse.Namespace, defaulting to None if not present
+
+        if cli_val is not None:  # If CLI provided a value (even if False), it takes precedence over config and defaults
+            return bool(cli_val)  # Return the CLI value as boolean when it is explicitly provided, even if it is False
+
+        if isinstance(config, dict):  # Verify config is a dictionary before accessing nested keys to avoid type errors
+            return bool(config.get("dataset_descriptor", {}).get("low_memory", get_default_config().get("dataset_descriptor", {}).get("low_memory", True)))  # Return the config value for low_memory if it exists, otherwise fallback to default config value
+
+        return bool(get_default_config().get("dataset_descriptor", {}).get("low_memory", True))  # Fallback to default config value when config is not a dict or does not contain the expected keys
+    except Exception:  # Catch any exception during resolution to ensure production safety and fallback to defaults
+        return bool(get_default_config().get("dataset_descriptor", {}).get("low_memory", True))  # On any error during resolution, fallback to default config value for low_memory
 
 
 def init_runtime(config: dict):
@@ -3483,6 +3517,7 @@ def main():
         start_time = datetime.datetime.now()  # Capture program start time
 
         log_config_sources(config, cli_args)  # Log resolved configuration values with their source
+        low_memory = resolve_low_memory(cli_args, config)  # Determine low memory mode based on CLI and config settings
 
         setup_telegram_bot()  # Initialize Telegram bot for progress notifications
         send_telegram_message(TELEGRAM_BOT, [f"Starting Dataset Descriptor at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Send start notification via Telegram
@@ -3500,7 +3535,7 @@ def main():
                     print(f"{BackgroundColors.RED}The specified input path does not exist: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")  # Report missing path to terminal
                     continue  # Skip non-existing paths without aborting the full run
 
-                success = generate_dataset_report(dir_path, file_extension=".csv", low_memory=True, output_filename=None, config=config)  # Generate dataset report for this path
+                success = generate_dataset_report(dir_path, file_extension=".csv", low_memory=low_memory, output_filename=None, config=config)  # Generate dataset report for this path
                 if not success:  # Verify whether report generation succeeded
                     print(f"{BackgroundColors.RED}Failed to generate dataset report for: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")  # Report failure for this path
                 else:  # Report generation succeeded
@@ -3509,7 +3544,7 @@ def main():
         if config.get("execution", {}).get("cross_dataset_validate", True) and len(datasets) > 1:  # Verify cross-dataset validation is enabled and multiple datasets are configured
             try:  # Attempt cross-dataset validation with graceful failure handling
                 send_telegram_message(TELEGRAM_BOT, "Starting cross-dataset validation...")  # Notify cross-dataset validation start via Telegram
-                success = generate_cross_dataset_report(datasets, file_extension=".csv", config=config)  # Generate pairwise cross-dataset feature compatibility report
+                success = generate_cross_dataset_report(datasets, file_extension=".csv", low_memory=low_memory, config=config)  # Generate pairwise cross-dataset feature compatibility report
                 if success:  # Verify whether cross-dataset report was saved
                     print(f"{BackgroundColors.GREEN}Cross-dataset report saved -> {BackgroundColors.CYAN}Cross_{results_suffix.lstrip('_')}{Style.RESET_ALL}")  # Confirm successful cross-dataset report save
                 else:  # Cross-dataset report generation produced no output
