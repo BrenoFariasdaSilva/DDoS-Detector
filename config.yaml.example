@@ -667,6 +667,7 @@ dataloader:
 # ===============================================================================
 dataset_converter:
   verbose: false # Enable verbose output for dataset converter
+  low_memory: false # The low memory parameter for reading the files.
   input_file_formats: ["arff", "csv", "parquet", "txt"] # Supported input formats: arff,csv,parquet,txt. Defaults to all
   output_file_formats: ["arff", "csv", "parquet", "txt"] # Supported output formats: arff,csv,parquet,txt. Defaults to all
   output_directory: "Converted" # Default output directory for converted datasets; use "in-place" to save converted files in the same directory as the input file
