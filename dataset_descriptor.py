@@ -973,7 +973,7 @@ def detect_label_column(columns):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        candidates = ["label", "class", "target", "y", "category"]  # Common label column names to verify for exact matchescandidates = ["label", "class", "target"]  # Common label column names
+        candidates = ["label", "class", "target", "y", "category"]  # Common label column names to verify for exact matches
 
         for col in columns:  # First search for exact matches
             if col.lower() in candidates:  # Verify if the column name matches any candidate exactly
@@ -983,7 +983,7 @@ def detect_label_column(columns):
             if "target" in col.lower() or "label" in col.lower():  # Verify if the column name contains any candidate
                 return col  # Return the column name if found
 
-        return None  # Return None if no label column is found
+        return ""  # Return empty string if no label column is found (fix type issue)
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -2066,12 +2066,12 @@ def build_class_distribution_string(counts: "pd.Series") -> str:
     """
 
     try:
-        if counts is None or counts.empty:  # Return None when counts is missing or empty
-            return None  # No distribution can be built
+        if counts is None or counts.empty:  # Return empty string when counts is missing or empty
+            return ""  # No distribution can be built
 
         total = int(counts.sum())  # Compute total number of samples from counts
         if total == 0:  # Guard against division by zero when total is zero
-            return None  # No distribution to build for zero total
+            return ""  # No distribution to build for zero total
 
         counts_sorted = counts.sort_values(ascending=False)  # Sort classes by count descending
 
@@ -2082,11 +2082,11 @@ def build_class_distribution_string(counts: "pd.Series") -> str:
             pct_str = format_percentage(pct)  # Format percentage to trimmed string representation
             parts.append(f"{cls_key}: {int(cnt)} ({pct_str}%)")  # Append formatted entry to parts list
 
-        return "{" + ", ".join(parts) + "}" if parts else None  # Join parts into final dictionary-like string or return None
+        return "{" + ", ".join(parts) + "}" if parts else ""  # Join parts into final dictionary-like string or return empty string
     except Exception as e:
-        print(str(e))
+        print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+        raise  # Re-raise to preserve original failure semantics
 
 
 def extract_classes_and_distribution(df: "pd.DataFrame") -> tuple:
@@ -2099,33 +2099,33 @@ def extract_classes_and_distribution(df: "pd.DataFrame") -> tuple:
 
     try:  # Guard logic with module-standard exception handling
         if df is None or df.empty:  # Handle empty DataFrame edge case
-            return None, None, None  # No label and no class info
+            return "", "", ""  # No label and no class info
 
         found_col = detect_label_column(df.columns)  # Use existing detector to find label column when possible
 
-        if found_col is None:  # If detector failed, fallback heuristics
-            last_col = df.columns[-1] if len(df.columns) > 0 else None  # Determine last column when available
-            if last_col is not None and (  # Only accept last column when it appears categorical/object/bool
+        if not found_col:  # If detector failed, fallback heuristics
+            last_col = df.columns[-1] if len(df.columns) > 0 else ""  # Determine last column when available
+            if last_col and (
                 pd.api.types.is_object_dtype(df[last_col].dtype)
-                or pd.api.types.is_categorical_dtype(df[last_col].dtype)
+                or getattr(pd.api.types, "is_categorical_dtype", lambda x: False)(df[last_col].dtype)
                 or pd.api.types.is_bool_dtype(df[last_col].dtype)
             ):  # Accept last column as label when non-numeric
                 found_col = last_col  # Use last column as fallback label
 
-        if found_col is None:  # When still no label candidate found
-            return None, None, None  # No class information available
+        if not found_col:  # When still no label candidate found
+            return "", "", ""  # No class information available
 
         series = df[found_col]  # Reference label series directly to avoid copy
         counts = series.value_counts(dropna=False)  # Counts including NaN as a key when present
         total = int(counts.sum())  # Total samples as int
 
         if total == 0:  # Handle degenerate case with zero total
-            return found_col, None, None  # Return label column but no class info
+            return found_col, "", ""  # Return label column but no class info
 
         counts_sorted = counts.sort_values(ascending=False)  # Ensure highest-to-lowest ordering
 
         classes_list = [str(x) for x in counts_sorted.index.tolist()]  # Convert index values to strings
-        classes_str = ", ".join(classes_list) if classes_list else None  # Comma-separated classes string or None
+        classes_str = ", ".join(classes_list) if classes_list else ""  # Comma-separated classes string or empty string
 
         class_dist_str = build_class_distribution_string(counts_sorted)  # Build class distribution string in the exact format used in reports
 
@@ -2728,7 +2728,7 @@ def apply_zebra_style(df):
             pass  # Continue even if index mapping fails
         for col in list(sanitized_df.columns):  # Iterate over a static list of columns to sanitize values
             try:  # Guard per-column sanitization to avoid failing entire styling pipeline
-                if sanitized_df[col].dtype == object or pd.api.types.is_string_dtype(sanitized_df[col]):  # Detect string-like columns
+                if sanitized_df[col].dtype == object or getattr(pd.api.types, "is_string_dtype", lambda x: False)(sanitized_df[col]):  # Detect string-like columns
                     sanitized_df[col] = sanitized_df[col].apply(lambda x: sanitize_plot_text(str(x)) if pd.notnull(x) else x)  # Sanitize each cell in string columns
             except Exception:  # Ignore individual column sanitization errors to preserve original behavior
                 pass  # Continue processing remaining columns even if one fails
@@ -3615,8 +3615,11 @@ def main():
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        cli_args = parse_cli_args()  # Parse CLI arguments and load configuration
-        config = get_config(file_path=cli_args.get("config", "config.yaml"), cli_args=cli_args)  # Load and merge config with CLI overrides
+
+        cli_args_dict = parse_cli_args()  # Parse CLI arguments and load configuration as dict
+        config = get_config(file_path=cli_args_dict.get("config", "config.yaml"), cli_args=cli_args_dict)  # Load and merge config with CLI overrides
+
+        cli_args_ns = argparse.Namespace(**cli_args_dict)  # Convert dict to Namespace for type safety
 
         runtime = init_runtime(config)  # Initialize runtime artifacts including the logger
 
@@ -3630,8 +3633,8 @@ def main():
         print(f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Dataset Descriptor{BackgroundColors.GREEN}!{Style.RESET_ALL}")  # Print welcome message
         start_time = datetime.datetime.now()  # Capture program start time
 
-        log_config_sources(config, cli_args)  # Log resolved configuration values with their source
-        low_memory = resolve_low_memory(cli_args, config)  # Determine low memory mode based on CLI and config settings
+        log_config_sources(config, cli_args_dict)  # Log resolved configuration values with their source
+        low_memory = resolve_low_memory(cli_args_ns, config)  # Determine low memory mode based on CLI and config settings
 
         setup_telegram_bot()  # Initialize Telegram bot for progress notifications
         send_telegram_message(TELEGRAM_BOT, [f"Starting Dataset Descriptor at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Send start notification via Telegram
