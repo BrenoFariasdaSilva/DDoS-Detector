@@ -911,6 +911,7 @@ def preprocess_dataframe(df, remove_zero_variance=True):
         else:  # When no numeric columns exist
             inf_mask = pd.Series([False] * len(df_no_nan), index=df_no_nan.index)  # Create false mask to avoid errors
         df_no_inf = df_no_nan.loc[~inf_mask]  # Remove rows that contain infinite values in numeric columns
+        del df_no_nan  # Release NaN-filtered intermediate DataFrame to reduce memory footprint after infinite-value filtering is applied
         rows_after_inf_removal = int(len(df_no_inf))  # Capture row count after infinite-value filtering step
         removed_rows_inf = int(rows_before_inf_removal - rows_after_inf_removal)  # Compute rows removed by infinite-value filtering step
         if rows_before_inf_removal > 0:  # Guard division by zero for infinite-value removed-row proportion
@@ -927,6 +928,7 @@ def preprocess_dataframe(df, remove_zero_variance=True):
         preprocessing_metrics["nan_inf"] = {"rows_before_step": original_row_count, "rows_after_step": rows_after_inf_removal, "removed_rows_step": removed_rows_nan_inf, "removed_rows_step_proportion": removed_rows_nan_inf_proportion}  # Store aggregated NaN+infinite step metrics
 
         df_clean = df_no_inf.replace([np.nan], np.nan)  # Ensure canonical NaN representation after removal steps
+        del df_no_inf  # Release infinite-filtered intermediate DataFrame to reduce memory footprint after NaN normalization is applied
         features_before_zero_variance = int(df_clean.shape[1]) if hasattr(df_clean, "shape") else 0  # Capture feature count before zero-variance removal
         features_after_zero_variance = features_before_zero_variance  # Initialize feature count after zero-variance removal
         removed_zero_variance_features = 0  # Initialize removed zero-variance feature counter
@@ -2213,6 +2215,7 @@ def get_dataset_file_info(filepath, df=None, low_memory=None):
         features_after_zero_variance_removal = features_after_zero_variance_removal if features_after_zero_variance_removal >= 0 else 0  # Clamp negative values to zero for safety
 
         cleaned_df = preprocess_dataframe(df)  # Preprocess the DataFrame
+        del df  # Release original DataFrame local reference to reduce memory footprint after preprocessing produces the cleaned copy
 
         rows_after_preprocessing = len(cleaned_df)  # Capture rows after preprocessing
         features_after_preprocessing = cleaned_df.shape[1] if hasattr(cleaned_df, "shape") else 0  # Capture features after preprocessing
@@ -2288,6 +2291,7 @@ def get_dataset_file_info(filepath, df=None, low_memory=None):
             raise  # Re-raise to preserve original failure semantics
         result["data_augmentation_samples"] = int(aug_count)  # Store integer augmented sample count in result dict
 
+        del cleaned_df  # Release preprocessed DataFrame to reduce memory footprint after all metrics are extracted
         del nan_mask  # Release NaN mask to reduce retained memory after metrics extraction
         del inf_mask_after_nan  # Release infinite-value mask to reduce retained memory after metrics extraction
         del valid_nan_mask  # Release non-NaN mask to reduce retained memory after metrics extraction
@@ -3052,6 +3056,7 @@ def finalize_and_write_report(report_rows, preprocessing_metrics, base_dir, outp
             print(f"{BackgroundColors.GREEN}Saved preprocessing summary to {BackgroundColors.CYAN}{out_path}{Style.RESET_ALL}")  # Inform the user of the saved summary path
             if os.environ.get("DD_DESCRIPTOR_VERBOSE", "False").lower() in ("1", "true", "yes"):  # Print table only in verbose mode
                 print_preprocessing_summary_table(pre_df)  # Print the summary table to the terminal when verbose output is enabled
+            del pre_df  # Release preprocessing summary DataFrame after saving and printing to reduce retained memory
     except Exception as _ps:  # Warn and continue when summary generation fails to preserve the main report
         print(f"{BackgroundColors.YELLOW}Warning: failed to generate preprocessing summary: {_ps}{Style.RESET_ALL}")  # Warn without aborting
     return True  # Return True to signal that the main report was written successfully
