@@ -5400,8 +5400,11 @@ def run_batch_mode(args: Any, config: Dict, datasets: Dict, mode: str, results_s
     print(f"{BackgroundColors.GREEN}No CSV path provided. Processing datasets in batch mode...{Style.RESET_ALL}")  # Announce batch mode entry to user
     
     for dataset_name, paths in datasets.items():  # Iterate over each named dataset entry in registry
+        dataset_name = str(dataset_name).strip()  # Normalize dataset name by removing leading and trailing spaces
+        paths = [p.strip() if isinstance(p, str) else p for p in paths] if isinstance(paths, list) else paths  # Normalize paths list by stripping each string entry
         print(f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")  # Announce current dataset name
         for input_path in paths:  # Iterate over each directory path within the dataset
+            input_path = input_path.strip() if isinstance(input_path, str) else input_path  # Normalize input path by removing leading and trailing spaces
             if not verify_filepath_exists(input_path):  # Skip paths that do not exist on disk
                 verbose_output(f"{BackgroundColors.YELLOW}Skipping missing path: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}", config=config)  # Log skipped path at verbose level
                 continue  # Advance to next path in dataset
