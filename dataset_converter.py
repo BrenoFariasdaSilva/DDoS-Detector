@@ -43,6 +43,7 @@ TODOs (short):
     - Provide more granular CLI control for cleaning rules
 """
 
+
 import argparse  # For parsing command-line arguments
 import arff  # Liac-arff, used to save ARFF files
 import atexit  # For playing a sound when the program finishes
@@ -306,7 +307,7 @@ def parse_cli_arguments():
         raise  # Re-raise to preserve original failure semantics
 
 
-def resolve_low_memory(cli_args: "argparse.Namespace", config: dict) -> bool:
+def resolve_low_memory(cli_args: "argparse.Namespace", config: Optional[dict]) -> bool:
     """
     Resolve final low_memory flag using CLI arguments and configuration.
 
@@ -1449,7 +1450,7 @@ def load_csv_file(input_path):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        df = pd.read_csv(input_path, low_memory=DEFAULTS.get("dataset_converter", {}).get("low_memory", False))  # Load the CSV file
+        df = pd.read_csv(input_path, low_memory=(DEFAULTS or {}).get("dataset_converter", {}).get("low_memory", False))  # Load the CSV file using safe DEFAULTS access
         df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
         return df  # Return the DataFrame
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -1484,7 +1485,7 @@ def load_txt_file(input_path):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        df = pd.read_csv(input_path, sep="\t", low_memory=DEFAULTS.get("dataset_converter", {}).get("low_memory", False))  # Load TXT file using tab separator
+        df = pd.read_csv(input_path, sep="\t", low_memory=(DEFAULTS or {}).get("dataset_converter", {}).get("low_memory", False))  # Load TXT file using safe DEFAULTS access
         df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
         return df  # Return the DataFrame
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -1626,7 +1627,7 @@ def load_pcap_stats_file(input_path: str) -> pd.DataFrame:
         )  # Output the verbose message
 
         try:  # Attempt CSV-style parsing as the first strategy using auto-detected delimiter
-            df = pd.read_csv(input_path, sep=None, engine="python", low_memory=DEFAULTS.get("dataset_converter", {}).get("low_memory", False))  # Parse using Python's auto-delimiter detection
+            df = pd.read_csv(input_path, sep=None, engine="python", low_memory=(DEFAULTS or {}).get("dataset_converter", {}).get("low_memory", False))  # Parse using Python's auto-delimiter detection with safe DEFAULTS access
             if not df.empty and len(df.columns) > 1:  # Verify successful multi-column parse before accepting result
                 df.columns = df.columns.str.strip()  # Strip whitespace from all column names
                 return df  # Return the DataFrame when CSV-style parse succeeds with multiple columns
