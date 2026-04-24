@@ -106,6 +106,94 @@ def verbose_output(true_string="", false_string=""):
         print(false_string)  # Output the false statement string
 
 
+def resolve_entry_with_trailing_space(current_path: str, entry: str, stripped_part: str) -> str:
+    """
+    Resolve and optionally rename a directory entry with trailing spaces.
+
+    :param current_path: Current directory path.
+    :param entry: Directory entry name.
+    :param stripped_part: Normalized target name without surrounding spaces.
+    :return: Resolved path after optional rename.
+    """
+
+    try:  # Wrap full function logic to ensure safe execution
+        resolved = os.path.join(current_path, entry)  # Build resolved path
+
+        if entry != stripped_part:  # Verify trailing spaces exist
+            corrected = os.path.join(current_path, stripped_part)  # Build corrected path
+            try:  # Attempt to rename entry
+                os.rename(resolved, corrected)  # Rename entry to stripped version
+                verbose_output(true_string=f"{BackgroundColors.GREEN}Renamed: {BackgroundColors.CYAN}{resolved}{BackgroundColors.GREEN} -> {BackgroundColors.CYAN}{corrected}{Style.RESET_ALL}")  # Log rename
+                resolved = corrected  # Update resolved path after rename
+            except Exception:  # Handle rename failure
+                verbose_output(true_string=f"{BackgroundColors.RED}Failed to rename: {BackgroundColors.CYAN}{resolved}{Style.RESET_ALL}")  # Log failure
+
+        return resolved  # Return resolved path
+    except Exception:  # Catch unexpected errors
+        return os.path.join(current_path, entry)  # Return fallback resolved path
+
+
+def resolve_full_trailing_space_path(filepath: str) -> str:
+    """
+    Resolve trailing space issues across all path components.
+
+    :param filepath: Path to resolve potential trailing space mismatches.
+    :return: Corrected full path if matches are found, otherwise original filepath.
+    """
+
+    try:  # Wrap full function logic to ensure safe execution
+        verbose_output(true_string=f"{BackgroundColors.GREEN}Resolving full trailing space path for: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Log start
+
+        if not isinstance(filepath, str) or not filepath:  # Verify filepath validity
+            verbose_output(true_string=f"{BackgroundColors.YELLOW}Invalid filepath provided, skipping resolution.{Style.RESET_ALL}")  # Log invalid input
+            return filepath  # Return original
+
+        filepath = os.path.expanduser(filepath)  # Expand ~ to user directory
+        parts = filepath.split(os.sep)  # Split path into components
+
+        if not parts:  # Verify path parts exist
+            return filepath  # Return original
+
+        if filepath.startswith(os.sep):  # Handle absolute paths
+            current_path = os.sep  # Start from root
+            parts = parts[1:]  # Remove empty root part
+        else:
+            current_path = parts[0] if parts[0] else os.getcwd()  # Initialize base
+            parts = parts[1:] if parts[0] else parts  # Adjust parts
+
+        for part in parts:  # Iterate over each path component
+            if part == "":  # Skip empty parts
+                continue  # Continue iteration
+
+            try:  # Attempt to list current directory
+                entries = os.listdir(current_path) if os.path.isdir(current_path) else []  # List current directory entries
+            except Exception:  # Handle failure to list directory contents
+                verbose_output(true_string=f"{BackgroundColors.RED}Failed to list directory: {BackgroundColors.CYAN}{current_path}{Style.RESET_ALL}")  # Log failure
+                return filepath  # Return original
+
+            stripped_part = part.strip()  # Normalize current part
+            match_found = False  # Initialize match flag
+
+            for entry in entries:  # Iterate directory entries
+                try:  # Attempt safe comparison for each entry
+                    if entry.strip() == stripped_part:  # Compare stripped names
+                        current_path = resolve_entry_with_trailing_space(current_path, entry, stripped_part)  # Resolve entry and update current path
+                        match_found = True  # Mark match
+                        break  # Stop searching
+                except Exception:  # Handle any unexpected error during comparison
+                    continue  # Continue on error
+
+            if not match_found:  # If no match found for this segment
+                verbose_output(true_string=f"{BackgroundColors.YELLOW}No match for segment: {BackgroundColors.CYAN}{part}{Style.RESET_ALL}")  # Log miss
+                return filepath  # Return original
+
+        return current_path  # Return fully resolved path
+
+    except Exception:  # Catch unexpected errors to maintain stability
+        verbose_output(true_string=f"{BackgroundColors.RED}Error resolving full path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Log error
+        return filepath  # Return original
+
+
 def verify_filepath_exists(filepath):
     """
     Verify if a file or folder exists at the specified path.
