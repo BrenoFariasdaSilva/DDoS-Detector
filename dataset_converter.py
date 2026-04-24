@@ -48,6 +48,7 @@ import arff  # Liac-arff, used to save ARFF files
 import atexit  # For playing a sound when the program finishes
 import datetime  # For timestamping
 import io  # For in-memory file operations
+import numpy as np  # For NaN representation and numeric coercion
 import os  # For running commands in the terminal
 import pandas as pd  # For handling CSV and TXT file formats
 import platform  # For getting the operating system name
@@ -65,7 +66,6 @@ from scipy.io import arff as scipy_arff  # Used to read ARFF files
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For Telegram utilities and global exception hook
 from tqdm import tqdm  # For showing a progress bar
 from typing import Optional  # For optional typing hints
-import numpy as np  # For NaN representation and numeric coercion
 
 
 # Macros:
