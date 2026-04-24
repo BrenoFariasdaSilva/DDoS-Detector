@@ -296,12 +296,49 @@ def parse_cli_arguments():
             help="Comma-separated output formats to produce (arff,csv,parquet,txt). If not provided, uses config",
         )  # Output file formats argument
         parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")  # Verbose mode flag
+        parser.add_argument("--low-memory", dest="low_memory", action="store_true", help="Enable low memory mode")  # Low memory mode flag
+        parser.add_argument("--no-low-memory", dest="no_low_memory", action="store_true", help="Disable low memory mode")  # No low memory mode flag
 
         return parser.parse_args()  # Return parsed CLI arguments
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
         raise  # Re-raise to preserve original failure semantics
+
+
+def resolve_low_memory(cli_args: "argparse.Namespace", config: dict) -> bool:
+    """
+    Resolve final low_memory flag using CLI arguments and configuration.
+
+    :param cli_args: Parsed CLI arguments.
+    :param config: Loaded configuration dictionary.
+    :return: Final low_memory boolean value.
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        cli_low = bool(getattr(cli_args, "low_memory", False))  # Verify if --low-memory flag was provided in CLI arguments
+        cli_no_low = bool(getattr(cli_args, "no_low_memory", False))  # Verify if --no-low-memory flag was provided in CLI arguments
+
+        if cli_low and cli_no_low:  # If both flags are provided, this is a conflict that cannot be resolved
+            raise ValueError("Conflicting CLI options: --low-memory and --no-low-memory were both provided")  # Report the conflict as an error
+
+        if cli_low:  # If --low-memory flag was provided, it takes precedence and enables low memory mode
+            return True  # Return True to enable low memory mode when --low-memory is specified in CLI arguments
+        if cli_no_low:  # If --no-low-memory flag was provided, it takes precedence and disables low memory mode
+            return False  # Return False to disable low memory mode when --no-low-memory is specified in CLI arguments
+
+        try:  # If no CLI flags were provided, attempt to resolve low_memory from the configuration file
+            cfg_section = config.get("dataset_converter", {}) if isinstance(config, dict) else {}  # Safely access the dataset_converter section of the configuration
+            cfg_value = cfg_section.get("low_memory")  # Attempt to retrieve the low_memory setting from the configuration
+            if isinstance(cfg_value, bool):  # If the retrieved configuration value is a boolean, return it directly
+                return cfg_value  # Return the boolean value from the configuration if it is already a boolean
+        except Exception:  # If there is any issue accessing the configuration or the expected keys, we will catch the exception and fall back to the default behavior without crashing
+            pass  # Silently ignore configuration access issues and fall back to default behavior
+
+        return False  # Default to False (disable low memory mode) when no CLI flags are provided and configuration does not specify a valid boolean value for low_memory
+    except Exception:  # Catch any exception to ensure logging and Telegram alert, then re-raise to preserve failure semantics
+        send_exception_via_telegram(*sys.exc_info())  # Send full exception info via Telegram
+        raise  # Re-raise the exception to preserve original failure semantics
 
 
 def verify_filepath_exists(filepath):
@@ -1270,7 +1307,7 @@ def load_csv_file(input_path):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        df = pd.read_csv(input_path, low_memory=False)  # Load the CSV file
+        df = pd.read_csv(input_path, low_memory=DEFAULTS.get("dataset_converter", {}).get("low_memory", False))  # Load the CSV file
         df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
         return df  # Return the DataFrame
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -1305,7 +1342,7 @@ def load_txt_file(input_path):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        df = pd.read_csv(input_path, sep="\t", low_memory=False)  # Load TXT file using tab separator
+        df = pd.read_csv(input_path, sep="\t", low_memory=DEFAULTS.get("dataset_converter", {}).get("low_memory", False))  # Load TXT file using tab separator
         df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
         return df  # Return the DataFrame
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -1447,7 +1484,7 @@ def load_pcap_stats_file(input_path: str) -> pd.DataFrame:
         )  # Output the verbose message
 
         try:  # Attempt CSV-style parsing as the first strategy using auto-detected delimiter
-            df = pd.read_csv(input_path, sep=None, engine="python", low_memory=False)  # Parse using Python's auto-delimiter detection
+            df = pd.read_csv(input_path, sep=None, engine="python", low_memory=DEFAULTS.get("dataset_converter", {}).get("low_memory", False))  # Parse using Python's auto-delimiter detection
             if not df.empty and len(df.columns) > 1:  # Verify successful multi-column parse before accepting result
                 df.columns = df.columns.str.strip()  # Strip whitespace from all column names
                 return df  # Return the DataFrame when CSV-style parse succeeds with multiple columns
@@ -2305,6 +2342,15 @@ def main():
         setup_telegram_bot()  # Setup Telegram bot if configured
         
         args = parse_cli_arguments()  # Parse CLI arguments
+
+        resolved_low_memory = resolve_low_memory(args, DEFAULTS)  # Resolve low_memory setting from CLI arguments and configuration
+        
+        try:  # Attempt to store resolved low_memory back into DEFAULTS for use in other functions that read from it, but don't fail if this doesn't work (e.g., if DEFAULTS is not a dict or is immutable)
+            if isinstance(DEFAULTS, dict):  # Only attempt to set if DEFAULTS is a dict to avoid errors
+                DEFAULTS.setdefault("dataset_converter", {})  # Ensure the 'dataset_converter' section exists in DEFAULTS
+                DEFAULTS["dataset_converter"]["low_memory"] = resolved_low_memory  # Store the resolved low_memory value in DEFAULTS for use in other functions that read from it
+        except Exception:  # Catch any exception that occurs during this storage attempt to avoid crashing the program, since the resolved value is already stored in the local variable and can be used directly by functions that need it without relying on DEFAULTS
+            pass  # Silently ignore any errors that occur while trying to store the resolved low_memory value back into DEFAULTS, since this is a best-effort attempt to make it available for functions that read from DEFAULTS, but the program can still function correctly using the local variable without this storage if necessary
 
         input_paths, output_path = resolve_io_paths(args)  # Resolve and validate paths, returning list of inputs
         if input_paths is None or output_path is None:  # If either resolution failed
