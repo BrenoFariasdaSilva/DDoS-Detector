@@ -222,11 +222,69 @@ def verify_filepath_exists(filepath):
     :return: True if the file or folder exists, False otherwise
     """
 
-    verbose_output(
-        f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
-    )  # Output the verbose message
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        verbose_output(
+            f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
+        )  # Output the verbose message
+        
+        if not isinstance(filepath, str) or not filepath.strip():  # Verify for non-string or empty/whitespace-only input   
+            verbose_output(true_string=f"{BackgroundColors.YELLOW}Invalid filepath provided, skipping existence verification.{Style.RESET_ALL}")  # Log invalid input
+            return False  # Return False for invalid input
 
-    return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
+        if os.path.exists(filepath):  # Fast path: original input exists
+            return True  # Return True immediately
+
+        candidate = str(filepath).strip()  # Normalize input to string and strip surrounding whitespace
+
+        if (candidate.startswith("'") and candidate.endswith("'")) or (
+            candidate.startswith('"') and candidate.endswith('"')
+        ):  # Handle quoted paths from config files
+            candidate = candidate[1:-1].strip()  # Remove wrapping quotes and trim again
+
+        candidate = os.path.expanduser(candidate)  # Expand ~ to user home directory
+        candidate = os.path.normpath(candidate)  # Normalize path separators and structure
+
+        if os.path.exists(candidate):  # Verify normalized candidate directly
+            return True  # Return True if normalized path exists
+
+        repo_dir = os.path.dirname(os.path.abspath(__file__))  # Resolve repository directory
+        cwd = os.getcwd()  # Capture current working directory
+
+        alt = candidate.lstrip(os.sep) if candidate.startswith(os.sep) else candidate  # Prepare relative-safe path
+
+        repo_candidate = os.path.join(repo_dir, alt)  # Build repo-relative candidate
+        cwd_candidate = os.path.join(cwd, alt)  # Build cwd-relative candidate
+
+        for path_variant in (repo_candidate, cwd_candidate):  # Iterate alternative base paths
+            try:
+                normalized_variant = os.path.normpath(path_variant)  # Normalize variant
+                if os.path.exists(normalized_variant):  # Verify existence
+                    return True  # Return True if found
+            except Exception:
+                continue  # Continue safely on error
+
+        try:  # Attempt absolute path resolution as fallback
+            abs_candidate = os.path.abspath(candidate)  # Build absolute path
+            if os.path.exists(abs_candidate):  # Verify existence
+                return True  # Return True if found
+        except Exception:
+            pass  # Ignore resolution errors
+
+        for path_variant in (candidate, repo_candidate, cwd_candidate):  # Attempt trailing-space resolution on all variants
+            try:  # Attempt to resolve trailing space issues across path components for this variant
+                resolved = resolve_full_trailing_space_path(path_variant)  # Resolve trailing space issues across path components
+                if resolved != path_variant and os.path.exists(resolved):  # Verify resolved path exists
+                    verbose_output(
+                        f"{BackgroundColors.YELLOW}Resolved trailing space mismatch: {BackgroundColors.CYAN}{path_variant}{BackgroundColors.YELLOW} -> {BackgroundColors.CYAN}{resolved}{Style.RESET_ALL}"
+                    )  # Log successful resolution
+                    return True  # Return True if corrected path exists
+            except Exception:  # Catch any exception during trailing space resolution   
+                continue  # Continue safely on error
+
+        return False  # Not found after all resolution strategies
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        raise  # Re-raise to preserve original failure semantics
 
 
 def extract_section_names(text):
