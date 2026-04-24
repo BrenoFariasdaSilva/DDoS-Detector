@@ -3515,9 +3515,11 @@ def migrate_results_csv_schema(filepath: str) -> None:
         inferred_dataset_name = ""  # Initialize dataset name to empty string before attempting lookup
 
         for cfg_name, cfg_paths in DATASETS.items():  # Iterate configured dataset entries to find a matching path
+            cfg_name = str(cfg_name).strip()  # Normalize dataset name by removing leading/trailing spaces
             for cfg_path in cfg_paths:  # Iterate each path listed under the current dataset name
+                cfg_path = str(cfg_path).strip()  # Normalize configured path by removing leading/trailing spaces
                 norm_cfg = os.path.normpath(cfg_path).replace(os.sep, "/").rstrip("/") + "/"  # Normalize the configured path for comparison
-                norm_inf = os.path.normpath(rel_dataset_path).replace(os.sep, "/").rstrip("/") + "/"  # Normalize the inferred path for comparison
+                norm_inf = os.path.normpath(str(rel_dataset_path).strip()).replace(os.sep, "/").rstrip("/") + "/"  # Normalize the inferred path for comparison
                 if norm_cfg == norm_inf:  # Compare normalized paths to resolve the matching dataset name
                     inferred_dataset_name = cfg_name  # Assign the matched dataset name from the configuration
                     break  # Stop searching once a match is found
