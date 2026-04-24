@@ -531,64 +531,62 @@ def verify_filepath_exists(filepath):
         verbose_output(
             f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
         )  # Output the verbose message
+        
+        if not isinstance(filepath, str) or not filepath.strip():  # Verify for non-string or empty/whitespace-only input   
+            verbose_output(true_string=f"{BackgroundColors.YELLOW}Invalid filepath provided, skipping existence verification.{Style.RESET_ALL}")  # Log invalid input
+            return False  # Return False for invalid input
 
-        if os.path.exists(filepath):  # Verify if the file or folder exists at the specified path
-            return True  # Return True if it exists
+        if os.path.exists(filepath):  # Fast path: original input exists
+            return True  # Return True immediately
 
-        candidate = str(filepath).strip()  # Normalize and sanitize common mis-formatting produced by config files
+        candidate = str(filepath).strip()  # Normalize input to string and strip surrounding whitespace
 
         if (candidate.startswith("'") and candidate.endswith("'")) or (
             candidate.startswith('"') and candidate.endswith('"')
-        ):  # Verify if the path is wrapped in quotes from a config file
-            candidate = candidate[1:-1].strip()  # Remove leading/trailing quotes and whitespace
+        ):  # Handle quoted paths from config files
+            candidate = candidate[1:-1].strip()  # Remove wrapping quotes and trim again
 
-        candidate_no_trail = candidate.rstrip("/\\")  # Remove trailing slashes or backslashes
-        if candidate_no_trail and os.path.exists(candidate_no_trail):  # Verify existence of candidate without trailing slashes
-            return True  # Found candidate after removing trailing slash/backslash
+        candidate = os.path.expanduser(candidate)  # Expand ~ to user home directory
+        candidate = os.path.normpath(candidate)  # Normalize path separators and structure
 
-        repo_dir = os.path.dirname(os.path.abspath(__file__))  # Resolve repository directory for fallback path resolution
-        cwd = os.getcwd()  # Capture current working directory to attempt alternate resolution
+        if os.path.exists(candidate):  # Verify normalized candidate directly
+            return True  # Return True if normalized path exists
 
-        alt = candidate.lstrip("/") if candidate.startswith("/") else candidate  # Remove leading slash from candidate for relative path construction
+        repo_dir = os.path.dirname(os.path.abspath(__file__))  # Resolve repository directory
+        cwd = os.getcwd()  # Capture current working directory
 
-        repo_candidate = os.path.join(repo_dir, alt)  # Build repo-relative candidate path
-        cwd_candidate = os.path.join(cwd, alt)  # Build cwd-relative candidate path
+        alt = candidate.lstrip(os.sep) if candidate.startswith(os.sep) else candidate  # Prepare relative-safe path
 
-        if os.path.exists(repo_candidate):  # Verify if repo-relative candidate exists
-            return True  # Found repo-relative path
+        repo_candidate = os.path.join(repo_dir, alt)  # Build repo-relative candidate
+        cwd_candidate = os.path.join(cwd, alt)  # Build cwd-relative candidate
 
-        if os.path.exists(cwd_candidate):  # Verify if cwd-relative candidate exists
-            return True  # Found cwd-relative path
+        for path_variant in (repo_candidate, cwd_candidate):  # Iterate alternative base paths
+            try:
+                normalized_variant = os.path.normpath(path_variant)  # Normalize variant
+                if os.path.exists(normalized_variant):  # Verify existence
+                    return True  # Return True if found
+            except Exception:
+                continue  # Continue safely on error
 
-        try:  # Attempt absolute path resolution as last resort
-            abs_candidate = os.path.abspath(candidate)  # Build absolute path from candidate
-            if os.path.exists(abs_candidate):  # Verify existence of absolute candidate
-                return True  # Found absolute candidate
-        except Exception:  # Ignore errors when resolving absolute candidate
-            pass  # Swallow resolution exceptions and continue
+        try:  # Attempt absolute path resolution as fallback
+            abs_candidate = os.path.abspath(candidate)  # Build absolute path
+            if os.path.exists(abs_candidate):  # Verify existence
+                return True  # Return True if found
+        except Exception:
+            pass  # Ignore resolution errors
 
-        resolved_full = resolve_full_trailing_space_path(candidate)  # Attempt full trailing space resolution across all path components
-        if resolved_full != candidate and os.path.exists(resolved_full):  # Verify resolved path exists
-            verbose_output(
-                f"{BackgroundColors.YELLOW}Resolved trailing space mismatch: {BackgroundColors.CYAN}{candidate}{BackgroundColors.YELLOW} -> {BackgroundColors.CYAN}{resolved_full}{Style.RESET_ALL}"
-            )  # Log successful resolution
-            return True  # Return True if corrected path exists
+        for path_variant in (candidate, repo_candidate, cwd_candidate):  # Attempt trailing-space resolution on all variants
+            try:  # Attempt to resolve trailing space issues across path components for this variant
+                resolved = resolve_full_trailing_space_path(path_variant)  # Resolve trailing space issues across path components
+                if resolved != path_variant and os.path.exists(resolved):  # Verify resolved path exists
+                    verbose_output(
+                        f"{BackgroundColors.YELLOW}Resolved trailing space mismatch: {BackgroundColors.CYAN}{path_variant}{BackgroundColors.YELLOW} -> {BackgroundColors.CYAN}{resolved}{Style.RESET_ALL}"
+                    )  # Log successful resolution
+                    return True  # Return True if corrected path exists
+            except Exception:  # Catch any exception during trailing space resolution   
+                continue  # Continue safely on error
 
-        resolved_full_repo = resolve_full_trailing_space_path(repo_candidate)  # Attempt resolution on repo-relative path
-        if resolved_full_repo != repo_candidate and os.path.exists(resolved_full_repo):  # Verify resolved repo path exists
-            verbose_output(
-                f"{BackgroundColors.YELLOW}Resolved trailing space mismatch (repo): {BackgroundColors.CYAN}{repo_candidate}{BackgroundColors.YELLOW} -> {BackgroundColors.CYAN}{resolved_full_repo}{Style.RESET_ALL}"
-            )  # Log successful resolution
-            return True  # Return True if corrected repo path exists
-
-        resolved_full_cwd = resolve_full_trailing_space_path(cwd_candidate)  # Attempt resolution on cwd-relative path
-        if resolved_full_cwd != cwd_candidate and os.path.exists(resolved_full_cwd):  # Verify resolved cwd path exists
-            verbose_output(
-                f"{BackgroundColors.YELLOW}Resolved trailing space mismatch (cwd): {BackgroundColors.CYAN}{cwd_candidate}{BackgroundColors.YELLOW} -> {BackgroundColors.CYAN}{resolved_full_cwd}{Style.RESET_ALL}"
-            )  # Log successful resolution
-            return True  # Return True if corrected cwd path exists
-
-        return False  # Not found after all heuristics
+        return False  # Not found after all resolution strategies
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -970,7 +968,7 @@ def detect_label_column(columns):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        candidates = ["label", "class", "target", "y", "category"]  # Common label column names to check for exact matchescandidates = ["label", "class", "target"]  # Common label column names
+        candidates = ["label", "class", "target", "y", "category"]  # Common label column names to verify for exact matchescandidates = ["label", "class", "target"]  # Common label column names
 
         for col in columns:  # First search for exact matches
             if col.lower() in candidates:  # Verify if the column name matches any candidate exactly
