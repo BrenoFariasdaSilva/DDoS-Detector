@@ -53,6 +53,7 @@ Limitations / TODO
     - Consider structured logging instead of printing/redirecting stdout.
 """
 
+
 import argparse  # For parsing CLI arguments
 import atexit  # For playing a sound when the program finishes
 import dataframe_image as dfi  # For exporting DataFrame as PNG images
@@ -100,6 +101,7 @@ class BackgroundColors:  # Colors for the terminal
 
 # Execution Constants will be sourced from configuration (CLI > config.yaml > defaults)
 
+
 SOUND_COMMANDS = {
     "Darwin": "afplay",
     "Linux": "aplay",
@@ -107,6 +109,9 @@ SOUND_COMMANDS = {
 }
 
 SOUND_FILE = "./.assets/Sounds/NotificationSound.wav"
+
+
+# Functions Definitions:
 
 
 def get_default_config() -> dict:
