@@ -118,7 +118,7 @@ def get_default_config() -> dict:
     
     return {
         "dataset_descriptor": {
-            "low_memory": False,
+            "low_memory": True,
             "include_preprocessing_metrics": True,
             "include_data_augmentation_info": True,
             "generate_table_image": True,
