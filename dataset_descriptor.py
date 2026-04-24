@@ -3321,7 +3321,9 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=None, 
         )  # Create a single in-place progress bar instance
         for idx, filepath in enumerate(progress, 1):  # Process each matching file
             file_basename = os.path.relpath(filepath, base_dir).replace("\\", "/")  # Get the file path relative to base_dir and normalize slashes
-            colored_desc = f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{file_basename}{Style.RESET_ALL}"  # Compose colored description using BackgroundColors while keeping length bounded
+            py_dir = os.path.dirname(os.path.abspath(__file__))  # Resolve the directory of the running Python file for relative display path computation
+            display_path = os.path.relpath(filepath, py_dir).replace("\\", "/")  # Compute path relative to the Python file's directory for display in the progress bar
+            colored_desc = f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{display_path}{Style.RESET_ALL}"  # Compose colored description using BackgroundColors while keeping length bounded
             progress.set_description(colored_desc)  # Update progress bar description with colored, truncated filename for inline display
 
             df_current = load_dataset(filepath, low_memory)  # Load one dataset at a time to minimize peak RAM usage
