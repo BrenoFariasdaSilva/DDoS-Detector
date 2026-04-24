@@ -44,8 +44,8 @@ TODOs (short):
 """
 
 
-import argparse  # For parsing command-line arguments
 import arff  # Liac-arff, used to save ARFF files
+import argparse  # For parsing command-line arguments
 import atexit  # For playing a sound when the program finishes
 import datetime  # For timestamping
 import io  # For in-memory file operations
