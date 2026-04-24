@@ -6,36 +6,39 @@ Author      : Breno Farias da Silva
 Created     : 2025-05-31
 
 Short Description:
-    Command-line utility that discovers datasets (ARFF, CSV, Parquet, TXT)
-    under an input directory, applies lightweight structural cleaning to
-    text-based formats, loads them into pandas DataFrames, and writes
-    converted outputs (ARFF, CSV, Parquet, TXT) to a mirrored `Output`
-    directory structure.
+    Command-line utility for discovering, cleaning, and converting datasets in multiple formats (ARFF, CSV, Parquet, TXT, PCAP, stats).
+    Recursively scans input directories, applies lightweight structural cleaning to text-based formats, loads them into pandas DataFrames,
+    and writes converted outputs (ARFF, CSV, Parquet, TXT) to a mirrored output directory structure. Handles binary PCAP and statistics files.
 
 Defaults & Behavior:
-    - Default input directory: ./Input
-    - Default output directory: ./Output
-    - Supported input formats: .arff, .csv, .parquet, .txt
+    - Default input directory: ./Datasets
+    - Default output directory: ./Converted
+    - Supported input formats: .arff, .csv, .parquet, .txt, .pcap, .stats
+    - Supported output formats: .arff, .csv, .parquet, .txt
     - Cleaning: minimal whitespace/domain-list normalization for ARFF/CSV/TXT
     - Parquet files are rewritten via `fastparquet` for consistency
-    - Conversion preserves directory hierarchy relative to `Input`
+    - PCAP files are loaded with Scapy and converted to DataFrames
+    - PCAP stats files parsed as key-value or line-based tables
+    - Conversion preserves directory hierarchy relative to input
+    - Disk-space verifies are performed before writing outputs
+    - Optional Telegram notifications for progress and errors
     - Optional completion sound (platform-dependent)
 
 Usage:
     - Run interactively:
         python3 dataset_converter.py
-    - Or pass CLI args: `-i/--input`, `-o/--output`, `-f/--formats`, `-v/--verbose`
+    - Or pass CLI args: `-i/--input`, `-o/--output`, `-f/--formats`, `-v/--verbose`, `--input-file-formats`, `--output-file-formats`, `--low-memory`, `--no-low-memory`
 
 Dependencies (non-exhaustive):
     - Python 3.8+
-    - pandas, fastparquet, scipy, liac-arff (arff), colorama, tqdm
+    - pandas, fastparquet, scipy, liac-arff (arff), colorama, tqdm, scapy, pyyaml
 
 Notes and Caveats:
-    - The converter performs pragmatic cleaning only; do not rely on it to
-        fully sanitize malformed CSVs.
+    - The converter performs pragmatic cleaning only; do not rely on it to fully sanitize malformed CSVs.
     - The script uses both `scipy` and `liac-arff` as fallbacks for ARFF.
     - Disk-space verifies are performed before writing outputs.
     - The module expects UTF-8 encoded text files.
+    - Telegram integration and sound notification are optional and platform-dependent.
 
 TODOs (short):
     - Add unit tests and more robust CSV parsing
