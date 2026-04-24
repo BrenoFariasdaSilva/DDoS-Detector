@@ -560,7 +560,7 @@ def collect_matching_files(
         raise  # Re-raise to preserve original failure semantics
 
 
-def build_headers_map(filepaths, low_memory=True):
+def build_headers_map(filepaths, low_memory=None):
     """
     Build a mapping of file path -> list of header columns.
 
@@ -636,7 +636,7 @@ def compute_common_features(headers_map):
         raise  # Re-raise to preserve original failure semantics
 
 
-def load_dataset(filepath, low_memory=True):
+def load_dataset(filepath, low_memory=None):
     """
     Loads a dataset from a CSV file.
 
@@ -646,6 +646,8 @@ def load_dataset(filepath, low_memory=True):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
+        low_memory = True if low_memory is None else bool(low_memory)  # Default to True if low_memory is not provided
+        
         try:  # Try to load the dataset
             with warnings.catch_warnings():  # Suppress DtypeWarning warnings
                 warnings.simplefilter("ignore", pd.errors.DtypeWarning)  # Ignore DtypeWarning warnings
@@ -1226,7 +1228,7 @@ def sample_indices_from_alloc(labels, allocations, random_state):
         raise  # Re-raise to preserve original failure semantics
 
 
-def prepare_numeric_dataset(filepath, low_memory=True, sample_size=5000, random_state=42):
+def prepare_numeric_dataset(filepath, low_memory=None, sample_size=5000, random_state=42):
     """
     Load CSV dataset, clean it, extract numeric features, optionally downsample,
     and return numeric DataFrame and labels.
@@ -1785,7 +1787,7 @@ def resolve_tsne_output_directory(filepath, output_dir, config):
 def generate_tsne_plot(
     filepath,
     df=None,
-    low_memory=True,
+    low_memory=None,
     sample_size=5000,
     perplexity=30,
     n_iter=1000,
@@ -2022,7 +2024,7 @@ def extract_classes_and_distribution(df: "pd.DataFrame") -> tuple:
         raise  # Re-raise to preserve original failure semantics
 
 
-def get_dataset_file_info(filepath, df=None, low_memory=True):
+def get_dataset_file_info(filepath, df=None, low_memory=None):
     """
     Extract dataset information from a CSV file and return it as a dictionary.
 
@@ -3076,7 +3078,7 @@ def append_preprocessing_metrics_safe(filepath, info, preprocessing_metrics, fil
         print(f"{BackgroundColors.YELLOW}Warning: failed to collect preprocessing metrics for {file_basename}: {_pm}{Style.RESET_ALL}")  # Warn without breaking the progress bar
 
 
-def generate_dataset_report(input_path, file_extension=".csv", low_memory=True, output_filename: str | None = None, config: dict | None = None):
+def generate_dataset_report(input_path, file_extension=".csv", low_memory=None, output_filename: str | None = None, config: dict | None = None):
     """
     Generate a CSV report for the specified input path.
     The Dataset Name column will include subdirectories if present.
@@ -3186,7 +3188,7 @@ def collect_group_files(paths, file_extension=".csv", config: dict | None = None
         raise  # Re-raise to preserve original failure semantics
 
 
-def compute_group_features(files, low_memory=True):
+def compute_group_features(files, low_memory=None):
     """
     Compute common and union features for a list of dataset files.
 
@@ -3312,7 +3314,7 @@ def adjust_rows_for_group(report_rows, group_name):
         raise  # Re-raise to preserve original failure semantics
 
 
-def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memory=True, output_filename=None, config: dict | None = None):
+def generate_cross_dataset_report(datasets_dict, file_extension=".csv", low_memory=None, output_filename=None, config: dict | None = None):
     """
     Generate a cross-dataset feature-compatibility report comparing dataset
     groups defined in `datasets_dict`. Produces pairwise comparisons between
