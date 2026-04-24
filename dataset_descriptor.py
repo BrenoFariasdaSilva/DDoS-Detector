@@ -2211,6 +2211,8 @@ def get_dataset_file_info(filepath, df=None, low_memory=None):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
+        mem_before, total_mem, percent_before = report_memory_usage(f"Before Loading Dataset File", filepath)  # Report memory usage before loading the dataset
+
         verbose_output(
             f"{BackgroundColors.GREEN}Extracting dataset information from: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
         )  # Output start message for dataset info extraction
@@ -2219,6 +2221,8 @@ def get_dataset_file_info(filepath, df=None, low_memory=None):
 
         if df is None:
             df = load_dataset(filepath, low_memory)  # Load the dataset
+
+        mem_after, _, percent_after = report_memory_usage(f"After Loading Dataset File", filepath)  # Report memory usage after loading the dataset
 
         if df is None:  # If the dataset could not be loaded
             return None  # Return None
