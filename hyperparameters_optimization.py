@@ -582,7 +582,9 @@ def iterate_dataset_directories():
     
     try:
         for dataset_name, paths in DATASETS.items():  # Iterate over datasets
+            dataset_name = str(dataset_name).strip()  # Normalize dataset name by removing leading/trailing spaces
             for dirpath in paths:  # Iterate configured paths
+                dirpath = str(dirpath).strip()  # Normalize directory path by removing leading/trailing spaces
                 if not os.path.isdir(dirpath):  # If path is not a directory
                     verbose_output(
                         f"{BackgroundColors.YELLOW}Skipping non-directory path: {BackgroundColors.CYAN}{dirpath}{Style.RESET_ALL}"
