@@ -2190,16 +2190,20 @@ def format_bytes_to_best_unit(byte_value: int) -> tuple[float, str]:
     return float(byte_value), "B"  # Return raw bytes when below kilobyte threshold
 
 
-def report_memory_usage(stage: str, filepath: str) -> tuple[int, int, float]:
+def report_resources_usage(stage: str, filepath: str) -> tuple[int, int, float, int, float]:
     """
-    Report and return the current process memory usage and system RAM percentage.
+    Report and return the current process memory usage, system RAM percentage, CPU cores, and CPU usage.
 
-    Prints a verbose output line with the memory usage (in MB and percent) for the given stage and file.
+    Prints a verbose output line with CPU usage and memory usage for the given stage and file.
 
     :param stage: Description of the memory measurement stage (e.g., "Before loading").
     :param filepath: Path to the file being processed (for output context).
-    :return: Tuple (rss_bytes, total_bytes, percent_used) where rss_bytes is the process RSS in bytes,
-             total_bytes is the total system RAM in bytes, and percent_used is the percentage of RAM used.
+    :return: Tuple (rss_bytes, total_bytes, percent_used, cpu_cores, cpu_percent)
+             where rss_bytes is process memory usage in bytes,
+             total_bytes is system RAM in bytes,
+             percent_used is RAM percentage,
+             cpu_cores is logical CPU cores used/available,
+             cpu_percent is CPU utilization percentage.
     """
 
     process = psutil.Process(os.getpid())  # Get current process
@@ -2211,13 +2215,15 @@ def report_memory_usage(stage: str, filepath: str) -> tuple[int, int, float]:
     percent = (mem_bytes / total_bytes) * 100 if total_bytes else 0.0  # Compute percent of RAM used
 
     mem_value, mem_unit = format_bytes_to_best_unit(mem_bytes)  # Convert memory usage to best human-readable unit
+    cpu_cores, cpu_percent = get_process_cpu_usage(process)  # Retrieve CPU core count and CPU usage percentage
 
     verbose_output(
         f"{BackgroundColors.YELLOW}[MEMORY]{Style.RESET_ALL} {stage} {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}: "
-        f"{mem_value:.2f} {mem_unit} ({percent:.4f}%) of system RAM used."
-    )  # Print memory usage with optimized unit formatting and context
+        f"{cpu_percent:.2f}% CPU across {cpu_cores} cores | "
+        f"{mem_value:.2f} {mem_unit} ({percent:.4f}%) RAM."
+    )  # Print CPU usage first and memory usage second with formatted output
 
-    return mem_bytes, total_bytes, percent  # Return values for further use if needed
+    return mem_bytes, total_bytes, percent, cpu_cores, cpu_percent  # Return full resource usage metrics
 
 
 def get_dataset_file_info(filepath, df=None, low_memory=None):
@@ -2231,21 +2237,20 @@ def get_dataset_file_info(filepath, df=None, low_memory=None):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        mem_before, total_mem, percent_before = report_memory_usage(f"Before Loading Dataset File", filepath)  # Report memory usage before loading the dataset
-
         verbose_output(
             f"{BackgroundColors.GREEN}Extracting dataset information from: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
         )  # Output start message for dataset info extraction
-        verbose_output(f"{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Log dataset processing start without breaking the active progress bar
-        send_telegram_message(TELEGRAM_BOT, [f"Starting processing dataset: {os.path.basename(filepath)}"])  # Send Telegram notification indicating start of processing for dataset
-
+        send_telegram_message(TELEGRAM_BOT, [f"Extracting dataset information from: {os.path.basename(filepath)}"])  # Send Telegram notification indicating start of dataset info extraction
+        
+        mem_before, total_mem, percent_before, cpu_cores_before, cpu_percent_before = report_resources_usage(f"Before Loading Dataset File", filepath)  # Report full resource usage before loading dataset
+        
         if df is None:
             df = load_dataset(filepath, low_memory)  # Load the dataset
 
-        mem_after, _, percent_after = report_memory_usage(f"After Loading Dataset File", filepath)  # Report memory usage after loading the dataset
-
         if df is None:  # If the dataset could not be loaded
             return None  # Return None
+        
+        mem_after, total_mem_after, percent_after, cpu_cores_after, cpu_percent_after = report_resources_usage(f"After Loading Dataset File", filepath)  # Report full resource usage after loading dataset
 
         original_num_rows = len(df)  # Capture original number of rows immediately after read
         original_num_features = df.shape[1] if hasattr(df, "shape") else 0  # Capture original feature count
