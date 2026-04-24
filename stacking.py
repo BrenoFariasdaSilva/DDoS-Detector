@@ -887,29 +887,65 @@ def resolve_full_trailing_space_path(filepath: str) -> str:
         return filepath  # Return original
 
 
-def verify_filepath_exists(filepath):
+def resolve_full_trailing_space_path(filepath: str) -> str:
     """
-    Verify if a file or folder exists at the specified path.
+    Resolve trailing space issues across all path components.
 
-    :param filepath: Path to the file or folder
-    :return: True if the file or folder exists, False otherwise
+    :param filepath: Path to resolve potential trailing space mismatches.
+    :return: Corrected full path if matches are found, otherwise original filepath.
     """
 
-    try:  # Wrap full function logic to ensure production-safe monitoring
-        verbose_output(true_string=f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Output the verbose message
+    try:  # Wrap full function logic to ensure safe execution
+        verbose_output(true_string=f"{BackgroundColors.GREEN}Resolving full trailing space path for: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Log start
 
-        if os.path.exists(filepath):  # Verify if the file or folder exists at the specified path
-            return True  # Return True if the original path exists
+        if not isinstance(filepath, str) or not filepath:  # Verify filepath validity
+            verbose_output(true_string=f"{BackgroundColors.YELLOW}Invalid filepath provided, skipping resolution.{Style.RESET_ALL}")  # Log invalid input
+            return filepath  # Return original
 
-        resolved_path = resolve_full_trailing_space_path(filepath)  # Attempt to resolve path with full trailing space correction across components
-        if resolved_path != filepath and os.path.exists(resolved_path):  # Verify if resolved path exists and differs from original
-            verbose_output(true_string=f"{BackgroundColors.YELLOW}Resolved trailing space mismatch: {BackgroundColors.CYAN}{filepath}{BackgroundColors.YELLOW} -> {BackgroundColors.CYAN}{resolved_path}{Style.RESET_ALL}")  # Output verbose message about the resolution
-            return True  # Return True if corrected path exists
+        filepath = os.path.expanduser(filepath)  # Expand ~ to user directory
+        parts = filepath.split(os.sep)  # Split path into components
 
-        return False  # Return False if neither original nor corrected path exists
-    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
-        print(str(e))  # Print error to terminal for server logs
-        raise  # Re-raise to preserve original failure semantics
+        if not parts:  # Verify path parts exist
+            return filepath  # Return original
+
+        if filepath.startswith(os.sep):  # Handle absolute paths
+            current_path = os.sep  # Start from root
+            parts = parts[1:]  # Remove empty root part
+        else:
+            current_path = parts[0] if parts[0] else os.getcwd()  # Initialize base
+            parts = parts[1:] if parts[0] else parts  # Adjust parts
+
+        for part in parts:  # Iterate over each path component
+            if part == "":  # Skip empty parts
+                continue  # Continue iteration
+
+            try:  # Attempt to list current directory
+                entries = os.listdir(current_path) if os.path.isdir(current_path) else []  # List current directory entries
+            except Exception:  # Handle failure to list directory contents
+                verbose_output(true_string=f"{BackgroundColors.RED}Failed to list directory: {BackgroundColors.CYAN}{current_path}{Style.RESET_ALL}")  # Log failure
+                return filepath  # Return original
+
+            stripped_part = part.strip()  # Normalize current part
+            match_found = False  # Initialize match flag
+
+            for entry in entries:  # Iterate directory entries
+                try:  # Attempt safe comparison for each entry
+                    if entry.strip() == stripped_part:  # Compare stripped names
+                        current_path = resolve_entry_with_trailing_space(current_path, entry, stripped_part)  # Resolve entry and update current path
+                        match_found = True  # Mark match
+                        break  # Stop searching
+                except Exception:  # Handle any unexpected error during comparison
+                    continue  # Continue on error
+
+            if not match_found:  # If no match found for this segment
+                verbose_output(true_string=f"{BackgroundColors.YELLOW}No match for segment: {BackgroundColors.CYAN}{part}{Style.RESET_ALL}")  # Log miss
+                return filepath  # Return original
+
+        return current_path  # Return fully resolved path
+
+    except Exception:  # Catch unexpected errors to maintain stability
+        verbose_output(true_string=f"{BackgroundColors.RED}Error resolving full path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Log error
+        return filepath  # Return original
 
 
 def get_files_to_process(directory_path, file_extension=".csv", config=None):
