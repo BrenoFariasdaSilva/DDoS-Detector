@@ -519,6 +519,7 @@ pca:
 # DATASET DESCRIPTOR — Used by dataset_descriptor.py
 # ==============================================================================
 dataset_descriptor:
+  low_memory: false # The low memory parameter for reading the files.
   include_preprocessing_metrics: true # Include preprocessing statistics
   include_data_augmentation_info: true # Include WGANGP augmentation summary column
   generate_table_image: true # Export table image using dataframe_image
