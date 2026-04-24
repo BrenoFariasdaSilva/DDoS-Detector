@@ -3528,10 +3528,12 @@ def main():
         results_suffix = config.get("dataset_descriptor", {}).get("csv_output_suffix", "_description")  # Resolve output CSV suffix from config
 
         for dataset_name, paths in datasets.items():  # Iterate over configured dataset entries
+            dataset_name = str(dataset_name).strip()  # Normalize dataset name by removing leading/trailing spaces
             verbose_output(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")  # Log dataset processing start
-            safe_dataset_name = str(dataset_name).replace(" ", "_").replace("/", "_")  # Sanitize dataset name for safe filesystem use
+            safe_dataset_name = dataset_name.replace(" ", "_").replace("/", "_")  # Sanitize dataset name for safe filesystem use and remove leading/trailing spaces
 
             for dir_path in paths:  # Iterate over all configured paths for this dataset
+                dir_path = str(dir_path).strip()  # Normalize directory path by removing leading/trailing spaces
                 print(f"{BackgroundColors.GREEN}Location: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")  # Print current directory path
                 if not verify_filepath_exists(dir_path):  # Verify the configured path exists before processing
                     print(f"{BackgroundColors.RED}The specified input path does not exist: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")  # Report missing path to terminal
@@ -3541,7 +3543,7 @@ def main():
                 if not success:  # Verify whether report generation succeeded
                     print(f"{BackgroundColors.RED}Failed to generate dataset report for: {BackgroundColors.CYAN}{dir_path}{Style.RESET_ALL}")  # Report failure for this path
                 else:  # Report generation succeeded
-                    print(f"{BackgroundColors.GREEN}Report saved for {BackgroundColors.CYAN}{dataset_name}{BackgroundColors.GREEN} -> {BackgroundColors.CYAN}{results_suffix}{Style.RESET_ALL}")  # Confirm successful report save
+                    print(f"{BackgroundColors.GREEN}Report saved for {BackgroundColors.CYAN}{safe_dataset_name}{BackgroundColors.GREEN} -> {BackgroundColors.CYAN}{results_suffix}{Style.RESET_ALL}")  # Confirm successful report save
 
         if config.get("execution", {}).get("cross_dataset_validate", True) and len(datasets) > 1:  # Verify cross-dataset validation is enabled and multiple datasets are configured
             try:  # Attempt cross-dataset validation with graceful failure handling
