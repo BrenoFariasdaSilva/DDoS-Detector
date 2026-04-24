@@ -515,40 +515,6 @@ pca:
       - testing_time_s
       - hardware
 
-# ==============================================================================
-# DATASET DESCRIPTOR — Used by dataset_descriptor.py
-# ==============================================================================
-dataset_descriptor:
-  low_memory: false # The low memory parameter for reading the files.
-  include_preprocessing_metrics: true # Include preprocessing statistics
-  include_data_augmentation_info: true # Include WGANGP augmentation summary column
-  generate_table_image: true # Export table image using dataframe_image
-  table_image_format: "png" # Table image format (png/jpg)
-  csv_output_suffix: "_description" # Suffix for generated descriptor CSV
-  class_column_name: "Label" # Target/class column name
-  dropna_before_analysis: false # Drop NaN rows before computing metrics
-  compute_class_distribution: true # Compute per-class counts and proportions
-  compute_feature_statistics: true # Compute feature-level summary statistics
-  round_decimals: 4 # Number of decimal places for floats
-  datasets: # Dictionary containing dataset paths
-    CAIDA-2007:
-    - "./Datasets/CAIDA 2007/Converted/"
-    CICDDoS2019-Dataset:
-      - "./Datasets/CICDDoS2019/01-12/"
-      - "./Datasets/CICDDoS2019/03-11/"
-    CIC-IDS2017-Dataset:
-      - "./Datasets/CICIDS2017/TrafficLabelling/"
-    ISCX-IDS-2012:
-      - "./Datasets/ISCX IDS 2012/data/CSV/" 
-    KDD-Dataset:
-      - "./Datasets/KDD-Dataset/Converted/"
-    LATAM-DDoS-IoT:
-      - "./Datasets/LATAM DDoS IoT/Converted/"
-    UGR-16:
-      - "./Datasets/UGR-16/uniq/"
-    UNSW-NB15-Dataset:
-      - "./Datasets/UNSW-NB15-Dataset/Converted/"
-
 # RFE — Used by rfe.py
 # ==============================================================================
 rfe:
@@ -731,3 +697,37 @@ dataset_converter:
     - "Feature_Analysis"
     - "Results" # Directory names to ignore during discovery
   ignore_files: ["results", "summary"] # Filename substrings to ignore
+
+# ==============================================================================
+# DATASET DESCRIPTOR — Used by dataset_descriptor.py
+# ==============================================================================
+dataset_descriptor:
+  low_memory: false # The low memory parameter for reading the files.
+  include_preprocessing_metrics: true # Include preprocessing statistics
+  include_data_augmentation_info: true # Include WGANGP augmentation summary column
+  generate_table_image: true # Export table image using dataframe_image
+  table_image_format: "png" # Table image format (png/jpg)
+  csv_output_suffix: "_description" # Suffix for generated descriptor CSV
+  class_column_name: "Label" # Target/class column name
+  dropna_before_analysis: false # Drop NaN rows before computing metrics
+  compute_class_distribution: true # Compute per-class counts and proportions
+  compute_feature_statistics: true # Compute feature-level summary statistics
+  round_decimals: 4 # Number of decimal places for floats
+  datasets: # Dictionary containing dataset paths
+    CAIDA-2007:
+    - "./Datasets/CAIDA 2007/Converted/"
+    CICDDoS2019-Dataset:
+      - "./Datasets/CICDDoS2019/01-12/"
+      - "./Datasets/CICDDoS2019/03-11/"
+    CIC-IDS2017-Dataset:
+      - "./Datasets/CICIDS2017/TrafficLabelling/"
+    ISCX-IDS-2012:
+      - "./Datasets/ISCX IDS 2012/data/CSV/" 
+    KDD-Dataset:
+      - "./Datasets/KDD-Dataset/Converted/"
+    LATAM-DDoS-IoT:
+      - "./Datasets/LATAM DDoS IoT/Converted/"
+    UGR-16:
+      - "./Datasets/UGR-16/uniq/"
+    UNSW-NB15-Dataset:
+      - "./Datasets/UNSW-NB15-Dataset/Converted/"
