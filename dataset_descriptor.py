@@ -2139,6 +2139,26 @@ def extract_classes_and_distribution(df: "pd.DataFrame") -> tuple:
         raise  # Re-raise to preserve original failure semantics
 
 
+def get_process_cpu_usage(process: psutil.Process) -> tuple[int, float]:
+    """
+    Compute CPU usage and logical CPU count for a given process.
+
+    :param process: psutil process instance.
+    :return: Tuple containing number of logical CPUs used and average CPU usage percentage.
+    """
+
+    cpu_times = process.cpu_times()  # Retrieve CPU time statistics for process
+
+    cpu_percent = process.cpu_percent(interval=0.1)  # Compute CPU usage over short sampling interval
+
+    cpu_count = len(process.cpu_affinity()) if hasattr(process, "cpu_affinity") else os.cpu_count()  # Detect assigned CPU cores or fallback to system count
+
+    if cpu_count is None:  # Verify CPU count resolution fallback safety
+        cpu_count = 1  # Default to single core when detection fails
+
+    return cpu_count, cpu_percent  # Return CPU core usage estimate and utilization percentage
+
+
 def format_bytes_to_best_unit(byte_value: int) -> tuple[float, str]:
     """
     Convert a byte value into the most appropriate human-readable unit.
