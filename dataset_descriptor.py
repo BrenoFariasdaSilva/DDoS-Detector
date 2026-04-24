@@ -65,6 +65,7 @@ import numpy as np  # For numerical operations
 import os  # For running a command in the terminal
 import pandas as pd  # For data manipulation
 import platform  # For getting the operating system name
+import psutil  # Local import to avoid global dependency if not needed
 import re  # For regex operations
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
@@ -2136,6 +2137,37 @@ def extract_classes_and_distribution(df: "pd.DataFrame") -> tuple:
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
         raise  # Re-raise to preserve original failure semantics
+
+
+def format_bytes_to_best_unit(byte_value: int) -> tuple[float, str]:
+    """
+    Convert a byte value into the most appropriate human-readable unit.
+
+    :param byte_value: Size in bytes to be converted.
+    :return: Tuple containing the converted value and its unit label.
+    """
+
+    if byte_value < 0:  # Verify if byte value is negative before conversion
+        byte_value = 0  # Normalize negative values to zero to avoid invalid memory representation
+
+    kb_value = byte_value / 1024  # Compute kilobyte representation
+    mb_value = kb_value / 1024  # Compute megabyte representation
+    gb_value = mb_value / 1024  # Compute gigabyte representation
+    tb_value = gb_value / 1024  # Compute terabyte representation
+
+    if tb_value >= 1:  # Verify if value fits into terabyte range
+        return tb_value, "TB"  # Return terabyte formatted value and unit
+
+    if gb_value >= 1:  # Verify if value fits into gigabyte range
+        return gb_value, "GB"  # Return gigabyte formatted value and unit
+
+    if mb_value >= 1:  # Verify if value fits into megabyte range
+        return mb_value, "MB"  # Return megabyte formatted value and unit
+
+    if kb_value >= 1:  # Verify if value fits into kilobyte range
+        return kb_value, "KB"  # Return kilobyte formatted value and unit
+
+    return float(byte_value), "B"  # Return raw bytes when below kilobyte threshold
 
 
 def get_dataset_file_info(filepath, df=None, low_memory=None):
