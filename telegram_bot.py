@@ -112,7 +112,7 @@ class TelegramBot:
 
         env_path = env_file if env_file else ".env"  # Determine the .env file path
 
-        if not os.path.exists(env_path):  # Verify if the .env file exists
+        if not verify_filepath_exists(env_path):  # Verify if the .env file exists
             print(
                 f"{BackgroundColors.RED}Error: {BackgroundColors.CYAN}.env{BackgroundColors.RED} file not found at {env_path}.{Style.RESET_ALL}"
             )

@@ -223,17 +223,17 @@ def verify_filepath_exists(filepath):
     :param filepath: Path to the file or folder
     :return: True if the file or folder exists, False otherwise
     """
-    
-    try:
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
         verbose_output(
-            f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
+            true_string=f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
         )  # Output the verbose message
 
         return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def get_features_from_file(file_path, start_line_keyword="Best Feature Subset using"):
@@ -1069,7 +1069,7 @@ def save_results(report, metrics_df, results_dir, index, model_name, feat_extrac
     try:
         verbose_output(f"{BackgroundColors.GREEN}Saving results for {model_name}...{Style.RESET_ALL}")
 
-        if not os.path.exists(results_dir):  # If the results directory does not exist
+        if not verify_filepath_exists(results_dir):  # If the results directory does not exist
             os.makedirs(results_dir)  # Create the results directory
 
         model_name_clean = model_name.replace(" ", "_").replace("(", "").replace(")", "")  # Clean model name for filename

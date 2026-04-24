@@ -432,11 +432,11 @@ def load_config_file(config_path=None):
         if config_path is None:  # If no path provided, try default locations
             possible_paths = ["config.yaml", "config.yml", ".env"]  # List of possible config file paths
             for path in possible_paths:  # Iterate through possible paths
-                if os.path.exists(path):  # Verify if file exists
+                if verify_filepath_exists(path):  # Verify if file exists
                     config_path = path  # Use this path
                     break  # Stop searching
 
-        if config_path is None or not os.path.exists(config_path):  # If no config file found
+        if config_path is None or not verify_filepath_exists(config_path):  # If no config file found
             return {}  # Return empty dictionary
 
         try:  # Attempt to load the configuration file
@@ -759,7 +759,7 @@ def verify_filepath_exists(filepath):
 
     try:  # Wrap full function logic to ensure production-safe monitoring
         verbose_output(
-            f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
+            true_string=f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
         )  # Output the verbose message
 
         return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
@@ -800,7 +800,7 @@ def load_exported_artifacts(csv_path):
         scaler_path = latest_model.replace("-model.joblib", "-scaler.joblib")  # Derive scaler file path from model path
         features_path = latest_model.replace("-model.joblib", "-features.json")  # Derive features file path from model path
         params_path = latest_model.replace("-model.joblib", "-params.json")  # Derive params file path from model path
-        if not (os.path.exists(scaler_path) and os.path.exists(features_path)):  # Verify both scaler and features files exist
+        if not (verify_filepath_exists(scaler_path) and verify_filepath_exists(features_path)):  # Verify both scaler and features files exist
             return None  # Return None if required files are missing
         try:  # Attempt to load all model artifacts
             model = load(latest_model)  # Load trained model from joblib file
@@ -808,7 +808,7 @@ def load_exported_artifacts(csv_path):
             with open(features_path, "r", encoding="utf-8") as fh:  # Open features JSON file
                 features = json.load(fh)  # Parse selected features list from JSON
             params = None  # Initialize params as None
-            if os.path.exists(params_path):  # Verify if params file exists
+            if verify_filepath_exists(params_path):  # Verify if params file exists
                 try:  # Attempt to load params
                     with open(params_path, "r", encoding="utf-8") as ph:  # Open params JSON file
                         params = json.load(ph)  # Parse model parameters from JSON
@@ -1689,7 +1689,7 @@ def split_dataset(df, csv_path, test_size=0.2):
             ".csv", f"_cache_test{test_size}.pkl"
         )  # Cache file path, including test_size for uniqueness
 
-        if os.path.exists(cache_file):  # If cache exists
+        if verify_filepath_exists(cache_file):  # If cache exists
             verbose_output(
                 f"{BackgroundColors.GREEN}Loading cached preprocessed data from {cache_file}.{Style.RESET_ALL}"
             )  # Output loading message
@@ -1935,7 +1935,7 @@ def load_run_result(output_dir, state_id):
     try:  # Wrap full function logic to ensure production-safe execution
         try:  # Attempt to load the run result
             _, run_path = state_file_paths(output_dir, state_id)  # Get the path for the run state file
-            if not os.path.exists(run_path):  # Verify if the file exists
+            if not verify_filepath_exists(run_path):  # Verify if the file exists
                 return None  # Return None if file does not exist
             with open(run_path, "rb") as f:  # Open the file for reading in binary mode
                 return pickle.load(f)  # Deserialize and return the result
@@ -2393,7 +2393,7 @@ def load_generation_state(output_dir, state_id):
     try:
         try:  # Attempt to load the generation state
             gen_path, _ = state_file_paths(output_dir, state_id)  # Get the path for the generation state file
-            if not os.path.exists(gen_path):  # Verify if the file exists
+            if not verify_filepath_exists(gen_path):  # Verify if the file exists
                 return None  # Return None if file does not exist
             with open(gen_path, "rb") as f:  # Open the file for reading in binary mode
                 return pickle.load(f)  # Deserialize and return the payload
@@ -6004,7 +6004,7 @@ def load_existing_results(csv_out):
     """
 
     try:
-        if os.path.exists(csv_out):  # If the consolidated CSV exists
+        if verify_filepath_exists(csv_out):  # If the consolidated CSV exists
             try:  # Try to read the file into a DataFrame
                 df = pd.read_csv(csv_out, dtype=object)  # Read CSV preserving types as object
                 df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
@@ -6210,7 +6210,7 @@ def merge_and_sort_with_existing_csv(df_new, csv_out, results_cols):
     """
 
     try:
-        if os.path.exists(csv_out):  # If the consolidated CSV already exists, we need to merge with existing data
+        if verify_filepath_exists(csv_out):  # If the consolidated CSV already exists, we need to merge with existing data
             df_existing = pd.read_csv(csv_out, dtype=str)  # Read existing CSV as strings to avoid type issues
             if "timestamp" not in df_existing.columns:  # If the existing CSV is missing the "timestamp" column, add it with a default value based on file modification time
                 print(

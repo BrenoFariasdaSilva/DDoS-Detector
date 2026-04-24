@@ -1399,16 +1399,16 @@ def verify_filepath_exists(filepath):
     :return: True if the file or folder exists, False otherwise
     """
 
-    try:
+    try:  # Wrap full function logic to ensure production-safe monitoring
         verbose_output(
-            f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
+            true_string=f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
         )  # Output the verbose message
 
         return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def get_files_to_process(directory_path, file_extension=".csv", config: Optional[Dict] = None):

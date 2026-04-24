@@ -807,9 +807,9 @@ def verify_filepath_exists(filepath):
     :return: True if the file or folder exists, False otherwise
     """
 
-    try:
+    try:  # Wrap full function logic to ensure production-safe monitoring
         verbose_output(
-            f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
+            true_string=f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
         )  # Output the verbose message
 
         return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
@@ -2616,7 +2616,7 @@ def find_local_feature_file(file_dir, filename, config=None):
 
         candidate = os.path.join(file_dir, "Feature_Analysis", filename)  # Construct candidate path
 
-        if os.path.exists(candidate):  # If the candidate file exists
+        if verify_filepath_exists(candidate):  # If the candidate file exists
             return candidate  # Return the candidate path
 
         return None  # Not found
@@ -2648,7 +2648,7 @@ def find_parent_feature_file(file_dir, filename, config=None):
         path = file_dir  # Start from the file's directory
         while True:  # Loop until break
             candidate = os.path.join(path, "Feature_Analysis", filename)  # Construct candidate path
-            if os.path.exists(candidate):  # If the candidate file exists
+            if verify_filepath_exists(candidate):  # If the candidate file exists
                 return candidate  # Return the candidate path
 
             parent = os.path.dirname(path)  # Get the parent directory
@@ -2699,7 +2699,7 @@ def find_dataset_level_feature_file(file_path, filename, config=None):
         dataset_dir = os.sep.join(parts[: idx + 2])  # Construct the dataset directory path
 
         candidate = os.path.join(dataset_dir, "Feature_Analysis", filename)  # Construct candidate path for the direct path
-        if os.path.exists(candidate):  # If the candidate file exists
+        if verify_filepath_exists(candidate):  # If the candidate file exists
             return candidate  # Return the candidate path
 
         matches = glob.glob(
@@ -4236,7 +4236,7 @@ def load_existing_model_if_available(model, model_name, dataset_file, feature_se
             loaded = load(str(matches[0]))  # Load the serialized model from the first match
             model = loaded  # Replace in-memory model with the loaded one
             scaler_path = str(matches[0]).replace("_model.joblib", "_scaler.joblib")  # Build expected scaler path from model path
-            if os.path.exists(scaler_path):  # If scaler file exists alongside the model
+            if verify_filepath_exists(scaler_path):  # If scaler file exists alongside the model
                 scaler = load(scaler_path)  # Load the serialized scaler from disk
             verbose_output(f"Loaded existing model from {matches[0]}")  # Log that an existing model was loaded
             y_pred = model.predict(X_test)  # Predict labels using the loaded model on test features
@@ -5576,7 +5576,7 @@ def load_cache_results(csv_path, config=None):
 
         cache_path = get_cache_file_path(csv_path, config=config)  # Get the cache file path
 
-        if not os.path.exists(cache_path):  # If cache file doesn't exist
+        if not verify_filepath_exists(cache_path):  # If cache file doesn't exist
             verbose_output(
                 f"{BackgroundColors.YELLOW}No cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}",
                 config=config
@@ -5657,7 +5657,7 @@ def remove_cache_file(csv_path, config=None):
 
         cache_path = get_cache_file_path(csv_path, config=config)  # Get the cache file path
 
-        if os.path.exists(cache_path):  # If cache file exists
+        if verify_filepath_exists(cache_path):  # If cache file exists
             try:  # Try to remove the cache file
                 os.remove(cache_path)  # Delete the cache file
                 print(
@@ -9875,7 +9875,7 @@ def validate_and_resolve_dataset_path(dataset_path: str, config: dict) -> dict:
     try:
         resolved = os.path.abspath(dataset_path)  # Resolve to absolute path
 
-        if not os.path.exists(resolved):  # Verify path existence before proceeding
+        if not verify_filepath_exists(resolved):  # Verify path existence before proceeding
             raise FileNotFoundError(f"Dataset path does not exist: {resolved}")  # Raise descriptive error for missing path
 
         dataset_name = get_dataset_name(resolved)  # Extract dataset name from resolved path

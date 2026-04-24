@@ -779,16 +779,17 @@ def verify_filepath_exists(filepath):
     :param filepath: Path to the file or folder
     :return: True if the file or folder exists, False otherwise
     """
-    
-    try:
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
         verbose_output(
-            f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
+            true_string=f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
         )  # Output the verbose message
+
         return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def load_dataset(csv_path):
@@ -1580,7 +1581,7 @@ def merge_or_create_results_df(csv_output: str, comparison_df: pd.DataFrame, hea
     """
 
     try:
-        if os.path.exists(csv_output):  # Verify if a pre-existing CSV file was found
+        if verify_filepath_exists(csv_output):  # Verify if a pre-existing CSV file was found
             try:
                 df_existing = pd.read_csv(csv_output, dtype=str)  # Read existing CSV with all columns as strings
                 if "timestamp" not in df_existing.columns:  # Verify if timestamp column is missing

@@ -609,17 +609,17 @@ def verify_filepath_exists(filepath):
     :param filepath: Path to the file or folder
     :return: True if the file or folder exists, False otherwise
     """
-    
-    try:
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
         verbose_output(
-            f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
+            true_string=f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
         )  # Output the verbose message
 
         return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def get_files_to_process(directory_path, file_extension=".csv"):
@@ -1085,7 +1085,7 @@ def load_cache_results(csv_path):
     try:
         cache_file = get_cache_file_path(csv_path)  # Get cache file path
         
-        if not os.path.exists(cache_file):  # If cache file doesn't exist
+        if not verify_filepath_exists(cache_file):  # If cache file doesn't exist
             verbose_output(
                 f"{BackgroundColors.YELLOW}No cache file found at: {BackgroundColors.CYAN}{cache_file}{Style.RESET_ALL}"
             )
@@ -1133,7 +1133,7 @@ def is_fully_processed(csv_path, models):
         results_file = get_results_file_path(csv_path)  # Get results file path
         base_filename = os.path.basename(csv_path)  # Get base filename
         
-        if not os.path.exists(results_file):  # If results file doesn't exist
+        if not verify_filepath_exists(results_file):  # If results file doesn't exist
             return False  # Not fully processed
         
         try:  # Try to verify results file
@@ -1194,7 +1194,7 @@ def save_to_cache(csv_path, result_entry):
 
             result_df = pd.DataFrame([save_entry])  # Create DataFrame from entry
 
-            if os.path.exists(cache_file):  # If cache file exists
+            if verify_filepath_exists(cache_file):  # If cache file exists
                 result_df.to_csv(cache_file, mode="a", header=False, index=False)  # Append without header
             else:  # If cache file doesn't exist
                 result_df.to_csv(cache_file, mode="w", header=True, index=False)  # Write with header
@@ -1224,7 +1224,7 @@ def remove_cache_file(csv_path):
     try:
         cache_file = get_cache_file_path(csv_path)  # Get cache file path
         
-        if os.path.exists(cache_file):  # If cache file exists
+        if verify_filepath_exists(cache_file):  # If cache file exists
             try:  # Try to remove cache file
                 os.remove(cache_file)  # Delete cache file
                 print(
@@ -2316,7 +2316,7 @@ def load_partial_trial_cache(csv_path):
 
     try:
         cache_path = get_partial_trial_cache_path(csv_path)  # Resolve the partial trial cache file path for this dataset
-        if not os.path.exists(cache_path):  # Return empty lookup when no partial cache file exists yet
+        if not verify_filepath_exists(cache_path):  # Return empty lookup when no partial cache file exists yet
             verbose_output(f"{BackgroundColors.YELLOW}[DEBUG] No partial trial cache found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Log absence of the partial cache file
             return {}  # Return empty dict indicating no prior trial results were persisted
 
@@ -2423,7 +2423,7 @@ def persist_partial_trial_result(csv_path, row_dict):
         try:  # Guard all file operations against I/O errors to prevent pipeline interruption on write failure
             os.makedirs(cache_dir, exist_ok=True)  # Ensure the cache directory exists before attempting to write
             row_df = pd.DataFrame([row_dict])  # Wrap the row dict in a single-row DataFrame for CSV export
-            if os.path.exists(cache_path):  # Verify if the partial trial cache file already exists
+            if verify_filepath_exists(cache_path):  # Verify if the partial trial cache file already exists
                 row_df.to_csv(cache_path, mode="a", header=False, index=False)  # Append row without header to preserve all existing trial rows
             else:  # Create a new partial trial cache file with header when none exists
                 row_df.to_csv(cache_path, mode="w", header=True, index=False)  # Write header and first trial row to the new partial cache file
@@ -3493,7 +3493,7 @@ def migrate_results_csv_schema(filepath: str) -> None:
     :return: None
     """
 
-    if not os.path.exists(filepath):  # Return early when the results CSV does not yet exist on disk
+    if not verify_filepath_exists(filepath):  # Return early when the results CSV does not yet exist on disk
         return  # Nothing to migrate
 
     try:  # Guard the entire migration against unexpected read or write failures
@@ -3589,7 +3589,7 @@ def save_optimization_results(csv_path, results_list):
 
         migrate_results_csv_schema(output_path)  # Migrate existing results CSV to the new schema before appending new rows
 
-        if os.path.exists(output_path):  # Verify if the results CSV file already exists to determine write mode
+        if verify_filepath_exists(output_path):  # Verify if the results CSV file already exists to determine write mode
             df_results.to_csv(output_path, mode="a", header=False, index=False)  # Append new rows to existing CSV without duplicating the header
             try:  # Try to regenerate the PNG visualization using combined results from the full file
                 combined_df = pd.read_csv(output_path)  # Load all rows including previously saved results for combined image

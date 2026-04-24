@@ -506,16 +506,17 @@ def verify_filepath_exists(filepath):
     :param filepath: Path to the file or folder
     :return: True if the file or folder exists, False otherwise
     """
-    
-    try:
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
         verbose_output(
-            f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
+            true_string=f"{BackgroundColors.GREEN}Verifying if the file or folder exists at the path: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
         )  # Output the verbose message
+
         return os.path.exists(filepath)  # Return True if the file or folder exists, False otherwise
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
 
 
 def load_dataset(csv_path):
@@ -1522,7 +1523,7 @@ def load_and_merge_results_csv(run_csv_path: str, df_new: pd.DataFrame, cols: li
     """
 
     try:
-        if os.path.exists(run_csv_path):  # Verify if an existing results file is present
+        if verify_filepath_exists(run_csv_path):  # Verify if an existing results file is present
             try:  # Attempt to load and merge with existing data
                 df_existing = pd.read_csv(run_csv_path, dtype=str)  # Load existing CSV with all columns as strings
                 if "timestamp" not in df_existing.columns:  # Verify if timestamp column is missing
@@ -1662,7 +1663,7 @@ def load_exported_artifacts(csv_path):
         latest_model = max(candidates, key=os.path.getmtime)  # Select most recent model file
         scaler_path = latest_model.replace("-model.joblib", "-scaler.joblib")  # Infer scaler path
         features_path = latest_model.replace("-model.joblib", "-features.json")  # Infer features path
-        if not os.path.exists(scaler_path) or not os.path.exists(features_path):
+        if not verify_filepath_exists(scaler_path) or not verify_filepath_exists(features_path):
             return None  # Incomplete artifact set
 
         try:
@@ -1672,7 +1673,7 @@ def load_exported_artifacts(csv_path):
                 features = json.load(fh)  # Load features list
             params = None
             params_path = latest_model.replace("-model.joblib", "-params.json")  # Infer params path
-            if os.path.exists(params_path):
+            if verify_filepath_exists(params_path):
                 try:
                     with open(params_path, "r", encoding="utf-8") as ph:
                         params = json.load(ph)  # Load hyperparameters if available

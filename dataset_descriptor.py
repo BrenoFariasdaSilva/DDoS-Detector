@@ -172,7 +172,7 @@ def load_config_file(path: str = "config.yaml") -> dict:
     :return: Configuration dictionary loaded from the file, or empty dict if file does not exist or fails to load.
     """
 
-    if path and os.path.exists(path):  # Verify the path is non-empty and the file exists
+    if path and verify_filepath_exists(path):  # Verify the path is non-empty and the file exists
         try:  # Attempt to open and parse the YAML file
             with open(path, "r", encoding="utf-8") as f:  # Open config file for reading
                 return yaml.safe_load(f) or {}  # Parse YAML safely and fallback to empty dict
@@ -2511,7 +2511,7 @@ def save_preprocessing_summary_csv(df, base_dir, filename="preprocessing_summary
         cfg = config or get_default_config()
         results_subdir = cfg.get("paths", {}).get("dataset_description_subdir", "Dataset_Description")
         results_dir = os.path.join(base_dir, results_subdir)
-        if not os.path.exists(results_dir):
+        if not verify_filepath_exists(results_dir):
             os.makedirs(results_dir, exist_ok=True)
         out_path = os.path.join(results_dir, filename)
         generate_csv_and_image(df, out_path, config=cfg)
@@ -2701,7 +2701,7 @@ def attempt_matplotlib_export_fallback(styled_df, output_path, e_inner):
         fig.tight_layout()  # Adjust the layout to fit the table within the figure area
         fig.savefig(output_path, dpi=300)  # Save the rendered table to disk at 300 DPI
         plt.close(fig)  # Close the figure immediately after saving to free memory
-        if os.path.exists(output_path):  # Verify the output file was actually created on disk
+        if verify_filepath_exists(output_path):  # Verify the output file was actually created on disk
             print(f"{BackgroundColors.GREEN}[DEBUG] Exported image (matplotlib fallback): {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log matplotlib fallback success
             print(f"{BackgroundColors.GREEN}[INFO] Table image successfully saved to: {BackgroundColors.CYAN}{os.path.abspath(output_path)}{Style.RESET_ALL}")  # Log the absolute save path
             return None  # Return None to signal matplotlib export succeeded
