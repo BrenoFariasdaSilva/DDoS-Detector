@@ -667,7 +667,7 @@ dataloader:
 # ===============================================================================
 dataset_converter:
   verbose: false # Enable verbose output for dataset converter
-  low_memory: false # The low memory parameter for reading the files.
+  low_memory: true # The low memory parameter for reading the files.
   input_file_formats: ["arff", "csv", "parquet", "txt"] # Supported input formats: arff,csv,parquet,txt. Defaults to all
   output_file_formats: ["arff", "csv", "parquet", "txt"] # Supported output formats: arff,csv,parquet,txt. Defaults to all
   output_directory: "Converted" # Default output directory for converted datasets; use "in-place" to save converted files in the same directory as the input file
@@ -703,7 +703,7 @@ dataset_converter:
 # DATASET DESCRIPTOR — Used by dataset_descriptor.py
 # ==============================================================================
 dataset_descriptor:
-  low_memory: false # The low memory parameter for reading the files.
+  low_memory: true # The low memory parameter for reading the files.
   include_preprocessing_metrics: true # Include preprocessing statistics
   include_data_augmentation_info: true # Include WGANGP augmentation summary column
   generate_table_image: true # Export table image using dataframe_image
