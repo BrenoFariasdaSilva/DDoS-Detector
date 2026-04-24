@@ -364,8 +364,6 @@ def validate_config_structure(config: dict):
     if dd["round_decimals"] < 0:  # Verify round_decimals is non-negative
         raise ValueError("dataset_descriptor.round_decimals must be >= 0")  # Raise when value is negative
 
-# Functions Definitions:
-
 
 def verbose_output(true_string="", false_string=""):
     """
