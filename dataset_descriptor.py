@@ -897,7 +897,19 @@ def load_dataset_in_batches(filepath: str, num_batches: int, low_memory=None) ->
 
         print(f"{BackgroundColors.GREEN}[BATCH] Loading {BackgroundColors.CYAN}{os.path.basename(filepath)}{BackgroundColors.GREEN} in {BackgroundColors.CYAN}{num_batches}{BackgroundColors.GREEN} batch(es) of ~{BackgroundColors.CYAN}{chunksize}{BackgroundColors.GREEN} rows each.{Style.RESET_ALL}")  # Log batch loading parameters with file and chunk details
 
-        chunks = read_csv_in_chunks(filepath, chunksize, low_memory=low_memory_resolved)  # Read all CSV chunks using detected encoding
+        chunks = []  # Initialize chunk accumulator list for batch loading
+        try:  # Wrap batch reading with progress bar
+            with warnings.catch_warnings():  # Suppress DtypeWarning during chunk reading
+                warnings.simplefilter("ignore", pd.errors.DtypeWarning)  # Ignore dtype mismatch warnings
+                for chunk in tqdm(pd.read_csv(filepath, chunksize=chunksize, low_memory=low_memory_resolved, encoding="utf-8"), total=num_batches, desc=f"[BATCH] {os.path.basename(filepath)}", unit="batch"):  # Iterate over CSV chunks with progress bar
+                    chunks.append(chunk)  # Append current chunk to accumulator list
+        except UnicodeDecodeError:  # Handle UTF-8 decode failures
+            try:  # Retry with Latin-1 encoding if UTF-8 fails
+                for chunk in tqdm(pd.read_csv(filepath, chunksize=chunksize, low_memory=low_memory_resolved, encoding="latin-1"), total=num_batches, desc=f"[BATCH] {os.path.basename(filepath)}", unit="batch"):  # Iterate over CSV chunks with progress bar
+                    chunks.append(chunk)  # Append current chunk to accumulator list
+            except Exception as e_inner:  # Handle all other errors during batch reading
+                print(f"{BackgroundColors.RED}Error reading {filepath} in batches: {e_inner}{Style.RESET_ALL}")  # Log error to terminal
+                return load_dataset(filepath, low_memory)  # Fall back to normal load on error
 
         if not chunks:  # Verify chunks were produced before concatenation
             print(f"{BackgroundColors.YELLOW}Warning: batch read produced no chunks for {filepath}; falling back to load_dataset.{Style.RESET_ALL}")  # Warn and prepare fallback
