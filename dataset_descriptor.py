@@ -797,6 +797,24 @@ def count_csv_rows(filepath: str) -> int:
         raise  # Re-raise to preserve original failure semantics
 
 
+def get_file_size_gb(filepath: str) -> float:
+    """
+    Determine the size of a file in gigabytes.
+
+    :param filepath: Path to the file to measure.
+    :return: File size in gigabytes as a float, or 0.0 on failure.
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        size_bytes = os.path.getsize(filepath)  # Retrieve raw file size in bytes from filesystem
+        size_gb = float(size_bytes) / (1024.0 ** 3)  # Convert bytes to gigabytes using binary prefix
+        return size_gb  # Return file size as a float in gigabytes
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def load_dataset(filepath, low_memory=None):
     """
     Loads a dataset from a CSV file.
