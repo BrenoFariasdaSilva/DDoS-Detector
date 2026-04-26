@@ -714,6 +714,7 @@ dataset_descriptor:
   compute_class_distribution: true # Compute per-class counts and proportions
   compute_feature_statistics: true # Compute feature-level summary statistics
   round_decimals: 4 # Number of decimal places for floats
+  batch_threshold_gb: null # Threshold in GB to enable batch loading for large CSVs (null = always load whole file)
   datasets: # Dictionary containing dataset paths
     CAIDA-2007:
     - "./Datasets/CAIDA 2007/Converted/"
