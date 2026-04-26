@@ -59,6 +59,7 @@ import atexit  # For playing a sound when the program finishes
 import dataframe_image as dfi  # For exporting DataFrame as PNG images
 import datetime  # For timestamping
 import gc  # For explicit garbage collection
+import math  # For ceiling division in batch count computation
 import matplotlib.pyplot as plt  # For plotting t-SNE results
 import multiprocessing as mp  # For explicit process and semaphore resource finalization
 import numpy as np  # For numerical operations
@@ -809,6 +810,26 @@ def get_file_size_gb(filepath: str) -> float:
         size_bytes = os.path.getsize(filepath)  # Retrieve raw file size in bytes from filesystem
         size_gb = float(size_bytes) / (1024.0 ** 3)  # Convert bytes to gigabytes using binary prefix
         return size_gb  # Return file size as a float in gigabytes
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
+def compute_batch_count(file_size_gb: float, threshold: float) -> int:
+    """
+    Compute the number of batches required based on file size and batch threshold.
+
+    :param file_size_gb: File size in gigabytes.
+    :param threshold: Batch threshold in gigabytes; each batch covers at most this many GB.
+    :return: Number of batches as an integer, always at least 1.
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        if threshold <= 0.0:  # Verify threshold is positive to avoid division by zero
+            return 1  # Return single batch when threshold is non-positive
+        batches = int(math.ceil(float(file_size_gb) / float(threshold)))  # Compute ceiling of file size divided by threshold
+        return max(1, batches)  # Ensure at least one batch is always returned
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
