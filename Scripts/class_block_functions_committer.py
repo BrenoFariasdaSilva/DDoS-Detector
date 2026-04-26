@@ -646,8 +646,10 @@ def main():
     
     start_time = datetime.datetime.now()  # Get the start time of the program
     
-    if not verify_filepath_exists(FILE_PATH):  # If the file does not exist
-        print(f"{BackgroundColors.RED}Error: Target file {BackgroundColors.CYAN}{FILE_PATH}{BackgroundColors.RED} not found!{Style.RESET_ALL}")  # Output error message
+    file_path_str = str(FILE_PATH)  # Convert FILE_PATH to string for display
+    
+    if not verify_filepath_exists(file_path_str):  # If the file does not exist
+        print(f"{BackgroundColors.RED}Error: Target file {BackgroundColors.CYAN}{file_path_str}{BackgroundColors.RED} not found!{Style.RESET_ALL}")  # Output error message
         return  # Exit the function
     
     original_text = FILE_PATH.read_text(encoding="utf-8")  # Read the original file content
