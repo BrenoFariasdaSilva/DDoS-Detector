@@ -3498,6 +3498,8 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=None, 
         sorted_matching_files, base_dir = collect_report_input_files(input_path, file_extension, config)  # Collect matching files and resolve base directory from the provided input path
 
         cfg = config or get_default_config()
+        batch_threshold_gb = cfg.get("dataset_descriptor", {}).get("batch_threshold_gb", None)  # Resolve batch threshold from config; None preserves existing load behavior
+        batch_threshold_gb = float(batch_threshold_gb) if batch_threshold_gb is not None else None  # Normalize batch threshold to float or None for type-safe comparison
 
         if not sorted_matching_files:  # If no matching files were found
             print(f"{BackgroundColors.RED}No matching {file_extension} files found in: {input_path}{Style.RESET_ALL}")
@@ -3522,7 +3524,7 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=None, 
             colored_desc = f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{display_path}{Style.RESET_ALL}"  # Compose colored description using BackgroundColors while keeping length bounded
             progress.set_description(colored_desc)  # Update progress bar description with colored, truncated filename for inline display
 
-            df_current = load_dataset(filepath, low_memory)  # Load one dataset at a time to minimize peak RAM usage
+            df_current = resolve_dataset_loader(filepath, batch_threshold_gb, low_memory)  # Load dataset using normal or batched strategy based on configured threshold
             if df_current is None:  # Verify that the dataset was loaded successfully
                 print(f"{BackgroundColors.YELLOW}Warning: failed to load {filepath}; skipping.{Style.RESET_ALL}")  # Warn about the skipped file without breaking the progress bar
                 continue  # Skip to the next file without accumulating a None entry
