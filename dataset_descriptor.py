@@ -756,6 +756,47 @@ def compute_common_features(headers_map):
         raise  # Re-raise to preserve original failure semantics
 
 
+def count_csv_rows(filepath: str) -> int:
+    """
+    Count the total number of data rows in a CSV file using chunked reading.
+
+    :param filepath: Path to the CSV file to count rows in.
+    :return: Total number of data rows excluding the header, or 0 on failure.
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        total = 0  # Initialize row counter for incremental accumulation
+
+        try:  # Attempt chunked UTF-8 read for accurate row counting
+            with warnings.catch_warnings():  # Suppress DtypeWarning during counting
+                warnings.simplefilter("ignore", pd.errors.DtypeWarning)  # Ignore dtype mismatch warnings
+                for chunk in pd.read_csv(filepath, encoding="utf-8", chunksize=10000, low_memory=True):  # Read fixed-size chunks using UTF-8 encoding
+                    total += len(chunk)  # Accumulate row count from each chunk
+                    del chunk  # Release each chunk immediately after counting to free memory
+        except UnicodeDecodeError:  # Handle UTF-8 decode failures
+            total = 0  # Reset counter before retrying with Latin-1 encoding
+            try:  # Attempt chunked Latin-1 read as first fallback encoding
+                with warnings.catch_warnings():  # Suppress DtypeWarning during Latin-1 counting
+                    warnings.simplefilter("ignore", pd.errors.DtypeWarning)  # Ignore dtype mismatch warnings
+                    for chunk in pd.read_csv(filepath, encoding="latin1", chunksize=10000, low_memory=True):  # Read chunks using Latin-1 encoding
+                        total += len(chunk)  # Accumulate row count from each chunk
+                        del chunk  # Release each chunk immediately after counting to free memory
+            except UnicodeDecodeError:  # Handle Latin-1 decode failures
+                total = 0  # Reset counter before final encoding attempt
+                with warnings.catch_warnings():  # Suppress DtypeWarning during CP1252 counting
+                    warnings.simplefilter("ignore", pd.errors.DtypeWarning)  # Ignore dtype mismatch warnings
+                    for chunk in pd.read_csv(filepath, encoding="cp1252", chunksize=10000, low_memory=True):  # Read chunks using CP1252 encoding as final fallback
+                        total += len(chunk)  # Accumulate row count from each chunk
+                        del chunk  # Release each chunk immediately after counting to free memory
+
+        gc.collect()  # Trigger garbage collection after counting loop to reclaim chunk memory
+        return max(0, int(total))  # Return non-negative integer row count
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def load_dataset(filepath, low_memory=None):
     """
     Loads a dataset from a CSV file.
