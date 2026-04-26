@@ -136,6 +136,7 @@ def get_default_config() -> dict:
             "compute_class_distribution": True,
             "compute_feature_statistics": True,
             "round_decimals": 4,
+            "batch_threshold_gb": None,
         },
         "paths": {
             "dataset_description_subdir": "Dataset_Description",
@@ -215,6 +216,7 @@ def parse_cli_args(argv=None) -> dict:
     parser.add_argument("--compute_feature_statistics", dest="compute_feature_statistics", action="store_true", default=None)
     parser.add_argument("--no-compute_feature_statistics", dest="compute_feature_statistics", action="store_false", default=None)
     parser.add_argument("--round_decimals", dest="round_decimals", type=int, default=None)
+    parser.add_argument("--batch_threshold_gb", dest="batch_threshold_gb", type=float, default=None)  # Threshold in GB above which batched loading is activated
     parser.add_argument("--config", dest="config", default="config.yaml")
     args, _ = parser.parse_known_args(argv)  # Parse known args and discard unknown entries
     return {k: v for k, v in vars(args).items() if v is not None}  # Return only non-None values as overrides
@@ -247,6 +249,7 @@ def get_config(file_path: str = "config.yaml", cli_args: dict | None = None) -> 
             "compute_class_distribution",
             "compute_feature_statistics",
             "round_decimals",
+            "batch_threshold_gb",
         ]:  # Iterate over keys that may be overridden by CLI
             if key in cli_args and cli_args[key] is not None:  # Verify the CLI arg key is present and non-None
                 dd[key] = cli_args[key]  # Apply the CLI override for this key
@@ -363,6 +366,12 @@ def validate_config_structure(config: dict):
 
     if dd["round_decimals"] < 0:  # Verify round_decimals is non-negative
         raise ValueError("dataset_descriptor.round_decimals must be >= 0")  # Raise when value is negative
+
+    if "batch_threshold_gb" in dd and dd["batch_threshold_gb"] is not None:  # Verify batch_threshold_gb type when explicitly provided
+        if not isinstance(dd["batch_threshold_gb"], (int, float)):  # Verify batch_threshold_gb is numeric when present
+            raise ValueError("dataset_descriptor.batch_threshold_gb must be a float or None")  # Raise on type mismatch for batch_threshold_gb
+        if float(dd["batch_threshold_gb"]) <= 0.0:  # Verify batch_threshold_gb is positive when specified
+            raise ValueError("dataset_descriptor.batch_threshold_gb must be greater than 0.0 when specified")  # Raise when threshold is non-positive
 
 
 def verbose_output(true_string="", false_string=""):
