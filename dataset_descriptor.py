@@ -874,6 +874,47 @@ def read_csv_in_chunks(filepath: str, chunksize: int, low_memory: bool = True) -
         raise  # Re-raise to preserve original failure semantics
 
 
+def load_dataset_in_batches(filepath: str, num_batches: int, low_memory=None) -> "pd.DataFrame | None":
+    """
+    Load a CSV dataset in row-based batches and return the concatenated full DataFrame.
+
+    :param filepath: Path to the CSV file to load.
+    :param num_batches: Number of batches to split the dataset into.
+    :param low_memory: Whether to use low memory mode during reading (default: True).
+    :return: Concatenated pandas DataFrame representing the full dataset, or None on failure.
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        low_memory_resolved = True if low_memory is None else bool(low_memory)  # Normalize low_memory to boolean with default True
+
+        total_rows = count_csv_rows(filepath)  # Count total data rows for chunksize computation
+
+        if total_rows <= 0:  # Verify there are rows to process before computing chunk size
+            verbose_output(f"{BackgroundColors.YELLOW}Batch load: zero rows detected in {filepath}, falling back to load_dataset.{Style.RESET_ALL}")  # Warn about empty file detection
+            return load_dataset(filepath, low_memory)  # Fall back to normal load for empty or unreadable files
+
+        chunksize = max(1, int(math.ceil(float(total_rows) / float(max(1, num_batches)))))  # Compute row-based chunksize ensuring at least 1 row per chunk
+
+        print(f"{BackgroundColors.GREEN}[BATCH] Loading {BackgroundColors.CYAN}{os.path.basename(filepath)}{BackgroundColors.GREEN} in {BackgroundColors.CYAN}{num_batches}{BackgroundColors.GREEN} batch(es) of ~{BackgroundColors.CYAN}{chunksize}{BackgroundColors.GREEN} rows each.{Style.RESET_ALL}")  # Log batch loading parameters with file and chunk details
+
+        chunks = read_csv_in_chunks(filepath, chunksize, low_memory=low_memory_resolved)  # Read all CSV chunks using detected encoding
+
+        if not chunks:  # Verify chunks were produced before concatenation
+            print(f"{BackgroundColors.YELLOW}Warning: batch read produced no chunks for {filepath}; falling back to load_dataset.{Style.RESET_ALL}")  # Warn and prepare fallback
+            return load_dataset(filepath, low_memory)  # Fall back to normal load when chunked read fails
+
+        df = pd.concat(chunks, ignore_index=True)  # Concatenate all chunks into a single full DataFrame
+
+        del chunks  # Release chunks list after concatenation to reduce peak memory retention
+        gc.collect()  # Trigger garbage collection after releasing large chunk list
+
+        return df  # Return the concatenated full DataFrame
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def load_dataset(filepath, low_memory=None):
     """
     Loads a dataset from a CSV file.
