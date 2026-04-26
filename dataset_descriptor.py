@@ -836,6 +836,44 @@ def compute_batch_count(file_size_gb: float, threshold: float) -> int:
         raise  # Re-raise to preserve original failure semantics
 
 
+def read_csv_in_chunks(filepath: str, chunksize: int, low_memory: bool = True) -> list:
+    """
+    Read a CSV file in row-based chunks and return a list of DataFrames.
+
+    :param filepath: Path to the CSV file to read.
+    :param chunksize: Number of rows per chunk.
+    :param low_memory: Whether to use low memory mode during reading (default: True).
+    :return: List of pandas DataFrames representing each batch, or empty list on failure.
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        chunks = []  # Initialize chunk accumulator list
+
+        with warnings.catch_warnings():  # Suppress DtypeWarning during chunk reading
+            warnings.simplefilter("ignore", pd.errors.DtypeWarning)  # Ignore dtype mismatch warnings
+            try:  # Attempt chunked UTF-8 read as primary encoding
+                for chunk in pd.read_csv(filepath, encoding="utf-8", chunksize=chunksize, low_memory=low_memory):  # Read fixed-size row chunks using UTF-8 encoding
+                    chunk.columns = chunk.columns.str.strip()  # Remove leading/trailing whitespace from column names
+                    chunks.append(chunk)  # Accumulate each chunk for later concatenation
+            except UnicodeDecodeError:  # Handle UTF-8 decode failures
+                chunks = []  # Reset accumulator before retrying with Latin-1 encoding
+                try:  # Attempt chunked Latin-1 read as first fallback encoding
+                    for chunk in pd.read_csv(filepath, encoding="latin1", chunksize=chunksize, low_memory=low_memory):  # Read chunks using Latin-1 encoding
+                        chunk.columns = chunk.columns.str.strip()  # Remove leading/trailing whitespace from column names
+                        chunks.append(chunk)  # Accumulate each chunk for later concatenation
+                except UnicodeDecodeError:  # Handle Latin-1 decode failures
+                    chunks = []  # Reset accumulator before final encoding attempt
+                    for chunk in pd.read_csv(filepath, encoding="cp1252", chunksize=chunksize, low_memory=low_memory):  # Read chunks using CP1252 encoding as final fallback
+                        chunk.columns = chunk.columns.str.strip()  # Remove leading/trailing whitespace from column names
+                        chunks.append(chunk)  # Accumulate each chunk for later concatenation
+
+        return chunks  # Return list of chunk DataFrames for concatenation
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def load_dataset(filepath, low_memory=None):
     """
     Loads a dataset from a CSV file.
