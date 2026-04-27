@@ -1018,6 +1018,35 @@ def aggregate_batch_dataset_info(batch_info_list: list, filepath: str) -> "dict 
         raise  # Re-raise to preserve original failure semantics
 
 
+def process_batches_and_aggregate(dataset_result, filepath, low_memory) -> tuple:
+    """
+    Process a batch generator, accumulate per-batch metadata, aggregate, and clean up.
+
+    :param dataset_result: Generator yielding one batch DataFrame at a time.
+    :param filepath: Path to the CSV file being processed.
+    :param low_memory: Boolean flag for memory optimization in get_dataset_file_info.
+    :return: Tuple (info, df_for_enrich) where info is the aggregated metadata dict and df_for_enrich is always None.
+    """
+
+    batch_info_list = []  # Initialize accumulator for per-batch metadata dicts
+
+    for batch_df in dataset_result:  # Iterate one batch DataFrame at a time without accumulation
+        batch_info = get_dataset_file_info(filepath, df=batch_df, low_memory=low_memory)  # Extract metadata from this single batch DataFrame
+        if batch_info is not None:  # Accumulate only valid per-batch results
+            batch_info_list.append(batch_info)  # Append batch metadata dict to accumulator
+        del batch_df  # Immediately discard batch DataFrame to release memory
+        gc.collect()  # Force garbage collection after each batch discard
+
+    info = aggregate_batch_dataset_info(batch_info_list, filepath) if batch_info_list else None  # Aggregate per-batch metadata into a single combined info dict
+
+    del batch_info_list  # Release accumulated metadata list after aggregation
+    gc.collect()  # Force garbage collection after releasing accumulated batch metadata
+
+    df_for_enrich = None  # No single DataFrame available in batch mode for t-SNE enrichment
+
+    return info, df_for_enrich  # Return aggregated info and None for downstream compatibility
+
+
 def load_dataset(filepath, low_memory=None):
     """
     Loads a dataset from a CSV file.
