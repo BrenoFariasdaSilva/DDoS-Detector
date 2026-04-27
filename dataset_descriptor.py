@@ -84,7 +84,7 @@ from sklearn.manifold import TSNE  # For t-SNE dimensionality reduction
 from sklearn.preprocessing import StandardScaler  # For feature scaling
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages and exceptions to Telegram
 from tqdm import tqdm  # For progress bars
-from typing import Any, cast  # For type hinting
+from typing import Any, cast, Iterator  # For type hinting and streaming batch generator
 
 
 setup_global_exception_hook()  # Install global exception handler to catch unhandled exceptions
@@ -836,14 +836,14 @@ def compute_batch_count(file_size_gb: float, threshold: float) -> int:
         raise  # Re-raise to preserve original failure semantics
 
 
-def load_dataset_in_batches(filepath: str, num_batches: int, low_memory=None) -> "pd.DataFrame | None":
+def load_dataset_in_batches(filepath: str, num_batches: int, low_memory=None) -> "Iterator[pd.DataFrame]":
     """
-    Load a CSV dataset in row-based batches and return the concatenated full DataFrame.
+    Stream a CSV dataset in row-based batches, yielding one DataFrame per batch.
 
     :param filepath: Path to the CSV file to load.
     :param num_batches: Number of batches to split the dataset into.
     :param low_memory: Whether to use low memory mode during reading (default: True).
-    :return: Concatenated pandas DataFrame representing the full dataset, or None on failure.
+    :return: Generator yielding one batch DataFrame at a time; yields nothing when the file is empty or unreadable.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
@@ -852,37 +852,27 @@ def load_dataset_in_batches(filepath: str, num_batches: int, low_memory=None) ->
         total_rows = count_csv_rows(filepath)  # Count total data rows for chunksize computation
 
         if total_rows <= 0:  # Verify there are rows to process before computing chunk size
-            verbose_output(f"{BackgroundColors.YELLOW}Batch load: zero rows detected in {filepath}, falling back to load_dataset.{Style.RESET_ALL}")  # Warn about empty file detection
-            return load_dataset(filepath, low_memory)  # Fall back to normal load for empty or unreadable files
+            verbose_output(f"{BackgroundColors.YELLOW}Batch stream: zero rows detected in {filepath}, no batches yielded.{Style.RESET_ALL}")  # Warn about empty file detection
+            return  # Yield nothing when file has no processable rows
 
         chunksize = max(1, int(math.ceil(float(total_rows) / float(max(1, num_batches)))))  # Compute row-based chunksize ensuring at least 1 row per chunk
 
-        print(f"{BackgroundColors.GREEN}[BATCH] Loading {BackgroundColors.CYAN}{os.path.basename(filepath)}{BackgroundColors.GREEN} in {BackgroundColors.CYAN}{num_batches}{BackgroundColors.GREEN} batch(es) of ~{BackgroundColors.CYAN}{chunksize}{BackgroundColors.GREEN} rows each.{Style.RESET_ALL}")  # Log batch loading parameters with file and chunk details
+        print(f"{BackgroundColors.GREEN}[BATCH] Streaming {BackgroundColors.CYAN}{os.path.basename(filepath)}{BackgroundColors.GREEN} in {BackgroundColors.CYAN}{num_batches}{BackgroundColors.GREEN} batch(es) of ~{BackgroundColors.CYAN}{chunksize}{BackgroundColors.GREEN} rows each.{Style.RESET_ALL}")  # Log batch streaming parameters with file and chunk details
 
-        chunks = []  # Initialize chunk accumulator list for batch loading
-        try:  # Wrap batch reading with progress bar
-            with warnings.catch_warnings():  # Suppress DtypeWarning during chunk reading
-                warnings.simplefilter("ignore", pd.errors.DtypeWarning)  # Ignore dtype mismatch warnings
-                for chunk in tqdm(pd.read_csv(filepath, chunksize=chunksize, low_memory=low_memory_resolved, encoding="utf-8"), total=num_batches, desc=f"[BATCH] {os.path.basename(filepath)}", unit="batch"):  # Iterate over CSV chunks with progress bar
-                    chunks.append(chunk)  # Append current chunk to accumulator list
-        except UnicodeDecodeError:  # Handle UTF-8 decode failures
-            try:  # Retry with Latin-1 encoding if UTF-8 fails
-                for chunk in tqdm(pd.read_csv(filepath, chunksize=chunksize, low_memory=low_memory_resolved, encoding="latin-1"), total=num_batches, desc=f"[BATCH] {os.path.basename(filepath)}", unit="batch"):  # Iterate over CSV chunks with progress bar
-                    chunks.append(chunk)  # Append current chunk to accumulator list
-            except Exception as e_inner:  # Handle all other errors during batch reading
-                print(f"{BackgroundColors.RED}Error reading {filepath} in batches: {e_inner}{Style.RESET_ALL}")  # Log error to terminal
-                return load_dataset(filepath, low_memory)  # Fall back to normal load on error
-
-        if not chunks:  # Verify chunks were produced before concatenation
-            print(f"{BackgroundColors.YELLOW}Warning: batch read produced no chunks for {filepath}; falling back to load_dataset.{Style.RESET_ALL}")  # Warn and prepare fallback
-            return load_dataset(filepath, low_memory)  # Fall back to normal load when chunked read fails
-
-        df = pd.concat(chunks, ignore_index=True)  # Concatenate all chunks into a single full DataFrame
-
-        del chunks  # Release chunks list after concatenation to reduce peak memory retention
-        gc.collect()  # Trigger garbage collection after releasing large chunk list
-
-        return df  # Return the concatenated full DataFrame
+        with warnings.catch_warnings():  # Suppress DtypeWarning during chunk reading
+            warnings.simplefilter("ignore", pd.errors.DtypeWarning)  # Ignore dtype mismatch warnings
+            try:  # Attempt chunked UTF-8 read as primary encoding
+                for chunk in tqdm(pd.read_csv(filepath, chunksize=chunksize, low_memory=low_memory_resolved, encoding="utf-8"), total=num_batches, desc=f"[BATCH] {os.path.basename(filepath)}", unit="batch"):  # Iterate over CSV chunks with progress bar using UTF-8 encoding
+                    chunk.columns = chunk.columns.str.strip()  # Remove leading/trailing whitespace from column names
+                    yield chunk  # Yield each batch DataFrame immediately without accumulation
+            except UnicodeDecodeError:  # Handle UTF-8 decode failures
+                try:  # Retry with Latin-1 encoding if UTF-8 fails
+                    for chunk in tqdm(pd.read_csv(filepath, chunksize=chunksize, low_memory=low_memory_resolved, encoding="latin-1"), total=num_batches, desc=f"[BATCH] {os.path.basename(filepath)}", unit="batch"):  # Iterate over CSV chunks with progress bar using Latin-1 encoding
+                        chunk.columns = chunk.columns.str.strip()  # Remove leading/trailing whitespace from column names
+                        yield chunk  # Yield each batch DataFrame immediately without accumulation
+                except Exception as e_inner:  # Handle all other errors during batch streaming
+                    print(f"{BackgroundColors.RED}Error streaming {filepath} in batches: {e_inner}{Style.RESET_ALL}")  # Log error to terminal
+                    raise  # Re-raise to preserve original failure semantics
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
