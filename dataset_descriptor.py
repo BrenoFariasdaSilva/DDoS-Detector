@@ -84,7 +84,7 @@ from sklearn.manifold import TSNE  # For t-SNE dimensionality reduction
 from sklearn.preprocessing import StandardScaler  # For feature scaling
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages and exceptions to Telegram
 from tqdm import tqdm  # For progress bars
-from typing import Any, cast, Iterator  # For type hinting and streaming batch generator
+from typing import Any, cast, Iterator, Optional  # For type hinting and streaming batch generator
 
 
 setup_global_exception_hook()  # Install global exception handler to catch unhandled exceptions
@@ -1030,8 +1030,8 @@ def process_batches_and_aggregate(dataset_result, filepath, low_memory) -> tuple
 
     batch_info_list = []  # Initialize accumulator for per-batch metadata dicts
 
-    for batch_df in dataset_result:  # Iterate one batch DataFrame at a time without accumulation
-        batch_info = get_dataset_file_info(filepath, df=batch_df, low_memory=low_memory)  # Extract metadata from this single batch DataFrame
+    for current_batch, batch_df in enumerate(dataset_result, start=1):  # Enumerate batches to provide batch index for logging
+        batch_info = get_dataset_file_info(filepath, df=batch_df, low_memory=low_memory, current_batch=current_batch, total_batches=None)  # Extract metadata and pass batch index; total unknown
         if batch_info is not None:  # Accumulate only valid per-batch results
             batch_info_list.append(batch_info)  # Append batch metadata dict to accumulator
         del batch_df  # Immediately discard batch DataFrame to release memory
@@ -2521,21 +2521,29 @@ def report_resources_usage(stage: str, filepath: str) -> tuple[int, int, float, 
     return mem_bytes, total_bytes, percent, used_cpu_cores, total_cpu_cores, cpu_percent  # Return full resource metrics
 
 
-def get_dataset_file_info(filepath, df=None, low_memory=None):
+def get_dataset_file_info(filepath, df=None, low_memory=None, current_batch: Optional[int] = None, total_batches: Optional[int] = None):
     """
     Extract dataset information from a CSV file and return it as a dictionary.
 
     :param filepath: Path to the CSV file.
     :param df: Optional pre-loaded pandas DataFrame to avoid redundant disk reads.
     :param low_memory: Whether to use low memory mode when loading the CSV (default: True).
+    :param current_batch: Optional current batch index for batch-aware logging.
+    :param total_batches: Optional total number of batches for batch-aware logging.
     :return: Dictionary containing dataset information.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
+        batch_suffix = ""  # Initialize batch suffix empty string for logging context
+        if current_batch is not None and total_batches is not None:  # When both current and total batches are provided
+            batch_suffix = f" [Batch {current_batch}/{total_batches}]"  # Append full batch index and total
+        elif current_batch is not None:  # When only current batch is provided
+            batch_suffix = f" [Batch {current_batch}]"  # Append only current batch index
+
         verbose_output(
-            f"{BackgroundColors.GREEN}Extracting dataset information from: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}"
-        )  # Output start message for dataset info extraction
-        send_telegram_message(TELEGRAM_BOT, [f"Extracting dataset information from: {os.path.basename(filepath)}"])  # Send Telegram notification indicating start of dataset info extraction
+            f"{BackgroundColors.GREEN}Extracting dataset information from: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}{batch_suffix}"
+        )  # Output start message for dataset info extraction with batch context
+        send_telegram_message(TELEGRAM_BOT, [f"Extracting dataset information from: {os.path.basename(filepath)}{batch_suffix}"])  # Send Telegram notification indicating start with batch context
         
         mem_before, total_mem, percent_before, used_cores_before, total_cores_before, cpu_percent_before = report_resources_usage(f"Before Loading Dataset File", filepath)  # Capture full resource state before dataset load
         
@@ -2694,8 +2702,8 @@ def get_dataset_file_info(filepath, df=None, low_memory=None):
         del categorical_feature_view  # Release categorical feature view reference after dtype accounting
         gc.collect()  # Trigger garbage collection after releasing large intermediate objects
 
-        verbose_output(f"{BackgroundColors.GREEN}Finished processing dataset: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}")  # Print message indicating completion of processing for dataset
-        send_telegram_message(TELEGRAM_BOT, [f"Finished processing dataset: {os.path.basename(filepath)}"])  # Send Telegram notification indicating completion of processing for dataset
+        verbose_output(f"{BackgroundColors.GREEN}Finished processing dataset: {BackgroundColors.CYAN}{filepath}{Style.RESET_ALL}{batch_suffix}")  # Print message indicating completion with batch context
+        send_telegram_message(TELEGRAM_BOT, [f"Finished processing dataset: {os.path.basename(filepath)}{batch_suffix}"])  # Send Telegram notification indicating completion with batch context
         return result  # Return the dataset information
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
