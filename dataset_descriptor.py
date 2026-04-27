@@ -2617,6 +2617,9 @@ def get_dataset_file_info(filepath, df=None, low_memory=None):
 
         labels_list_str = format_labels_list(labels_list)  # Format labels list into stable string for CSV inclusion
 
+        raw_class_counts = cleaned_df[label_col].value_counts().to_dict() if label_col and label_col in cleaned_df.columns else {}  # Extract raw per-class count dict for per-batch aggregation
+        raw_missing_count_by_col = {col: int(cnt) for col, cnt in cleaned_df.isnull().sum().items()}  # Extract raw per-column missing count dict for per-batch aggregation
+
         feature_view_df = cleaned_df.drop(columns=[label_col], errors="ignore") if label_col else cleaned_df  # Build feature-only frame by excluding the label column when available
         numeric_feature_view = feature_view_df.select_dtypes(include=["number"])  # Extract numeric features for cast-to-float64/int64 accounting
         categorical_feature_view = feature_view_df.select_dtypes(exclude=["number"])  # Extract non-numeric features for categorical encoding accounting
@@ -2669,6 +2672,9 @@ def get_dataset_file_info(filepath, df=None, low_memory=None):
             "Missing Values": missing_summary,
             "Classes": classes_str,
             "Class Distribution": class_dist_str,
+            "_raw_labels_list": labels_list,  # Raw labels list for per-batch aggregation
+            "_raw_class_counts": raw_class_counts,  # Raw per-class count dict for per-batch aggregation
+            "_raw_missing_count_by_col": raw_missing_count_by_col,  # Raw per-column missing count dict for per-batch aggregation
         }
 
         try:  # Attempt to retrieve augmented sample count for this dataset
