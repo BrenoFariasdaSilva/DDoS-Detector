@@ -75,7 +75,7 @@ import traceback  # For printing full exception tracebacks
 import warnings  # For suppressing pandas warnings when requested
 import yaml  # For optional config.yaml loading when locating WGANGP outputs
 from colorama import Style  # For coloring the terminal
-from inspect import signature  # For inspecting function signatures
+from inspect import isgenerator, signature  # For inspecting function signatures and verifying generator objects
 from Logger import Logger  # For logging output to both terminal and file
 from mpl_toolkits.mplot3d import Axes3D  # For 3D plotting
 from pathlib import Path  # For handling file paths
@@ -3634,14 +3634,21 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=None, 
             colored_desc = f"{BackgroundColors.GREEN}Processing {BackgroundColors.CYAN}{display_path}{Style.RESET_ALL}"  # Compose colored description using BackgroundColors while keeping length bounded
             progress.set_description(colored_desc)  # Update progress bar description with colored, truncated filename for inline display
 
-            df_current = resolve_dataset_loader(filepath, batch_threshold_gb, low_memory)  # Load dataset using normal or batched strategy based on configured threshold
-            if df_current is None:  # Verify that the dataset was loaded successfully
-                print(f"{BackgroundColors.YELLOW}Warning: failed to load {filepath}; skipping.{Style.RESET_ALL}")  # Warn about the skipped file without breaking the progress bar
-                continue  # Skip to the next file without accumulating a None entry
+            dataset_result = resolve_dataset_loader(filepath, batch_threshold_gb, low_memory)  # Load dataset via full load or batch generator based on configured threshold
 
-            info = get_dataset_file_info(filepath, df=df_current, low_memory=low_memory)  # Extract metadata using the already-loaded DataFrame to avoid a second full read
-            if info:  # If info was successfully retrieved
-                enrich_file_info_with_metadata(info, filepath, base_dir, headers_map, common_features, headers_match_all, cfg, low_memory, df_current)  # Populate Dataset Name, Headers Match, Common/Extra Features, and t-SNE Plot fields in place
+            if isgenerator(dataset_result):  # Verify whether the result is a batch generator for large files
+                info, df_for_enrich = process_batches_and_aggregate(dataset_result, filepath, low_memory)  # Process batches, aggregate metadata, and clean up
+            else:  # Full DataFrame load path for files at or below the batch threshold
+                df_for_enrich = dataset_result  # Assign full DataFrame for downstream enrichment
+                if df_for_enrich is None:  # Verify dataset was loaded successfully before processing
+                    print(f"{BackgroundColors.YELLOW}Warning: failed to load {filepath}; skipping.{Style.RESET_ALL}")  # Warn about the skipped file without breaking the progress bar
+                    continue  # Skip to the next file without accumulating a None entry
+                info = get_dataset_file_info(filepath, df=df_for_enrich, low_memory=low_memory)  # Extract metadata using the already-loaded DataFrame
+
+            if info:  # Process and store results only when metadata extraction succeeded
+                for _key in ("_raw_labels_list", "_raw_class_counts", "_raw_missing_count_by_col"):  # Iterate over internal batch aggregation keys
+                    info.pop(_key, None)  # Remove internal batch aggregation field from report row before storing
+                enrich_file_info_with_metadata(info, filepath, base_dir, headers_map, common_features, headers_match_all, cfg, low_memory, df_for_enrich)  # Populate Dataset Name, Headers Match, Common/Extra Features, and t-SNE Plot fields in place
 
                 report_rows.append(info)  # Add the info to the report rows
 
@@ -3649,7 +3656,8 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=None, 
                 del info  # Release info reference after appending to report structures to reduce retention
 
             try:  # Attempt to release dataset memory to minimize peak RAM consumption
-                del df_current  # Delete the current dataset reference to allow garbage collection
+                if df_for_enrich is not None:  # Release DataFrame only when it was loaded in non-batch mode
+                    del df_for_enrich  # Delete the DataFrame reference to allow garbage collection
             except Exception:  # Ignore exceptions during cleanup to prevent masking processing errors
                 pass  # Continue without cleanup on delete failure
             gc.collect()  # Force garbage collection to reclaim memory released by deleting the dataset
