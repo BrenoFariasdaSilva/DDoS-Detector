@@ -879,14 +879,14 @@ def load_dataset_in_batches(filepath: str, num_batches: int, low_memory=None) ->
         raise  # Re-raise to preserve original failure semantics
 
 
-def resolve_dataset_loader(filepath: str, batch_threshold_gb, low_memory=None) -> "pd.DataFrame | None":
+def resolve_dataset_loader(filepath: str, batch_threshold_gb, low_memory=None) -> "pd.DataFrame | Iterator[pd.DataFrame] | None":
     """
-    Decide whether to load a dataset normally or in batches based on the configured threshold.
+    Decide whether to load a dataset fully or stream it in batches based on the configured threshold.
 
     :param filepath: Path to the CSV file to load.
-    :param batch_threshold_gb: Threshold in gigabytes above which batched loading is used, or None to always load normally.
+    :param batch_threshold_gb: Threshold in gigabytes above which batch streaming is used, or None to always load normally.
     :param low_memory: Whether to use low memory mode during reading (default: True).
-    :return: Loaded pandas DataFrame or None on failure.
+    :return: Full pandas DataFrame for small files, batch generator for large files, or None on failure.
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
@@ -900,7 +900,7 @@ def resolve_dataset_loader(filepath: str, batch_threshold_gb, low_memory=None) -
 
         num_batches = compute_batch_count(file_size_gb, float(batch_threshold_gb))  # Compute number of batches from file size and threshold
 
-        return load_dataset_in_batches(filepath, num_batches, low_memory)  # Load dataset in batches when file exceeds threshold
+        return load_dataset_in_batches(filepath, num_batches, low_memory)  # Return batch generator for files exceeding the threshold
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
