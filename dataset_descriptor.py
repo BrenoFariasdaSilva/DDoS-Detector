@@ -907,6 +907,117 @@ def resolve_dataset_loader(filepath: str, batch_threshold_gb, low_memory=None) -
         raise  # Re-raise to preserve original failure semantics
 
 
+def aggregate_batch_dataset_info(batch_info_list: list, filepath: str) -> "dict | None":
+    """
+    Aggregate a list of per-batch dataset info dicts into a single combined info dict.
+
+    :param batch_info_list: List of info dicts produced by get_dataset_file_info for each batch.
+    :param filepath: Path to the original CSV file used for context in error reporting.
+    :return: Aggregated info dict with summed row counts, merged class distributions, and combined label lists, or None when batch_info_list is empty.
+    """
+
+    try:  # Wrap full function logic to ensure production-safe monitoring
+        if not batch_info_list:  # Verify that at least one batch result is available before aggregation
+            return None  # Return None when no batch results were collected
+
+        first = batch_info_list[0]  # Take the first batch as the base for schema-stable fields
+
+        total_original_rows = sum(b.get("original_num_rows", 0) for b in batch_info_list)  # Sum original row counts across all batches
+        total_rows_after_nan_removal = sum(b.get("rows_after_nan_removal", 0) for b in batch_info_list)  # Sum post-NaN-removal row counts across all batches
+        total_removed_rows_nan = sum(b.get("removed_rows_nan", 0) for b in batch_info_list)  # Sum removed-by-NaN row counts across all batches
+        total_rows_after_inf_removal = sum(b.get("rows_after_inf_removal", 0) for b in batch_info_list)  # Sum post-infinite-removal row counts across all batches
+        total_removed_rows_inf = sum(b.get("removed_rows_inf", 0) for b in batch_info_list)  # Sum removed-by-infinite row counts across all batches
+        total_rows_after_nan_inf_removal = sum(b.get("rows_after_nan_inf_removal", 0) for b in batch_info_list)  # Sum post-NaN+infinite-removal row counts across all batches
+        total_removed_rows_nan_inf = sum(b.get("removed_rows_nan_inf", 0) for b in batch_info_list)  # Sum combined NaN+infinite removed row counts across all batches
+        total_rows_after_preprocessing = sum(b.get("rows_after_preprocessing", 0) for b in batch_info_list)  # Sum post-preprocessing row counts across all batches
+
+        removed_rows_nan_proportion = round(total_removed_rows_nan / float(total_original_rows), 6) if total_original_rows > 0 else 0.0  # Recompute NaN removal proportion from aggregated totals
+        removed_rows_nan_inf_proportion = round(total_removed_rows_nan_inf / float(total_original_rows), 6) if total_original_rows > 0 else 0.0  # Recompute NaN+infinite removal proportion from aggregated totals
+
+        original_num_features = first.get("original_num_features", 0)  # Use first batch feature count as schema is consistent across batches
+        features_after_preprocessing = first.get("features_after_preprocessing", 0)  # Use first batch post-preprocessing feature count
+        features_after_zero_variance_removal = first.get("features_after_zero_variance_removal", 0)  # Use first batch zero-variance-removal feature count
+        removed_zero_variance_features = first.get("removed_zero_variance_features", 0)  # Use first batch zero-variance removed feature count
+        removed_zero_variance_features_proportion = first.get("removed_zero_variance_features_proportion", 0.0)  # Use first batch zero-variance removal proportion
+        dropped_non_informative_features = first.get("dropped_non_informative_features", 0)  # Use first batch non-informative dropped feature count
+        dropped_non_informative_features_proportion = first.get("dropped_non_informative_features_proportion", 0.0)  # Use first batch non-informative dropped feature proportion
+        features_transformed_for_experiment = first.get("features_transformed_for_experiment", 0)  # Use first batch transformed feature count
+        features_transformed_for_experiment_proportion = first.get("features_transformed_for_experiment_proportion", 0.0)  # Use first batch transformed feature proportion
+        features_cast_to_float64_int64 = first.get("features_cast_to_float64_int64", 0)  # Use first batch cast-to-float64/int64 feature count
+        features_encoded_categorical = first.get("features_encoded_categorical", 0)  # Use first batch encoded categorical feature count
+
+        merged_raw_class_counts = {}  # Initialize accumulator for raw per-class counts across all batches
+        for batch_info in batch_info_list:  # Iterate over all per-batch info dicts to accumulate class counts
+            for cls, cnt in batch_info.get("_raw_class_counts", {}).items():  # Iterate over per-class raw counts from this batch
+                merged_raw_class_counts[cls] = merged_raw_class_counts.get(cls, 0) + int(cnt)  # Accumulate raw count for this class
+
+        merged_labels_set = set()  # Initialize set for merged unique labels across all batches
+        for batch_info in batch_info_list:  # Iterate over all per-batch info dicts to union label sets
+            merged_labels_set.update(batch_info.get("_raw_labels_list", []))  # Union label sets from all batches
+        merged_labels_sorted = sorted(merged_labels_set, key=lambda x: str(x))  # Sort merged labels deterministically by string representation
+
+        labels_list_str = format_labels_list(merged_labels_sorted)  # Format merged labels list into stable CSV string
+        num_labels = len(merged_labels_sorted)  # Compute total count of distinct labels across all batches
+
+        merged_class_series = pd.Series(merged_raw_class_counts, dtype=int) if merged_raw_class_counts else pd.Series(dtype=int)  # Build pandas Series from aggregated raw class counts for distribution formatting
+        merged_class_series = merged_class_series.sort_values(ascending=False)  # Sort classes by count descending for consistent output order
+        classes_str = ", ".join(str(k) for k in merged_class_series.index.tolist()) if not merged_class_series.empty else ""  # Build comma-separated classes string from sorted index
+        class_dist_str = build_class_distribution_string(merged_class_series) if not merged_class_series.empty else ""  # Build formatted class distribution string from aggregated counts
+
+        merged_missing = {}  # Initialize accumulator for per-column missing value counts across all batches
+        for batch_info in batch_info_list:  # Iterate over all per-batch info dicts to accumulate missing counts
+            for col, cnt in batch_info.get("_raw_missing_count_by_col", {}).items():  # Iterate over per-column missing counts from this batch
+                merged_missing[col] = merged_missing.get(col, 0) + int(cnt)  # Accumulate missing count for this column
+        missing_summary = (  # Build missing values summary string from aggregated per-column counts
+            ", ".join(f"{col} ({cnt})" for col, cnt in merged_missing.items() if cnt > 0)
+            if any(v > 0 for v in merged_missing.values())
+            else "None"
+        )  # Produce "None" when no missing values are present across all batches
+
+        result = {  # Assemble the aggregated dataset info dict from all accumulated batch metrics
+            "Dataset Name": first.get("Dataset Name"),  # Carry dataset name from first batch
+            "Size (GB)": first.get("Size (GB)"),  # Carry file size from first batch
+            "Number of Samples": f"{total_rows_after_preprocessing:,}",  # Total samples as aggregated post-preprocessing row count
+            "Number of Features": f"{features_after_preprocessing:,}",  # Feature count consistent across batches
+            "Number of Labels": f"{num_labels:,}",  # Total distinct labels merged across all batches
+            "Labels List": labels_list_str,  # Merged labels formatted as stable CSV string
+            "original_num_rows": total_original_rows,  # Total original rows summed across all batches
+            "rows_after_nan_removal": total_rows_after_nan_removal,  # Total rows after NaN removal summed across all batches
+            "removed_rows_nan": total_removed_rows_nan,  # Total rows removed by NaN filtering summed across all batches
+            "removed_rows_nan_proportion": removed_rows_nan_proportion,  # Recomputed NaN removal proportion from aggregated totals
+            "rows_after_inf_removal": total_rows_after_inf_removal,  # Total rows after infinite removal summed across all batches
+            "removed_rows_inf": total_removed_rows_inf,  # Total rows removed by infinite filtering summed across all batches
+            "rows_after_nan_inf_removal": total_rows_after_nan_inf_removal,  # Total rows after NaN+infinite removal summed across all batches
+            "removed_rows_nan_inf": total_removed_rows_nan_inf,  # Total rows removed by combined NaN+infinite filtering summed across all batches
+            "removed_rows_nan_inf_proportion": removed_rows_nan_inf_proportion,  # Recomputed NaN+infinite removal proportion from aggregated totals
+            "rows_after_preprocessing": total_rows_after_preprocessing,  # Total rows after preprocessing summed across all batches
+            "original_num_features": original_num_features,  # Original feature count from first batch as schema is stable
+            "features_after_zero_variance_removal": features_after_zero_variance_removal,  # Post-zero-variance-removal feature count from first batch
+            "removed_zero_variance_features": removed_zero_variance_features,  # Zero-variance removed feature count from first batch
+            "removed_zero_variance_features_proportion": removed_zero_variance_features_proportion,  # Zero-variance removal proportion from first batch
+            "features_after_preprocessing": features_after_preprocessing,  # Post-preprocessing feature count from first batch
+            "dropped_non_informative_features": dropped_non_informative_features,  # Non-informative dropped feature count from first batch
+            "dropped_non_informative_features_proportion": dropped_non_informative_features_proportion,  # Non-informative dropped feature proportion from first batch
+            "features_transformed_for_experiment": features_transformed_for_experiment,  # Transformed feature count from first batch
+            "features_transformed_for_experiment_proportion": features_transformed_for_experiment_proportion,  # Transformed feature proportion from first batch
+            "features_cast_to_float64_int64": features_cast_to_float64_int64,  # Cast-to-float64/int64 feature count from first batch
+            "features_encoded_categorical": features_encoded_categorical,  # Encoded categorical feature count from first batch
+            "preprocessing_metrics": first.get("preprocessing_metrics"),  # Preprocessing step metrics from first batch
+            "Feature Types": first.get("Feature Types"),  # Feature type summary from first batch as schema is stable
+            "Categorical Features (object/string)": first.get("Categorical Features (object/string)"),  # Categorical feature names from first batch
+            "Missing Values": missing_summary,  # Missing values summary aggregated across all batches
+            "Classes": classes_str,  # Classes string rebuilt from aggregated class counts
+            "Class Distribution": class_dist_str,  # Class distribution string rebuilt from aggregated counts
+            "data_augmentation_samples": int(first.get("data_augmentation_samples", 0)),  # Augmented sample count from first batch as it is file-level not batch-level
+        }  # Aggregated info dict fully assembled
+
+        return result  # Return the combined result dict to the caller
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def load_dataset(filepath, low_memory=None):
     """
     Loads a dataset from a CSV file.
