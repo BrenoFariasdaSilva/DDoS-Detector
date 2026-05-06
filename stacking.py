@@ -7942,6 +7942,8 @@ def evaluate_single_feature_set(
     current_combination,
     progress_bar,
     config=None,
+    cache_dict=None,
+    cache_ref_file=None,
 ):
     """
     Evaluate all individual classifiers and the stacking model on one non-empty feature subset.
@@ -7968,6 +7970,8 @@ def evaluate_single_feature_set(
     :param current_combination: 1-based overall combination counter updated for each model evaluated.
     :param progress_bar: tqdm progress bar instance advanced after each model evaluation.
     :param config: Optional configuration dictionary; falls back to global CONFIG when None.
+    :param cache_dict: Dictionary of previously cached results keyed by resume cache key for skip-if-cached logic.
+    :param cache_ref_file: File path used when deriving the cache file location for atomic cache writes.
     :return: Tuple of (individual_results, stacking_result_entry, current_combination) containing per-model result dicts and updated combination counter.
     """
 
@@ -7984,14 +7988,16 @@ def evaluate_single_feature_set(
         X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
         data_source_label, experiment_id, experiment_mode, augmentation_ratio,
         hyperparams_map, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
-    )  # Evaluate all individual classifiers in parallel and collect their result entries
+        cache_dict=cache_dict, cache_ref_file=cache_ref_file,
+    )  # Evaluate all individual classifiers and collect their result entries with resume support
 
     stacking_result_entry, current_combination = run_stacking_evaluation_for_feature_set(
         name, stacking_model, X_train_df, y_train, X_test_df, y_test,
         X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
         data_source_label, experiment_id, experiment_mode, augmentation_ratio,
         scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
-    )  # Evaluate stacking classifier, export model artifacts, generate metric plots, and collect result entry
+        cache_dict=cache_dict, cache_ref_file=cache_ref_file,
+    )  # Evaluate stacking classifier, export model artifacts, generate metric plots, and collect result entry with resume support
 
     return individual_results, stacking_result_entry, current_combination  # Return per-model results and updated combination counter to the caller
 
