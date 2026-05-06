@@ -5710,7 +5710,7 @@ def load_cache_results(csv_path, config=None):
 
     :param csv_path: Path to the dataset CSV file
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: Dictionary mapping (feature_set, model_name) to result entry
+    :return: Dictionary mapping full resume cache key tuple to result entry
     """
     
     try:
@@ -5740,7 +5740,13 @@ def load_cache_results(csv_path, config=None):
             for _, row in df_cache.iterrows():  # Iterate through each row
                 feature_set = row.get("feature_set", "")  # Get feature set name
                 model_name = row.get("model_name", "")  # Get model name
-                cache_key = (feature_set, model_name)  # Create cache key tuple
+                execution_mode_row = row.get("execution_mode", "separate_files")  # Get execution mode from cached row
+                data_source_row = row.get("data_source", "Original")  # Get data source label from cached row
+                experiment_mode_row = row.get("experiment_mode", "original_only")  # Get experiment mode from cached row
+                aug_ratio_row = float(row["augmentation_ratio"]) if "augmentation_ratio" in row and not pd.isna(row.get("augmentation_ratio")) else None  # Parse augmentation ratio from cached row
+                attack_types_raw_row = safe_load_json(row.get("attack_types_combined", None))  # Load attack types from cached row
+                attack_types_list_row = attack_types_raw_row if isinstance(attack_types_raw_row, list) else None  # Normalize attack types to list or None
+                cache_key = build_resume_cache_key(execution_mode_row, data_source_row, experiment_mode_row, aug_ratio_row, attack_types_list_row, feature_set, model_name)  # Build full resume cache key from all distinguishing dimensions
 
                 result_entry = {
                     "model": row.get("model", ""),
