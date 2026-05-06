@@ -9482,6 +9482,11 @@ def orchestrate_binary_combination(file, ga_sel, pca_n, rfe_sel, base_models, hp
         del df_original, results  # Release evaluation data to free memory after separate files evaluation combination completes
         gc.collect()  # Force garbage collection to reclaim memory from evaluation data
 
+        try:  # Attempt to remove the cache file now that all results are safely persisted to CSV
+            remove_cache_file(file, config)  # Remove the per-file cache once the full evaluation is confirmed complete
+        except Exception:  # If cache removal fails for any reason
+            pass  # Proceed without failing the run since the CSV output is already written
+
         return True  # Signal success
     except Exception as e:
         print(str(e))
