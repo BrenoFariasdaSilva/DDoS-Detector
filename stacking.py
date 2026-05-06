@@ -9229,6 +9229,11 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                 hp_params_map, attack_types_list, results_original, augmentation_ratios,
                 total_steps, feature_analysis_dir, dataset_name, config=config,
             )  # Process combined files evaluation augmented data evaluation with ratio experiments
+
+        try:  # Attempt to remove the cache file now that all combined files evaluation results are safely persisted
+            remove_cache_file(reference_file, config)  # Remove the per-dataset cache once the full combined files evaluation is confirmed complete
+        except Exception:  # If cache removal fails for any reason
+            pass  # Proceed without failing the run since the CSV output is already written
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
