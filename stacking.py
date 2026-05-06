@@ -9650,6 +9650,11 @@ def orchestrate_combined_files_combination(files_to_process, ga_sel, pca_n, rfe_
         del combined_df, data  # Release combined files evaluation data to free memory
         gc.collect()  # Force garbage collection to reclaim memory from combined files evaluation combination
 
+        try:  # Attempt to remove the cache file now that all results are safely persisted to CSV
+            remove_cache_file(files_to_process[0], config)  # Remove the per-combination cache once the full combined files evaluation is confirmed complete
+        except Exception:  # If cache removal fails for any reason
+            pass  # Proceed without failing the run since the CSV output is already written
+
         return None  # Signal success (no flow control change needed)
     except Exception as e:
         print(str(e))
