@@ -9533,7 +9533,8 @@ def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, 
             experiment_mode="original_only", augmentation_ratio=None,
             execution_mode_str="combined_files", attack_types_combined=attack_types,
             df_augmented_for_training=None,
-        )  # Evaluate combined files evaluation original dataset
+            cache_ref_file=files_to_process[0],
+        )  # Evaluate combined files evaluation original dataset with cache reference for resume support
     except Exception as e:  # If evaluation fails
         print(f"{BackgroundColors.RED}Combined files evaluation failed for combo {suffix}: {e}{Style.RESET_ALL}")  # Error
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
