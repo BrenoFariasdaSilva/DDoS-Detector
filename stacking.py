@@ -5819,6 +5819,30 @@ def remove_cache_file(csv_path, config=None):
         raise
 
 
+def build_resume_cache_key(execution_mode_str: str, data_source_label: str, experiment_mode: str, augmentation_ratio, attack_types_combined, feature_set: str, model_name: str) -> tuple:
+    """
+    Build a deterministic, collision-free resume cache key for one evaluation unit.
+
+    :param execution_mode_str: Execution mode string (e.g., 'separate_files' or 'combined_files')
+    :param data_source_label: Data source label (e.g., 'Original' or 'Original+Augmented@50%')
+    :param experiment_mode: Experiment mode string (e.g., 'original_only' or 'original_plus_augmented')
+    :param augmentation_ratio: Augmentation ratio float or None for original-only experiments
+    :param attack_types_combined: List of attack type strings for combined files mode or None
+    :param feature_set: Feature set name string (e.g., 'Full Features' or 'GA Features')
+    :param model_name: Model name string (e.g., 'Random Forest' or 'StackingClassifier')
+    :return: Hashable tuple uniquely identifying the evaluation unit across all dimensions
+    """
+
+    try:  # Build a deterministic cache key tuple from all relevant dimensions, using JSON serialization for complex fields to ensure hashability and uniqueness
+        attack_key = json.dumps(sorted(str(a) for a in attack_types_combined), sort_keys=True) if attack_types_combined else "None"  # Serialize attack types deterministically or use sentinel string
+        ratio_key = str(augmentation_ratio) if augmentation_ratio is not None else "None"  # Serialize augmentation ratio as string or use sentinel
+        return (execution_mode_str, data_source_label, experiment_mode, ratio_key, attack_key, feature_set, model_name)  # Return tuple covering all dimensions that uniquely identify an evaluation unit
+    except Exception as e:  # Catch any unexpected errors in key construction
+        print(str(e))  # Log the error message for debugging
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send the exception details via Telegram for monitoring
+        raise  # Re-raise the exception to allow upstream handling if necessary
+
+
 def get_automl_search_spaces():
     """
     Return hyperparameter search space definitions for all AutoML candidate models.
