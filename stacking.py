@@ -7676,7 +7676,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         raise
 
 
-def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=None):
+def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None):
     """
     Evaluates the stacking classifier for one feature set, exports the model, generates metric plots, and returns the result entry.
 
@@ -7701,12 +7701,22 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
     :param current_combination: Current combination index counter for progress messages
     :param progress_bar: tqdm progress bar to update after stacking evaluation
     :param config: Configuration dictionary (uses global CONFIG if None)
+    :param cache_dict: Dictionary of previously cached results keyed by resume cache key for skip-if-cached logic.
+    :param cache_ref_file: File path used when deriving the cache file location for atomic cache writes.
     :return: Tuple (stacking_result_entry, next_current_combination) where stacking_result_entry is the standardized result dict
     """
 
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
+
+        if cache_dict:  # Verify if a cache dictionary is available for resume
+            resume_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, "StackingClassifier")  # Build the full resume cache key for the stacking classifier
+            if resume_key in cache_dict:  # Verify if the stacking result is already cached from a previous run
+                verbose_output(f"{BackgroundColors.YELLOW}Resume: skipping {name} - StackingClassifier (cached result loaded).{Style.RESET_ALL}", config=config)  # Log that stacking evaluation was skipped due to a cache hit
+                progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
+                current_combination += 1  # Advance the global combination counter for skipped evaluations
+                return (cache_dict[resume_key], current_combination)  # Return the cached stacking result entry without re-running the evaluation
 
         try:  # Attempt to obtain a compact snapshot of stacking model parameters for logging
             params_raw = stacking_model.get_params() if hasattr(stacking_model, "get_params") else {}  # Get model parameters when available
@@ -7755,6 +7765,13 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             "StackingClassifier", data_source_label, experiment_id, experiment_mode, augmentation_ratio,
             X_train_n_cols, len(y_train), len(y_test), stacking_metrics, subset_feature_names,
         )  # Build standardized result entry for the stacking classifier
+
+        if cache_ref_file is not None:  # Only persist to cache when a valid cache reference file is available
+            try:  # Attempt to atomically append the stacking result to the cache CSV
+                save_cache_result_entry(cache_ref_file, stacking_result_entry, config=config)  # Persist stacking result immediately after computation for resume support
+            except Exception:  # If cache save fails for any reason
+                pass  # Continue evaluation without failing the run
+
         send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - StackingClassifier with F1: {stacking_metrics[3]} in {calculate_execution_time(0, stacking_metrics[6])}")  # Notify Telegram about stacking evaluation completion using raw F1 value
         pass  # Verify removal of duplicate stacking classifier accuracy print
         progress_bar.update(1)  # Advance progress bar after stacking evaluation
