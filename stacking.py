@@ -90,6 +90,7 @@ import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import time  # For measuring execution time
+import tempfile  # For atomic cache file writes using temp-file and rename strategy
 import traceback  # For formatting and printing exception tracebacks
 import yaml  # Import YAML library
 from colorama import Style  # For terminal text styling
@@ -5838,6 +5839,68 @@ def build_resume_cache_key(execution_mode_str: str, data_source_label: str, expe
         ratio_key = str(augmentation_ratio) if augmentation_ratio is not None else "None"  # Serialize augmentation ratio as string or use sentinel
         return (execution_mode_str, data_source_label, experiment_mode, ratio_key, attack_key, feature_set, model_name)  # Return tuple covering all dimensions that uniquely identify an evaluation unit
     except Exception as e:  # Catch any unexpected errors in key construction
+        print(str(e))  # Log the error message for debugging
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send the exception details via Telegram for monitoring
+        raise  # Re-raise the exception to allow upstream handling if necessary
+
+
+def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> None:
+    """
+    Atomically append a single result entry to the cache CSV file.
+
+    Uses a temp-file and rename strategy for atomicity on POSIX systems. If the
+    cache file does not exist, a new file with a header row is created. If it
+    already exists, the entry is appended as a new row without repeating the header.
+
+    :param csv_path: Path to the dataset CSV file used to derive the cache file path
+    :param result_entry: Dictionary containing the classifier evaluation result to persist
+    :param config: Configuration dictionary (uses global CONFIG if None)
+    :return: None
+    """
+
+    try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
+
+        cache_path = get_cache_file_path(csv_path, config=config)  # Derive cache file path from the dataset file path
+
+        flat_rows = flatten_and_serialize_results([result_entry])  # Flatten and serialize entry using same pipeline as final results
+        if not flat_rows:  # If serialization produced no rows
+            return  # Exit without writing anything
+
+        row_dict = flat_rows[0]  # Extract the single flattened row dictionary
+
+        try:  # Attempt atomic write to cache file
+            cache_dir = os.path.dirname(cache_path)  # Get directory containing the cache file
+            os.makedirs(cache_dir, exist_ok=True)  # Ensure cache directory exists before writing
+            cache_file_exists = os.path.isfile(cache_path)  # Verify if cache file already exists to decide whether to write header
+            tmp_fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")  # Create temp file in same directory for atomic rename
+            try:  # Write to temp file before atomic rename
+                with os.fdopen(tmp_fd, "w", encoding="utf-8", newline="") as tmp_f:  # Open temp file descriptor for writing
+                    if cache_file_exists:  # If cache file exists, read existing content first
+                        with open(cache_path, "r", encoding="utf-8", newline="") as existing_f:  # Open existing cache file for reading
+                            existing_content = existing_f.read()  # Read full existing cache content
+                        tmp_f.write(existing_content)  # Write existing content to temp file
+                        if existing_content and not existing_content.endswith("\n"):  # Verify if existing content needs a trailing newline
+                            tmp_f.write("\n")  # Add trailing newline before appending new row
+                        row_df = pd.DataFrame([row_dict])  # Wrap single row in DataFrame for CSV serialization
+                        tmp_f.write(row_df.to_csv(index=False, header=False))  # Append new row without repeating header
+                    else:  # Cache file does not exist, create with header
+                        row_df = pd.DataFrame([row_dict])  # Wrap single row in DataFrame for CSV serialization
+                        tmp_f.write(row_df.to_csv(index=False, header=True))  # Write new row with header for new cache file
+                os.replace(tmp_path, cache_path)  # Atomic rename from temp to cache path (POSIX guarantees atomicity)
+            except Exception:  # If write or rename fails
+                try:  # Attempt to clean up temp file
+                    os.unlink(tmp_path)  # Remove temp file to avoid leftover artifacts
+                except Exception:  # If temp file cleanup fails
+                    pass  # Ignore cleanup failure to avoid masking the original error
+                raise  # Re-raise original write failure
+        except Exception as e:  # If any cache write operation fails
+            verbose_output(
+                f"{BackgroundColors.YELLOW}Warning: Failed to save result to cache {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}",
+                config=config,
+            )  # Log cache write failure without interrupting the main evaluation flow
+    except Exception as e:  # Catch any unexpected errors in the cache saving process
         print(str(e))  # Log the error message for debugging
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send the exception details via Telegram for monitoring
         raise  # Re-raise the exception to allow upstream handling if necessary
