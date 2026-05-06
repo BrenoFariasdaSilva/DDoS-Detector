@@ -9592,7 +9592,8 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
                             experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
                             execution_mode_str="combined_files", attack_types_combined=attack_types,
                             df_augmented_for_training=df_sampled,
-                        )  # Evaluate augmented combined files evaluation combination
+                            cache_ref_file=files_to_process[0],
+                        )  # Evaluate augmented combined files evaluation combination with cache reference for resume support
                     except Exception as e:  # If evaluation failed
                         print(f"{BackgroundColors.YELLOW}Augmented evaluation failed for ratio {ratio} combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
                         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
