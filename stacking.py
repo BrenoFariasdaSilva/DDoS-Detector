@@ -7562,7 +7562,7 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
     return results_dict  # Return accumulated result entries
 
 
-def run_individual_classifiers_for_feature_set(name, individual_models, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, hyperparams_map, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=None):
+def run_individual_classifiers_for_feature_set(name, individual_models, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, hyperparams_map, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None):
     """
     Evaluates all individual classifiers for a feature set sequentially, collects results, and runs explainability.
 
@@ -7588,6 +7588,8 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
     :param current_combination: Current combination index counter for progress messages
     :param progress_bar: tqdm progress bar to update after each model evaluation
     :param config: Configuration dictionary (uses global CONFIG if None)
+    :param cache_dict: Dictionary of previously cached results keyed by resume cache key for skip-if-cached logic.
+    :param cache_ref_file: File path used when deriving the cache file location for atomic cache writes.
     :return: Tuple (results_dict, next_current_combination) where results_dict maps (name, model_name) to result entries
     """
 
@@ -7602,6 +7604,14 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         results_dict = {}  # Accumulate result entries for this feature set
 
         for model_name, model in individual_models.items():  # Iterate over each individual model sequentially to prevent loky deadlock
+            if cache_dict:  # Verify if a cache dictionary is available for resume
+                resume_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name)  # Build the full resume cache key for this evaluation unit
+                if resume_key in cache_dict:  # Verify if this classifier's result is already cached from a previous run
+                    results_dict[(name, model_name)] = cache_dict[resume_key]  # Reuse the cached result entry without recomputation
+                    verbose_output(f"{BackgroundColors.YELLOW}Resume: skipping {name} - {model_name} (cached result loaded).{Style.RESET_ALL}", config=config)  # Log that this evaluation was skipped due to a cache hit
+                    progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
+                    current_combination += 1  # Advance the global combination counter for skipped evaluations
+                    continue  # Skip to the next model since this one is already computed
             send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - {model_name}")  # Notify Telegram about evaluation start
             sys.stdout.flush()  # Flush stdout before each classifier to ensure logs are visible under nohup
 
@@ -7627,6 +7637,12 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 hyperparams_map=hyperparams_map,
             )  # Build standardized result entry for this individual classifier
             results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
+
+            if cache_ref_file is not None:  # Only persist to cache when a valid cache reference file is available
+                try:  # Attempt to atomically append this result to the cache CSV
+                    save_cache_result_entry(cache_ref_file, result_entry, config=config)  # Persist result immediately after computation for resume support
+                except Exception:  # If cache save fails for any reason
+                    pass  # Continue evaluation without failing the run
 
             send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {name} - {model_name} with F1: {metrics[3]} in {calculate_execution_time(0, metrics[6])}")  # Notify Telegram about completion using raw F1 value
             pass  # Verify removal of duplicate individual model accuracy print
