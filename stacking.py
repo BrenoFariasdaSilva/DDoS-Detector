@@ -8019,6 +8019,7 @@ def evaluate_on_dataset(
     attack_types_combined=None,
     df_augmented_for_training=None,
     config=None,
+    cache_ref_file=None,
 ):
     """
     Evaluate classifiers on a single dataset with optional training-only augmentation.
@@ -8038,6 +8039,7 @@ def evaluate_on_dataset(
     :param attack_types_combined: List of attack types for combined files evaluation or None for separate files evaluation
     :param df_augmented_for_training: Optional augmented DataFrame to merge into training set only (test set remains original-only)
     :param config: Configuration dictionary (uses global CONFIG if None)
+    :param cache_ref_file: Override file path to use when computing the cache file location (required when file is 'combined_files_combined')
     :return: Dictionary mapping (feature_set, model_name) to results
     """
     
@@ -8057,6 +8059,16 @@ def evaluate_on_dataset(
             return {}  # Return empty dictionary
 
         X_train_scaled, X_test_scaled, y_train, y_test, scaler = data_splits  # Unpack the data splits tuple
+
+        effective_cache_ref = cache_ref_file if cache_ref_file is not None else (file if file != "combined_files_combined" else None)  # Determine which file to use for cache path computation
+        cache_dict = {}  # Initialize empty cache dictionary as fallback when no cache file exists
+        if effective_cache_ref is not None:  # Only attempt cache loading when a valid file path is available
+            try:  # Attempt to load cached results from a previous interrupted run
+                cache_dict = load_cache_results(effective_cache_ref, config=config)  # Load previously persisted results keyed by full resume cache key
+                if cache_dict:  # Report cache hit count to the operator if any cached entries were found
+                    print(f"{BackgroundColors.GREEN}Resume: loaded {BackgroundColors.CYAN}{len(cache_dict)}{BackgroundColors.GREEN} cached result(s) from previous run.{Style.RESET_ALL}")  # Inform operator of resume state
+            except Exception:  # If cache loading raises any exception
+                cache_dict = {}  # Fall back to empty cache to proceed with a fresh evaluation
 
         stacking_model = build_evaluation_stacking_model(base_models, config=config)  # Build stacking classifier from base models
 
@@ -8084,7 +8096,8 @@ def evaluate_on_dataset(
                 file, execution_mode_str, attack_types_combined,
                 data_source_label, experiment_id, experiment_mode, augmentation_ratio,
                 hyperparams_map, scaler, total_steps, current_combination, progress_bar, config=config,
-            )  # Evaluate all individual classifiers and stacking model on this non-empty feature subset
+                cache_dict=cache_dict, cache_ref_file=effective_cache_ref,
+            )  # Evaluate all individual classifiers and stacking model on this non-empty feature subset with resume support
 
             all_results.update(individual_results)  # Merge this feature set's results into the global results dict
             all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store stacking result with key
