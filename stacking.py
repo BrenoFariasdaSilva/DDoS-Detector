@@ -5669,10 +5669,10 @@ def get_cache_file_path(csv_path, config=None):
 
         cache_prefix = config.get("stacking", {}).get("cache_prefix", "CACHE_")  # Get cache prefix from config
         dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Get base dataset name
-        output_dir = f"{os.path.dirname(csv_path)}/Classifiers"  # Directory relative to the dataset
+        output_dir = os.path.join(os.path.dirname(csv_path), "Classifiers")  # Directory relative to the dataset using OS-safe path join
 
-        stacking_output_dir = get_stacking_output_dir(csv_path, config)
-        validate_output_path(stacking_output_dir, str(Path(output_dir)))
+        dataset_dir = str(Path(csv_path).resolve().parent)  # Resolve dataset root directory for path validation
+        validate_output_path(dataset_dir, str(Path(output_dir).resolve()))  # Verify cache directory is within the dataset root to prevent directory traversal
         os.makedirs(output_dir, exist_ok=True)  # Ensure the directory exists
         cache_filename = f"{cache_prefix}{dataset_name}-Stacking_Classifiers_Results.csv"  # Cache filename
         cache_path = os.path.join(output_dir, cache_filename)  # Full cache file path
@@ -5781,10 +5781,11 @@ def load_cache_results(csv_path, config=None):
             print(f"{BackgroundColors.GREEN}Loaded cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")
             return cache_dict
 
-        except Exception as e:  # Catch any errors
+        except Exception as e:  # Catch any errors reading the cache file
             print(
-                f"{BackgroundColors.YELLOW}Warning: Failed to save to cache {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
-            )  # Print warning message
+                f"{BackgroundColors.YELLOW}Warning: Failed to load from cache {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
+            )  # Print warning message about cache read failure
+            return {}  # Return empty dict to signal no cached results are available
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -8739,8 +8740,8 @@ def run_single_ratio_experiment(file, df_original_cleaned, df_augmented_cleaned,
             hyperparams_map=hp_params_map, experiment_id=experiment_id,
             experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
             execution_mode_str="separate_files", attack_types_combined=None,
-            df_augmented_for_training=df_sampled
-        )  # Evaluate all classifiers with augmented data in training only (test remains original-only)
+            df_augmented_for_training=df_sampled, config=config,
+        )  # Evaluate all classifiers with augmented data in training only (test remains original-only) with explicit config propagation
 
         send_telegram_message(
             TELEGRAM_BOT, f"Completed augmentation ratio {ratio_pct}% for {os.path.basename(file)}"
@@ -8966,8 +8967,8 @@ def run_combined_files_augmentation_ratio_experiment(reference_file, combined_fi
             hyperparams_map=hp_params_map, experiment_id=experiment_id,
             experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
             execution_mode_str="combined_files", attack_types_combined=attack_types_list,
-            df_augmented_for_training=df_sampled
-        )  # Evaluate all classifiers with augmented training data using original-only test set
+            df_augmented_for_training=df_sampled, config=config,
+        )  # Evaluate all classifiers with augmented training data using original-only test set with explicit config propagation
 
         send_telegram_message(
             TELEGRAM_BOT, f"Completed combined files evaluation augmentation ratio {ratio_pct}% for {dataset_name}"
@@ -9208,8 +9209,8 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             reference_file, combined_files_df, feature_names, ga_selected_features, pca_n_components,
             rfe_selected_features, base_models, data_source_label="Original Combined Files", hyperparams_map=hp_params_map,  # Normalized data source label for log and CSV output
             experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
-            execution_mode_str="combined_files", attack_types_combined=attack_types_list
-        )  # Evaluate on original combined files evaluation data with execution mode tracking
+            execution_mode_str="combined_files", attack_types_combined=attack_types_list, config=config,
+        )  # Evaluate on original combined files evaluation data with execution mode tracking and explicit config propagation
         
         original_results_list = list(results_original.values())  # Convert results dict to list
         feature_analysis_dir = save_combined_files_results_to_csv(reference_file, original_results_list, config=config)  # Save combined files evaluation results and get Feature_Analysis directory
@@ -9328,8 +9329,8 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
             file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
             rfe_selected_features, base_models, data_source_label="Original", hyperparams_map=hp_params_map,
             experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
-            execution_mode_str="separate_files", attack_types_combined=None
-        )  # Evaluate on original data with experiment traceability metadata
+            execution_mode_str="separate_files", attack_types_combined=None, config=config,
+        )  # Evaluate on original data with experiment traceability metadata and explicit config propagation
 
         original_results_list = list(results_original.values())  # Convert results dict to list
         save_stacking_results(file, original_results_list, config=config)  # Save original results to CSV
@@ -9454,8 +9455,8 @@ def orchestrate_binary_combination(file, ga_sel, pca_n, rfe_sel, base_models, hp
                 experiment_id=generate_experiment_id(file, "original_only"),
                 experiment_mode="original_only", augmentation_ratio=None,
                 execution_mode_str="separate_files", attack_types_combined=None,
-                df_augmented_for_training=None,
-            )  # Evaluate original-only separate files evaluation
+                df_augmented_for_training=None, config=config,
+            )  # Evaluate original-only separate files evaluation with explicit config propagation
         except Exception as e:  # If evaluation fails
             print(f"{BackgroundColors.RED}Evaluation failed for {file} combo {suffix}: {e}{Style.RESET_ALL}")  # Log error
             send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
@@ -9533,8 +9534,8 @@ def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, 
             experiment_mode="original_only", augmentation_ratio=None,
             execution_mode_str="combined_files", attack_types_combined=attack_types,
             df_augmented_for_training=None,
-            cache_ref_file=files_to_process[0],
-        )  # Evaluate combined files evaluation original dataset with cache reference for resume support
+            cache_ref_file=files_to_process[0], config=config,
+        )  # Evaluate combined files evaluation original dataset with cache reference for resume support and explicit config propagation
     except Exception as e:  # If evaluation fails
         print(f"{BackgroundColors.RED}Combined files evaluation failed for combo {suffix}: {e}{Style.RESET_ALL}")  # Error
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
@@ -9592,8 +9593,8 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
                             experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
                             execution_mode_str="combined_files", attack_types_combined=attack_types,
                             df_augmented_for_training=df_sampled,
-                            cache_ref_file=files_to_process[0],
-                        )  # Evaluate augmented combined files evaluation combination with cache reference for resume support
+                            cache_ref_file=files_to_process[0], config=config,
+                        )  # Evaluate augmented combined files evaluation combination with cache reference for resume support and explicit config propagation
                     except Exception as e:  # If evaluation failed
                         print(f"{BackgroundColors.YELLOW}Augmented evaluation failed for ratio {ratio} combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
                         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
