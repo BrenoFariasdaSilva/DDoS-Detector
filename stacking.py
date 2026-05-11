@@ -7609,7 +7609,8 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 resume_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name)  # Build the full resume cache key for this evaluation unit
                 if resume_key in cache_dict:  # Verify if this classifier's result is already cached from a previous run
                     results_dict[(name, model_name)] = cache_dict[resume_key]  # Reuse the cached result entry without recomputation
-                    verbose_output(f"{BackgroundColors.YELLOW}Resume: skipping {name} - {model_name} (cached result loaded).{Style.RESET_ALL}", config=config)  # Log that this evaluation was skipped due to a cache hit
+                    print(f"{BackgroundColors.YELLOW}[RESUME] Recovered combination {current_combination}/{total_steps}: {name} - {model_name} from saved partial progress (no recomputation performed).{Style.RESET_ALL}")  # Log recovered combination to stdout for visibility
+                    send_telegram_message(TELEGRAM_BOT, f"[RESUME] Recovered combination {current_combination}/{total_steps}: {name} - {model_name} from saved partial progress. No recomputation performed.")  # Notify Telegram that this combination was recovered and not recomputed
                     progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
                     current_combination += 1  # Advance the global combination counter for skipped evaluations
                     continue  # Skip to the next model since this one is already computed
@@ -7714,7 +7715,8 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         if cache_dict:  # Verify if a cache dictionary is available for resume
             resume_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, "StackingClassifier")  # Build the full resume cache key for the stacking classifier
             if resume_key in cache_dict:  # Verify if the stacking result is already cached from a previous run
-                verbose_output(f"{BackgroundColors.YELLOW}Resume: skipping {name} - StackingClassifier (cached result loaded).{Style.RESET_ALL}", config=config)  # Log that stacking evaluation was skipped due to a cache hit
+                print(f"{BackgroundColors.YELLOW}[RESUME] Recovered combination {current_combination}/{total_steps}: {name} - StackingClassifier from saved partial progress (no recomputation performed).{Style.RESET_ALL}")  # Log recovered stacking combination to stdout for visibility
+                send_telegram_message(TELEGRAM_BOT, f"[RESUME] Recovered combination {current_combination}/{total_steps}: {name} - StackingClassifier from saved partial progress. No recomputation performed.")  # Notify Telegram that the stacking result was recovered and not recomputed
                 progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
                 current_combination += 1  # Advance the global combination counter for skipped evaluations
                 return (cache_dict[resume_key], current_combination)  # Return the cached stacking result entry without re-running the evaluation
