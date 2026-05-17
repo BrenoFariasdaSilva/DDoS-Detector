@@ -769,6 +769,10 @@ def set_threads_limit_based_on_ram(config=None):
     """
     Sets threads limit to 1 if system RAM is below threshold to avoid memory issues.
 
+    Also enforces n_jobs=1 in config when RAM is constrained or low_memory is active,
+    so all downstream model instantiation respects the safe parallelism ceiling and
+    prevents OOM-induced process termination during parallel model fitting.
+
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Threads limit value
     """
@@ -792,7 +796,17 @@ def set_threads_limit_based_on_ram(config=None):
                 f"{BackgroundColors.YELLOW}System RAM is {ram_gb:.1f}GB (<={ram_threshold}GB). Setting threads_limit to 1.{Style.RESET_ALL}",
                 config=config
             )
-        
+
+        low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag to determine if model-level parallelism must also be restricted
+        current_n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Read the currently configured n_jobs value before any override
+        effective_n_jobs = 1 if (threads_limit == 1 or low_memory) else current_n_jobs  # Force n_jobs to 1 when RAM-constrained or low_memory is active to prevent OOM during parallel model fitting
+        config.setdefault("evaluation", {})["n_jobs"] = effective_n_jobs  # Write effective n_jobs back into config so all downstream model instantiation respects the safe value
+
+        if effective_n_jobs != current_n_jobs:  # Verify if n_jobs was actually changed to issue a visible diagnostic
+            reason = "low_memory=True" if low_memory else f"ram_gb={ram_gb:.1f}GB (<={ram_threshold}GB)"  # Determine the specific reason that triggered the n_jobs override
+            print(f"{BackgroundColors.YELLOW}[RESOURCE GUARD] n_jobs overridden: {BackgroundColors.CYAN}{current_n_jobs}{BackgroundColors.YELLOW} -> {BackgroundColors.CYAN}{effective_n_jobs}{BackgroundColors.YELLOW} (reason: {reason}). Prevents OOM during parallel model fitting.{Style.RESET_ALL}")  # Inform operator that n_jobs was limited for OOM safety
+            send_telegram_message(TELEGRAM_BOT, f"[RESOURCE GUARD] n_jobs overridden: {current_n_jobs} -> {effective_n_jobs} (reason: {reason}). Prevents OOM during parallel model fitting.")  # Notify Telegram about the resource guard activation for remote monitoring
+
         return threads_limit  # Return the threads limit value
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -4063,6 +4077,13 @@ def apply_hyperparameters_to_models(hyperparams_map, models_map, config=None):
                     continue  # Skip invalid parameter entries
 
                 try:  # Try applying parameters
+                    guarded_n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Read the currently effective n_jobs to preserve any resource guard overrides
+                    if guarded_n_jobs == 1 and "n_jobs" in params:  # Prevent hyperparameter CSV from overriding the resource guard n_jobs=1 setting
+                        params = {k: v for k, v in params.items() if k != "n_jobs"}  # Strip n_jobs from params to preserve the RAM-based safety limit
+                        verbose_output(
+                            f"{BackgroundColors.YELLOW}[RESOURCE GUARD] Stripped n_jobs from hyperparameters for {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW} to preserve n_jobs=1 safety limit.{Style.RESET_ALL}",
+                            config=config
+                        )  # Inform operator that n_jobs was removed from hyperparameters for OOM safety
                     model.set_params(**params)  # Apply parameters to estimator
                     verbose_output(
                         f"{BackgroundColors.GREEN}Applied hyperparameters to {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}",
