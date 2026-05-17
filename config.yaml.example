@@ -41,7 +41,7 @@ execution: # Execution control and per-script overrides
   match_filenames_to_process: [""] # List of specific filenames to match
   ignore_files: ["_data_augmented"] # List of filename substrings to ignore
   ignore_dirs: # List of directory names to ignore
-    - "Classifiers" 
+    - "Classifiers"
     - "Classifiers_Hyperparameters"
     - "Dataset_Description"
     - "Data_Separability"
@@ -289,7 +289,7 @@ stacking: # Stacking experiment settings
 
   top_n_features_heatmap: 15 # Number of top features to show in generated heatmaps and CSV exports (int)
   combined_files_evaluation: true # Default: combined files evaluation enabled. If false, runs separate_files single-file evaluation mode.
-  
+
   methods: # Method toggles for stacking pipeline (overridable via CLI)
     augmentation: true # Enable data augmentation combination in pipeline
     automl: true # Enable AutoML pipeline in stacking
@@ -680,7 +680,7 @@ dataset_converter:
     CIC-IDS2017-Dataset:
       - "./Datasets/CICIDS2017/TrafficLabelling/"
     ISCX-IDS-2012:
-      - "./Datasets/ISCX IDS 2012/data/CSV/" 
+      - "./Datasets/ISCX IDS 2012/data/CSV/"
     KDD-Dataset:
       - "./Datasets/KDD-Dataset/"
     LATAM-DDoS-IoT:
@@ -724,7 +724,7 @@ dataset_descriptor:
     CIC-IDS2017-Dataset:
       - "./Datasets/CICIDS2017/TrafficLabelling/"
     ISCX-IDS-2012:
-      - "./Datasets/ISCX IDS 2012/data/CSV/" 
+      - "./Datasets/ISCX IDS 2012/data/CSV/"
     KDD-Dataset:
       - "./Datasets/KDD-Dataset/Converted/"
     LATAM-DDoS-IoT:
