@@ -385,6 +385,85 @@ def build_results_path(cfg: Dict[str, Any]) -> str:
     return results_path
 
 
+def parse_cli_args() -> argparse.Namespace:
+    """
+    Parse command-line arguments for hyperparameters optimization pipeline.
+
+    :return: Namespace object containing parsed command-line arguments.
+    """
+
+    try:
+        parser = argparse.ArgumentParser(description="Hyperparameters optimization runner")  # Create CLI argument parser
+        parser.add_argument("--config", type=str, default=None, help="Path to config.yaml file")  # Config path override
+        parser.add_argument("--verbose", dest="verbose", action="store_true", default=None, help="Enable verbose output (overrides config)")  # Verbose enable flag
+        parser.add_argument("--no-verbose", dest="verbose", action="store_false", help="Disable verbose output (overrides config)")  # Verbose disable flag
+        parser.add_argument("--n-jobs", "--n_jobs", dest="n_jobs", type=int, default=None, help="Number of parallel jobs (overrides config)")  # N_JOBS override
+        parser.add_argument("--skip-train-if-model-exists", "--skip_train_if_model_exists", dest="skip_train_if_model_exists", action="store_true", default=None, help="Skip training if model exists (overrides config)")  # Skip-training enable flag
+        parser.add_argument("--no-skip-train-if-model-exists", "--no-skip_train_if_model_exists", dest="skip_train_if_model_exists", action="store_false", help="Disable skip training if model exists (overrides config)")  # Skip-training disable flag
+        parser.add_argument("--low-memory", "--low_memory", dest="low_memory", action="store_true", default=None, help="Enable low memory mode (overrides config)")  # Low-memory enable flag
+        parser.add_argument("--no-low-memory", "--no-low_memory", dest="low_memory", action="store_false", help="Disable low memory mode (overrides config)")  # Low-memory disable flag
+        parser.add_argument("--results-dir", "--results_dir", dest="results_dir", type=str, default=None, help="Results directory (overrides config)")  # Results directory override
+        parser.add_argument("--results-filename", "--results_filename", dest="results_filename", type=str, default=None, help="Results CSV filename (overrides config)")  # Results filename override
+        parser.add_argument("--model-export-base-dir", "--model_export_base_dir", dest="model_export_base_dir", type=str, default=None, help="Model export base directory (overrides config)")  # Model export directory override
+        parser.add_argument("--cache-prefix", "--cache_prefix", dest="cache_prefix", type=str, default=None, help="Cache file prefix (overrides config)")  # Cache prefix override
+        parser.add_argument("--svm-max-iter", "--svm_max_iter", dest="svm_max_iter", type=int, default=None, help="Maximum SVC solver iterations (overrides config)")  # SVM max iterations override
+        parser.add_argument("--sample-fraction", "--sample_fraction", dest="sample_fraction", type=float, default=None, help="Subsample fraction for grid-search training data (overrides config)")  # Sample fraction override
+        parser.add_argument("--use-linear-svc-for-linear-kernel", dest="use_linear_svc_for_linear_kernel", action="store_true", default=None, help="Enable LinearSVC substitution for linear kernel (overrides config)")  # LinearSVC substitution enable flag
+        parser.add_argument("--no-use-linear-svc-for-linear-kernel", dest="use_linear_svc_for_linear_kernel", action="store_false", help="Disable LinearSVC substitution for linear kernel (overrides config)")  # LinearSVC substitution disable flag
+        parser.add_argument("--enable-parallel-for-non-n-jobs-classifiers", "--enable_parallel_for_non_n_jobs_classifiers", dest="enable_parallel_for_non_n_jobs_classifiers", action="store_true", default=None, help="Enable parallel execution for non-n_jobs classifiers (overrides config)")  # Non-n_jobs parallel enable flag
+        parser.add_argument("--disable-parallel-for-non-n-jobs-classifiers", "--no-enable_parallel_for_non_n_jobs_classifiers", dest="enable_parallel_for_non_n_jobs_classifiers", action="store_false", help="Disable parallel execution for non-n_jobs classifiers (overrides config)")  # Non-n_jobs parallel disable flag
+        parser.add_argument("--dataset-path", "--dataset_path", dest="dataset_path", type=str, default=None, help="Path to a dataset directory or single CSV file to process")  # Dataset path override
+        parser.add_argument("--csv", dest="csv", type=str, default=None, help="Path to a single CSV file to process")  # Single CSV override
+
+        return parser.parse_args()  # Return parsed CLI arguments
+    except Exception as e:
+        print(str(e))  # Print parser error message
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send parser exception via Telegram
+        raise  # Re-raise to preserve failure semantics
+
+
+def resolve_cli_dataset_overrides(args: argparse.Namespace) -> Dict[str, Any]:
+    """
+    Resolve dataset-related overrides from CLI arguments into config-compatible keys.
+
+    :param args: Parsed command-line arguments.
+    :return: Dictionary containing optional datasets and dataset_processing overrides.
+    """
+
+    try:
+        csv_arg = getattr(args, "csv", None)  # Read single-CSV override argument
+        dataset_path_arg = getattr(args, "dataset_path", None)  # Read dataset path override argument
+
+        if csv_arg is not None and str(csv_arg).strip() != "":  # Verify if a CSV override was provided
+            resolved_csv = os.path.abspath(os.path.expanduser(str(csv_arg).strip()))  # Normalize CSV path
+            if not os.path.isfile(resolved_csv):  # Verify if the CSV override points to a valid file
+                raise ValueError(f"Invalid --csv path: {resolved_csv}")  # Raise explicit error for invalid CSV path
+            resolved_dir = os.path.dirname(resolved_csv)  # Resolve parent directory for single-file scan
+            return {
+                "datasets": {"CLI-Dataset": [resolved_dir]},  # Restrict dataset traversal to the CSV parent directory
+                "dataset_processing": {"match_filenames_to_process": [os.path.basename(resolved_csv)]},  # Restrict processing to the selected CSV filename
+            }  # Return single-CSV processing overrides
+
+        if dataset_path_arg is not None and str(dataset_path_arg).strip() != "":  # Verify if a dataset path override was provided
+            resolved_path = os.path.abspath(os.path.expanduser(str(dataset_path_arg).strip()))  # Normalize dataset path
+            if os.path.isfile(resolved_path):  # Verify if dataset path points to a single CSV file
+                return {
+                    "datasets": {"CLI-Dataset": [os.path.dirname(resolved_path)]},  # Restrict dataset traversal to the file parent directory
+                    "dataset_processing": {"match_filenames_to_process": [os.path.basename(resolved_path)]},  # Restrict processing to the selected CSV filename
+                }  # Return single-file overrides derived from dataset path
+            if os.path.isdir(resolved_path):  # Verify if dataset path points to a directory
+                return {
+                    "datasets": {"CLI-Dataset": [resolved_path]},  # Restrict dataset traversal to the selected directory
+                }  # Return directory-level dataset override
+            raise ValueError(f"Invalid --dataset-path value: {resolved_path}")  # Raise explicit error for invalid dataset path
+
+        return {}  # Return empty overrides when no dataset-specific CLI argument was provided
+    except Exception as e:
+        print(str(e))  # Print dataset override resolution error message
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send dataset override resolution exception via Telegram
+        raise  # Re-raise to preserve failure semantics
+
+
 def apply_cli_overrides_to_cfg(cfg: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
     """
     Apply CLI overrides (when provided) into the merged config.
@@ -397,6 +476,7 @@ def apply_cli_overrides_to_cfg(cfg: Dict[str, Any], args: argparse.Namespace) ->
     hp = cfg.setdefault("hyperparameters_optimization", {})
     execution = hp.setdefault("execution", {})
     export = hp.setdefault("export", {})
+    dataset_processing = hp.setdefault("dataset_processing", {})
 
     if getattr(args, "verbose", None) is not None:
         execution["verbose"] = bool(args.verbose)
@@ -406,6 +486,15 @@ def apply_cli_overrides_to_cfg(cfg: Dict[str, Any], args: argparse.Namespace) ->
 
     if getattr(args, "skip_train_if_model_exists", None) is not None:
         execution["skip_train_if_model_exists"] = bool(args.skip_train_if_model_exists)
+
+    if getattr(args, "low_memory", None) is not None:
+        execution["low_memory"] = bool(args.low_memory)
+
+    if getattr(args, "sample_fraction", None) is not None:
+        execution["sample_fraction"] = float(args.sample_fraction)
+
+    if getattr(args, "use_linear_svc_for_linear_kernel", None) is not None:
+        execution["use_linear_svc_for_linear_kernel"] = bool(args.use_linear_svc_for_linear_kernel)
 
     if getattr(args, "svm_max_iter", None) is not None:  # Verify if svm_max_iter CLI argument was provided
         execution["svm_max_iter"] = int(args.svm_max_iter)  # Apply CLI svm_max_iter override to execution config
@@ -424,6 +513,12 @@ def apply_cli_overrides_to_cfg(cfg: Dict[str, Any], args: argparse.Namespace) ->
 
     if getattr(args, "cache_prefix", None):
         export["cache_prefix"] = str(args.cache_prefix)
+
+    dataset_overrides = resolve_cli_dataset_overrides(args)  # Resolve dataset-related overrides from CLI arguments
+    if "datasets" in dataset_overrides:
+        hp["datasets"] = dataset_overrides["datasets"]
+    if "dataset_processing" in dataset_overrides:
+        dataset_processing.update(dataset_overrides["dataset_processing"])
 
     return cfg
 
@@ -523,24 +618,10 @@ def parse_args(default_verbose=False):
     """
     
     try:
-        parser = argparse.ArgumentParser(description="Hyperparameter optimization runner")  # Create argument parser
-        parser.add_argument(  # Add verbose flag
-            "--verbose",
-            dest="verbose",
-            action="store_true",
-            help="Enable verbose output (overrides VERBOSE)",
-        )
-        parser.add_argument(  # Add no-verbose flag
-            "--no-verbose",
-            dest="verbose",
-            action="store_false",
-            help="Disable verbose output (overrides VERBOSE)",
-        )
-        
+        args = parse_cli_args()  # Parse CLI arguments using the unified parser
+
         global VERBOSE  # Access the global VERBOSE constant
-        parser.set_defaults(verbose=default_verbose)  # Set default value for verbose argument
-        args = parser.parse_args()  # Parse command-line arguments
-        VERBOSE = bool(args.verbose)  # Set the VERBOSE constant based on parsed argument
+        VERBOSE = bool(default_verbose if getattr(args, "verbose", None) is None else args.verbose)  # Resolve VERBOSE from CLI with default fallback
         return VERBOSE  # Return the resulting VERBOSE boolean
     except Exception as e:
         print(str(e))
@@ -4038,33 +4119,13 @@ def main():
     :return: None.
     """
 
-    parser = argparse.ArgumentParser(description="Hyperparameters optimization runner")  # Create CLI argument parser
-    parser.add_argument("--verbose", action="store_true", help="Enable verbose output (overrides config)")  # Verbose flag
-    parser.add_argument("--n_jobs", type=int, help="Number of parallel jobs (overrides config)")  # N_jobs override
-    parser.add_argument("--skip_train_if_model_exists", action="store_true", help="Skip training if model exists (overrides config)")  # Skip-training flag
-    parser.add_argument("--results_dir", type=str, help="Results directory (overrides config)")  # Results directory override
-    parser.add_argument("--results_filename", type=str, help="Results CSV filename (overrides config)")  # Results filename override
-    parser.add_argument("--model_export_base_dir", type=str, help="Model export base directory (overrides config)")  # Model export directory override
-    parser.add_argument("--cache_prefix", type=str, help="Cache file prefix (overrides config)")  # Cache prefix override
-    parser.add_argument("--svm_max_iter", type=int, help="Maximum SVC solver iterations (overrides config)")  # SVM max iterations override
-    parser.add_argument(
-        "--enable_parallel_for_non_n_jobs_classifiers",
-        dest="enable_parallel_for_non_n_jobs_classifiers",
-        action="store_true",
-        default=None,
-        help="Enable parallel execution for non-n_jobs classifiers (overrides config)",
-    )  # Parallel execution enable flag for non-n_jobs classifiers
-    parser.add_argument(
-        "--no-enable_parallel_for_non_n_jobs_classifiers",
-        dest="enable_parallel_for_non_n_jobs_classifiers",
-        action="store_false",
-        help="Disable parallel execution for non-n_jobs classifiers (overrides config)",
-    )  # Parallel execution disable flag for non-n_jobs classifiers
-    args = parser.parse_args()  # Parse CLI arguments
+    args = parse_cli_args()  # Parse CLI arguments once using the unified parser
+
+    config_path = str(args.config).strip() if getattr(args, "config", None) else "config.yaml"  # Resolve configuration path from CLI with default fallback
 
     defaults = get_default_config()  # Load hard-coded default configuration
-    file_cfg = load_config_file("config.yaml")  # Load configuration from disk
-    merged = deep_merge(defaults, file_cfg.get("hyperparameters_optimization") and {"hyperparameters_optimization": file_cfg.get("hyperparameters_optimization")} or defaults)  # Deep-merge file config over defaults
+    file_cfg = load_config_file(config_path)  # Load configuration from disk using resolved path
+    merged = deep_merge(defaults, file_cfg)  # Deep-merge file config over defaults
     merged = apply_cli_overrides_to_cfg(merged, args)  # Apply CLI overrides to merged config
     merged = validate_hyperopt_config(merged)  # Validate required configuration fields
 
@@ -4130,7 +4191,6 @@ if __name__ == "__main__":
     """
     
     try:  # Protect top-level execution to ensure errors are reported and notified
-        init_logger_and_exception_hook()  # Initialize logger and global exception hook for Telegram notifications
         main()  # Invoke main business logic for hyperparameter optimization
     except KeyboardInterrupt:  # Handle user-initiated interrupt separately
         try:  # Attempt friendly shutdown notification and cleanup
