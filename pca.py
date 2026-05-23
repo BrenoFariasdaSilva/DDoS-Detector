@@ -2150,7 +2150,7 @@ def print_best_pca_configuration(all_results: list) -> None:
         raise
 
 
-def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48], parallel=True, max_workers=None, random_state=42, scale_data=True, remove_zero_variance=True):
+def run_pca_analysis(csv_path, n_components_list=[8, 16, 24, 32, 48, 64, 128], parallel=True, max_workers=None, random_state=42, scale_data=True, remove_zero_variance=True):
     """
     Runs PCA analysis with different numbers of components and evaluates performance.
 
