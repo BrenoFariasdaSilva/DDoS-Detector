@@ -7590,6 +7590,72 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
     return results_dict  # Return accumulated result entries
 
 
+def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, feature_set_name, model_name, results_dict, current_combination, total_steps, progress_bar):
+    """
+    Recover one cached individual-classifier result (if present), emit resume logs, and advance progress counters.
+
+    :param cache_dict: Dictionary of cached result entries keyed by resume cache key.
+    :param execution_mode_str: Current execution mode string used to build resume cache keys.
+    :param data_source_label: Data source label used to build resume cache keys.
+    :param experiment_mode: Experiment mode string used to build resume cache keys.
+    :param augmentation_ratio: Augmentation ratio used to build resume cache keys.
+    :param attack_types_combined: Attack types list for combined mode key disambiguation.
+    :param feature_set_name: Current feature set name used to build resume cache keys.
+    :param model_name: Current model name used to build resume cache keys.
+    :param results_dict: Mutable result dictionary to receive recovered entries.
+    :param current_combination: Current combination counter value.
+    :param total_steps: Total number of evaluation steps for progress messaging.
+    :param progress_bar: tqdm progress bar instance to advance when recovered.
+    :return: Tuple (recovered, next_current_combination) where recovered indicates if cache was hit.
+    """
+
+    if not cache_dict:  # Skip recovery when cache dictionary is empty or unavailable
+        return (False, current_combination)  # Signal no cache hit and unchanged counter
+
+    resume_key = build_resume_cache_key(
+        execution_mode_str,
+        data_source_label,
+        experiment_mode,
+        augmentation_ratio,
+        attack_types_combined,
+        feature_set_name,
+        model_name,
+    )  # Build full resume cache key for this evaluation unit
+
+    if resume_key not in cache_dict:  # Skip recovery when no cached result exists for this key
+        return (False, current_combination)  # Signal cache miss and unchanged counter
+
+    cached_result = cache_dict[resume_key]  # Retrieve cached result entry for this classifier
+    results_dict[(feature_set_name, model_name)] = cached_result  # Reuse cached entry without recomputation
+    print(
+        f"{BackgroundColors.YELLOW}[RESUME] Recovered combination {current_combination}/{total_steps}: {feature_set_name} - {model_name} from saved partial progress (no recomputation performed).{Style.RESET_ALL}"
+    )  # Log recovered combination to stdout for visibility
+
+    cached_execution_mode = cached_result.get("execution_mode", execution_mode_str)  # Resolve execution mode from cached entry for log consistency
+    evaluation_mode = str(cached_execution_mode).replace("_", " ").title().replace(" ", "") if cached_execution_mode else "SeparateFiles"  # Normalize execution mode to CamelCase style
+    acc = cached_result.get("accuracy", "N/A")  # Recover accuracy from cached result for full metrics log
+    prec = cached_result.get("precision", "N/A")  # Recover precision from cached result for full metrics log
+    rec = cached_result.get("recall", "N/A")  # Recover recall from cached result for full metrics log
+    f1 = cached_result.get("f1_score", "N/A")  # Recover F1 score from cached result for full metrics log
+    fpr = cached_result.get("fpr", "N/A")  # Recover FPR from cached result for full metrics log
+    fnr = cached_result.get("fnr", "N/A")  # Recover FNR from cached result for full metrics log
+    cached_elapsed = cached_result.get("elapsed_time_s", 0)  # Recover elapsed time from cached result for full metrics log
+    cached_elapsed = int(round(float(cached_elapsed))) if cached_elapsed is not None else 0  # Normalize elapsed seconds to integer for display
+    cached_human_time = calculate_execution_time(cached_elapsed)  # Format elapsed seconds to human-readable duration string
+    print(
+        f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"
+    )  # Print a full metrics summary for recovered cached classifier as if freshly evaluated
+
+    send_telegram_message(
+        TELEGRAM_BOT,
+        f"[RESUME] Recovered combination {current_combination}/{total_steps}: {feature_set_name} - {model_name} from saved partial progress. No recomputation performed.",
+    )  # Notify Telegram that this combination was recovered and not recomputed
+    progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
+    current_combination += 1  # Advance the global combination counter for skipped evaluations
+
+    return (True, current_combination)  # Signal cache hit and return updated counter
+
+
 def run_individual_classifiers_for_feature_set(name, individual_models, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, hyperparams_map, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None):
     """
     Evaluates all individual classifiers for a feature set sequentially, collects results, and runs explainability.
@@ -7632,32 +7698,9 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         results_dict = {}  # Accumulate result entries for this feature set
 
         for model_name, model in individual_models.items():  # Iterate over each individual model sequentially to prevent loky deadlock
-            if cache_dict:  # Verify if a cache dictionary is available for resume
-                resume_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name)  # Build the full resume cache key for this evaluation unit
-                if resume_key in cache_dict:  # Verify if this classifier's result is already cached from a previous run
-                    cached_result = cache_dict[resume_key]  # Retrieve cached result entry for this classifier
-                    results_dict[(name, model_name)] = cached_result  # Reuse the cached result entry without recomputation
-                    print(f"{BackgroundColors.YELLOW}[RESUME] Recovered combination {current_combination}/{total_steps}: {name} - {model_name} from saved partial progress (no recomputation performed).{Style.RESET_ALL}")  # Log recovered combination to stdout for visibility
-
-                    cached_execution_mode = cached_result.get("execution_mode", execution_mode_str)  # Resolve execution mode from cached entry for log consistency
-                    evaluation_mode = str(cached_execution_mode).replace("_", " ").title().replace(" ", "") if cached_execution_mode else "SeparateFiles"  # Normalize execution mode to CamelCase style
-                    acc = cached_result.get("accuracy", "N/A")  # Recover accuracy from cached result for full metrics log
-                    prec = cached_result.get("precision", "N/A")  # Recover precision from cached result for full metrics log
-                    rec = cached_result.get("recall", "N/A")  # Recover recall from cached result for full metrics log
-                    f1 = cached_result.get("f1_score", "N/A")  # Recover F1 score from cached result for full metrics log
-                    fpr = cached_result.get("fpr", "N/A")  # Recover FPR from cached result for full metrics log
-                    fnr = cached_result.get("fnr", "N/A")  # Recover FNR from cached result for full metrics log
-                    cached_elapsed = cached_result.get("elapsed_time_s", 0)  # Recover elapsed time from cached result for full metrics log
-                    cached_elapsed = int(round(float(cached_elapsed))) if cached_elapsed is not None else 0  # Normalize elapsed seconds to integer for display
-                    cached_human_time = calculate_execution_time(cached_elapsed)  # Format elapsed seconds to human-readable duration string
-                    print(
-                        f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"
-                    )  # Print a full metrics summary for recovered cached classifier as if freshly evaluated
-
-                    send_telegram_message(TELEGRAM_BOT, f"[RESUME] Recovered combination {current_combination}/{total_steps}: {name} - {model_name} from saved partial progress. No recomputation performed.")  # Notify Telegram that this combination was recovered and not recomputed
-                    progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
-                    current_combination += 1  # Advance the global combination counter for skipped evaluations
-                    continue  # Skip to the next model since this one is already computed
+            recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, results_dict, current_combination, total_steps, progress_bar)  # Attempt to recover cached result for this model and advance counters when recovered
+            if recovered:  # Skip recomputation when cache recovery succeeds
+                continue  # Move to next model because this one has already been recovered
             send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - {model_name}")  # Notify Telegram about evaluation start
             sys.stdout.flush()  # Flush stdout before each classifier to ensure logs are visible under nohup
 
