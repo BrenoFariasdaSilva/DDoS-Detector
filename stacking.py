@@ -7646,10 +7646,13 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
         f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"
     )  # Print a full metrics summary for recovered cached classifier as if freshly evaluated
 
+    telegram_resume_header = f"[RESUME] Recovered combination {current_combination}/{total_steps}: {feature_set_name} - {model_name} from saved partial progress (no recomputation performed)."  # Build Telegram resume header matching stdout semantics
+    telegram_metrics_line = f"{model_name}: Mode {evaluation_mode} | F1-Score {f1} | Accuracy: {acc} | Precision: {prec} | Recall: {rec} | FPR: {fpr} | FNR: {fnr} | Training Time: {cached_elapsed}s | Execution Time: {cached_elapsed}s | Total Time: {cached_human_time} ({cached_elapsed}s)"  # Build Telegram metrics line with full recovered metrics
+
     send_telegram_message(
         TELEGRAM_BOT,
-        f"[RESUME] Recovered combination {current_combination}/{total_steps}: {feature_set_name} - {model_name} from saved partial progress. No recomputation performed.",
-    )  # Notify Telegram that this combination was recovered and not recomputed
+        f"{telegram_resume_header}\n{telegram_metrics_line}",
+    )  # Notify Telegram with the same recovered metrics summary shown in stdout
     progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
     current_combination += 1  # Advance the global combination counter for skipped evaluations
 
@@ -7820,7 +7823,9 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
                     f"{BackgroundColors.CYAN}StackingClassifier{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"
                 )  # Print a full metrics summary for recovered cached stacking classifier as if freshly evaluated
 
-                send_telegram_message(TELEGRAM_BOT, f"[RESUME] Recovered combination {current_combination}/{total_steps}: {name} - StackingClassifier from saved partial progress. No recomputation performed.")  # Notify Telegram that the stacking result was recovered and not recomputed
+                telegram_resume_header = f"[RESUME] Recovered combination {current_combination}/{total_steps}: {name} - StackingClassifier from saved partial progress (no recomputation performed)."  # Build Telegram resume header matching stdout semantics
+                telegram_metrics_line = f"StackingClassifier: Mode {evaluation_mode} | F1-Score {f1} | Accuracy: {acc} | Precision: {prec} | Recall: {rec} | FPR: {fpr} | FNR: {fnr} | Training Time: {cached_elapsed}s | Execution Time: {cached_elapsed}s | Total Time: {cached_human_time} ({cached_elapsed}s)"  # Build Telegram metrics line with full recovered metrics
+                send_telegram_message(TELEGRAM_BOT, f"{telegram_resume_header}\n{telegram_metrics_line}")  # Notify Telegram with full recovered stacking metrics summary
                 progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
                 current_combination += 1  # Advance the global combination counter for skipped evaluations
                 return (cached_result, current_combination)  # Return the cached stacking result entry without re-running the evaluation
