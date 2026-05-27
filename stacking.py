@@ -5747,6 +5747,10 @@ def load_cache_results(csv_path, config=None):
             )  # Output the verbose message
             return {}  # Return empty dictionary
 
+        print(
+            f"{BackgroundColors.GREEN}Resume cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
+        )  # Always print cache discovery and exact location when the cache file exists
+
         verbose_output(
             f"{BackgroundColors.GREEN}Loading cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}",
             config=config
@@ -5772,6 +5776,8 @@ def load_cache_results(csv_path, config=None):
                 result_entry = {
                     "model": row.get("model", ""),
                     "dataset": row.get("dataset", ""),
+                    "execution_mode": row.get("execution_mode", "separate_files"),
+                    "attack_types_combined": row.get("attack_types_combined", None),
                     "feature_set": feature_set,
                     "classifier_type": row.get("classifier_type", ""),
                     "model_name": model_name,
@@ -7629,8 +7635,25 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             if cache_dict:  # Verify if a cache dictionary is available for resume
                 resume_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name)  # Build the full resume cache key for this evaluation unit
                 if resume_key in cache_dict:  # Verify if this classifier's result is already cached from a previous run
-                    results_dict[(name, model_name)] = cache_dict[resume_key]  # Reuse the cached result entry without recomputation
+                    cached_result = cache_dict[resume_key]  # Retrieve cached result entry for this classifier
+                    results_dict[(name, model_name)] = cached_result  # Reuse the cached result entry without recomputation
                     print(f"{BackgroundColors.YELLOW}[RESUME] Recovered combination {current_combination}/{total_steps}: {name} - {model_name} from saved partial progress (no recomputation performed).{Style.RESET_ALL}")  # Log recovered combination to stdout for visibility
+
+                    cached_execution_mode = cached_result.get("execution_mode", execution_mode_str)  # Resolve execution mode from cached entry for log consistency
+                    evaluation_mode = str(cached_execution_mode).replace("_", " ").title().replace(" ", "") if cached_execution_mode else "SeparateFiles"  # Normalize execution mode to CamelCase style
+                    acc = cached_result.get("accuracy", "N/A")  # Recover accuracy from cached result for full metrics log
+                    prec = cached_result.get("precision", "N/A")  # Recover precision from cached result for full metrics log
+                    rec = cached_result.get("recall", "N/A")  # Recover recall from cached result for full metrics log
+                    f1 = cached_result.get("f1_score", "N/A")  # Recover F1 score from cached result for full metrics log
+                    fpr = cached_result.get("fpr", "N/A")  # Recover FPR from cached result for full metrics log
+                    fnr = cached_result.get("fnr", "N/A")  # Recover FNR from cached result for full metrics log
+                    cached_elapsed = cached_result.get("elapsed_time_s", 0)  # Recover elapsed time from cached result for full metrics log
+                    cached_elapsed = int(round(float(cached_elapsed))) if cached_elapsed is not None else 0  # Normalize elapsed seconds to integer for display
+                    cached_human_time = calculate_execution_time(cached_elapsed)  # Format elapsed seconds to human-readable duration string
+                    print(
+                        f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"
+                    )  # Print a full metrics summary for recovered cached classifier as if freshly evaluated
+
                     send_telegram_message(TELEGRAM_BOT, f"[RESUME] Recovered combination {current_combination}/{total_steps}: {name} - {model_name} from saved partial progress. No recomputation performed.")  # Notify Telegram that this combination was recovered and not recomputed
                     progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
                     current_combination += 1  # Advance the global combination counter for skipped evaluations
@@ -7736,11 +7759,28 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         if cache_dict:  # Verify if a cache dictionary is available for resume
             resume_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, "StackingClassifier")  # Build the full resume cache key for the stacking classifier
             if resume_key in cache_dict:  # Verify if the stacking result is already cached from a previous run
+                cached_result = cache_dict[resume_key]  # Retrieve cached stacking result entry for full resume logging
                 print(f"{BackgroundColors.YELLOW}[RESUME] Recovered combination {current_combination}/{total_steps}: {name} - StackingClassifier from saved partial progress (no recomputation performed).{Style.RESET_ALL}")  # Log recovered stacking combination to stdout for visibility
+
+                cached_execution_mode = cached_result.get("execution_mode", execution_mode_str)  # Resolve execution mode from cached entry for log consistency
+                evaluation_mode = str(cached_execution_mode).replace("_", " ").title().replace(" ", "") if cached_execution_mode else "SeparateFiles"  # Normalize execution mode to CamelCase style
+                acc = cached_result.get("accuracy", "N/A")  # Recover accuracy from cached stacking result for full metrics log
+                prec = cached_result.get("precision", "N/A")  # Recover precision from cached stacking result for full metrics log
+                rec = cached_result.get("recall", "N/A")  # Recover recall from cached stacking result for full metrics log
+                f1 = cached_result.get("f1_score", "N/A")  # Recover F1 score from cached stacking result for full metrics log
+                fpr = cached_result.get("fpr", "N/A")  # Recover FPR from cached stacking result for full metrics log
+                fnr = cached_result.get("fnr", "N/A")  # Recover FNR from cached stacking result for full metrics log
+                cached_elapsed = cached_result.get("elapsed_time_s", 0)  # Recover elapsed time from cached stacking result for full metrics log
+                cached_elapsed = int(round(float(cached_elapsed))) if cached_elapsed is not None else 0  # Normalize elapsed seconds to integer for display
+                cached_human_time = calculate_execution_time(cached_elapsed)  # Format elapsed seconds to human-readable duration string
+                print(
+                    f"{BackgroundColors.CYAN}StackingClassifier{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"
+                )  # Print a full metrics summary for recovered cached stacking classifier as if freshly evaluated
+
                 send_telegram_message(TELEGRAM_BOT, f"[RESUME] Recovered combination {current_combination}/{total_steps}: {name} - StackingClassifier from saved partial progress. No recomputation performed.")  # Notify Telegram that the stacking result was recovered and not recomputed
                 progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
                 current_combination += 1  # Advance the global combination counter for skipped evaluations
-                return (cache_dict[resume_key], current_combination)  # Return the cached stacking result entry without re-running the evaluation
+                return (cached_result, current_combination)  # Return the cached stacking result entry without re-running the evaluation
 
         try:  # Attempt to obtain a compact snapshot of stacking model parameters for logging
             params_raw = stacking_model.get_params() if hasattr(stacking_model, "get_params") else {}  # Get model parameters when available
