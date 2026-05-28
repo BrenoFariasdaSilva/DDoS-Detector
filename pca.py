@@ -1213,6 +1213,53 @@ def run_cv_folds(model: RandomForestClassifier, X_train_pca, y_train, skf: Strat
         raise
 
 
+def compute_fpr_fnr_from_labels(y_true, y_pred) -> tuple:
+    """
+    Compute FPR/FNR from labels for binary and multiclass tasks.
+
+    :param y_true: True target labels.
+    :param y_pred: Predicted target labels.
+    :return: Tuple (fpr, fnr) as floats.
+    """
+
+    try:
+        y_true_arr = np.asarray(y_true)  # Convert true labels to numpy array for robust downstream indexing
+        y_pred_arr = np.asarray(y_pred)  # Convert predicted labels to numpy array for robust downstream indexing
+        labels_union = np.unique(np.concatenate((y_true_arr, y_pred_arr)))  # Build stable class space across truth and predictions
+
+        if labels_union.size == 2:  # Use direct binary confusion-matrix computation when exactly two classes are present
+            tn, fp, fn, tp = confusion_matrix(y_true_arr, y_pred_arr, labels=labels_union).ravel()  # Compute binary confusion matrix components
+            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Compute binary false positive rate with zero-denominator guard
+            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Compute binary false negative rate with zero-denominator guard
+            return float(fpr), float(fnr)  # Return binary FPR/FNR as floats
+
+        cm = confusion_matrix(y_true_arr, y_pred_arr, labels=labels_union)  # Compute multiclass confusion matrix over the full class space
+        supports = cm.sum(axis=1).astype(float)  # Extract per-class support counts to weight one-vs-rest rates
+        total_support = float(supports.sum()) if supports.sum() > 0 else 1.0  # Compute total support with guard to prevent division by zero
+
+        fpr_per_class = []  # Collect one-vs-rest false positive rates per class
+        fnr_per_class = []  # Collect one-vs-rest false negative rates per class
+
+        for i in range(cm.shape[0]):  # Iterate each class index for one-vs-rest rate computation
+            tp = cm[i, i]  # Compute true positives for current class
+            fn = cm[i, :].sum() - tp  # Compute false negatives for current class
+            fp = cm[:, i].sum() - tp  # Compute false positives for current class
+            tn = cm.sum() - (tp + fn + fp)  # Compute true negatives for current class
+            fpr_i = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Compute per-class FPR with zero-denominator guard
+            fnr_i = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Compute per-class FNR with zero-denominator guard
+            fpr_per_class.append(fpr_i)  # Store per-class FPR for weighted aggregation
+            fnr_per_class.append(fnr_i)  # Store per-class FNR for weighted aggregation
+
+        fpr = float(np.average(fpr_per_class, weights=supports)) if len(fpr_per_class) > 0 else 0.0  # Compute support-weighted multiclass FPR
+        fnr = float(np.average(fnr_per_class, weights=supports)) if len(fnr_per_class) > 0 else 0.0  # Compute support-weighted multiclass FNR
+
+        return fpr, fnr  # Return multiclass FPR/FNR as floats
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def compute_test_metrics(model: RandomForestClassifier, X_train_pca, y_train, X_test_pca, y_test) -> tuple:
     """
     Fit the model on the full training set and evaluate on the test set.
@@ -1238,12 +1285,7 @@ def compute_test_metrics(model: RandomForestClassifier, X_train_pca, y_train, X_
         rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test recall
         f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test f1
 
-        fpr, fnr = 0, 0  # Initialize FPR and FNR
-        unique_classes = np.unique(y_test)  # Get unique classes in the test set
-        if len(unique_classes) == 2:  # If binary classification
-            tn, fp, fn, tp = confusion_matrix(y_test, y_pred, labels=unique_classes).ravel()  # Get confusion matrix
-            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # Compute FPR
-            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # Compute FNR
+        fpr, fnr = compute_fpr_fnr_from_labels(y_test, y_pred)  # Compute FPR/FNR for binary and multiclass predictions
 
         test_pred_elapsed = round(time.perf_counter() - start_test, 6)  # Stop timer after test prediction+metrics and round
 
