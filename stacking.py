@@ -5750,6 +5750,9 @@ def load_cache_results(csv_path, config=None):
         print(
             f"{BackgroundColors.GREEN}Resume cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
         )  # Always print cache discovery and exact location when the cache file exists
+        send_telegram_message(
+            f"Resume cache file found at: {cache_path}"
+        )  # Send Telegram notification about cache discovery with the exact path
 
         verbose_output(
             f"{BackgroundColors.GREEN}Loading cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}",
