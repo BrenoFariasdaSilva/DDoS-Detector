@@ -273,6 +273,7 @@ def get_default_stacking_config():
         return {
             "results_dir": "Stacking",  # Output subdirectory name for stacking results
             "results_filename": "Stacking_Classifiers_Results.csv",  # Separate files evaluation results CSV filename
+            "cache_results_subdir": "Cache_Results",  # Cache results subdirectory inside the stacking results directory
             "combined_files_results_filename": "Stacking_Classifiers_CombinedFiles_Results.csv",  # Combined files evaluation results CSV filename
             "augmentation_comparison_filename": "Data_Augmentation_Comparison_Results.csv",  # Augmentation comparison CSV filename
             "data_augmentation_suffix": "_data_augmented",  # File suffix for augmented data files
@@ -5689,12 +5690,13 @@ def get_cache_file_path(csv_path, config=None):
         )  # Output the verbose message
 
         cache_prefix = config.get("stacking", {}).get("cache_prefix", "CACHE_")  # Get cache prefix from config
+        cache_results_subdir = config.get("stacking", {}).get("cache_results_subdir", "Cache_Results")  # Get cache results subdirectory from config
         dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Get base dataset name
-        output_dir = os.path.join(os.path.dirname(csv_path), "Classifiers")  # Directory relative to the dataset using OS-safe path join
+        stacking_output_dir = get_stacking_output_dir(csv_path, config)  # Get stacking results directory from config-aware path resolver
+        output_dir = os.path.join(stacking_output_dir, cache_results_subdir)  # Build cache directory inside the stacking results directory
 
-        dataset_dir = str(Path(csv_path).resolve().parent)  # Resolve dataset root directory for path validation
-        validate_output_path(dataset_dir, str(Path(output_dir).resolve()))  # Verify cache directory is within the dataset root to prevent directory traversal
-        os.makedirs(output_dir, exist_ok=True)  # Ensure the directory exists
+        validate_output_path(stacking_output_dir, str(Path(output_dir).resolve()))  # Verify cache directory is within the stacking results directory to prevent directory traversal
+        os.makedirs(output_dir, exist_ok=True)  # Ensure the cache directory exists
         cache_filename = f"{cache_prefix}{dataset_name}-Stacking_Classifiers_Results.csv"  # Cache filename
         cache_path = os.path.join(output_dir, cache_filename)  # Full cache file path
 
@@ -5751,6 +5753,7 @@ def load_cache_results(csv_path, config=None):
             f"{BackgroundColors.GREEN}Resume cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
         )  # Always print cache discovery and exact location when the cache file exists
         send_telegram_message(
+            TELEGRAM_BOT,  # Use the configured Telegram bot instance for the cache discovery notification
             f"Resume cache file found at: {cache_path}"
         )  # Send Telegram notification about cache discovery with the exact path
 
