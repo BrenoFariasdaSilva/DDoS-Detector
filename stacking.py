@@ -4345,17 +4345,34 @@ def compute_fpr_fnr(y_test, y_pred):
 
     :param y_test: True target labels
     :param y_pred: Predicted target labels
-    :return: Tuple (fpr, fnr) with 0.0 placeholders for combined files evaluation problems
+    :return: Tuple (fpr, fnr) computed for binary or multiclass predictions
     """
 
     try:
-        if len(np.unique(y_test)) == 2:  # Separate files evaluation problem
-            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()  # Extract confusion matrix components
-            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Calculate False Positive Rate with zero-division guard
-            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Calculate False Negative Rate with zero-division guard
-        else:  # Combined files evaluation problem
-            fpr = 0.0  # Use placeholder for combined files evaluation FPR
-            fnr = 0.0  # Use placeholder for combined files evaluation FNR
+        y_test_arr = np.asarray(y_test)  # Normalize true labels to numpy array for deterministic metric computation
+        y_pred_arr = np.asarray(y_pred)  # Normalize predicted labels to numpy array for deterministic metric computation
+        unique_labels = np.unique(y_test_arr)  # Resolve unique labels from true labels to branch binary versus multiclass logic
+        if len(unique_labels) == 2:  # Verify binary classification case for classic confusion-matrix decomposition
+            tn, fp, fn, tp = confusion_matrix(y_test_arr, y_pred_arr).ravel()  # Extract binary confusion matrix components
+            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Calculate binary False Positive Rate with zero-division guard
+            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Calculate binary False Negative Rate with zero-division guard
+        else:  # Handle multiclass classification with one-vs-rest aggregation
+            labels_union = np.unique(np.concatenate((y_test_arr, y_pred_arr)))  # Build deterministic label universe including unseen predictions
+            cm = confusion_matrix(y_test_arr, y_pred_arr, labels=labels_union)  # Build multiclass confusion matrix over full label universe
+            tp = np.diag(cm).astype(float)  # Extract per-class true positives from confusion matrix diagonal
+            fp = (cm.sum(axis=0) - np.diag(cm)).astype(float)  # Compute per-class false positives from predicted-column totals
+            fn = (cm.sum(axis=1) - np.diag(cm)).astype(float)  # Compute per-class false negatives from true-row totals
+            tn = (cm.sum() - (tp + fp + fn)).astype(float)  # Compute per-class true negatives using one-vs-rest decomposition
+            fpr_per_class = np.divide(fp, fp + tn, out=np.zeros_like(fp, dtype=float), where=(fp + tn) > 0)  # Compute per-class FPR with safe division
+            fnr_per_class = np.divide(fn, fn + tp, out=np.zeros_like(fn, dtype=float), where=(fn + tp) > 0)  # Compute per-class FNR with safe division
+            support = cm.sum(axis=1).astype(float)  # Use per-class true-label support for weighted aggregation
+            support_sum = float(support.sum())  # Compute total support to guard weighted averaging
+            if support_sum > 0.0:  # Verify weighted averaging denominator is valid
+                fpr = float(np.average(fpr_per_class, weights=support))  # Aggregate multiclass FPR as support-weighted one-vs-rest mean
+                fnr = float(np.average(fnr_per_class, weights=support))  # Aggregate multiclass FNR as support-weighted one-vs-rest mean
+            else:  # Handle degenerate empty-support case defensively
+                fpr = 0.0  # Default multiclass FPR to zero when support is unavailable
+                fnr = 0.0  # Default multiclass FNR to zero when support is unavailable
         return (fpr, fnr)  # Return the FPR and FNR tuple
     except Exception as e:
         print(str(e))
@@ -4555,11 +4572,7 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
         rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Recall (weighted)
         f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate F1-Score (weighted)
 
-        fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute False Positive and False Negative rates
-        if len(np.unique(y_test)) != 2:  # For combined files evaluation problems (FPR/FNR set to 0.0 placeholders)
-            print(
-                f"{BackgroundColors.YELLOW}Warning: Combined files evaluation FPR/FNR calculation simplified to 0.0.{Style.RESET_ALL}"
-            )  # Warning about simplification
+        fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute False Positive and False Negative rates for binary or multiclass predictions
 
         human_time = calculate_execution_time(elapsed_time)  # Convert elapsed duration to human-readable string using helper
         total_seconds = int(round(elapsed_time))  # Reuse elapsed_time as total seconds for reporting
@@ -6567,13 +6580,7 @@ def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y
         except Exception:  # If ROC-AUC computation fails
             roc_auc = None  # Keep as None
 
-        if len(np.unique(y_test)) == 2:  # Separate files evaluation metrics
-            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()  # Get confusion matrix components
-            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Calculate false positive rate
-            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Calculate false negative rate
-        else:  # Combined files evaluation (simplified)
-            fpr = 0.0  # Placeholder FPR
-            fnr = 0.0  # Placeholder FNR
+        fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute false positive and false negative rates for binary or multiclass predictions
 
         total_seconds = int(round(elapsed))  # Reuse elapsed as total seconds for reporting
         train_seconds = total_seconds  # Reuse total seconds as training time when only one timer exists
