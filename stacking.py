@@ -5699,10 +5699,10 @@ def get_cache_file_path(csv_path, config=None):
         cache_path = os.path.join(output_dir, cache_filename)  # Full cache file path
 
         return cache_path  # Return the cache file path
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+    except Exception as e:  # Catch any unexpected exceptions during cache path generation
+        print(str(e))  # Log the error message for debugging
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send the exception details via Telegram for monitoring
+        raise  # Re-raise the exception to allow upstream handling if necessary
 
 
 def safe_load_json(val):
