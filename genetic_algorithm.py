@@ -2240,6 +2240,52 @@ def instantiate_estimator(estimator_cls=None):
         raise  # Re-raise to preserve original failure semantics
 
 
+def compute_fpr_fnr_from_labels(y_true, y_pred):
+    """
+    Compute FPR/FNR from label vectors for binary and multiclass tasks.
+
+    :param y_true: True labels (array-like).
+    :param y_pred: Predicted labels (array-like).
+    :return: Tuple (fpr, fnr) as floats.
+    """
+
+    try:
+        y_true_arr = np.asarray(y_true)  # Convert true labels to numpy array for robust numeric operations
+        y_pred_arr = np.asarray(y_pred)  # Convert predicted labels to numpy array for robust numeric operations
+        labels_union = np.unique(np.concatenate((y_true_arr, y_pred_arr)))  # Build full class space from true and predicted labels
+
+        if labels_union.size == 2:  # Use direct binary confusion-matrix computation when exactly two classes exist
+            tn, fp, fn, tp = confusion_matrix(y_true_arr, y_pred_arr, labels=labels_union).ravel()  # Compute binary confusion-matrix terms
+            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Compute binary false positive rate with denominator guard
+            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Compute binary false negative rate with denominator guard
+            return float(fpr), float(fnr)  # Return binary FPR/FNR as floats
+
+        cm = confusion_matrix(y_true_arr, y_pred_arr, labels=labels_union)  # Compute multiclass confusion matrix over full class space
+        supports = cm.sum(axis=1).astype(float)  # Extract per-class support for weighted aggregation
+
+        fpr_per_class = []  # Collect per-class one-vs-rest false positive rates
+        fnr_per_class = []  # Collect per-class one-vs-rest false negative rates
+
+        for i in range(cm.shape[0]):  # Iterate each class for one-vs-rest decomposition
+            tp = cm[i, i]  # Compute true positives for class i
+            fn = cm[i, :].sum() - tp  # Compute false negatives for class i
+            fp = cm[:, i].sum() - tp  # Compute false positives for class i
+            tn = cm.sum() - (tp + fn + fp)  # Compute true negatives for class i
+            fpr_i = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # Compute per-class FPR with denominator guard
+            fnr_i = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # Compute per-class FNR with denominator guard
+            fpr_per_class.append(fpr_i)  # Save per-class FPR for weighted mean
+            fnr_per_class.append(fnr_i)  # Save per-class FNR for weighted mean
+
+        fpr = float(np.average(fpr_per_class, weights=supports)) if len(fpr_per_class) > 0 else 0.0  # Compute support-weighted multiclass FPR
+        fnr = float(np.average(fnr_per_class, weights=supports)) if len(fnr_per_class) > 0 else 0.0  # Compute support-weighted multiclass FNR
+
+        return fpr, fnr  # Return multiclass FPR/FNR as floats
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def compute_fold_metrics(y_true, y_pred):
     """
     Compute standard binary/multiclass classification metrics for one fold.
@@ -2254,13 +2300,7 @@ def compute_fold_metrics(y_true, y_pred):
         prec = precision_score(y_true, y_pred, average="weighted", zero_division=0)  # Calculate weighted precision
         rec = recall_score(y_true, y_pred, average="weighted", zero_division=0)  # Calculate weighted recall
         f1 = f1_score(y_true, y_pred, average="weighted", zero_division=0)  # Calculate weighted F1-score
-        cm = confusion_matrix(y_true, y_pred, labels=np.unique(y_true))  # Compute confusion matrix
-        tn = cm[0, 0] if cm.shape == (2, 2) else 0  # True negatives
-        fp = cm[0, 1] if cm.shape == (2, 2) else 0  # False positives
-        fn = cm[1, 0] if cm.shape == (2, 2) else 0  # False negatives
-        tp = cm[1, 1] if cm.shape == (2, 2) else 0  # True positives
-        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # False positive rate
-        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # False negative rate
+        fpr, fnr = compute_fpr_fnr_from_labels(y_true, y_pred)  # Compute robust FPR/FNR for binary and multiclass folds
         return acc, prec, rec, f1, fpr, fnr  # Return all six metrics as a tuple
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -2508,13 +2548,7 @@ def evaluate_feature_mask_with_test(feature_mask, X_train, y_train, X_test, y_te
         test_prec = precision_score(y_test, y_pred_test, average="weighted", zero_division=0)  # Calculate test precision
         test_rec = recall_score(y_test, y_pred_test, average="weighted", zero_division=0)  # Calculate test recall
         test_f1 = f1_score(y_test, y_pred_test, average="weighted", zero_division=0)  # Calculate test F1-score
-        cm = confusion_matrix(y_test, y_pred_test, labels=np.unique(y_test))  # Confusion matrix for test set
-        tn = cm[0, 0] if cm.shape == (2, 2) else 0  # True negatives
-        fp = cm[0, 1] if cm.shape == (2, 2) else 0  # False positives
-        fn = cm[1, 0] if cm.shape == (2, 2) else 0  # False negatives
-        tp = cm[1, 1] if cm.shape == (2, 2) else 0  # True positives
-        test_fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # Calculate test false positive rate
-        test_fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # Calculate test false negative rate
+        test_fpr, test_fnr = compute_fpr_fnr_from_labels(y_test, y_pred_test)  # Compute robust test FPR/FNR for binary and multiclass predictions
 
         return cv_acc, cv_prec, cv_rec, cv_f1, cv_fpr, cv_fnr, test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr  # Return combined CV and test metrics
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
