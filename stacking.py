@@ -788,7 +788,7 @@ def set_threads_limit_based_on_ram(config=None):
         )  # Output the verbose message
 
         threads_limit = config.get("evaluation", {}).get("threads_limit", 2)  # Get threads limit from config
-        ram_threshold = config.get("evaluation", {}).get("ram_threshold_gb", 128)  # Get RAM threshold from config
+        ram_threshold = config.get("evaluation", {}).get("ram_threshold_gb", 32)  # Get RAM threshold from config
         ram_gb = psutil.virtual_memory().total / (1024**3)  # Get total system RAM in GB
 
         if ram_gb <= ram_threshold:  # If RAM is less than or equal to threshold
