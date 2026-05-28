@@ -6334,7 +6334,7 @@ def automl_stacking_objective(trial, X_train, y_train, cv_folds, candidate_model
                 estimators=estimators,
                 final_estimator=meta_model,
                 cv=StratifiedKFold(n_splits=n_cv_splits, shuffle=True, random_state=automl_random_state),
-                n_jobs=1,
+                n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
             )  # Create stacking classifier with sequential CV folds to prevent nested loky deadlock
 
             mean_f1 = automl_cross_validate_model(stacking, X_train, y_train, cv_folds, trial)  # Cross-validate stacking
@@ -6516,7 +6516,7 @@ def build_automl_stacking_model(best_config, config=None):
             cv=StratifiedKFold(
                 n_splits=best_config["stacking_cv_splits"], shuffle=True, random_state=config.get("automl", {}).get("random_state", 42)
             ),
-            n_jobs=1,
+            n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
         )  # Create stacking classifier with sequential CV folds to prevent nested loky deadlock
 
         return stacking_model  # Return configured stacking model
@@ -7292,7 +7292,7 @@ def build_evaluation_stacking_model(base_models, config=None):
             estimators=estimators,
             final_estimator=RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=config.get("evaluation", {}).get("n_jobs", -1)),
             cv=StratifiedKFold(n_splits=10, shuffle=True, random_state=42),
-            n_jobs=1,
+            n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
         )  # Define the Stacking Classifier model with sequential CV folds to prevent nested loky deadlock
 
         return stacking_model  # Return the constructed stacking model
