@@ -3660,29 +3660,46 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, X_augment
             config=config
         )  # Output the verbose message
 
-        y = pd.Series(y)  # Normalize target to pandas Series
+        y_series = y if isinstance(y, pd.Series) else pd.Series(y)  # Normalize target to pandas Series only when needed
 
         le = LabelEncoder()  # Initialize a LabelEncoder
-        encoded_values: np.ndarray = np.asarray(le.fit_transform(y.to_numpy()), dtype=int)  # Encode target labels as integers
+        encoded_values: np.ndarray = np.asarray(le.fit_transform(y_series.to_numpy(copy=False)), dtype=np.int64)  # Encode target labels as integers without forcing extra target copy
 
-        y_encoded = pd.Series(encoded_values, index=y.index)  # Create a Series for the encoded target
+        if isinstance(X, pd.DataFrame):  # If features are a DataFrame
+            non_numeric_cols = [c for c in X.columns if not pd.api.types.is_numeric_dtype(X[c])]  # Detect non-numeric feature columns for warning and filtering
+            if non_numeric_cols:  # If non-numeric columns were found
+                print(
+                    f"{BackgroundColors.YELLOW}Warning: Dropping non-numeric feature columns for scaling: {BackgroundColors.CYAN}{non_numeric_cols}{Style.RESET_ALL}"
+                )  # Warn about dropped columns
+                numeric_X = X.select_dtypes(include=np.number)  # Select only numeric columns when needed
+                if numeric_X.empty:  # If no numeric features remain after filtering
+                    raise ValueError(
+                        f"{BackgroundColors.RED}No numeric features found in X after filtering.{Style.RESET_ALL}"
+                    )  # Raise an error if no numeric features remain
+                X_values = numeric_X.to_numpy(copy=False)  # Convert numeric DataFrame to numpy view when possible
+                del numeric_X  # Release temporary numeric DataFrame reference to reduce peak memory
+            else:  # If all columns are already numeric
+                X_values = X.to_numpy(copy=False)  # Convert directly to numpy view when possible without extra DataFrame filtering copy
+        else:  # If features are already array-like
+            X_values = np.asarray(X)  # Normalize features to numpy array
 
-        numeric_X = X.select_dtypes(include=np.number)  # Select only numeric columns for scaling
-        non_numeric_X = X.select_dtypes(exclude=np.number)  # Identify non-numeric columns (to be dropped)
-
-        if not non_numeric_X.empty:  # If non-numeric columns were found
-            print(
-                f"{BackgroundColors.YELLOW}Warning: Dropping non-numeric feature columns for scaling: {BackgroundColors.CYAN}{list(non_numeric_X.columns)}{Style.RESET_ALL}"
-            )  # Warn about dropped columns
-
-        if numeric_X.empty:  # If no numeric features remain
+        if X_values.ndim != 2 or X_values.shape[1] == 0:  # If no usable feature columns are available
             raise ValueError(
                 f"{BackgroundColors.RED}No numeric features found in X after filtering.{Style.RESET_ALL}"
-            )  # Raise an error if X is empty
+            )  # Raise an error if X has no valid feature columns
 
-        X_train, X_test, y_train, y_test = train_test_split(
-            numeric_X, y_encoded, test_size=test_size, random_state=random_state, stratify=y_encoded
-        )  # Split the data into training and testing sets with stratification
+        sample_indices = np.arange(encoded_values.shape[0], dtype=np.int64)  # Build sample index array for index-based stratified splitting
+        train_idx, test_idx = train_test_split(
+            sample_indices, test_size=test_size, random_state=random_state, stratify=encoded_values
+        )  # Split sample indices to avoid DataFrame duplication during train/test partitioning
+
+        X_train = X_values[train_idx]  # Materialize training features from index split
+        X_test = X_values[test_idx]  # Materialize test features from index split
+        y_train = encoded_values[train_idx]  # Materialize encoded training targets from index split
+        y_test = encoded_values[test_idx]  # Materialize encoded test targets from index split
+
+        del sample_indices, train_idx, test_idx, X_values  # Release split helper arrays and base feature view before augmentation/scaling
+        gc.collect()  # Force garbage collection to reclaim memory from released split helpers
 
         if X_augmented is not None and y_augmented is not None:  # If augmented data is provided for training enhancement
             verbose_output(
@@ -3690,16 +3707,39 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, X_augment
                 config=config
             )  # Output augmentation merge message
             
-            y_augmented_series = pd.Series(y_augmented)  # Normalize augmented target to pandas Series
+            y_augmented_series = y_augmented if isinstance(y_augmented, pd.Series) else pd.Series(y_augmented)  # Normalize augmented target to pandas Series only when needed
             le_augmented = LabelEncoder()  # Initialize LabelEncoder for augmented target
             le_augmented.classes_ = le.classes_  # Use same classes as original encoder for consistency
-            encoded_augmented_values = np.asarray(le_augmented.transform(y_augmented_series.to_numpy()), dtype=int)  # Encode augmented target labels as integers
-            y_augmented_encoded = pd.Series(encoded_augmented_values, index=y_augmented_series.index)  # Create Series for encoded augmented target
-            
-            numeric_X_augmented = X_augmented.select_dtypes(include=np.number)  # Select only numeric columns from augmented features
-            
-            X_train = pd.concat([X_train, numeric_X_augmented], ignore_index=True)  # Concatenate augmented features into training set
-            y_train = pd.concat([y_train, y_augmented_encoded], ignore_index=True)  # Concatenate augmented target into training labels
+            encoded_augmented_values = np.asarray(le_augmented.transform(y_augmented_series.to_numpy(copy=False)), dtype=np.int64)  # Encode augmented target labels as integers
+
+            if isinstance(X_augmented, pd.DataFrame):  # If augmented features are a DataFrame
+                non_numeric_aug_cols = [c for c in X_augmented.columns if not pd.api.types.is_numeric_dtype(X_augmented[c])]  # Detect non-numeric augmented feature columns for warning and filtering
+                if non_numeric_aug_cols:  # If non-numeric augmented columns were found
+                    print(
+                        f"{BackgroundColors.YELLOW}Warning: Dropping non-numeric augmented feature columns for scaling: {BackgroundColors.CYAN}{non_numeric_aug_cols}{Style.RESET_ALL}"
+                    )  # Warn about dropped augmented columns
+                    numeric_X_augmented = X_augmented.select_dtypes(include=np.number)  # Select only numeric augmented columns when needed
+                    if numeric_X_augmented.empty:  # If no numeric augmented features remain
+                        raise ValueError(
+                            f"{BackgroundColors.RED}No numeric features found in X_augmented after filtering.{Style.RESET_ALL}"
+                        )  # Raise an error when augmented features are unusable
+                    X_augmented_values = numeric_X_augmented.to_numpy(copy=False)  # Convert numeric augmented DataFrame to numpy view when possible
+                    del numeric_X_augmented  # Release temporary augmented numeric DataFrame reference
+                else:  # If all augmented columns are already numeric
+                    X_augmented_values = X_augmented.to_numpy(copy=False)  # Convert augmented DataFrame directly to numpy view when possible
+            else:  # If augmented features are already array-like
+                X_augmented_values = np.asarray(X_augmented)  # Normalize augmented features to numpy array
+
+            if X_augmented_values.ndim != 2 or X_augmented_values.shape[1] != X_train.shape[1]:  # Verify augmented features align with training feature matrix
+                raise ValueError(
+                    f"{BackgroundColors.RED}Augmented feature shape mismatch. Expected {X_train.shape[1]} columns, got {X_augmented_values.shape[1] if X_augmented_values.ndim == 2 else 'invalid shape'}.{Style.RESET_ALL}"
+                )  # Raise error when augmented feature matrix is incompatible with training matrix
+
+            X_train = np.concatenate((X_train, X_augmented_values), axis=0)  # Concatenate augmented features into training matrix
+            y_train = np.concatenate((y_train, encoded_augmented_values), axis=0)  # Concatenate encoded augmented targets into training target array
+
+            del X_augmented_values, encoded_augmented_values, y_augmented_series  # Release augmented temporaries to reduce memory pressure before scaling
+            gc.collect()  # Force garbage collection to reclaim memory from released augmented temporaries
             
             verbose_output(
                 f"{BackgroundColors.GREEN}Training set expanded to {BackgroundColors.CYAN}{len(X_train)}{BackgroundColors.GREEN} samples (original + augmented){Style.RESET_ALL}",
@@ -3711,6 +3751,9 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, X_augment
         X_train_scaled = scaler.fit_transform(X_train)  # Fit and transform the training features (including augmented if provided)
 
         X_test_scaled = scaler.transform(X_test)  # Transform the testing features (original data only)
+
+        del X_train, X_test, y_series  # Release large pre-scaled matrices and temporary target Series after scaling
+        gc.collect()  # Force garbage collection to reclaim memory from released pre-scaled matrices
 
         verbose_output(
             f"{BackgroundColors.GREEN}Data split successful. Training set shape: {BackgroundColors.CYAN}{X_train_scaled.shape}{BackgroundColors.GREEN}. Testing set shape: {BackgroundColors.CYAN}{X_test_scaled.shape}{Style.RESET_ALL}",
@@ -7253,8 +7296,12 @@ def prepare_evaluation_data_splits(df, df_augmented_for_training=None, config=No
             config = CONFIG  # Use global CONFIG
 
         target_col_name = df.columns[-1]  # Target is always the last column regardless of its dtype
-        X_full = df.drop(columns=[target_col_name]).select_dtypes(include=np.number)  # All numeric feature columns with the target explicitly excluded by name
+        feature_df = df.iloc[:, :-1]  # Build feature view excluding the target column positionally to avoid drop-copy amplification
+        X_full = feature_df.select_dtypes(include=np.number)  # Select only numeric feature columns from the feature view
         y = df.iloc[:, -1]  # Extract target column as the last column
+
+        del feature_df  # Release temporary feature DataFrame view reference before split/scaling
+        gc.collect()  # Force garbage collection to reclaim memory from released feature view references
 
         if len(np.unique(y)) < 2:  # Verify if there is more than one class
             print(
@@ -7264,15 +7311,24 @@ def prepare_evaluation_data_splits(df, df_augmented_for_training=None, config=No
 
         if df_augmented_for_training is not None:  # If augmented data provided for training enhancement
             aug_target_col_name = df_augmented_for_training.columns[-1]  # Target is always the last column in augmented data regardless of dtype
-            X_augmented = df_augmented_for_training.drop(columns=[aug_target_col_name]).select_dtypes(include=np.number)  # All numeric feature columns from augmented data with target explicitly excluded by name
+            X_augmented_feature_df = df_augmented_for_training.iloc[:, :-1]  # Build augmented feature view excluding target positionally to avoid drop-copy amplification
+            X_augmented = X_augmented_feature_df.select_dtypes(include=np.number)  # Select only numeric augmented feature columns from augmented feature view
             y_augmented = df_augmented_for_training.iloc[:, -1]  # Extract augmented target
+
+            del X_augmented_feature_df  # Release temporary augmented feature DataFrame view reference before split/scaling
+            gc.collect()  # Force garbage collection to reclaim memory from released augmented feature view reference
             X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
                 X_full, y, config=config, X_augmented=X_augmented, y_augmented=y_augmented
             )  # Scale and split with augmented data merged into training set only
+            del X_augmented, y_augmented  # Release augmented split inputs after scale_and_split returns
+            gc.collect()  # Force garbage collection to reclaim memory from released augmented split inputs
         else:  # No augmented data provided
             X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
                 X_full, y, config=config
             )  # Scale and split the data normally (original-only)
+
+        del X_full, y  # Release original split inputs after scale_and_split returns
+        gc.collect()  # Force garbage collection to reclaim memory from released original split inputs
 
         return X_train_scaled, X_test_scaled, y_train, y_test, scaler  # Return the prepared data splits
     except Exception as e:
