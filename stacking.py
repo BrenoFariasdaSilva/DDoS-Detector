@@ -4811,6 +4811,106 @@ def select_shap_explainer(model, X_test_sampled, random_state):
         raise  # Re-raise the exception to preserve original behavior
 
 
+def build_shap_progress_description(model_name, dataset_name, explainer_name):
+    """
+    Build a concise contextual SHAP progress-bar description.
+
+    :param model_name: Name of the model being explained.
+    :param dataset_name: Name of the dataset being explained.
+    :param explainer_name: Name of the SHAP explainer in use.
+    :return: Context-rich progress-bar description string.
+    """
+
+    try:
+        model_label = str(model_name) if model_name else "UnknownModel"  # Normalize model label for progress output.
+        dataset_label = str(dataset_name) if dataset_name else "UnknownDataset"  # Normalize dataset label for progress output.
+        explainer_label = str(explainer_name) if explainer_name else "SHAP"  # Normalize explainer label for progress output.
+        return f"SHAP {explainer_label} | {model_label} | {dataset_label}"  # Return concise contextual description for SHAP progress output.
+    except Exception as e:
+        print(str(e))  # Print the exception string for diagnostics.
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception details via Telegram if configured.
+        raise  # Re-raise the exception to preserve original behavior.
+
+
+def resolve_shap_progress_target(shap_callable):
+    """
+    Resolve the runtime tqdm symbol used by a SHAP callable when exposed.
+
+    :param shap_callable: Bound SHAP callable used to compute SHAP values.
+    :return: Tuple describing the patch target and original tqdm callable, or empty values when unavailable.
+    """
+
+    try:
+        method_globals = getattr(shap_callable, "__globals__", {})  # Access callable globals for runtime tqdm resolution.
+        direct_tqdm = method_globals.get("tqdm", None)  # Resolve direct tqdm symbol from callable globals when present.
+        if callable(direct_tqdm):  # Verify direct tqdm symbol is callable before using it.
+            return ("globals_dict", method_globals, "tqdm", direct_tqdm)  # Return direct globals-based patch target and original tqdm callable.
+        for value in method_globals.values():  # Iterate global values to locate module-style tqdm exposure when used by SHAP.
+            module_name = getattr(value, "__name__", "") if value is not None else ""  # Resolve module-like name defensively for tqdm filtering.
+            tqdm_attr = getattr(value, "tqdm", None) if value is not None else None  # Resolve nested tqdm attribute when a module wrapper is used.
+            if callable(tqdm_attr) and "tqdm" in str(module_name).lower():  # Verify nested tqdm attribute belongs to a tqdm-related module.
+                return ("module_attr", value, "tqdm", tqdm_attr)  # Return module-attribute patch target and original tqdm callable.
+        return (None, None, None, None)  # Return empty patch metadata when SHAP does not expose a runtime tqdm hook.
+    except Exception as e:
+        print(str(e))  # Print the exception string for diagnostics.
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception details via Telegram if configured.
+        raise  # Re-raise the exception to preserve original behavior.
+
+
+def create_shap_progress_wrapper(tqdm_callable, progress_desc, progress_phase):
+    """
+    Create a tqdm wrapper that injects SHAP-specific context without changing iteration semantics.
+
+    :param tqdm_callable: Original tqdm callable resolved from SHAP runtime globals.
+    :param progress_desc: Description string to inject into the progress bar.
+    :param progress_phase: Postfix string describing the current SHAP phase.
+    :return: Wrapped tqdm callable.
+    """
+
+    def wrapped_tqdm(*args, **kwargs):
+        kwargs.setdefault("desc", progress_desc)  # Inject contextual description only when SHAP did not already provide one.
+        kwargs.setdefault("file", sys.stdout)  # Route progress output through the configured stdout logger.
+        progress_bar = tqdm_callable(*args, **kwargs)  # Delegate progress-bar construction to the original tqdm callable.
+        if hasattr(progress_bar, "set_postfix_str") and progress_phase:  # Verify postfix support before appending SHAP phase metadata.
+            progress_bar.set_postfix_str(progress_phase, refresh=False)  # Append concise SHAP phase metadata without forcing a redraw.
+        return progress_bar  # Return the original tqdm instance with injected contextual metadata.
+
+    return wrapped_tqdm  # Return wrapped tqdm callable for temporary SHAP runtime patching.
+
+
+def compute_shap_values_with_context(explainer, X_test_for_shap, progress_desc, progress_phase):
+    """
+    Compute SHAP values while temporarily injecting contextual progress metadata when SHAP exposes tqdm.
+
+    :param explainer: Instantiated SHAP explainer object.
+    :param X_test_for_shap: Test feature matrix passed to SHAP.
+    :param progress_desc: Description string for the SHAP progress bar.
+    :param progress_phase: Postfix string describing the current SHAP phase.
+    :return: SHAP values returned by the explainer.
+    """
+
+    try:
+        patch_kind, patch_owner, patch_attr, original_tqdm = resolve_shap_progress_target(explainer.shap_values)  # Resolve SHAP runtime tqdm target when exposed by the installed version.
+        if original_tqdm is None:  # Verify whether SHAP exposes a patchable tqdm hook before attempting runtime injection.
+            return explainer.shap_values(X_test_for_shap)  # Compute SHAP values directly when no patchable tqdm hook exists.
+        wrapped_tqdm = create_shap_progress_wrapper(original_tqdm, progress_desc, progress_phase)  # Build contextual tqdm wrapper around the original SHAP progress constructor.
+        try:
+            if patch_kind == "globals_dict":  # Verify whether SHAP uses a direct globals-based tqdm symbol.
+                patch_owner[patch_attr] = wrapped_tqdm  # Replace SHAP globals-based tqdm symbol temporarily.
+            else:
+                setattr(patch_owner, patch_attr, wrapped_tqdm)  # Replace SHAP module-attribute tqdm symbol temporarily.
+            return explainer.shap_values(X_test_for_shap)  # Compute SHAP values while the contextual tqdm wrapper is active.
+        finally:
+            if patch_kind == "globals_dict":  # Verify whether the patched tqdm symbol lives in SHAP callable globals.
+                patch_owner[patch_attr] = original_tqdm  # Restore the original SHAP globals-based tqdm symbol after computation.
+            elif patch_owner is not None and patch_attr is not None:
+                setattr(patch_owner, patch_attr, original_tqdm)  # Restore the original SHAP module-attribute tqdm symbol after computation.
+    except Exception as e:
+        print(str(e))  # Print the exception string for diagnostics.
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception details via Telegram if configured.
+        raise  # Re-raise the exception to preserve original behavior.
+
+
 def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config=None):
     """
     Generate SHAP explanations for a trained model.
@@ -4862,8 +4962,17 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
                 return None  # Return None to avoid SHAP failures when data invalid
 
             explainer = select_shap_explainer(model, X_test_sampled, random_state)  # Select the appropriate SHAP explainer based on model type
+            explainer_name = explainer.__class__.__name__  # Resolve explainer class name for logging, Telegram, and progress context.
+            progress_desc = build_shap_progress_description(model_name, dataset_name, explainer_name)  # Build contextual SHAP progress-bar description from execution metadata.
+            progress_phase = f"samples={len(X_test_for_shap)} | mode={execution_mode}"  # Build concise SHAP progress postfix from available execution metadata.
 
-            shap_values = explainer.shap_values(X_test_for_shap)  # Compute SHAP values using the prepared numpy input
+            verbose_output(
+                f"{BackgroundColors.GREEN}Using {BackgroundColors.CYAN}{explainer_name}{BackgroundColors.GREEN} for SHAP on {BackgroundColors.CYAN}{len(X_test_for_shap)}{BackgroundColors.GREEN} sampled rows from {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}",
+                config=config
+            )  # Log the resolved SHAP explainer and sampled row count before computation.
+            send_telegram_message(TELEGRAM_BOT, f"Starting SHAP explanations for {dataset_name} - {model_name} using {explainer_name} on {len(X_test_for_shap)} sample(s)")  # Notify Telegram that SHAP computation is starting with available execution context.
+
+            shap_values = compute_shap_values_with_context(explainer, X_test_for_shap, progress_desc, progress_phase)  # Compute SHAP values using the prepared numpy input while preserving SHAP math and improving progress context.
 
             if isinstance(shap_values, list):  # Combined files evaluation case for multi-class classifiers
                 shap_values_summary = shap_values[0] if len(shap_values) > 0 else shap_values  # Use first class for summary to preserve existing behavior
@@ -4878,6 +4987,7 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
                 f"{BackgroundColors.GREEN}SHAP explanations saved to {BackgroundColors.CYAN}{output_dir}{Style.RESET_ALL}",
                 config=config
             )  # Log SHAP completion
+            send_telegram_message(TELEGRAM_BOT, f"Finished SHAP explanations for {dataset_name} - {model_name} using {explainer_name}; outputs saved to {output_dir}")  # Notify Telegram that SHAP computation finished successfully with available execution context.
 
             return {"shap_importance": shap_importance, "shap_values": shap_values}  # Return SHAP results
 
