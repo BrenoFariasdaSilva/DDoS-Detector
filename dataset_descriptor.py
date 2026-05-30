@@ -2837,6 +2837,8 @@ def write_report(report_rows, base_dir, output_filename, config: dict | None = N
         os.makedirs(results_dir, exist_ok=True)
         report_csv_path = os.path.join(results_dir, output_filename)
         generate_csv_and_image(report_df, report_csv_path, config=cfg)
+        del report_df  # Release report DataFrame immediately after saving to reduce post-write memory retention
+        gc.collect()  # Trigger garbage collection after releasing the report DataFrame
         pass  # No-op here; preprocessing summary is handled by the caller
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -3658,7 +3660,14 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=None, 
             if info:  # Process and store results only when metadata extraction succeeded
                 for _key in ("_raw_labels_list", "_raw_class_counts", "_raw_missing_count_by_col"):  # Iterate over internal batch aggregation keys
                     info.pop(_key, None)  # Remove internal batch aggregation field from report row before storing
-                enrich_file_info_with_metadata(info, filepath, base_dir, headers_map, common_features, headers_match_all, cfg, low_memory, df_for_enrich)  # Populate Dataset Name, Headers Match, Common/Extra Features, and t-SNE Plot fields in place
+                try:  # Release full DataFrame before t-SNE enrichment to eliminate unnecessary N-GB baseline during t-SNE preprocessing
+                    if df_for_enrich is not None:  # Release only when a full DataFrame was loaded in the non-batch path
+                        del df_for_enrich  # Release the full DataFrame reference before t-SNE creates a second full preprocessed copy
+                        df_for_enrich = None  # Assign None so the end-of-loop cleanup block remains a safe no-op
+                        gc.collect()  # Trigger garbage collection to allow the OS to reclaim pages before t-SNE reloads from disk
+                except Exception:  # Ignore cleanup exceptions to preserve metadata results already extracted
+                    pass  # Continue with enrichment even when early release fails
+                enrich_file_info_with_metadata(info, filepath, base_dir, headers_map, common_features, headers_match_all, cfg, low_memory, None)  # Populate Dataset Name, Headers Match, Common/Extra Features, and t-SNE Plot fields in place; pass None for df_current so t-SNE reloads from disk after the full DataFrame is released
 
                 report_rows.append(info)  # Add the info to the report rows
 
