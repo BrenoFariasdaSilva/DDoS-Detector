@@ -1018,20 +1018,21 @@ def aggregate_batch_dataset_info(batch_info_list: list, filepath: str) -> "dict 
         raise  # Re-raise to preserve original failure semantics
 
 
-def process_batches_and_aggregate(dataset_result, filepath, low_memory) -> tuple:
+def process_batches_and_aggregate(dataset_result, filepath, low_memory, total_batches: Optional[int] = None) -> tuple:
     """
     Process a batch generator, accumulate per-batch metadata, aggregate, and clean up.
 
     :param dataset_result: Generator yielding one batch DataFrame at a time.
     :param filepath: Path to the CSV file being processed.
     :param low_memory: Boolean flag for memory optimization in get_dataset_file_info.
+    :param total_batches: Total number of batches for progress display in extraction log messages.
     :return: Tuple (info, df_for_enrich) where info is the aggregated metadata dict and df_for_enrich is always None.
     """
 
     batch_info_list = []  # Initialize accumulator for per-batch metadata dicts
 
     for current_batch, batch_df in enumerate(dataset_result, start=1):  # Enumerate batches to provide batch index for logging
-        batch_info = get_dataset_file_info(filepath, df=batch_df, low_memory=low_memory, current_batch=current_batch, total_batches=None)  # Extract metadata and pass batch index; total unknown
+        batch_info = get_dataset_file_info(filepath, df=batch_df, low_memory=low_memory, current_batch=current_batch, total_batches=total_batches)  # Extract metadata and pass batch index and total batch count for full progress display
         if batch_info is not None:  # Accumulate only valid per-batch results
             batch_info_list.append(batch_info)  # Append batch metadata dict to accumulator
         del batch_df  # Immediately discard batch DataFrame to release memory
@@ -3645,7 +3646,8 @@ def generate_dataset_report(input_path, file_extension=".csv", low_memory=None, 
             dataset_result = resolve_dataset_loader(filepath, batch_threshold_gb, low_memory)  # Load dataset via full load or batch generator based on configured threshold
 
             if isgenerator(dataset_result):  # Verify whether the result is a batch generator for large files
-                info, df_for_enrich = process_batches_and_aggregate(dataset_result, filepath, low_memory)  # Process batches, aggregate metadata, and clean up
+                file_total_batches = compute_batch_count(get_file_size_gb(filepath), batch_threshold_gb) if batch_threshold_gb is not None else None  # Compute total batch count for progress display using the same size and threshold values used by the batch generator
+                info, df_for_enrich = process_batches_and_aggregate(dataset_result, filepath, low_memory, total_batches=file_total_batches)  # Process batches, aggregate metadata, and clean up
             else:  # Full DataFrame load path for files at or below the batch threshold
                 df_for_enrich = dataset_result  # Assign full DataFrame for downstream enrichment
                 if df_for_enrich is None:  # Verify dataset was loaded successfully before processing
