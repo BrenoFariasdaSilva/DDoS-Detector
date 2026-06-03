@@ -4181,6 +4181,7 @@ def main():
     ENABLED_MODELS = hp.get("enabled_models", [])  # Load enabled models directly from hyperparameters_optimization configuration section
     if not ENABLED_MODELS:  # Raise error when no models are configured to prevent silent optimization bypass
         raise ValueError("Configuration error: 'enabled_models' under 'hyperparameters_optimization' is empty or missing. At least one model must be enabled.")  # Abort with descriptive error message
+    print(f"{BackgroundColors.GREEN}[INFO] Enabled classifiers ({len(ENABLED_MODELS)}): {BackgroundColors.CYAN}{', '.join(ENABLED_MODELS)}{Style.RESET_ALL}")  # Log the final resolved classifier list after all config merging, CLI overrides, and validation are complete
     DATASETS = hp.get("datasets", {})  # Set datasets mapping from config
 
     print(f"{BackgroundColors.GREEN}Results CSV will be saved to: {BackgroundColors.CYAN}{results_path}{Style.RESET_ALL}")  # Log resolved results CSV path
