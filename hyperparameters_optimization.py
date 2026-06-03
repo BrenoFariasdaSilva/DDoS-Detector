@@ -371,16 +371,15 @@ def validate_hyperopt_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 def build_results_path(cfg: Dict[str, Any]) -> str:
     """
-    Build the absolute path for the results CSV file based on the configuration.
+    Build the absolute path for the configured results CSV file without creating directories.
     
     :param cfg: The configuration dictionary containing export settings
-    :return: The absolute path to the results CSV file
+    :return: The absolute path to the configured results CSV file
     """
     
     export = cfg["hyperparameters_optimization"]["export"]
     results_dir = export["results_dir"]
     results_filename = export["results_filename"]
-    os.makedirs(results_dir, exist_ok=True)
     results_path = os.path.abspath(os.path.join(results_dir, results_filename))
     return results_path
 
@@ -4133,7 +4132,7 @@ def main():
     merged = apply_cli_overrides_to_cfg(merged, args)  # Apply CLI overrides to merged config
     merged = validate_hyperopt_config(merged)  # Validate required configuration fields
 
-    results_path = build_results_path(merged)  # Build results CSV path and ensure directory exists
+    results_path = build_results_path(merged)  # Build configured results CSV path for logging without creating directories
 
     init_logger_and_exception_hook()  # Initialize logger and global exception hook for Telegram notifications
 
