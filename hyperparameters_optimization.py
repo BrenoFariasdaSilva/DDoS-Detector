@@ -127,7 +127,7 @@ class BackgroundColors:  # Colors for the terminal
 # Execution Constants:
 VERBOSE = False  # Default verbose setting (can be overridden via CLI args)
 LOW_MEMORY = False  # Default low_memory setting for pandas CSV loading (configurable; forced True when verbose is active)
-MODEL_EXPORT_BASE = "Feature_Analysis/Hyperparameter_Optimization/Models/"
+MODEL_EXPORT_BASE = "Hyperparameter_Optimization/Models/"
 N_JOBS = -2  # Number of parallel jobs (-1 uses all cores, -2 leaves one core free, or set specific number like 4)
 SKIP_TRAIN_IF_MODEL_EXISTS = False  # If True, skip training when exported models exist for dataset
 RESULTS_FILENAME = "Hyperparameter_Optimization_Results.csv"  # Filename for saving results
@@ -241,9 +241,9 @@ def get_default_config() -> Dict[str, Any]:
                 "enable_parallel_for_non_n_jobs_classifiers": True,  # Enable custom parallel execution for classifiers that do not support n_jobs natively
             },
             "export": {
-                "results_dir": "Feature_Analysis/Hyperparameter_Optimization",
+                "results_dir": "Hyperparameter_Optimization",
                 "results_filename": "Hyperparameter_Optimization_Results.csv",
-                "model_export_base_dir": "Feature_Analysis/Hyperparameter_Optimization/Models",
+                "model_export_base_dir": "Hyperparameter_Optimization/Models",
                 "cache_prefix": "Cache_",
             },
             "dataset_processing": {
@@ -3349,7 +3349,7 @@ def safe_model_filename(name):
     return re.sub(r'[\\/*?:"<>|]', "_", str(name))  # Replace all forbidden filesystem characters with underscores
 
 
-def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_names, best_params):
+def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_names, best_params, csv_path=None):
     """
     Exports the trained model and scaler to disk in a structured directory.
     :param model: Trained model object
@@ -3358,11 +3358,14 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_nam
     :param model_name: Name of the model (used for filename)
     :param feature_names: List of feature names used for training
     :param best_params: Best hyperparameters dict (for filename uniqueness)
+    :param csv_path: Path to the dataset CSV file used to anchor the export directory relative to the dataset directory (optional; falls back to CWD-relative when None)
     :return: None
     """
 
     try:
-        export_dir = os.path.join(MODEL_EXPORT_BASE, safe_model_filename(dataset_name))  # Build export directory using sanitized dataset name
+        csv_dir = os.path.dirname(os.path.abspath(csv_path)) if csv_path else None  # Resolve dataset directory from CSV path when available to anchor export relative to the dataset.
+        export_base = os.path.join(csv_dir, MODEL_EXPORT_BASE) if csv_dir else MODEL_EXPORT_BASE  # Build export base anchored to dataset directory when csv_path was provided, falling back to CWD-relative otherwise.
+        export_dir = os.path.join(export_base, safe_model_filename(dataset_name))  # Build export directory using sanitized dataset name
         os.makedirs(export_dir, exist_ok=True)  # Create export directory and any missing parents
         param_str = "_".join(f"{k}-{v}" for k, v in sorted(best_params.items())) if best_params else ""  # Build param string from sorted hyperparameter keys and values
         param_str = safe_model_filename(param_str)[:64]  # Sanitize and truncate param string for filesystem safety
@@ -3438,7 +3441,7 @@ def build_result_entry_from_best(csv_path, model_name, best_params, best_score, 
                     result_dict[metric_key] = best_result[metric_key]  # Preserve full-precision metric value
 
         if best_estimator is not None and scaler is not None and dataset_name is not None and feature_names is not None:  # Verify all export components are available
-            export_model_and_scaler(best_estimator, scaler, dataset_name, model_name, feature_names, best_params)  # Export trained model and scaler to disk
+            export_model_and_scaler(best_estimator, scaler, dataset_name, model_name, feature_names, best_params, csv_path=csv_path)  # Export trained model and scaler to disk, anchored to the dataset CSV directory.
 
         save_to_cache(csv_path, result_dict)  # Persist result entry to cache file
 
@@ -3552,7 +3555,8 @@ def process_single_csv_file(csv_path, dir_results_list, cfg_dataset_name: str = 
         )  # Output the file being processed
 
         dataset_name = os.path.basename(os.path.dirname(csv_path))
-        export_dir = os.path.join(MODEL_EXPORT_BASE, dataset_name)
+        csv_dir = os.path.dirname(os.path.abspath(csv_path))  # Resolve the absolute dataset directory from the CSV path to anchor the export check relative to the dataset, matching the export path built in export_model_and_scaler.
+        export_dir = os.path.join(csv_dir, MODEL_EXPORT_BASE, dataset_name)  # Build export check path relative to dataset directory, mirroring the path constructed by export_model_and_scaler.
         if SKIP_TRAIN_IF_MODEL_EXISTS and os.path.isdir(export_dir):
             try:
                 existing_models = [f for f in os.listdir(export_dir) if f.endswith("_model.joblib")]
