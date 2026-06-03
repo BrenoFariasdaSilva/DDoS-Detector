@@ -4779,6 +4779,27 @@ def get_shap_prediction_function(model):  # Resolve prediction function for SHAP
     return model.predict  # Fallback to class prediction when probabilities unavailable
 
 
+def build_kernel_explainer(model, X_test_sampled, random_state):
+    """
+    Build a SHAP KernelExplainer with a bounded, reproducible background sample.
+
+    :param model: Trained model object.
+    :param X_test_sampled: Sampled test features used to derive background data.
+    :param random_state: Random seed used for deterministic background sampling.
+    :return: Instantiated shap.KernelExplainer.
+    """
+
+    rng = np.random.default_rng(random_state)  # Create explicit RNG for deterministic background sampling
+    bkg_size = min(50, len(X_test_sampled)) if hasattr(X_test_sampled, "__len__") else 50  # Determine background sample size defensively
+    indices = rng.choice(len(X_test_sampled), size=bkg_size, replace=False)  # Draw reproducible background indices
+    if hasattr(X_test_sampled, "iloc"):  # If sampled data is a pandas object
+        background = X_test_sampled.iloc[indices]  # Slice background via iloc
+    else:  # Otherwise assume numpy-like array
+        background = X_test_sampled[indices]  # Slice background via numpy indexing
+    prediction_fn = get_shap_prediction_function(model)  # Resolve SHAP-compatible prediction callable
+    return shap.KernelExplainer(prediction_fn, background)  # Build and return KernelExplainer
+
+
 def select_shap_explainer(model, X_test_sampled, random_state):
     """
     Selects and instantiates the appropriate SHAP explainer based on model type.
@@ -4791,20 +4812,21 @@ def select_shap_explainer(model, X_test_sampled, random_state):
 
     try:
         model_type = model.__class__.__name__  # Get model class name for branch selection
+        n_classes = getattr(model, "n_classes_", None)  # Resolve fitted class count when available
         if model_type in ["RandomForestClassifier", "GradientBoostingClassifier", "XGBClassifier", "LightGBMClassifier", "ExtraTreesClassifier"]:  # Tree-based models
-            return shap.TreeExplainer(model)  # Use TreeExplainer for tree-based models
+            if model_type == "GradientBoostingClassifier" and n_classes is not None and int(n_classes) > 2:  # SHAP TreeExplainer does not support multiclass GradientBoostingClassifier
+                return build_kernel_explainer(model, X_test_sampled, random_state)  # Fallback to model-agnostic KernelExplainer for multiclass GB
+            try:  # Try fast tree explainer first for supported tree models
+                return shap.TreeExplainer(model)  # Use TreeExplainer for supported tree-based models
+            except Exception as e:  # If SHAP tree path fails for a known unsupported case
+                err = str(e).lower()  # Normalize exception string for safe matching
+                if model_type == "GradientBoostingClassifier" and "only supported for binary classification" in err:  # Explicit SHAP multiclass GB limitation
+                    return build_kernel_explainer(model, X_test_sampled, random_state)  # Fallback to KernelExplainer when SHAP rejects multiclass GB
+                raise  # Re-raise unknown errors to preserve failure visibility
         elif model_type in ["LogisticRegression", "LinearSVC", "SGDClassifier"]:  # Linear models
             return shap.LinearExplainer(model, X_test_sampled)  # Use LinearExplainer for linear models
         else:  # Other models that require a fallback explainer
-            rng = np.random.default_rng(random_state)  # Create explicit RNG for background sampling to avoid global seeding
-            bkg_size = min(50, len(X_test_sampled)) if hasattr(X_test_sampled, "__len__") else 50  # Determine background sample size defensively
-            indices = rng.choice(len(X_test_sampled), size=bkg_size, replace=False)  # Draw background sample indices reproducibly
-            if hasattr(X_test_sampled, "iloc"):  # If X_test_sampled is a pandas DataFrame/Series
-                background = X_test_sampled.iloc[indices]  # Build background as pandas slice
-            else:  # Otherwise assume numpy array-like
-                background = X_test_sampled[indices]  # Build background as numpy slice
-            prediction_fn = get_shap_prediction_function(model)  # Resolve SHAP-compatible prediction function for model
-            return shap.KernelExplainer(prediction_fn, background)  # Use KernelExplainer with resolved prediction function
+            return build_kernel_explainer(model, X_test_sampled, random_state)  # Use KernelExplainer with bounded deterministic background sampling
     except Exception as e:  # Handle unexpected errors
         print(str(e))  # Print the exception string for diagnostics
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception details via Telegram if configured
