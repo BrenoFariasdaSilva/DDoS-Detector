@@ -3562,8 +3562,8 @@ def process_single_csv_file(csv_path, dir_results_list, cfg_dataset_name: str = 
                 existing_models = [f for f in os.listdir(export_dir) if f.endswith("_model.joblib")]
             except Exception:
                 existing_models = []
-            if existing_models:
-                print(f"{BackgroundColors.YELLOW}Found exported models for {dataset_name} in {export_dir}. Skipping training as requested.{Style.RESET_ALL}")
+            if len(existing_models) >= len(ENABLED_MODELS):  # Skip only when ALL enabled classifiers already have an exported model; a partial export (e.g. only Random Forest) must not skip the remaining classifiers.
+                print(f"{BackgroundColors.YELLOW}Found exported models for all {len(ENABLED_MODELS)} enabled classifiers for {dataset_name} in {export_dir}. Skipping training as requested.{Style.RESET_ALL}")
                 return
 
         models = get_models_and_param_grids()  # Get models and their parameter grids
