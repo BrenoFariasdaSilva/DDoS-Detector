@@ -249,6 +249,8 @@ def parse_cli_args():
         parser.add_argument("--disable-feature-selection", dest="enable_feature_selection", action="store_false", help="Disable feature selection method toggle")
         parser.add_argument("--enable-hyperparameters", dest="enable_hyperparameters", action="store_true", default=None, help="Enable hyperparameter optimization method toggle")
         parser.add_argument("--disable-hyperparameters", dest="enable_hyperparameters", action="store_false", help="Disable hyperparameter optimization method toggle")
+        parser.add_argument("--enable-stacking", dest="enable_stacking", action="store_true", default=None, help="Enable stacking classifier evaluation")
+        parser.add_argument("--disable-stacking", dest="enable_stacking", action="store_false", help="Disable stacking classifier evaluation")
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
         parser.add_argument("--dataset-file-format", type=str, default=None, dest="dataset_file_format", help="File format for dataset files: arff, csv, parquet, txt")  # Dataset file format CLI override
         parser.add_argument("--augmentation-file-format", type=str, default=None, dest="augmentation_file_format", help="File format for augmentation files: arff, csv, parquet, txt")  # Augmentation file format CLI override
@@ -296,6 +298,7 @@ def get_default_stacking_config():
                 "feature_selection": True,  # Enable feature selection combination by default
                 "hyperparameter_optimization": True,  # Enable hyperparameter optimization combination by default
                 "automl": True,  # Enable AutoML pipeline by default
+                "stacking": True,  # Enable stacking classifier evaluation by default
             },  # Method toggles for stacking pipeline
             "dataset_file_format": "csv",  # File format for dataset files: arff, csv, parquet, txt
             "augmentation_file_format": "csv",  # File format for augmentation files: arff, csv, parquet, txt
@@ -585,6 +588,9 @@ def merge_configs(defaults, file_config, cli_args):
 
         if hasattr(cli_args, "enable_hyperparameters") and cli_args.enable_hyperparameters is not None:  # Hyperparameter optimization method toggle CLI override
             config.setdefault("stacking", {}).setdefault("methods", {})["hyperparameter_optimization"] = cli_args.enable_hyperparameters  # Apply hyperparameter optimization toggle override
+
+        if hasattr(cli_args, "enable_stacking") and cli_args.enable_stacking is not None:  # Stacking classifier evaluation toggle CLI override
+            config.setdefault("stacking", {}).setdefault("methods", {})["stacking"] = cli_args.enable_stacking  # Apply stacking toggle override
 
         if hasattr(cli_args, "low_memory") and cli_args.low_memory:  # Low memory CLI override
             config["execution"]["low_memory"] = True  # Apply low memory override to config
@@ -8205,7 +8211,7 @@ def convert_subset_to_dataframes(X_train_subset, X_test_subset, subset_feature_n
     return X_train_df, X_test_df  # Return DataFrames with named columns
 
 
-def initialize_evaluation_run_state(base_models, feature_sets, data_source_label):
+def initialize_evaluation_run_state(base_models, feature_sets, data_source_label, stacking_enabled=True):
     """
     Build the individual model map, compute total evaluation steps, create the progress bar, and initialize result containers.
 
@@ -8219,9 +8225,9 @@ def initialize_evaluation_run_state(base_models, feature_sets, data_source_label
         k: v for k, v in base_models.items()
     }  # Use the base models (with hyperparameters applied) for individual evaluation
 
-    total_steps = len(feature_sets) * (
-        len(individual_models) + 1
-    )  # Total steps: models + stacking per feature set
+    total_steps = len(feature_sets) * len(individual_models)  # Total steps: individual models only by default
+    if stacking_enabled:  # Count one extra step per feature set only when stacking is enabled
+        total_steps += len(feature_sets)
 
     progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout)  # Progress bar for all evaluations
 
@@ -8254,6 +8260,7 @@ def evaluate_single_feature_set(
     total_steps,
     current_combination,
     progress_bar,
+    stacking_enabled=True,
     config=None,
     cache_dict=None,
     cache_ref_file=None,
@@ -8304,13 +8311,15 @@ def evaluate_single_feature_set(
         cache_dict=cache_dict, cache_ref_file=cache_ref_file,
     )  # Evaluate all individual classifiers and collect their result entries with resume support
 
-    stacking_result_entry, current_combination = run_stacking_evaluation_for_feature_set(
-        name, stacking_model, X_train_df, y_train, X_test_df, y_test,
-        X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
-        data_source_label, experiment_id, experiment_mode, augmentation_ratio,
-        scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
-        cache_dict=cache_dict, cache_ref_file=cache_ref_file,
-    )  # Evaluate stacking classifier, export model artifacts, generate metric plots, and collect result entry with resume support
+    stacking_result_entry = None
+    if stacking_enabled:  # Skip stacking entirely when disabled to save RAM/CPU
+        stacking_result_entry, current_combination = run_stacking_evaluation_for_feature_set(
+            name, stacking_model, X_train_df, y_train, X_test_df, y_test,
+            X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
+            data_source_label, experiment_id, experiment_mode, augmentation_ratio,
+            scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
+            cache_dict=cache_dict, cache_ref_file=cache_ref_file,
+        )  # Evaluate stacking classifier, export model artifacts, generate metric plots, and collect result entry with resume support
 
     return individual_results, stacking_result_entry, current_combination  # Return per-model results and updated combination counter to the caller
 
@@ -8360,6 +8369,8 @@ def evaluate_on_dataset(
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
+        stacking_enabled = config.get("stacking", {}).get("methods", {}).get("stacking", True)  # Resolve stacking toggle from config
+
         ga_selected_features, rfe_selected_features = sanitize_and_verify_feature_selections(
             ga_selected_features, rfe_selected_features, feature_names, config=config
         )  # Sanitize and verify GA/RFE feature selections against available features
@@ -8383,7 +8394,7 @@ def evaluate_on_dataset(
             except Exception:  # If cache loading raises any exception
                 cache_dict = {}  # Fall back to empty cache to proceed with a fresh evaluation
 
-        stacking_model = build_evaluation_stacking_model(base_models, config=config)  # Build stacking classifier from base models
+        stacking_model = build_evaluation_stacking_model(base_models, config=config) if stacking_enabled else None  # Build stacking classifier only when enabled
 
         feature_sets = assemble_feature_sets(
             X_train_scaled, X_test_scaled, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file,
@@ -8392,7 +8403,7 @@ def evaluate_on_dataset(
         )  # Assemble feature sets dictionary using configurable strategy selection
 
         individual_models, total_steps, progress_bar, all_results, current_combination = initialize_evaluation_run_state(
-            base_models, feature_sets, data_source_label
+            base_models, feature_sets, data_source_label, stacking_enabled=stacking_enabled
         )  # Build individual model map, compute total steps, create progress bar, and initialize result containers
 
         for idx, (name, (X_train_subset, X_test_subset, subset_feature_names_list)) in enumerate(feature_sets.items(), start=1):
@@ -8408,12 +8419,13 @@ def evaluate_on_dataset(
                 individual_models, stacking_model, y_train, y_test,
                 file, execution_mode_str, attack_types_combined,
                 data_source_label, experiment_id, experiment_mode, augmentation_ratio,
-                hyperparams_map, scaler, total_steps, current_combination, progress_bar, config=config,
+                hyperparams_map, scaler, total_steps, current_combination, progress_bar, stacking_enabled=stacking_enabled, config=config,
                 cache_dict=cache_dict, cache_ref_file=effective_cache_ref,
             )  # Evaluate all individual classifiers and stacking model on this non-empty feature subset with resume support
 
             all_results.update(individual_results)  # Merge this feature set's results into the global results dict
-            all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store stacking result with key
+            if stacking_result_entry is not None:  # Store stacking result only when stacking evaluation was enabled
+                all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store stacking result with key
 
         progress_bar.close()  # Close progress bar
         return all_results  # Return dictionary of results
