@@ -296,6 +296,7 @@ stacking: # Stacking experiment settings
     automl: true # Enable AutoML pipeline in stacking
     feature_selection: true # Enable feature selection combination in pipeline
     hyperparameter_optimization: true # Enable hyperparameter optimization combination in pipeline
+    stacking: true # Enable stacking classifier evaluation
 
   feature_sets_config: # Configurable feature set strategies (overridable via CLI)
     use_full: true # Enable Full Features strategy (all dataset features)
