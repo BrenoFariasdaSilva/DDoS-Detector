@@ -3101,9 +3101,38 @@ def extract_recursive_feature_elimination_features(file_path, config=None):
             if not df.empty:  # Verify if the DataFrame is not empty
                 top_features_raw = df.loc[0, "top_features"]  # Get the "top_features" from the first row
 
-                top_features_str = str(top_features_raw)  # Ensure it's a string
+                rfe_features = top_features_raw  # Keep raw value and normalize below to avoid string/char splitting
+                if isinstance(rfe_features, str):  # If serialized, decode safely and support double-encoded payloads
+                    decoded_value = rfe_features.strip()  # Normalize whitespace around serialized payload
+                    for _ in range(2):  # Decode at most twice to support nested JSON string payloads
+                        if not isinstance(decoded_value, str):  # Stop when payload is no longer a string
+                            break
+                        if decoded_value == "":  # Empty serialized payload maps to an empty feature list
+                            decoded_value = []
+                            break
+                        try:  # Prefer JSON decoding because RFE exports JSON strings
+                            decoded_value = json.loads(decoded_value)
+                            continue
+                        except Exception:
+                            pass
+                        try:  # Fallback for legacy Python-literal serialized payloads
+                            decoded_value = ast.literal_eval(decoded_value)
+                            continue
+                        except Exception:
+                            break
+                    rfe_features = decoded_value  # Store decoded payload for type normalization
 
-                rfe_features = ast.literal_eval(top_features_str)  # Convert string to list
+                if isinstance(rfe_features, (tuple, set)):  # Normalize tuple/set payloads to list for downstream compatibility
+                    rfe_features = list(rfe_features)
+                elif isinstance(rfe_features, np.ndarray):  # Normalize numpy array payloads to list for downstream compatibility
+                    rfe_features = rfe_features.tolist()
+                elif isinstance(rfe_features, str):  # Defensive fallback: treat single feature name as one-item list
+                    rfe_features = [rfe_features]
+
+                if not isinstance(rfe_features, list):  # Validate normalized payload type before returning
+                    raise ValueError(f"Invalid RFE top_features payload type: {type(rfe_features).__name__}")
+
+                rfe_features = [str(f) for f in rfe_features]  # Ensure all feature names are strings
 
                 verbose_output(
                     f"{BackgroundColors.GREEN}Successfully extracted RFE top features from Run 1. Total features: {BackgroundColors.CYAN}{len(rfe_features)}{Style.RESET_ALL}",
@@ -3518,6 +3547,9 @@ def sanitize_feature_names(columns):
     """
     
     try:
+        if isinstance(columns, str):  # Guard against raw string payloads to avoid character-by-character sanitization
+            columns = [columns]  # Treat single string as one feature name
+
         sanitized = []  # List to store sanitized column names
         
         for col in columns:  # Iterate over each column name
