@@ -10721,10 +10721,10 @@ def log_resolved_configuration(config: dict) -> None:
         print(f"{BackgroundColors.GREEN}[INFO] Method toggle — AutoML: {BackgroundColors.CYAN}{automl_enabled}{Style.RESET_ALL}")  # Log AutoML toggle state
 
         feature_sets_cfg = config.get("stacking", {}).get("feature_sets_config", {})  # Get resolved feature sets configuration
-        full_features_flag = feature_sets_cfg.get("full_features", False)  # Resolve Full Features flag from feature sets config
-        pca_flag = feature_sets_cfg.get("pca_components", False)  # Resolve PCA Components flag from feature sets config
-        rfe_flag = feature_sets_cfg.get("rfe_features", False)  # Resolve RFE Features flag from feature sets config
-        ga_flag = feature_sets_cfg.get("ga_features", False)  # Resolve GA Features flag from feature sets config
+        full_features_flag = feature_sets_cfg.get("use_full", True)  # Resolve Full Features flag from feature sets config
+        pca_flag = feature_sets_cfg.get("use_pca", True)  # Resolve PCA Components flag from feature sets config
+        rfe_flag = feature_sets_cfg.get("use_rfe", True)  # Resolve RFE Features flag from feature sets config
+        ga_flag = feature_sets_cfg.get("use_ga", True)  # Resolve GA Features flag from feature sets config
         explicit_features = feature_sets_cfg.get("explicit_features", [])  # Retrieve explicit features list from feature sets config
 
         print(f"{BackgroundColors.GREEN}[INFO] Feature set — Full Features: {BackgroundColors.CYAN}{full_features_flag}{Style.RESET_ALL}")  # Log Full Features state
