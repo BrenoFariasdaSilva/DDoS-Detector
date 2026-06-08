@@ -2766,7 +2766,7 @@ def save_augmentation_comparison_results(file_path, comparison_results, config=N
 
 def find_local_feature_file(file_dir, filename, config=None):
     """
-    Attempt to locate <file_dir>/Feature_Analysis/Genetic_Algorithm/<filename>.
+    Attempt to locate <file_dir>/Feature_Analysis/<filename>.
 
     :param file_dir: Directory to search within
     :param filename: Filename to search for
@@ -2779,11 +2779,11 @@ def find_local_feature_file(file_dir, filename, config=None):
             config = CONFIG  # Use global CONFIG
 
         verbose_output(
-            f"{BackgroundColors.GREEN}Verifying local Feature_Analysis/Genetic_Algorithm in directory: {BackgroundColors.CYAN}{file_dir}{BackgroundColors.GREEN} for file: {BackgroundColors.CYAN}{filename}{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Verifying local Feature_Analysis/ in directory: {BackgroundColors.CYAN}{file_dir}{BackgroundColors.GREEN} for file: {BackgroundColors.CYAN}{filename}{Style.RESET_ALL}",
             config=config
         )  # Output the verbose message
 
-        candidate = os.path.join(file_dir, "Feature_Analysis/Genetic_Algorithm", filename)  # Construct candidate path
+        candidate = os.path.join(file_dir, "Feature_Analysis", filename)  # Construct candidate path
 
         if verify_filepath_exists(candidate):  # If the candidate file exists
             return candidate  # Return the candidate path
@@ -2797,7 +2797,7 @@ def find_local_feature_file(file_dir, filename, config=None):
 
 def find_parent_feature_file(file_dir, filename, config=None):
     """
-    Ascend parent directories searching for <parent>/Feature_Analysis/Genetic_Algorithm/<filename>.
+    Ascend parent directories searching for <parent>/Feature_Analysis/<filename>.
 
     :param file_dir: Directory to search within
     :param filename: Filename to search for
@@ -2816,7 +2816,7 @@ def find_parent_feature_file(file_dir, filename, config=None):
 
         path = file_dir  # Start from the file's directory
         while True:  # Loop until break
-            candidate = os.path.join(path, "Feature_Analysis/Genetic_Algorithm", filename)  # Construct candidate path
+            candidate = os.path.join(path, "Feature_Analysis", filename)  # Construct candidate path
             if verify_filepath_exists(candidate):  # If the candidate file exists
                 return candidate  # Return the candidate path
 
@@ -2837,7 +2837,7 @@ def find_dataset_level_feature_file(file_path, filename, config=None):
     """
     Try dataset-level search:
 
-    - /.../Datasets/<dataset_name>/Feature_Analysis/Genetic_Algorithm/<filename>
+    - /.../Datasets/<dataset_name>/Feature_Analysis/<filename>
     - recursive search under dataset directory
 
     :param file_path: Path to the file
@@ -2867,12 +2867,12 @@ def find_dataset_level_feature_file(file_path, filename, config=None):
 
         dataset_dir = os.sep.join(parts[: idx + 2])  # Construct the dataset directory path
 
-        candidate = os.path.join(dataset_dir, "Feature_Analysis/Genetic_Algorithm", filename)  # Construct candidate path for the direct path
+        candidate = os.path.join(dataset_dir, "Feature_Analysis", filename)  # Construct candidate path for the direct path
         if verify_filepath_exists(candidate):  # If the candidate file exists
             return candidate  # Return the candidate path
 
         matches = glob.glob(
-            os.path.join(dataset_dir, "**", "Feature_Analysis", "Genetic_Algorithm", filename), recursive=True
+            os.path.join(dataset_dir, "**", "Feature_Analysis", filename), recursive=True
         )  # Search recursively
         if matches:  # If matches are found
             return matches[0]  # Return the first match
@@ -2889,10 +2889,10 @@ def find_feature_file(file_path, filename, config=None):
     Locate a feature-analysis CSV file related to `file_path`.
 
     Search order:
-    - <file_dir>/Feature_Analysis/Genetic_Algorithm/<filename>
-    - ascend parent directories verifying <parent>/Feature_Analysis/Genetic_Algorithm/<filename>
-    - dataset-level folder under `.../Datasets/<dataset_name>/Feature_Analysis/Genetic_Algorithm/<filename>`
-    - fallback: search under workspace ./Datasets/**/Feature_Analysis/Genetic_Algorithm/<filename`
+    - <file_dir>/Feature_Analysis/<filename>
+    - ascend parent directories verifying <parent>/Feature_Analysis/<filename>
+    - dataset-level folder under `.../Datasets/<dataset_name>/Feature_Analysis/<filename>`
+    - fallback: search under workspace ./Datasets/**/Feature_Analysis/<filename>
 
     :param file_path: Path to the file
     :param filename: Filename to search for
@@ -2958,7 +2958,7 @@ def extract_genetic_algorithm_features(file_path, config=None):
             config=config
         )  # Output the verbose message
 
-        ga_results_path = find_feature_file(file_path, "Genetic_Algorithm_Results.csv", config=config)  # Find the GA results file
+        ga_results_path = find_feature_file(file_path, "Genetic_Algorithm/Genetic_Algorithm_Results.csv", config=config)  # Find the GA results file
         if ga_results_path is None:  # If the GA results file does not exist
             print(
                 f"{BackgroundColors.YELLOW}Warning: GA results file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping GA feature extraction for this file.{Style.RESET_ALL}"
@@ -3018,7 +3018,7 @@ def extract_principal_component_analysis_features(file_path, config=None):
             config=config
         )  # Output the verbose message
 
-        pca_results_path = find_feature_file(file_path, "PCA_Results.csv", config=config)  # Find the PCA results file
+        pca_results_path = find_feature_file(file_path, "PCA/PCA_Results.csv", config=config)  # Find the PCA results file
         if pca_results_path is None:  # If the PCA results file does not exist
             print(
                 f"{BackgroundColors.YELLOW}Warning: PCA results file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping PCA feature extraction for this file.{Style.RESET_ALL}"
@@ -3086,7 +3086,7 @@ def extract_recursive_feature_elimination_features(file_path, config=None):
             config=config
         )  # Output the verbose message
 
-        rfe_runs_path = find_feature_file(file_path, "RFE_Run_Results.csv", config=config)  # Find the RFE runs file
+        rfe_runs_path = find_feature_file(file_path, "RFE/RFE_Run_Results.csv", config=config)  # Find the RFE runs file
         if rfe_runs_path is None:  # If the RFE runs file does not exist
             print(
                 f"{BackgroundColors.YELLOW}Warning: RFE runs file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping RFE feature extraction for this file.{Style.RESET_ALL}"
