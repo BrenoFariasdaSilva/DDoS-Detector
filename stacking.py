@@ -9585,19 +9585,20 @@ def process_combined_files_augmentation_testing(reference_file, original_files_l
         raise
 
 
-def compute_class_distribution(combined_df: pd.DataFrame, target_col: str) -> List[Tuple[str, int]]:
+def compute_class_distribution(combined_df: pd.DataFrame, target_col: str) -> List[Tuple[str, int, float]]:
     """
     Compute sorted class distribution for a target column.
 
     :param combined_df: Combined DataFrame containing the target column.
     :param target_col: Name of the target column to count values for.
-    :return: List of tuples (label, count) sorted descending by count.
+    :return: List of tuples (label, count, percentage) sorted descending by count.
     """
 
     try:
         counts = combined_df[target_col].value_counts(dropna=False)  # Get value counts including NaN as a category
         counts_sorted = counts.sort_values(ascending=False)  # Sort counts descending to show most frequent classes first
-        distribution = [(str(label), int(count)) for label, count in counts_sorted.items()]  # Build list of (label, count) tuples
+        total_samples = int(counts_sorted.sum())  # Compute total number of samples across all classes
+        distribution = [(str(label), int(count), (int(count) / total_samples) * 100) for label, count in counts_sorted.items()]  # Build list of (label, count, percentage) tuples
         return distribution  # Return the structured distribution result
     except Exception as e:  # On exception, propagate for outer handlers to log and notify
         raise
@@ -9634,11 +9635,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         )  # Print dataset header
         distribution = compute_class_distribution(combined_files_df, 'attack_type')  # Compute distribution from combined dataframe
         print(f"{BackgroundColors.GREEN}Attack types:{Style.RESET_ALL}")  # Print attack types header
-        for label, count in distribution:  # Iterate over distribution entries sorted by count
-            print(f"- {BackgroundColors.CYAN}{label}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{count:,}{Style.RESET_ALL}")  # Print each class name and sample count
-        print(
-            f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
-        )  # Print closing separator
+        for label, count, percentage in distribution:  # Iterate over distribution entries sorted by count
+            print(f"- {BackgroundColors.CYAN}{label}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{count:,}{BackgroundColors.GREEN} ({percentage:.2f}% of total){Style.RESET_ALL}")  # Print each class name, sample count, and percentage
+        print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n")  # Print closing separator
         send_telegram_message(
             TELEGRAM_BOT,
             build_telegram_pipeline_summary(
@@ -9926,8 +9925,8 @@ def orchestrate_binary_combination(file, ga_sel, pca_n, rfe_sel, base_models, hp
         if target_col:  # If target column was found
             distribution = compute_class_distribution(df_original, target_col)  # Compute class distribution for this file
             print(f"{BackgroundColors.GREEN}[SEPARATE_FILES] Class distribution for {os.path.basename(file)}:{Style.RESET_ALL}")  # Print distribution header
-            for label, count in distribution:  # Iterate over each class and its count
-                print(f"  - {BackgroundColors.CYAN}{label}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{count:,}{Style.RESET_ALL}")  # Print class name and sample count
+            for label, count, percentage in distribution:  # Iterate over each class, count, and percentage
+                print(f"  - {BackgroundColors.CYAN}{label}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{count:,}{BackgroundColors.GREEN} ({percentage:.2f}% of total){Style.RESET_ALL}")  # Print class name, sample count, and percentage
 
         send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES] Starting evaluation | file: {os.path.basename(file)} | FS: {'ON' if feature_selection_enabled else 'OFF'} | HP: {'ON' if hyperparameters_enabled else 'OFF'} | DA: {'ON' if data_augmentation_enabled else 'OFF'}"])  # Notify Telegram about separate files evaluation start
 
