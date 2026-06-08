@@ -82,7 +82,7 @@ import os  # For running a command in the terminal
 import pandas as pd  # Import pandas for data manipulation
 import pickle  # For loading PCA objects
 import platform  # For getting the operating system name
-import psutil  # For checking system RAM
+import psutil  # For verifying system RAM
 import re  # For regular expressions
 import seaborn as sns  # For generating feature usage heatmaps
 import shap  # For SHAP explainability analysis
@@ -1098,7 +1098,7 @@ def detect_label_column(columns):
     """
 
     try:  # Wrap full function logic to ensure production-safe monitoring
-        candidates = ["label", "class", "target", "y", "category"]  # Common label column names to check for exact matches
+        candidates = ["label", "class", "target", "y", "category"]  # Common label column names to verify for exact matches
 
         for col in columns:  # First search for exact matches
             if col.lower() in candidates:  # Verify match against candidate set
@@ -1179,7 +1179,7 @@ def handle_target_column_consistency(target_col_name, this_target, f, df_clean, 
             config = CONFIG  # Use global CONFIG
         
         verbose_output(
-            f"{BackgroundColors.GREEN}Checking target column consistency for: {BackgroundColors.CYAN}{f}{Style.RESET_ALL} (target: {BackgroundColors.CYAN}{this_target}{Style.RESET_ALL})...{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Verifying target column consistency for: {BackgroundColors.CYAN}{f}{Style.RESET_ALL} (target: {BackgroundColors.CYAN}{this_target}{Style.RESET_ALL})...{Style.RESET_ALL}",
             config=config
         )  # Output the verbose message
 
@@ -2766,7 +2766,7 @@ def save_augmentation_comparison_results(file_path, comparison_results, config=N
 
 def find_local_feature_file(file_dir, filename, config=None):
     """
-    Attempt to locate <file_dir>/Feature_Analysis/<filename>.
+    Attempt to locate <file_dir>/Feature_Analysis/Genetic_Algorithm/<filename>.
 
     :param file_dir: Directory to search within
     :param filename: Filename to search for
@@ -2779,11 +2779,11 @@ def find_local_feature_file(file_dir, filename, config=None):
             config = CONFIG  # Use global CONFIG
 
         verbose_output(
-            f"{BackgroundColors.GREEN}Checking local Feature_Analysis in directory: {BackgroundColors.CYAN}{file_dir}{BackgroundColors.GREEN} for file: {BackgroundColors.CYAN}{filename}{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Verifying local Feature_Analysis/Genetic_Algorithm in directory: {BackgroundColors.CYAN}{file_dir}{BackgroundColors.GREEN} for file: {BackgroundColors.CYAN}{filename}{Style.RESET_ALL}",
             config=config
         )  # Output the verbose message
 
-        candidate = os.path.join(file_dir, "Feature_Analysis", filename)  # Construct candidate path
+        candidate = os.path.join(file_dir, "Feature_Analysis/Genetic_Algorithm", filename)  # Construct candidate path
 
         if verify_filepath_exists(candidate):  # If the candidate file exists
             return candidate  # Return the candidate path
@@ -2797,7 +2797,7 @@ def find_local_feature_file(file_dir, filename, config=None):
 
 def find_parent_feature_file(file_dir, filename, config=None):
     """
-    Ascend parent directories searching for <parent>/Feature_Analysis/<filename>.
+    Ascend parent directories searching for <parent>/Feature_Analysis/Genetic_Algorithm/<filename>.
 
     :param file_dir: Directory to search within
     :param filename: Filename to search for
@@ -2816,7 +2816,7 @@ def find_parent_feature_file(file_dir, filename, config=None):
 
         path = file_dir  # Start from the file's directory
         while True:  # Loop until break
-            candidate = os.path.join(path, "Feature_Analysis", filename)  # Construct candidate path
+            candidate = os.path.join(path, "Feature_Analysis/Genetic_Algorithm", filename)  # Construct candidate path
             if verify_filepath_exists(candidate):  # If the candidate file exists
                 return candidate  # Return the candidate path
 
@@ -2837,7 +2837,7 @@ def find_dataset_level_feature_file(file_path, filename, config=None):
     """
     Try dataset-level search:
 
-    - /.../Datasets/<dataset_name>/Feature_Analysis/<filename>
+    - /.../Datasets/<dataset_name>/Feature_Analysis/Genetic_Algorithm/<filename>
     - recursive search under dataset directory
 
     :param file_path: Path to the file
@@ -2867,12 +2867,12 @@ def find_dataset_level_feature_file(file_path, filename, config=None):
 
         dataset_dir = os.sep.join(parts[: idx + 2])  # Construct the dataset directory path
 
-        candidate = os.path.join(dataset_dir, "Feature_Analysis", filename)  # Construct candidate path for the direct path
+        candidate = os.path.join(dataset_dir, "Feature_Analysis/Genetic_Algorithm", filename)  # Construct candidate path for the direct path
         if verify_filepath_exists(candidate):  # If the candidate file exists
             return candidate  # Return the candidate path
 
         matches = glob.glob(
-            os.path.join(dataset_dir, "**", "Feature_Analysis", filename), recursive=True
+            os.path.join(dataset_dir, "**", "Feature_Analysis", "Genetic_Algorithm", filename), recursive=True
         )  # Search recursively
         if matches:  # If matches are found
             return matches[0]  # Return the first match
@@ -2889,10 +2889,10 @@ def find_feature_file(file_path, filename, config=None):
     Locate a feature-analysis CSV file related to `file_path`.
 
     Search order:
-    - <file_dir>/Feature_Analysis/<filename>
-    - ascend parent directories checking <parent>/Feature_Analysis/<filename>
-    - dataset-level folder under `.../Datasets/<dataset_name>/Feature_Analysis/<filename>`
-    - fallback: search under workspace ./Datasets/**/Feature_Analysis/<filename`
+    - <file_dir>/Feature_Analysis/Genetic_Algorithm/<filename>
+    - ascend parent directories verifying <parent>/Feature_Analysis/Genetic_Algorithm/<filename>
+    - dataset-level folder under `.../Datasets/<dataset_name>/Feature_Analysis/Genetic_Algorithm/<filename>`
+    - fallback: search under workspace ./Datasets/**/Feature_Analysis/Genetic_Algorithm/<filename`
 
     :param file_path: Path to the file
     :param filename: Filename to search for
@@ -2915,7 +2915,7 @@ def find_feature_file(file_path, filename, config=None):
         if result is not None:  # If found
             return result  # Return the result
 
-        result = find_parent_feature_file(file_dir, filename, config=config)  # 2. Ascend parents checking for Feature_Analysis
+        result = find_parent_feature_file(file_dir, filename, config=config)  # 2. Ascend parents verifying for Feature_Analysis
         if result is not None:  # If found
             return result  # Return the result
 
@@ -8493,7 +8493,7 @@ def combine_dataset_if_needed(files_to_process, config=None):
             config = CONFIG  # Use global CONFIG
 
         verbose_output(
-            f"{BackgroundColors.GREEN}Checking if dataset combination is needed...{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Verifying if dataset combination is needed...{Style.RESET_ALL}",
             config=config
         )  # Output the verbose message
         
