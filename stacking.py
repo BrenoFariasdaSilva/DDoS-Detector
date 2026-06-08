@@ -2967,23 +2967,97 @@ def extract_genetic_algorithm_features(file_path, config=None):
 
         try:  # Try to load the GA results
             low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
-            df = pd.read_csv(ga_results_path, usecols=["best_features", "run_index"], low_memory=low_memory)  # Load only the necessary columns
+            df = pd.read_csv(ga_results_path, low_memory=low_memory)  # Load the full GA results schema to support robust fallback selection
             df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
-            best_row = df[df["run_index"] == "best"].iloc[0]  # Get the row where run_index is 'best'
-            best_features_json = best_row["best_features"]  # Get the JSON string of best features
-            ga_features = json.loads(best_features_json)  # Parse the JSON string into a Python list
+
+            if "best_features" not in df.columns:  # Validate required feature payload column presence before row selection
+                print(
+                    f"{BackgroundColors.RED}Error: 'best_features' column not found in GA results file at {BackgroundColors.CYAN}{ga_results_path}{Style.RESET_ALL}"
+                )  # Report schema mismatch when mandatory best_features column is missing
+                return None  # Return None when GA results schema cannot provide selected features
+
+            selected_row = None  # Initialize selected row as None before applying selection rules
+            selected_source = ""  # Track selected-row strategy for diagnostic logging
+
+            if "run_index" in df.columns:  # Prefer explicit best-run marker when run_index column exists
+                run_index_norm = df["run_index"].fillna("").astype(str).str.strip().str.lower()  # Normalize run_index values for resilient matching
+                best_rows = df[run_index_norm == "best"]  # Select rows explicitly marked as best run
+                if not best_rows.empty:  # Continue only when at least one explicit best row exists
+                    selected_row = best_rows.iloc[0]  # Select the first explicit best row preserving legacy behavior
+                    selected_source = "run_index=best"  # Record legacy selection source for diagnostics
+
+            if selected_row is None:  # Apply fallback logic only when explicit best run marker is unavailable
+                best_features_norm = df["best_features"].fillna("").astype(str).str.strip()  # Normalize best_features payload for emptiness filtering
+                candidate_rows = df[best_features_norm != ""]  # Keep only rows that contain a non-empty best_features payload
+
+                metric_column = None  # Initialize metric column name used for fallback ranking
+                for candidate_metric in ["cv_f1_score", "test_f1_score", "f1_score", "cv_fnr", "test_fnr", "cv_fpr", "test_fpr"]:  # Try known GA metric fields in priority order
+                    if candidate_metric in candidate_rows.columns:  # Use first metric field present in the candidate rows
+                        metric_column = candidate_metric  # Store detected metric field for row ranking
+                        break  # Stop scanning once a valid ranking metric is found
+
+                if metric_column is not None and not candidate_rows.empty:  # Rank fallback candidates when at least one metric column exists
+                    ranked_rows = candidate_rows.copy()  # Copy candidate rows before numeric conversion and sorting
+                    ranked_rows[metric_column] = pd.to_numeric(ranked_rows[metric_column], errors="coerce")  # Convert ranking metric to numeric values for deterministic ordering
+                    ascending_order = metric_column.lower().endswith("fpr") or metric_column.lower().endswith("fnr")  # Use ascending order for error-rate metrics and descending for score metrics
+                    ranked_rows = ranked_rows.sort_values(by=metric_column, ascending=ascending_order, na_position="last")  # Sort rows by the resolved metric with NaN values placed last
+                    if not ranked_rows.empty:  # Continue only when ranking produced at least one usable row
+                        selected_row = ranked_rows.iloc[0]  # Select the top-ranked fallback row
+                        selected_source = f"fallback_metric={metric_column}"  # Record metric-based fallback source for diagnostics
+
+                if selected_row is None and not candidate_rows.empty:  # Fallback to first valid payload row when no ranking metric was available
+                    selected_row = candidate_rows.iloc[0]  # Select first non-empty best_features row as final fallback
+                    selected_source = "fallback_first_non_empty_best_features"  # Record positional fallback source for diagnostics
+
+            if selected_row is None:  # Abort when no row can provide a valid best_features payload
+                print(
+                    f"{BackgroundColors.RED}Error: 'best' run_index not found in GA results file at {BackgroundColors.CYAN}{ga_results_path}{BackgroundColors.RED}, and no fallback row with non-empty 'best_features' was found.{Style.RESET_ALL}"
+                )  # Report final selection failure with explicit fallback outcome
+                return None  # Return None when no usable GA feature row is available
+
+            best_features_raw = selected_row["best_features"]  # Read serialized best_features payload from the selected row
+            parsed_features = best_features_raw  # Initialize parsed payload with raw value before decoding
+            if isinstance(parsed_features, str):  # Decode serialized payload when best_features is stored as string
+                decoded_value = parsed_features.strip()  # Normalize serialized payload whitespace before decoding
+                for _ in range(2):  # Decode at most twice to support nested serialized payloads
+                    if not isinstance(decoded_value, str):  # Stop decoding when payload is no longer a string
+                        break  # Exit decode loop once payload becomes structured data
+                    if decoded_value == "":  # Convert empty payload string into an empty list container
+                        decoded_value = []  # Map empty payload to empty list for downstream normalization
+                        break  # Stop decode loop after empty payload normalization
+                    try:  # Prefer JSON decoding because GA writer exports JSON strings
+                        decoded_value = json.loads(decoded_value)  # Decode JSON payload into Python structure
+                        continue  # Continue decode loop for possible nested serialization
+                    except Exception:
+                        pass  # Fall through to Python-literal decode when JSON parsing fails
+                    try:  # Support legacy literal string payloads from older exports
+                        decoded_value = ast.literal_eval(decoded_value)  # Decode Python literal payload safely into Python structure
+                        continue  # Continue decode loop for possible nested serialization
+                    except Exception:
+                        break  # Stop decode loop when no decoder can parse the remaining string
+                parsed_features = decoded_value  # Store decoded payload for final normalization
+
+            if isinstance(parsed_features, (tuple, set)):  # Normalize tuple/set payloads into ordered list container
+                parsed_features = list(parsed_features)  # Convert tuple/set payload into list for downstream compatibility
+            elif isinstance(parsed_features, np.ndarray):  # Normalize numpy array payloads into Python list container
+                parsed_features = parsed_features.tolist()  # Convert numpy payload into list for downstream compatibility
+            elif isinstance(parsed_features, str):  # Normalize single feature string payload into one-item list
+                parsed_features = [parsed_features]  # Wrap single feature name string into list container
+
+            if not isinstance(parsed_features, list):  # Validate final decoded payload type before returning features
+                print(
+                    f"{BackgroundColors.RED}Error: Invalid GA 'best_features' payload type ({type(parsed_features).__name__}) in {BackgroundColors.CYAN}{ga_results_path}{Style.RESET_ALL}"
+                )  # Report unsupported payload type to preserve explicit diagnostics
+                return None  # Return None when decoded payload is not a feature list
+
+            ga_features = [str(f) for f in parsed_features]  # Normalize all feature names to strings for downstream consumers
 
             verbose_output(
-                f"{BackgroundColors.GREEN}Successfully extracted {BackgroundColors.CYAN}{len(ga_features)}{BackgroundColors.GREEN} GA features from the 'best' run.{Style.RESET_ALL}",
+                f"{BackgroundColors.GREEN}Successfully extracted {BackgroundColors.CYAN}{len(ga_features)}{BackgroundColors.GREEN} GA features using {BackgroundColors.CYAN}{selected_source}{BackgroundColors.GREEN}.{Style.RESET_ALL}",
                 config=config
             )  # Output the verbose message
 
             return ga_features  # Return the list of GA features
-        except IndexError:  # If there is no 'best' run_index
-            print(
-                f"{BackgroundColors.RED}Error: 'best' run_index not found in GA results file at {BackgroundColors.CYAN}{ga_results_path}{Style.RESET_ALL}"
-            )
-            return None  # Return None if 'best' run_index is not found
         except Exception as e:  # If there is an error loading or parsing the file
             print(
                 f"{BackgroundColors.RED}Error loading/parsing GA features from {BackgroundColors.CYAN}{ga_results_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
