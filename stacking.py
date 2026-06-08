@@ -2965,6 +2965,8 @@ def extract_genetic_algorithm_features(file_path, config=None):
             )
             return None  # Return None if the file does not exist
 
+        print(f"{BackgroundColors.GREEN}[INFO] GA feature file found: {BackgroundColors.CYAN}{ga_results_path}{Style.RESET_ALL}")  # Log the resolved GA results file path
+
         try:  # Try to load the GA results
             low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
             df = pd.read_csv(ga_results_path, low_memory=low_memory)  # Load the full GA results schema to support robust fallback selection
@@ -3107,6 +3109,8 @@ def extract_principal_component_analysis_features(file_path, config=None):
             )
             return None  # Return None if the file does not exist
 
+        print(f"{BackgroundColors.GREEN}[INFO] PCA feature file found: {BackgroundColors.CYAN}{pca_results_path}{Style.RESET_ALL}")  # Log the resolved PCA results file path
+
         try:  # Try to load the PCA results
             low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
             df = pd.read_csv(pca_results_path, low_memory=low_memory)  # Load the PCA results file
@@ -3193,6 +3197,8 @@ def extract_recursive_feature_elimination_features(file_path, config=None):
                 f"{BackgroundColors.YELLOW}Warning: RFE runs file not found for dataset containing {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}. Skipping RFE feature extraction for this file.{Style.RESET_ALL}"
             )
             return None  # Return None if the file does not exist
+
+        print(f"{BackgroundColors.GREEN}[INFO] RFE feature file found: {BackgroundColors.CYAN}{rfe_runs_path}{Style.RESET_ALL}")  # Log the resolved RFE runs file path
 
         try:  # Try to load the RFE runs results
             low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
