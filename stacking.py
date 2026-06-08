@@ -1442,6 +1442,8 @@ def concat_files_into_combined_files_df(processed_files_with_labels, common_feat
     """
 
     combined_parts = []  # Initialize list to accumulate dataframe parts
+    
+    total_samples = sum(len(df_clean) for _, df_clean, _, _, _ in processed_files_with_labels)  # Calculate total samples across all processed files for percentage reporting
 
     for idx, (f, df_clean, this_target, feat_cols, attack_label) in enumerate(processed_files_with_labels):  # Iterate over processed files with index
         df_subset = df_clean[common_features_list].copy()  # Select only common features as a copy for safe modification
@@ -1450,10 +1452,13 @@ def concat_files_into_combined_files_df(processed_files_with_labels, common_feat
 
         processed_files_with_labels[idx] = (f, None, this_target, feat_cols, attack_label)  # Release original full dataframe reference to free memory
 
+        samples_count = len(df_subset)  # Get sample count contributed by the current attack type
+        samples_percentage = (samples_count / total_samples) * 100 if total_samples else 0.0  # Calculate percentage contribution to the final combined dataset
+        
         verbose_output(
-            f"{BackgroundColors.GREEN}Added {BackgroundColors.CYAN}{len(df_subset)}{BackgroundColors.GREEN} samples from {BackgroundColors.CYAN}{attack_label}{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Added {BackgroundColors.CYAN}{samples_count}{BackgroundColors.GREEN} samples from {BackgroundColors.CYAN}{attack_label}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{samples_percentage:.2f}%{BackgroundColors.GREEN} of total){Style.RESET_ALL}",
             config=config
-        )  # Output samples added message
+        )  # Output samples added message including percentage contribution
 
     gc.collect()  # Force garbage collection to reclaim memory from released original dataframes
 
