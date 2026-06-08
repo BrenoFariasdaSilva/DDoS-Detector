@@ -9410,7 +9410,14 @@ def process_combined_files_augmentation_testing(reference_file, original_files_l
             return  # Exit function early as signaled by the loading function
 
         print_combined_files_augmentation_header(augmentation_ratios)  # Print the section header for ratio-based combined files evaluation augmentation experiments
-        send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES] Starting ratio-based augmentation experiments | Dataset: {dataset_name} | ratios: {[f'{int(r * 100)}%' for r in augmentation_ratios]}"])  # Notify Telegram about combined files evaluation augmentation ratio experiments start
+        send_telegram_message(
+            TELEGRAM_BOT,
+            build_telegram_pipeline_summary(
+                config,
+                dataset_name=dataset_name,
+                classification_mode="combined_files",
+            ) + [f"[COMBINED_FILES] Starting ratio-based augmentation experiments | Dataset: {dataset_name} | ratios: {[f'{int(r * 100)}%' for r in augmentation_ratios]}"]
+        )  # Notify Telegram about combined files evaluation augmentation ratio experiments start with full pipeline summary
 
         all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
 
@@ -9488,7 +9495,16 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
         )  # Print closing separator
-        send_telegram_message(TELEGRAM_BOT, [f"Starting combined files evaluation | Dataset: {dataset_name} | {len(attack_types_list)} attack types: {', '.join(str(a) for a in attack_types_list)}"])  # Notify Telegram about combined files evaluation start
+        send_telegram_message(
+            TELEGRAM_BOT,
+            build_telegram_pipeline_summary(
+                config,
+                dataset_name=dataset_name,
+                classification_mode="combined_files",
+                attack_types_list=attack_types_list,
+                include_attack_types=True,
+            ) + [f"Starting combined files evaluation | Dataset: {dataset_name}"]
+        )  # Notify Telegram about combined files evaluation start with full pipeline summary
 
         ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
             reference_file, config=config
@@ -10283,7 +10299,15 @@ def process_files_in_path(input_path, dataset_name, config=None):
         execution_mode = config.get("execution", {}).get("execution_mode", "both")  # Get execution mode from config (separate_files/combined_files/both, default: both)
 
         print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[DEBUG] Classification mode: {execution_mode}{Style.RESET_ALL}")  # Log the resolved classification mode
-        send_telegram_message(TELEGRAM_BOT, [f"Classification mode: {execution_mode} | path: {os.path.relpath(input_path)}"])  # Notify Telegram about classification mode and relative input path
+        send_telegram_message(
+            TELEGRAM_BOT,
+            build_telegram_pipeline_summary(
+                config,
+                dataset_path=os.path.relpath(input_path),
+                dataset_name=dataset_name,
+                classification_mode=execution_mode,
+            ),
+        )  # Notify Telegram about the full pipeline for this path
 
         files_to_process = determine_files_to_process(csv_file, input_path, config=config)  # Determine which files to process
 
@@ -10321,7 +10345,10 @@ def process_dataset_paths(dataset_name, paths, config=None):
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
         )  # Print dataset name
-        send_telegram_message(TELEGRAM_BOT, [f"Processing dataset: {dataset_name} ({len(paths)} path(s))"])  # Notify Telegram about dataset processing start
+        send_telegram_message(
+            TELEGRAM_BOT,
+            [f"Processing dataset: {dataset_name} ({len(paths)} path(s))"] + build_telegram_pipeline_summary(config, dataset_name=dataset_name),
+        )  # Notify Telegram about dataset processing start with full pipeline summary
 
         for input_path in paths:  # For each path in the dataset's paths list
             process_files_in_path(input_path, dataset_name, config=config)  # Process all files in  this path
@@ -10587,6 +10614,74 @@ def log_resolved_configuration(config: dict) -> None:
         raise  # Re-raise to preserve original failure semantics
 
 
+def build_telegram_pipeline_summary(config: dict, dataset_path: str = None, dataset_name: str = None, classification_mode: str = None, attack_types_list=None, include_attack_types: bool = False) -> list:
+    """
+    Build a Telegram message bundle describing the pipeline that will run.
+
+    :param config: Configuration dictionary.
+    :param dataset_path: Optional dataset path being processed.
+    :param dataset_name: Optional dataset name being processed.
+    :param classification_mode: Optional classification mode string.
+    :param attack_types_list: Optional list of attack types for combined-files evaluation.
+    :param include_attack_types: Whether to include attack type details when provided.
+    :return: List of Telegram message lines.
+    """
+
+    try:
+        if config is None:
+            config = CONFIG
+
+        execution_cfg = config.get("execution", {})
+        stacking_cfg = config.get("stacking", {})
+        methods_cfg = stacking_cfg.get("methods", {})
+        feature_sets_cfg = stacking_cfg.get("feature_sets_config", {})
+
+        enabled_classifiers = stacking_cfg.get("enabled_classifiers", []) or []
+        feature_methods = []
+        if feature_sets_cfg.get("use_full", True):
+            feature_methods.append("Full")
+        if feature_sets_cfg.get("use_pca", True):
+            feature_methods.append("PCA")
+        if feature_sets_cfg.get("use_rfe", True):
+            feature_methods.append("RFE")
+        if feature_sets_cfg.get("use_ga", True):
+            feature_methods.append("GA")
+
+        explicit_features = feature_sets_cfg.get("explicit_features", []) or []
+        if explicit_features:
+            feature_methods.append(f"Explicit({len(explicit_features)})")
+
+        feature_selection_enabled = methods_cfg.get("feature_selection", True)
+        hyperparameters_enabled = methods_cfg.get("hyperparameter_optimization", True)
+        augmentation_enabled = methods_cfg.get("augmentation", True)
+        automl_enabled = methods_cfg.get("automl", True)
+        stacking_enabled = methods_cfg.get("stacking", True)
+        test_data_augmentation = execution_cfg.get("test_data_augmentation", True)
+        augmentation_ratios = stacking_cfg.get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])
+
+        dataset_display = dataset_path if dataset_path else "config.yaml (default)"
+        lines = [
+            f"Execution mode: {execution_cfg.get('execution_mode', 'both')} | Dataset: {dataset_display}",
+            f"Dataset name: {dataset_name}" if dataset_name else None,
+            f"Classification mode: {classification_mode}" if classification_mode else None,
+            f"Methods: Feature Selection: {'ON' if feature_selection_enabled else 'OFF'}, Hyperparameters: {'ON' if hyperparameters_enabled else 'OFF'}, Data Augmentation: {'ON' if augmentation_enabled else 'OFF'}, AutoML: {'ON' if automl_enabled else 'OFF'}, Stacking: {'ON' if stacking_enabled else 'OFF'}",
+            f"Classifiers: {', '.join(enabled_classifiers) if enabled_classifiers else 'None'}",
+            f"Feature extraction methods: {', '.join(feature_methods) if feature_methods else 'None'}",
+        ]
+
+        if augmentation_enabled and test_data_augmentation:
+            lines.append(f"Data augmentation ratios: {[f'{int(r * 100)}%' for r in augmentation_ratios]}")
+
+        if include_attack_types and attack_types_list:
+            lines.append(f"Attack types: {len(attack_types_list)} attack types: {', '.join(str(a) for a in attack_types_list)}")
+
+        return [line for line in lines if line]
+    except Exception as e:
+        print(str(e))
+        send_exception_via_telegram(type(e), e, e.__traceback__)
+        raise
+
+
 def main(config=None):
     """
     Main function.
@@ -10623,17 +10718,14 @@ def main(config=None):
         _exec_mode = config.get("execution", {}).get("execution_mode", "both")  # Retrieve execution mode from config
         _dataset_path_cli = config.get("execution", {}).get("dataset_path", None)  # Retrieve CLI dataset path override
         _methods_cfg = config.get("stacking", {}).get("methods", {})  # Retrieve method toggles from config
-        _fs_on = _methods_cfg.get("feature_selection", True)  # Resolve feature selection toggle
-        _hp_on = _methods_cfg.get("hyperparameter_optimization", True)  # Resolve hyperparameter optimization toggle
-        _da_on = _methods_cfg.get("augmentation", True)  # Resolve data augmentation toggle
-        _automl_on = _methods_cfg.get("automl", True)  # Resolve AutoML toggle
-        _start_lines = [
-            f"Starting Classifiers Stacking at {start_time.strftime('%Y-%m-%d %H:%M:%S')}",
-            f"Execution mode: {_exec_mode} | Dataset: {_dataset_path_cli if _dataset_path_cli else 'config.yaml (default)'} | Methods: Feature Selection: {'ON' if _fs_on else 'OFF'}, HP Optimization: {'ON' if _hp_on else 'OFF'}, Data Augmentation: {'ON' if _da_on else 'OFF'}, AutoML: {'ON' if _automl_on else 'OFF'}",
-        ]
-        
-        if test_data_augmentation and _da_on:  # If augmentation testing is enabled and augmentation toggle is on
-            _start_lines.append(f"Augmentation ratios: {[f'{int(r * 100)}%' for r in augmentation_ratios]}")  # Append augmentation ratios to start message
+        _start_lines = [f"Starting Classifiers Stacking at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"]
+        _start_lines.extend(
+            build_telegram_pipeline_summary(
+                config,
+                dataset_path=_dataset_path_cli,
+                classification_mode=_exec_mode,
+            )
+        )
         
         send_telegram_message(TELEGRAM_BOT, _start_lines)  # Send detailed start message with full execution configuration
 
