@@ -3075,7 +3075,15 @@ def extract_principal_component_analysis_features(file_path, config=None):
     from the "PCA_Results.csv" file located in the "Feature_Analysis"
     subdirectory relative to the input file's directory.
 
-    The best result is determined by the highest 'cv_f1_score'.
+    Selection is based on the safest available PCA ranking logic:
+      1. Highest test_f1_score
+      2. Lowest test_fnr
+      3. Lowest test_fpr
+      4. Highest explained_variance
+      5. Lowest n_components
+
+    If the PCA results file does not contain the full metric set, the
+    function falls back to choosing the row with the highest cv_f1_score.
 
     :param file_path: Full path to the current CSV file being processed (e.g., "./Datasets/.../DrDoS_DNS.csv").
     :param config: Configuration dictionary (uses global CONFIG if None)
@@ -3101,23 +3109,42 @@ def extract_principal_component_analysis_features(file_path, config=None):
 
         try:  # Try to load the PCA results
             low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
-            df = pd.read_csv(pca_results_path, usecols=["n_components", "cv_f1_score"], low_memory=low_memory)  # Load only the necessary columns
+            df = pd.read_csv(pca_results_path, low_memory=low_memory)  # Load the PCA results file
             df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
 
             if df.empty:  # Verify if the DataFrame is empty
                 print(
                     f"{BackgroundColors.RED}Error: PCA results file at {BackgroundColors.CYAN}{pca_results_path}{BackgroundColors.RED} is empty.{Style.RESET_ALL}"
                 )
-                return None  # Return None if the file is empty
+                return None  # Return None if the DataFrame is empty
 
-            best_row_index = df["cv_f1_score"].idxmax()  # Get the index of the row with the highest CV F1-Score
-            best_n_components = df.loc[best_row_index, "n_components"]  # Get the optimal number of components
+            required_columns = ["n_components", "cv_f1_score"]  # Required columns for PCA selection
+            for col in required_columns:  # Ensure the required columns are present
+                if col not in df.columns:
+                    raise KeyError(col)  # Raise if a required column is missing
+
+            metric_columns = ["test_f1_score", "test_fnr", "test_fpr", "explained_variance"]  # Metrics for safe ranking
+            if all(col in df.columns for col in metric_columns):  # Use the full ranking only if all metrics exist
+                df = df.copy()  # Make a copy before numeric conversion
+                df["n_components"] = pd.to_numeric(df["n_components"], errors="raise")  # Normalize component counts
+                df["test_f1_score"] = pd.to_numeric(df["test_f1_score"], errors="raise")  # Normalize test F1 scores
+                df["test_fnr"] = pd.to_numeric(df["test_fnr"], errors="raise")  # Normalize test FNR
+                df["test_fpr"] = pd.to_numeric(df["test_fpr"], errors="raise")  # Normalize test FPR
+                df["explained_variance"] = pd.to_numeric(df["explained_variance"], errors="raise")  # Normalize explained variance
+
+                sorted_df = df.sort_values(
+                    by=["test_f1_score", "test_fnr", "test_fpr", "explained_variance", "n_components"],
+                    ascending=[False, True, True, False, True],
+                    kind="mergesort",
+                )  # Rank candidates with stable sorting and explicit tie-breakers
+                best_n_components = sorted_df.iloc[0]["n_components"]  # Select the best row after ranking
+            else:  # Fallback to CV F1 when the full metric set is unavailable
+                best_row_index = df["cv_f1_score"].idxmax()  # Find the highest CV F1-Score row
+                best_n_components = df.loc[best_row_index, "n_components"]  # Select n_components from the best CV F1 row
 
             verbose_output(
                 f"{BackgroundColors.GREEN}Successfully extracted best PCA configuration. Optimal components: {BackgroundColors.CYAN}{best_n_components}{Style.RESET_ALL}"
             )  # Output the verbose message
-
-            best_n_components = df.loc[best_row_index, "n_components"]  # Get the optimal number of components
 
             best_n_components_int = int(pd.to_numeric(best_n_components, errors="raise"))  # Ensure it's an integer
 
