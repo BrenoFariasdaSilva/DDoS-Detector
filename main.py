@@ -83,6 +83,7 @@ from colorama import Style  # For terminal text styling
 from lime.lime_tabular import LimeTabularExplainer  # For LIME explanations
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
+from typing import Any, cast  # For static typing helpers
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier  # For Gradient Boosting model
 from sklearn.linear_model import LogisticRegression  # For logistic regression model
 from sklearn.metrics import classification_report, confusion_matrix  # For evaluating model performance
@@ -516,7 +517,7 @@ def load_file(file_path):
             )
             arff_data = load_arff_file_safely(file_path)  # Load ARFF data using safe loader
             df = pd.DataFrame(
-                arff_data["data"], columns=[attr[0] for attr in arff_data["attributes"]]
+                arff_data["data"], columns=pd.Index([attr[0] for attr in arff_data["attributes"]])
             )  # Create DataFrame with correct column names
         elif ext in ["csv", "txt"]:  # CSV or TXT
             verbose_output(
@@ -1077,7 +1078,7 @@ def evaluate_model(model, X_test, y_test, duration_str):
         preds = model.predict(X_test)  # Make predictions on the test data
 
         report = classification_report(
-            y_test, preds, output_dict=True, zero_division=0
+            y_test, preds, output_dict=True, zero_division=cast(Any, 0)
         )  # Generate classification report as dictionary
 
         conf_matrix = confusion_matrix(y_test, preds)  # Generate confusion matrix
@@ -1343,7 +1344,7 @@ def generate_overall_performance_summary(all_model_scores, output_path=".", feat
         )  # Sort first by Dataset name (alphabetically), then by F1-Score (descending within each dataset)
 
         output_df = pd.DataFrame(
-            formatted_scores, columns=columns
+            formatted_scores, columns=pd.Index(columns)
         )  # Create a DataFrame using the sorted scores and defined column order
         os.makedirs(output_path, exist_ok=True)  # Ensure the output directory exists
         output_file = os.path.join(
@@ -1749,7 +1750,7 @@ def explain_predictions_with_lime(model, X_train, X_test, feature_names, model_n
                 predict_fn=model.predict_proba,  # Prediction function for the model
                 num_features=len(feature_names),  # Number of features to include in the explanation
             )
-            lime_df = pd.DataFrame(exp.as_list(), columns=["feature", "weight"])  # Create a DataFrame for LIME explanation
+            lime_df = pd.DataFrame(exp.as_list(), columns=pd.Index(["feature", "weight"]))  # Create a DataFrame for LIME explanation
             generate_csv_and_image(lime_df, f"{model_name}_lime_instance_{i+1}.csv", is_visualizable=True, index=False, float_format="%.2f")  # Save LIME explanation to CSV and generate PNG image
     except Exception as e:
         print(str(e))
