@@ -69,7 +69,7 @@ from scapy.all import PcapReader  # For memory-efficient PCAP reading using Scap
 from scipy.io import arff as scipy_arff  # Used to read ARFF files
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For Telegram utilities and global exception hook
 from tqdm import tqdm  # For showing a progress bar
-from typing import Optional  # For optional typing hints
+from typing import Any, Optional, cast  # For optional typing hints
 
 
 # Macros:
@@ -1412,7 +1412,7 @@ def load_arff_with_liac(input_path):
         with open(input_path, "r", encoding="utf-8") as f:  # Open the ARFF file for reading
             data = arff.load(f)  # Load using liac-arff
 
-        return pd.DataFrame(data["data"], columns=[attr[0] for attr in data["attributes"]])  # Convert to DataFrame
+        return pd.DataFrame(data["data"], columns=pd.Index([attr[0] for attr in data["attributes"]]))  # Convert to DataFrame
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -1577,15 +1577,15 @@ def normalize_dataframe_types(df: pd.DataFrame) -> pd.DataFrame:
             return df  # Return as-is when there is no DataFrame to normalize
 
         for col in list(df.columns):  # Iterate over a static list of columns to avoid mutation issues
-            series = df[col]  # Extract the column series for inspection and transformation
+            series = cast(pd.Series, df[col])  # Extract the column series for inspection and transformation
 
             try:  # Attempt to decode any bytes-like entries in this column
-                if series.map(lambda x: isinstance(x, (bytes, bytearray))).any():  # If any bytes-like objects present
+                if bool(cast(Any, series.map(lambda x: isinstance(x, (bytes, bytearray))).any())):  # If any bytes-like objects present
                     series = series.map(lambda x: x.decode("utf-8", errors="replace") if isinstance(x, (bytes, bytearray)) else x)  # Decode bytes while preserving non-bytes
             except Exception:  # If decoding attempt fails for unexpected reasons
                 series = series.map(lambda x: x.decode("utf-8", errors="replace") if isinstance(x, (bytes, bytearray)) else x)  # Best-effort decode fallback
 
-            non_null = series[~series.isna()]  # Slice non-null values for type inspection
+            non_null = cast(pd.Series, series[~series.isna()])  # Slice non-null values for type inspection
 
             if non_null.empty:  # If column contains only nulls
                 df[col] = series  # Preserve column as-is when empty of values
