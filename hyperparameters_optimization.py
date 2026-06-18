@@ -1120,9 +1120,9 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
 
         scaler = StandardScaler()  # Initialize the StandardScaler
 
-        X_train_scaled = scaler.fit_transform(X_train)  # Fit and transform the training features
+        X_train_scaled = np.asarray(scaler.fit_transform(X_train))  # Fit and transform the training features
 
-        X_test_scaled = scaler.transform(X_test)  # Transform the testing features
+        X_test_scaled = np.asarray(scaler.transform(X_test))  # Transform the testing features
 
         verbose_output(
             f"{BackgroundColors.GREEN}Data split successful. Training set shape: {BackgroundColors.CYAN}{X_train_scaled.shape}{BackgroundColors.GREEN}. Testing set shape: {BackgroundColors.CYAN}{X_test_scaled.shape}{Style.RESET_ALL}"
@@ -1366,7 +1366,7 @@ def is_fully_processed(csv_path, models):
             if file_results.empty:  # If no results for this file
                 return False  # Not processed
             
-            processed_models = set(file_results["model"].unique())  # Get processed models
+            processed_models = set(cast(pd.Series, file_results["model"]).unique())  # Get processed models
             required_models = set(models.keys())  # Get required models
             
             if required_models.issubset(processed_models):  # If all models processed
@@ -1876,10 +1876,10 @@ def compute_metrics_from_predictions(model, y_true, y_pred, X=None):
     try:
         metrics = {}  # Container for computed metrics
 
-        f1 = f1_score(y_true, y_pred, average="weighted", zero_division=0)  # Weighted F1 score with zero_division guard for single-class folds
+        f1 = f1_score(y_true, y_pred, average="weighted", zero_division=cast(Any, 0))  # Weighted F1 score with zero_division guard for single-class folds
         accuracy = accuracy_score(y_true, y_pred)  # Accuracy score
-        precision = precision_score(y_true, y_pred, average="weighted", zero_division=0)  # Precision with zero_division guard
-        recall = recall_score(y_true, y_pred, average="weighted", zero_division=0)  # Recall with zero_division guard
+        precision = precision_score(y_true, y_pred, average="weighted", zero_division=cast(Any, 0))  # Precision with zero_division guard
+        recall = recall_score(y_true, y_pred, average="weighted", zero_division=cast(Any, 0))  # Recall with zero_division guard
         mcc = matthews_corrcoef(y_true, y_pred)  # Matthews correlation coefficient
         try:  # Attempt Cohen's kappa safely to handle single-class fold edge cases
             kappa = cohen_kappa_score(y_true, y_pred)  # Cohen's kappa
@@ -2782,9 +2782,10 @@ def apply_grid_search_subsampling(X_train, y_train):
 
         y_arr = np.asarray(y_train)  # Convert labels to numpy array for stratified split compatibility
 
-        _, X_sampled, _, y_sampled = train_test_split(
+        _, X_sampled_raw, _, y_sampled = train_test_split(
             X_train, y_arr, test_size=fraction, random_state=42, stratify=y_arr
         )  # Apply stratified split to retain class proportions in the subsample
+        X_sampled = np.asarray(X_sampled_raw)  # Normalize sampled features to an ndarray for shape-safe logging and downstream fitting
 
         print(
             f"{BackgroundColors.GREEN}[INFO] Grid-search subsampling active: using {BackgroundColors.CYAN}{fraction * 100:.1f}%"
@@ -2838,7 +2839,7 @@ def compute_memory_per_job(model, keys, combo, X_train, y_train) -> float:
         y_sample = np.asarray(y_train)[:sample_size]  # Extract label sample from training labels for fit measurement
 
         try:  # Attempt a small sample fit to trigger model memory allocation for measurement
-            clf = clone(model)  # Clone model to avoid mutating the base instance during measurement
+            clf = cast(Any, clone(model))  # Clone model to avoid mutating the base instance during measurement
             clf.set_params(**dict(zip(keys, combo)))  # Apply the test combination to the fresh clone
             clf.fit(X_sample, y_sample)  # Fit on sample to trigger realistic model memory allocation
             del clf  # Delete fitted model immediately after measurement to release allocated memory
@@ -2945,13 +2946,16 @@ def execute_single_combination(task_tuple):
         total_predict_time = 0.0  # Initialize total predict time before the inner try block for the same NameError-prevention reason
 
         try:
+            if WORKER_X_TRAIN is None or WORKER_Y_TRAIN is None:  # Verify worker globals were initialized by pool setup
+                raise RuntimeError("Worker training data has not been initialized")  # Fail clearly when worker state is unavailable
+            worker_x_train = np.asarray(WORKER_X_TRAIN)  # Normalize worker training features for safe positional indexing
             y_train_arr = np.asarray(WORKER_Y_TRAIN)  # Convert worker training labels to numpy array for safe fold indexing
             cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)  # Initialize 10-fold stratified cross-validator for robust evaluation
             fold_metrics_list = []  # Accumulate per-fold metric dictionaries for aggregation
             fold_elapsed = []  # Accumulate per-fold elapsed times for diagnostics
 
-            for fold_idx, (train_idx, val_idx) in enumerate(cv.split(WORKER_X_TRAIN, y_train_arr), start=1):  # Generate stratified fold splits with per-fold index tracking
-                X_tr, X_val = WORKER_X_TRAIN[train_idx], WORKER_X_TRAIN[val_idx]  # Slice fold training and validation features using positional indices
+            for fold_idx, (train_idx, val_idx) in enumerate(cv.split(worker_x_train, y_train_arr), start=1):  # Generate stratified fold splits with per-fold index tracking
+                X_tr, X_val = worker_x_train[train_idx], worker_x_train[val_idx]  # Slice fold training and validation features using positional indices
                 y_tr, y_val = y_train_arr[train_idx], y_train_arr[val_idx]  # Slice fold training and validation labels using safe numpy indexing
 
                 if svm_linear_substitution:  # Verify if LinearSVC substitution is active for this fold
@@ -3596,12 +3600,12 @@ def process_single_csv_file(csv_path, dir_results_list, cfg_dataset_name: str = 
             feature_selection_method = "All Features (Fallback)"  # Update selection method label to reflect fallback mode
 
         try:  # Apply validated feature selection with KeyError protection for residual index mismatches
-            X_train_ga = get_feature_subset(X_train_scaled, valid_ga_features, feature_names)  # Apply validated feature subset to the scaled training set
-            X_test_ga = get_feature_subset(X_test_scaled, valid_ga_features, feature_names)  # Apply validated feature subset to the scaled testing set
+            X_train_ga = np.asarray(get_feature_subset(X_train_scaled, valid_ga_features, feature_names))  # Apply validated feature subset to the scaled training set
+            X_test_ga = np.asarray(get_feature_subset(X_test_scaled, valid_ga_features, feature_names))  # Apply validated feature subset to the scaled testing set
         except KeyError:  # Catch any residual KeyError from unexpected column index mismatch during selection
             print(f"{BackgroundColors.YELLOW}[WARNING] KeyError during feature selection for {os.path.basename(csv_path)}. Falling back to all features.{Style.RESET_ALL}")  # Log the fallback reason with file context
-            X_train_ga = X_train_scaled  # Use the full scaled training set as a safe fallback
-            X_test_ga = X_test_scaled  # Use the full scaled testing set as a safe fallback
+            X_train_ga = np.asarray(X_train_scaled)  # Use the full scaled training set as a safe fallback
+            X_test_ga = np.asarray(X_test_scaled)  # Use the full scaled testing set as a safe fallback
             valid_ga_features = feature_names  # Reset to all feature names to align with the full feature fallback
             feature_selection_method = "All Features (Fallback)"  # Update label to reflect fallback mode
 
@@ -3617,8 +3621,8 @@ def process_single_csv_file(csv_path, dir_results_list, cfg_dataset_name: str = 
 
         if X_train_ga.shape[1] == 0:  # Verify if feature matrix is still empty after all fallback attempts
             print(f"{BackgroundColors.YELLOW}[WARNING] Feature matrix empty after all selection attempts for {csv_path}. Falling back to full feature set.{Style.RESET_ALL}")  # Log emergency fallback due to persistent empty feature matrix
-            X_train_ga = X_train_scaled  # Use the full training set as last-resort emergency fallback
-            X_test_ga = X_test_scaled  # Use the full testing set as last-resort emergency fallback
+            X_train_ga = np.asarray(X_train_scaled)  # Use the full training set as last-resort emergency fallback
+            X_test_ga = np.asarray(X_test_scaled)  # Use the full testing set as last-resort emergency fallback
             valid_ga_features = feature_names  # Reset feature list to all features for the emergency fallback
             feature_selection_method = "All Features (Emergency Fallback)"  # Update label for tracking the emergency fallback path
 
@@ -3804,7 +3808,7 @@ def save_optimization_results(csv_path, results_list):
         )  # Add hardware specs column
 
         desired = [c for c in HYPERPARAMETERS_RESULTS_CSV_COLUMNS if c in df_results.columns]
-        df_results = df_results[desired + [c for c in df_results.columns if c not in desired]]
+        df_results = df_results.loc[:, desired + [c for c in df_results.columns if c not in desired]]
 
         for col in df_results.columns:  # Truncate long values for readability
             col_l = col.lower()  # Lowercase column name
