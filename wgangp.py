@@ -175,6 +175,8 @@ class CSVFlowDataset(Dataset):
                 raise ValueError(f"Label column '{label_col}' not found in CSV. Available columns: {list(df.columns)}")  # Raise error
 
         df = preprocess_dataframe(df, label_col, remove_zero_variance=True)  # Clean and filter DataFrame
+        if df is None or df.empty:  # Ensure preprocessing returned usable tabular data
+            raise ValueError(f"No valid data remaining after preprocessing {csv_path}")  # Raise error
         self.original_num_samples = len(df)  # Store number of samples after preprocessing (NaN/inf removed)
 
         if len(df) == 0:  # If all rows were dropped
@@ -192,7 +194,8 @@ class CSVFlowDataset(Dataset):
         self.label_col = label_col  # Save label column name
         self.feature_cols = feature_cols  # Save list of feature columns
 
-        self.labels_raw: np.ndarray = np.asarray(df[label_col].values, dtype=str)  # Extract raw labels as string array for consistent encoding, store as instance variable
+        label_series = cast(pd.Series, df[label_col])  # Narrow dynamic pandas column access to the expected label Series
+        self.labels_raw: np.ndarray = np.asarray(label_series.values, dtype=str)  # Extract raw labels as string array for consistent encoding, store as instance variable
 
         self.labels: Any  # Must be Any or Pylance will error
 
@@ -205,19 +208,22 @@ class CSVFlowDataset(Dataset):
             self.label_encoder = label_encoder  # Store provided encoder
             self.labels = self.label_encoder.transform(labels_arr)  # Encode labels with given encoder
 
-        X = df[feature_cols].values.astype(np.float32)  # Extract features and cast to float32
+        X = df.loc[:, feature_cols].to_numpy(dtype=np.float32, copy=False)  # Extract features and cast to float32
 
         if scaler is None:  # If no scaler is provided
             self.scaler = StandardScaler()  # Instantiate a default scaler
             if fit_scaler:  # Fit scaler when requested
-                self.X = self.scaler.fit_transform(X)  # Fit and transform features
+                self.X = np.asarray(self.scaler.fit_transform(X), dtype=np.float32)  # Fit and transform features
             else:  # Do not fit scaler
-                self.X = self.scaler.transform(X)  # Only transform features
+                self.X = np.asarray(self.scaler.transform(X), dtype=np.float32)  # Only transform features
         else:  # Scaler is provided
             self.scaler = scaler  # Store provided scaler
-            self.X = self.scaler.transform(X)  # Transform features with external scaler
+            self.X = np.asarray(self.scaler.transform(X), dtype=np.float32)  # Transform features with external scaler
 
-        self.n_classes = len(self.label_encoder.classes_)  # Count number of unique classes
+        label_classes = getattr(self.label_encoder, "classes_", None)  # Retrieve fitted label classes from the encoder
+        if label_classes is None:  # Verify the label encoder is fitted before counting classes
+            raise ValueError("Label encoder has no fitted classes_ attribute")  # Raise clear error when encoder state is invalid
+        self.n_classes = len(label_classes)  # Count number of unique classes
         self.feature_dim = self.X.shape[1]  # Determine dimensionality of features
 
         self.X = torch.from_numpy(np.ascontiguousarray(self.X)).float()  # Pre-convert features to float tensor to avoid per-batch numpy-to-tensor conversion overhead
@@ -4213,7 +4219,7 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
     X_fake = np.vstack(all_fake) if isinstance(all_fake, list) else all_fake  # Stack batches if list or use pre-allocated array directly
     Y_fake = np.concatenate(all_labels) if isinstance(all_labels, list) else all_labels  # Concatenate if list or use array directly
     X_orig = scaler.inverse_transform(X_fake)  # Inverse transform features to original scale
-    df = pd.DataFrame(X_orig, columns=feature_cols)  # Create DataFrame with original feature names
+    df = pd.DataFrame(X_orig, columns=pd.Index(feature_cols))  # Create DataFrame with original feature names
     df[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
     
     if config.get("hardware_tracking", False):  # If enabled in config
