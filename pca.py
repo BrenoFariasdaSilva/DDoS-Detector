@@ -1069,8 +1069,8 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, scale_data=True):
             except Exception:  # Preserve prior silent-failure behavior if attribute cannot be set
                 pass  # No-op on failure
         else:
-            X_train = X_train_df.values if hasattr(X_train_df, "values") else np.asarray(X_train_df)  # Convert training DataFrame to numpy array without scaling
-            X_test = X_test_df.values if hasattr(X_test_df, "values") else np.asarray(X_test_df)  # Convert testing DataFrame to numpy array without scaling
+            X_train = np.asarray(X_train_df)  # Convert training data to numpy array without scaling
+            X_test = np.asarray(X_test_df)  # Convert testing data to numpy array without scaling
 
         return X_train, X_test, y_train, y_test, scaler  # Return the split data and optional scaler
     except Exception as e:
@@ -1195,12 +1195,12 @@ def run_cv_folds(model: RandomForestClassifier, X_train_pca, y_train, skf: Strat
             y_pred_fold = model.predict(X_val_fold)  # Predict on validation fold
             cv_accs.append(accuracy_score(y_val_fold, y_pred_fold))  # Calculate and store accuracy
             cv_precs.append(
-                precision_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
+                precision_score(y_val_fold, y_pred_fold, average="weighted", zero_division=cast(Any, 0))
             )  # Calculate and store precision
             cv_recs.append(
-                recall_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)
+                recall_score(y_val_fold, y_pred_fold, average="weighted", zero_division=cast(Any, 0))
             )  # Calculate and store recall
-            f1_fold = f1_score(y_val_fold, y_pred_fold, average="weighted", zero_division=0)  # Compute F1
+            f1_fold = f1_score(y_val_fold, y_pred_fold, average="weighted", zero_division=cast(Any, 0))  # Compute F1
             cv_f1s.append(f1_fold)  # Store F1
             pred_elapsed = round(time.perf_counter() - start_pred, 6)  # Stop timer after prediction+metrics and round
             total_testing_time += pred_elapsed  # Accumulate testing durations for CV
@@ -1281,9 +1281,9 @@ def compute_test_metrics(model: RandomForestClassifier, X_train_pca, y_train, X_
         y_pred = model.predict(X_test_pca)  # Predict on test data
 
         acc = accuracy_score(y_test, y_pred)  # Calculate test accuracy
-        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test precision
-        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test recall
-        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate test f1
+        prec = precision_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate test precision
+        rec = recall_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate test recall
+        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate test f1
 
         fpr, fnr = compute_fpr_fnr_from_labels(y_test, y_pred)  # Compute FPR/FNR for binary and multiclass predictions
 
@@ -1779,10 +1779,10 @@ def merge_or_create_results_df(csv_output: str, comparison_df: pd.DataFrame, hea
                 df_combined = pd.concat([df_existing[header], comparison_df], ignore_index=True, sort=False)  # Concatenate existing and new rows
                 try:
                     df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")  # Parse timestamps for sorting
-                    df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)  # Sort by parsed timestamp descending
+                    df_combined = cast(Any, df_combined).sort_values(by="timestamp_dt", ascending=False)  # Sort by parsed timestamp descending
                     df_combined = df_combined.drop(columns=["timestamp_dt"])  # Remove temporary sorting column
                 except Exception:
-                    df_combined = df_combined.sort_values(by="timestamp", ascending=False)  # Fallback sort by raw timestamp string
+                    df_combined = cast(Any, df_combined).sort_values(by="timestamp", ascending=False)  # Fallback sort by raw timestamp string
 
                 return df_combined.reset_index(drop=True)  # Reset index after merge and sorting
             except Exception:
@@ -1982,6 +1982,8 @@ def load_and_prepare_pca_dataset(csv_path: str, remove_zero_variance: bool) -> t
             return None  # Return None to signal failure
 
         cleaned_df = preprocess_dataframe(df, remove_zero_variance=remove_zero_variance)  # Preprocess the DataFrame
+        if cleaned_df is None or cleaned_df.empty:  # Verify if preprocessing produced a usable DataFrame
+            return None  # Return None to signal failure
         X = cleaned_df.select_dtypes(include=["number"]).iloc[:, :-1]  # Select numeric features (all columns except last)
         y = cleaned_df.iloc[:, -1]  # Select target variable (last column)
 
