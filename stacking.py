@@ -126,7 +126,7 @@ from sklearn.svm import SVC  # For Support Vector Machine model
 from sklearn.tree import DecisionTreeClassifier  # For Decision Tree classifier model
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
-from typing import Optional, List, Tuple  # For optional and collection typing hints
+from typing import Any, Callable, Optional, List, Tuple  # For optional and collection typing hints
 from xgboost import XGBClassifier  # For XGBoost classifier
 
 
@@ -5004,7 +5004,7 @@ def build_shap_progress_description(model_name, dataset_name, explainer_name):
         raise  # Re-raise the exception to preserve original behavior.
 
 
-def resolve_shap_progress_target(shap_callable):
+def resolve_shap_progress_target(shap_callable) -> Tuple[Optional[str], Optional[Any], Optional[str], Optional[Callable[..., Any]]]:
     """
     Resolve the runtime tqdm symbol used by a SHAP callable when exposed.
 
@@ -5063,7 +5063,7 @@ def compute_shap_values_with_context(explainer, X_test_for_shap, progress_desc, 
 
     try:
         patch_kind, patch_owner, patch_attr, original_tqdm = resolve_shap_progress_target(explainer.shap_values)  # Resolve SHAP runtime tqdm target when exposed by the installed version.
-        if original_tqdm is None:  # Verify whether SHAP exposes a patchable tqdm hook before attempting runtime injection.
+        if original_tqdm is None or patch_owner is None or patch_attr is None:  # Verify whether SHAP exposes a complete patchable tqdm hook before attempting runtime injection.
             return explainer.shap_values(X_test_for_shap)  # Compute SHAP values directly when no patchable tqdm hook exists.
         wrapped_tqdm = create_shap_progress_wrapper(original_tqdm, progress_desc, progress_phase)  # Build contextual tqdm wrapper around the original SHAP progress constructor.
         try:
@@ -5075,7 +5075,7 @@ def compute_shap_values_with_context(explainer, X_test_for_shap, progress_desc, 
         finally:
             if patch_kind == "globals_dict":  # Verify whether the patched tqdm symbol lives in SHAP callable globals.
                 patch_owner[patch_attr] = original_tqdm  # Restore the original SHAP globals-based tqdm symbol after computation.
-            elif patch_owner is not None and patch_attr is not None:
+            else:
                 setattr(patch_owner, patch_attr, original_tqdm)  # Restore the original SHAP module-attribute tqdm symbol after computation.
     except Exception as e:
         print(str(e))  # Print the exception string for diagnostics.
@@ -10776,7 +10776,7 @@ def log_resolved_configuration(config: dict) -> None:
         raise  # Re-raise to preserve original failure semantics
 
 
-def build_telegram_pipeline_summary(config: dict, dataset_path: str = None, dataset_name: str = None, classification_mode: str = None, attack_types_list=None, include_attack_types: bool = False) -> list:
+def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Optional[str] = None, dataset_name: Optional[str] = None, classification_mode: Optional[str] = None, attack_types_list: Optional[List[Any]] = None, include_attack_types: bool = False) -> List[str]:
     """
     Build a Telegram message bundle describing the pipeline that will run.
 
