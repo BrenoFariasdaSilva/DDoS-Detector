@@ -126,7 +126,7 @@ from sklearn.svm import SVC  # For Support Vector Machine model
 from sklearn.tree import DecisionTreeClassifier  # For Decision Tree classifier model
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
-from typing import Any, Callable, Optional, List, Tuple  # For optional and collection typing hints
+from typing import Any, Callable, Optional, List, Tuple, cast  # For optional and collection typing hints
 from xgboost import XGBClassifier  # For XGBoost classifier
 
 
@@ -1765,7 +1765,7 @@ def extract_class_metrics(y_true, y_pred):
     """
     
     try:
-        report = classification_report(y_true, y_pred, output_dict=True, zero_division=0)  # Generate report dict
+        report = classification_report(y_true, y_pred, output_dict=True, zero_division=cast(Any, 0))  # Generate report dict
 
         if not isinstance(report, dict):  # Ensure report has mapping semantics
             raise TypeError("classification_report did not return a dict as expected")  # Defensive type verification
@@ -1784,10 +1784,10 @@ def extract_class_metrics(y_true, y_pred):
 
         global_metrics = {  # Compute deterministic global metrics
             "accuracy": float(accuracy_score(y_true, y_pred)),
-            "macro_f1": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
-            "weighted_f1": float(f1_score(y_true, y_pred, average="weighted", zero_division=0)),
-            "macro_precision": float(precision_score(y_true, y_pred, average="macro", zero_division=0)),
-            "macro_recall": float(recall_score(y_true, y_pred, average="macro", zero_division=0)),
+            "macro_f1": float(f1_score(y_true, y_pred, average="macro", zero_division=cast(Any, 0))),
+            "weighted_f1": float(f1_score(y_true, y_pred, average="weighted", zero_division=cast(Any, 0))),
+            "macro_precision": float(precision_score(y_true, y_pred, average="macro", zero_division=cast(Any, 0))),
+            "macro_recall": float(recall_score(y_true, y_pred, average="macro", zero_division=cast(Any, 0))),
         }
 
         return {"per_class": per_class, "global": global_metrics}  # Return structured metrics
@@ -2274,7 +2274,7 @@ def compute_and_save_tsne_plot(X_scaled, labels, output_path, title, perplexity=
             n_components=2,  # 2D embedding for visualization
             perplexity=actual_perplexity,  # Adjusted perplexity parameter
             random_state=random_state,  # Random seed for reproducibility
-            n_iter=1000  # Number of iterations
+            max_iter=1000  # Number of iterations
         )  # Create t-SNE object
 
         X_embedded = tsne.fit_transform(X_scaled)  # Compute 2D embedding
@@ -2610,7 +2610,7 @@ def aggregate_feature_usage(results_df, top_n=None):
             row_vals = [counts[feat].get(m, 0) for m in model_names]  # Get counts per model with zero fill
             matrix.append(row_vals)  # Append the row values
 
-        df_counts = pd.DataFrame(matrix, index=feature_index, columns=model_names)  # Build counts DataFrame
+        df_counts = pd.DataFrame(matrix, index=pd.Index(feature_index), columns=pd.Index(model_names))  # Build counts DataFrame
         df_counts["total"] = df_counts.sum(axis=1)  # Compute total occurrences across models
         df_counts = df_counts.sort_values("total", ascending=False)  # Sort by total descending for top-N selection
 
@@ -3002,7 +3002,7 @@ def extract_genetic_algorithm_features(file_path, config=None):
                     ranked_rows = candidate_rows.copy()  # Copy candidate rows before numeric conversion and sorting
                     ranked_rows[metric_column] = pd.to_numeric(ranked_rows[metric_column], errors="coerce")  # Convert ranking metric to numeric values for deterministic ordering
                     ascending_order = metric_column.lower().endswith("fpr") or metric_column.lower().endswith("fnr")  # Use ascending order for error-rate metrics and descending for score metrics
-                    ranked_rows = ranked_rows.sort_values(by=metric_column, ascending=ascending_order, na_position="last")  # Sort rows by the resolved metric with NaN values placed last
+                    ranked_rows = cast(Any, ranked_rows).sort_values(by=metric_column, ascending=ascending_order, na_position="last")  # Sort rows by the resolved metric with NaN values placed last
                     if not ranked_rows.empty:  # Continue only when ranking produced at least one usable row
                         selected_row = ranked_rows.iloc[0]  # Select the top-ranked fallback row
                         selected_source = f"fallback_metric={metric_column}"  # Record metric-based fallback source for diagnostics
@@ -3150,7 +3150,7 @@ def extract_principal_component_analysis_features(file_path, config=None):
                 f"{BackgroundColors.GREEN}Successfully extracted best PCA configuration. Optimal components: {BackgroundColors.CYAN}{best_n_components}{Style.RESET_ALL}"
             )  # Output the verbose message
 
-            best_n_components_int = int(pd.to_numeric(best_n_components, errors="raise"))  # Ensure it's an integer
+            best_n_components_int = int(cast(Any, pd.to_numeric(best_n_components, errors="raise")))  # Ensure it's an integer
 
             return best_n_components_int  # Return the optimal number of components
 
@@ -3202,7 +3202,7 @@ def extract_recursive_feature_elimination_features(file_path, config=None):
 
         try:  # Try to load the RFE runs results
             low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
-            df = pd.read_csv(rfe_runs_path, usecols=["top_features"], low_memory=low_memory)  # Load only the "top_features" column
+            df = pd.read_csv(rfe_runs_path, usecols=cast(Any, ["top_features"]), low_memory=low_memory)  # Load only the "top_features" column
             df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
 
             if not df.empty:  # Verify if the DataFrame is not empty
@@ -3407,7 +3407,7 @@ def load_arff_with_liac(input_path: str, config=None) -> pd.DataFrame:
         with open(input_path, "r", encoding="utf-8") as f:  # Open the ARFF file for reading
             data = arff.load(f)  # Load using liac-arff
 
-        return pd.DataFrame(data["data"], columns=[attr[0] for attr in data["attributes"]])  # Convert to DataFrame
+        return pd.DataFrame(data["data"], columns=pd.Index([attr[0] for attr in data["attributes"]]))  # Convert to DataFrame
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -3898,9 +3898,9 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, X_augment
 
         scaler = StandardScaler()  # Initialize the StandardScaler
 
-        X_train_scaled = scaler.fit_transform(X_train)  # Fit and transform the training features (including augmented if provided)
+        X_train_scaled = np.asarray(scaler.fit_transform(X_train))  # Fit and transform the training features (including augmented if provided)
 
-        X_test_scaled = scaler.transform(X_test)  # Transform the testing features (original data only)
+        X_test_scaled = np.asarray(scaler.transform(X_test))  # Transform the testing features (original data only)
 
         del X_train, X_test, y_series  # Release large pre-scaled matrices and temporary target Series after scaling
         gc.collect()  # Force garbage collection to reclaim memory from released pre-scaled matrices
@@ -4038,7 +4038,7 @@ def filter_matching_hyperparams(df: pd.DataFrame, csv_path: str, config: dict) -
         inferred_dataset_name = get_dataset_name(csv_path_str)  # Infer dataset name from path using existing utility
 
         if "dataset_path" in df.columns:  # Attempt dataset_path exact match (highest priority)
-            path_match = df[df["dataset_path"] == csv_path_str]  # Filter rows by exact dataset_path value
+            path_match = cast(pd.DataFrame, df.loc[df["dataset_path"] == csv_path_str, :])  # Filter rows by exact dataset_path value
             if not path_match.empty:  # If dataset_path match found
                 verbose_output(
                     f"[DEBUG] filter_matching_hyperparams: matched {len(path_match)} row(s) by dataset_path",
@@ -4047,7 +4047,7 @@ def filter_matching_hyperparams(df: pd.DataFrame, csv_path: str, config: dict) -
                 return path_match  # Return highest-priority match
 
         if "dataset_name" in df.columns:  # Attempt dataset_name fallback (secondary priority)
-            name_match = df[df["dataset_name"] == inferred_dataset_name]  # Filter rows by inferred dataset name
+            name_match = cast(pd.DataFrame, df.loc[df["dataset_name"] == inferred_dataset_name, :])  # Filter rows by inferred dataset name
             if not name_match.empty:  # If dataset_name match found
                 verbose_output(
                     f"[DEBUG] filter_matching_hyperparams: matched {len(name_match)} row(s) by dataset_name",
@@ -4056,7 +4056,7 @@ def filter_matching_hyperparams(df: pd.DataFrame, csv_path: str, config: dict) -
                 return name_match  # Return secondary-priority match
 
         if "base_csv" in df.columns:  # Attempt base_csv last resort fallback
-            base_match = df[df["base_csv"] == base_filename]  # Filter rows by base CSV filename
+            base_match = cast(pd.DataFrame, df.loc[df["base_csv"] == base_filename, :])  # Filter rows by base CSV filename
             if not base_match.empty:  # If base_csv match found
                 verbose_output(
                     f"[DEBUG] filter_matching_hyperparams: matched {len(base_match)} row(s) by base_csv",
@@ -4617,9 +4617,9 @@ def load_existing_model_if_available(model, model_name, dataset_file, feature_se
             y_pred = model.predict(X_test)  # Predict labels using the loaded model on test features
             elapsed_time = 0.0  # Set elapsed time to zero since retraining was skipped
             acc = accuracy_score(y_test, y_pred)  # Calculate accuracy score on test predictions
-            prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted precision score
-            rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted recall score
-            f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted F1 score
+            prec = precision_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted precision score
+            rec = recall_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted recall score
+            f1 = f1_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted F1 score
             fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute false positive and false negative rates
             return (acc, prec, rec, f1, fpr, fnr, elapsed_time)  # Return the metrics tuple with zero elapsed time
         except Exception:  # If loading or evaluation fails
@@ -4698,9 +4698,9 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         elapsed_time = time.time() - start_time  # Calculate the total time elapsed
 
         acc = accuracy_score(y_test, y_pred)  # Calculate Accuracy
-        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Precision
-        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Recall
-        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate F1-Score
+        prec = precision_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate Precision
+        rec = recall_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate Recall
+        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate F1-Score
 
         fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute False Positive and False Negative rates
 
@@ -4761,9 +4761,9 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
         elapsed_time = time.time() - start_time  # Calculate the total time elapsed
 
         acc = accuracy_score(y_test, y_pred)  # Calculate Accuracy
-        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Precision (weighted)
-        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate Recall (weighted)
-        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate F1-Score (weighted)
+        prec = precision_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate Precision (weighted)
+        rec = recall_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate Recall (weighted)
+        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate F1-Score (weighted)
 
         fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute False Positive and False Negative rates for binary or multiclass predictions
 
@@ -6107,44 +6107,49 @@ def load_cache_results(csv_path, config=None):
             cache_dict = {}  # Initialize cache dictionary
 
             for _, row in df_cache.iterrows():  # Iterate through each row
-                feature_set = row.get("feature_set", "")  # Get feature set name
-                model_name = row.get("model_name", "")  # Get model name
-                execution_mode_row = row.get("execution_mode", "separate_files")  # Get execution mode from cached row
-                data_source_row = row.get("data_source", "Original")  # Get data source label from cached row
-                experiment_mode_row = row.get("experiment_mode", "original_only")  # Get experiment mode from cached row
-                aug_ratio_row = float(row["augmentation_ratio"]) if "augmentation_ratio" in row and not pd.isna(row.get("augmentation_ratio")) else None  # Parse augmentation ratio from cached row
-                attack_types_raw_row = safe_load_json(row.get("attack_types_combined", None))  # Load attack types from cached row
+                def cache_row_value(column_name, default=None):
+                    value = row.get(column_name, default)  # Retrieve a scalar value from the cache row
+                    return default if value is None or bool(cast(Any, pd.isna(value))) else value  # Normalize missing pandas scalars to the provided default
+
+                feature_set = str(cache_row_value("feature_set", ""))  # Get feature set name
+                model_name = str(cache_row_value("model_name", ""))  # Get model name
+                execution_mode_row = str(cache_row_value("execution_mode", "separate_files"))  # Get execution mode from cached row
+                data_source_row = str(cache_row_value("data_source", "Original"))  # Get data source label from cached row
+                experiment_mode_row = str(cache_row_value("experiment_mode", "original_only"))  # Get experiment mode from cached row
+                aug_ratio_value = cache_row_value("augmentation_ratio", None)  # Retrieve augmentation ratio when present
+                aug_ratio_row = float(aug_ratio_value) if aug_ratio_value is not None else None  # Parse augmentation ratio from cached row
+                attack_types_raw_row = safe_load_json(cache_row_value("attack_types_combined", None))  # Load attack types from cached row
                 attack_types_list_row = attack_types_raw_row if isinstance(attack_types_raw_row, list) else None  # Normalize attack types to list or None
                 cache_key = build_resume_cache_key(execution_mode_row, data_source_row, experiment_mode_row, aug_ratio_row, attack_types_list_row, feature_set, model_name)  # Build full resume cache key from all distinguishing dimensions
 
                 result_entry = {
-                    "model": row.get("model", ""),
-                    "dataset": row.get("dataset", ""),
-                    "execution_mode": row.get("execution_mode", "separate_files"),
-                    "attack_types_combined": row.get("attack_types_combined", None),
+                    "model": cache_row_value("model", ""),
+                    "dataset": cache_row_value("dataset", ""),
+                    "execution_mode": execution_mode_row,
+                    "attack_types_combined": cache_row_value("attack_types_combined", None),
                     "feature_set": feature_set,
-                    "classifier_type": row.get("classifier_type", ""),
+                    "classifier_type": cache_row_value("classifier_type", ""),
                     "model_name": model_name,
-                    "data_source": row.get("data_source", ""),
-                    "experiment_id": row.get("experiment_id", None),
-                    "experiment_mode": row.get("experiment_mode", "original_only"),
-                    "augmentation_ratio": float(row["augmentation_ratio"]) if "augmentation_ratio" in row and not pd.isna(row.get("augmentation_ratio")) else None,
-                    "n_features": int(row["n_features"]) if "n_features" in row and not pd.isna(row["n_features"]) else None,
-                    "n_samples_train": int(row["n_samples_train"]) if "n_samples_train" in row and not pd.isna(row["n_samples_train"]) else None,
-                    "n_samples_test": int(row["n_samples_test"]) if "n_samples_test" in row and not pd.isna(row["n_samples_test"]) else None,
-                    "accuracy": float(row["accuracy"]) if "accuracy" in row and not pd.isna(row["accuracy"]) else None,
-                    "precision": float(row["precision"]) if "precision" in row and not pd.isna(row["precision"]) else None,
-                    "recall": float(row["recall"]) if "recall" in row and not pd.isna(row["recall"]) else None,
-                    "f1_score": float(row["f1_score"]) if "f1_score" in row and not pd.isna(row["f1_score"]) else None,
-                    "fpr": float(row["fpr"]) if "fpr" in row and not pd.isna(row["fpr"]) else None,
-                    "fnr": float(row["fnr"]) if "fnr" in row and not pd.isna(row["fnr"]) else None,
-                    "elapsed_time_s": float(row["elapsed_time_s"]) if "elapsed_time_s" in row and not pd.isna(row["elapsed_time_s"]) else None,
-                    "cv_method": row.get("cv_method", None),
-                    "top_features": safe_load_json(row.get("top_features", None)),
-                    "rfe_ranking": safe_load_json(row.get("rfe_ranking", None)),
-                    "hyperparameters": safe_load_json(row.get("hyperparameters", None)),
-                    "features_list": safe_load_json(row.get("features_list", None)),
-                    "Hardware": row.get("Hardware", None),
+                    "data_source": data_source_row,
+                    "experiment_id": cache_row_value("experiment_id", None),
+                    "experiment_mode": experiment_mode_row,
+                    "augmentation_ratio": aug_ratio_row,
+                    "n_features": int(n_features_value) if (n_features_value := cache_row_value("n_features", None)) is not None else None,
+                    "n_samples_train": int(n_samples_train_value) if (n_samples_train_value := cache_row_value("n_samples_train", None)) is not None else None,
+                    "n_samples_test": int(n_samples_test_value) if (n_samples_test_value := cache_row_value("n_samples_test", None)) is not None else None,
+                    "accuracy": float(accuracy_value) if (accuracy_value := cache_row_value("accuracy", None)) is not None else None,
+                    "precision": float(precision_value) if (precision_value := cache_row_value("precision", None)) is not None else None,
+                    "recall": float(recall_value) if (recall_value := cache_row_value("recall", None)) is not None else None,
+                    "f1_score": float(f1_score_value) if (f1_score_value := cache_row_value("f1_score", None)) is not None else None,
+                    "fpr": float(fpr_value) if (fpr_value := cache_row_value("fpr", None)) is not None else None,
+                    "fnr": float(fnr_value) if (fnr_value := cache_row_value("fnr", None)) is not None else None,
+                    "elapsed_time_s": float(elapsed_time_value) if (elapsed_time_value := cache_row_value("elapsed_time_s", None)) is not None else None,
+                    "cv_method": cache_row_value("cv_method", None),
+                    "top_features": safe_load_json(cache_row_value("top_features", None)),
+                    "rfe_ranking": safe_load_json(cache_row_value("rfe_ranking", None)),
+                    "hyperparameters": safe_load_json(cache_row_value("hyperparameters", None)),
+                    "features_list": safe_load_json(cache_row_value("features_list", None)),
+                    "Hardware": cache_row_value("Hardware", None),
                 }
 
                 cache_dict[cache_key] = result_entry
@@ -6492,7 +6497,7 @@ def automl_cross_validate_model(model, X_train, y_train, cv_folds, trial=None, c
 
             model.fit(X_fold_train, y_fold_train)  # Fit model on fold training data using its internal n_jobs parallelism
             y_pred = model.predict(X_fold_val)  # Predict on fold validation data
-            fold_f1 = f1_score(y_fold_val, y_pred, average="weighted", zero_division=0)  # Calculate fold F1
+            fold_f1 = f1_score(y_fold_val, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate fold F1
             f1_scores.append(fold_f1)  # Append fold F1 score
 
             if trial is not None:  # If Optuna trial is provided
@@ -6890,9 +6895,9 @@ def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y
         elapsed = time.time() - start_time  # Calculate elapsed training time
 
         acc = accuracy_score(y_test, y_pred)  # Calculate accuracy
-        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted precision
-        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted recall
-        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate weighted F1 score
+        prec = precision_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted precision
+        rec = recall_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted recall
+        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted F1 score
 
         roc_auc = None  # Initialize ROC-AUC as None
         try:  # Try to compute ROC-AUC
