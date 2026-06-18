@@ -1445,8 +1445,8 @@ def coerce_numeric_columns(df):
                 include=["object", "string"]
             ).columns.tolist()  # List object/string columns as candidates
             for c in obj_cols:  # Iterate over candidate object/string columns
-                coerced = pd.to_numeric(df[c], errors="coerce")  # Attempt to coerce the column to numeric, invalid -> NaN
-                if coerced.notna().sum() > 0:  # If coercion produced any non-NaN values
+                coerced = cast(pd.Series, pd.to_numeric(df[c], errors="coerce"))  # Attempt to coerce the column to numeric, invalid -> NaN
+                if int(cast(Any, coerced.notna().sum())) > 0:  # If coercion produced any non-NaN values
                     numeric_df[c] = coerced  # Add the coerced column to the numeric DataFrame
 
         return numeric_df  # Return the numeric-only DataFrame (may be empty)
@@ -2050,7 +2050,7 @@ def save_tsne_plot(X_emb, labels, output_path, title):
                 unique = list(labels_ser.unique())  # Unique class labels (preserve order)
                 for cls in unique:  # Plot each class separately
                     mask = labels_ser == cls  # Boolean mask for class
-                    plt.scatter(X_emb[mask, 0], X_emb[mask, 1], label=sanitize_plot_text(f"{cls} ({int(counts.get(cls, 0))})"), s=8)  # Scatter plot for class with sanitized count label
+                    plt.scatter(X_emb[mask, 0], X_emb[mask, 1], label=sanitize_plot_text(f"{cls} ({int(cast(Any, counts.get(cls, 0)))})"), s=8)  # Scatter plot for class with sanitized count label
                 plt.legend(markerscale=2, fontsize="small")  # Add legend for classes
                 try:  # Try to add counts text box
                     counts_text = "\n".join([f"{str(c)}: {int(counts[c])}" for c in counts.index])  # Prepare counts text
@@ -2119,7 +2119,7 @@ def save_tsne_3d_plot(X_emb, labels, output_path, title):
                     X_emb[mask, 0],
                     X_emb[mask, 1],
                     X_emb[mask, 2],
-                    label=sanitize_plot_text(f"{cls} ({int(counts.get(cls, 0))})"),  # Sanitize class label before passing to matplotlib
+                    label=sanitize_plot_text(f"{cls} ({int(cast(Any, counts.get(cls, 0)))})"),  # Sanitize class label before passing to matplotlib
                     s=8,
                 )  # 3D scatter plot for class with count in label
             ax.legend(markerscale=2, fontsize="small")  # Add legend for classes
@@ -2405,8 +2405,8 @@ def extract_classes_and_distribution(df: "pd.DataFrame") -> tuple:
 
         found_col = detect_label_column(df.columns)  # Use existing detector to find label column when possible
 
-        if not found_col:  # If detector failed, fallback heuristics
-            last_col = df.columns[-1] if len(df.columns) > 0 else ""  # Determine last column when available
+        if not isinstance(found_col, str) or not found_col:  # If detector failed, fallback heuristics
+            last_col = str(df.columns[-1]) if len(df.columns) > 0 else ""  # Determine last column when available
             if last_col and (
                 pd.api.types.is_object_dtype(df[last_col].dtype)
                 or getattr(pd.api.types, "is_categorical_dtype", lambda x: False)(df[last_col].dtype)
@@ -2414,7 +2414,7 @@ def extract_classes_and_distribution(df: "pd.DataFrame") -> tuple:
             ):  # Accept last column as label when non-numeric
                 found_col = last_col  # Use last column as fallback label
 
-        if not found_col:  # When still no label candidate found
+        if not isinstance(found_col, str) or not found_col:  # When still no label candidate found
             return "", "", ""  # No class information available
 
         series = df[found_col]  # Reference label series directly to avoid copy
@@ -2560,7 +2560,7 @@ def get_dataset_file_info(filepath, df=None, low_memory=None, current_batch: Opt
         original_num_features = df.shape[1] if hasattr(df, "shape") else 0  # Capture original feature count
 
         nan_mask = df.isna().any(axis=1)  # Build boolean mask for rows containing any NaN/null values
-        rows_after_nan_removal = int((~nan_mask).sum())  # Capture rows remaining after NaN/null filtering via mask count
+        rows_after_nan_removal = int(np.asarray(~nan_mask).sum())  # Capture rows remaining after NaN/null filtering via mask count
         removed_rows_nan = original_num_rows - rows_after_nan_removal  # Compute removed row count due to NaN/null filtering
         removed_rows_nan = removed_rows_nan if removed_rows_nan >= 0 else 0  # Clamp negative values to zero for safety
         if original_num_rows > 0:  # Verify original row count is non-zero before percentage division
@@ -2576,7 +2576,7 @@ def get_dataset_file_info(filepath, df=None, low_memory=None, current_batch: Opt
         valid_nan_mask = ~nan_mask  # Build non-NaN mask to reuse across metric computations
         valid_inf_mask = ~inf_mask_after_nan  # Build non-infinite mask to reuse across metric computations
         valid_nan_inf_mask = valid_nan_mask & valid_inf_mask  # Combine masks to represent rows surviving NaN and infinite filtering
-        rows_after_nan_inf_removal = int(valid_nan_inf_mask.sum())  # Capture rows remaining after NaN+infinite filtering
+        rows_after_nan_inf_removal = int(np.asarray(valid_nan_inf_mask).sum())  # Capture rows remaining after NaN+infinite filtering
         removed_rows_inf = rows_after_nan_removal - rows_after_nan_inf_removal  # Compute rows removed due to infinite filtering specifically
         rows_after_inf_removal = rows_after_nan_inf_removal  # Record rows after infinite removal (applied after NaN removal)
         removed_rows_nan_inf = original_num_rows - rows_after_nan_inf_removal  # Compute total rows removed by NaN+infinite filtering combined
@@ -2809,7 +2809,7 @@ def reorder_report_columns(report_df: "pd.DataFrame") -> "pd.DataFrame":
                 ordered_cols.append(column)  # Append preprocessing column
 
         if ordered_cols:  # If we built an ordering
-            return report_df[[column for column in ordered_cols if column in report_df.columns]]  # Return reordered DataFrame
+            return report_df.loc[:, [column for column in ordered_cols if column in report_df.columns]]  # Return reordered DataFrame
         return report_df  # Return original DataFrame when no ordering was computed
     except Exception as e:  # Preserve module-wide exception handling semantics
         print(str(e))  # Print error to terminal for server logs
@@ -3004,8 +3004,8 @@ def build_preprocessing_summary_dataframe(metrics_list):
             numeric_cols = [c for c in cols if c != "filename"]  # Build numeric columns list by excluding filename
             avg_row: dict[str, Any] = {"filename": "AVERAGE"}  # Initialize the average row with a fixed label and explicit flexible value types
             for c in numeric_cols:  # Iterate over all numeric columns that require an average value
-                series_num = pd.to_numeric(df[c], errors="coerce")  # Convert each column to numeric while coercing invalid values
-                avg_row[c] = round(float(series_num.mean()), 6) if series_num.notna().any() else None  # Compute rounded mean only when valid values exist
+                series_num = cast(pd.Series, pd.to_numeric(df[c], errors="coerce"))  # Convert each column to numeric while coercing invalid values
+                avg_row[c] = round(float(cast(Any, series_num.mean())), 6) if bool(cast(Any, series_num.notna().any())) else None  # Compute rounded mean only when valid values exist
             df = pd.concat([df, pd.DataFrame([avg_row])], ignore_index=True)  # Append the average row as the final record
 
         return df  # Return the prepared DataFrame
