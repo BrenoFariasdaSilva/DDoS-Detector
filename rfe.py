@@ -786,8 +786,8 @@ def scale_and_split(X, y, test_size=0.2, random_state=42):
         if X_numeric.shape[1] == 0:  # No numeric columns detected
             coerced_cols = {}  # Dictionary to hold coerced numeric columns
             for col in X.columns:  # Try coercing each column to numeric
-                coerced = pd.to_numeric(X[col], errors="coerce")  # Coerce invalid -> NaN
-                if coerced.notna().sum() > 0:  # Keep columns that produced numeric values
+                coerced = cast(pd.Series, pd.to_numeric(X[col], errors="coerce"))  # Coerce invalid -> NaN
+                if int(cast(Any, coerced.notna().sum())) > 0:  # Keep columns that produced numeric values
                     coerced_cols[col] = coerced
             if coerced_cols:  # Build DataFrame from coerced columns
                 X_numeric = pd.DataFrame(coerced_cols, index=X.index)  # Use original index
@@ -984,9 +984,9 @@ def predict_and_compute_rfe_scores(model, X_test_selected, y_test):
         test_start = time.perf_counter()  # Start perf_counter immediately before prediction (testing window)
         y_pred = model.predict(X_test_selected)  # Predict on selected test features (testing)
         acc = accuracy_score(y_test, y_pred)  # Calculate accuracy
-        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate precision
-        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate recall
-        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)  # Calculate F1-score
+        prec = precision_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate precision
+        rec = recall_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate recall
+        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate F1-score
 
         fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute false positive and false negative rates
 
@@ -1681,10 +1681,10 @@ def load_and_merge_results_csv(run_csv_path: str, df_new: pd.DataFrame, cols: li
 
                 try:  # Attempt timestamp-based sorting
                     df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")  # Parse timestamp for sorting
-                    df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)  # Sort by timestamp descending
+                    df_combined = cast(Any, df_combined).sort_values(by="timestamp_dt", ascending=False)  # Sort by timestamp descending
                     df_combined = df_combined.drop(columns=["timestamp_dt"])  # Remove temporary sorting column
                 except Exception:  # Fallback to lexicographic sort on string timestamp
-                    df_combined = df_combined.sort_values(by="timestamp", ascending=False)  # Lexicographic fallback sort
+                    df_combined = cast(Any, df_combined).sort_values(by="timestamp", ascending=False)  # Lexicographic fallback sort
 
                 df_out = df_combined.reset_index(drop=True)  # Reset index after sorting
             except Exception:  # On any merge failure
@@ -1720,7 +1720,7 @@ def save_rfe_results(csv_path, run_results):
             rows.append(data)
 
         cols = get_results_csv_columns(CONFIG if CONFIG else None)
-        df_new = pd.DataFrame(rows, columns=cols)
+        df_new = pd.DataFrame(rows, columns=pd.Index(cols))
 
         resolved_dir, run_csv_path = resolve_results_export_path(csv_path)  # Resolve destination directory and full CSV path
 
@@ -1845,9 +1845,9 @@ def evaluate_exported_model(model, scaler, X_numeric, feature_columns, top_featu
         y_pred = model.predict(X_eval)  # Model predictions on full dataset
 
         acc = accuracy_score(y_array, y_pred)  # Compute accuracy
-        prec = precision_score(y_array, y_pred, average="weighted", zero_division=0)  # Precision
-        rec = recall_score(y_array, y_pred, average="weighted", zero_division=0)  # Recall
-        f1 = f1_score(y_array, y_pred, average="weighted", zero_division=0)  # F1 score
+        prec = precision_score(y_array, y_pred, average="weighted", zero_division=cast(Any, 0))  # Precision
+        rec = recall_score(y_array, y_pred, average="weighted", zero_division=cast(Any, 0))  # Recall
+        f1 = f1_score(y_array, y_pred, average="weighted", zero_division=cast(Any, 0))  # F1 score
 
         if len(np.unique(y_array)) == 2:
             cm = confusion_matrix(y_array, y_pred)
@@ -2070,6 +2070,8 @@ def run_rfe_fallback(csv_path, X_numeric, y_array, feature_columns, hyperparamet
         X_train, X_test, y_train, y_test = train_test_split(
             X_numeric.values, y_array, test_size=0.2, random_state=int(random_state), stratify=None
         )  # Perform a single non-stratified train/test split
+        X_train = np.asarray(X_train)  # Normalize split training data to ndarray for shape-safe RFE selection
+        X_test = np.asarray(X_test)  # Normalize split testing data to ndarray for downstream metrics
         selector, model, feature_extraction_time_s = run_rfe_selector(
             X_train, y_train, n_select=n_features_to_select or X_train.shape[1], step=step, estimator_name=estimator_name, random_state=random_state
         )  # Run RFE on the single split and get feature extraction time
@@ -2123,8 +2125,12 @@ def split_and_scale_for_cv(X_numeric: pd.DataFrame, y_array: np.ndarray, random_
 
         scaler_for_run = StandardScaler()  # Create scaler for the run
         scale_start = time.perf_counter()  # Start perf_counter immediately before scaling (feature extraction window begins)
-        X_train_scaled = scaler_for_run.fit_transform(X_train_df.values)  # Fit scaler and transform training data (scaling)
-        X_test_scaled = scaler_for_run.transform(X_test_df.values)  # Transform test data using fitted scaler
+        X_train_df = cast(pd.DataFrame, X_train_df)  # Narrow train split to DataFrame after sklearn split
+        X_test_df = cast(pd.DataFrame, X_test_df)  # Narrow test split to DataFrame after sklearn split
+        y_train_array = np.asarray(y_train_array)  # Normalize train labels to ndarray for the annotated return contract
+        y_test_array = np.asarray(y_test_array)  # Normalize test labels to ndarray for the annotated return contract
+        X_train_scaled = np.asarray(scaler_for_run.fit_transform(X_train_df.values))  # Fit scaler and transform training data (scaling)
+        X_test_scaled = np.asarray(scaler_for_run.transform(X_test_df.values))  # Transform test data using fitted scaler
         scale_end = time.perf_counter()  # End perf_counter immediately after scaling (feature extraction window part)
         scaling_time_s = round(scale_end - scale_start, 6)  # Compute scaling time rounded to 6 decimals
 
@@ -2374,8 +2380,8 @@ def extract_numeric_features(X: pd.DataFrame) -> Optional[pd.DataFrame]:
         if X_numeric.shape[1] == 0:  # Verify if no numeric columns were detected
             coerced_cols = {}  # Dictionary to hold coerced numeric columns
             for col in X.columns:  # Iterate through all columns
-                coerced = pd.to_numeric(X[col], errors="coerce")  # Attempt to coerce to numeric
-                if coerced.notna().sum() > 0:  # Verify if any values were successfully coerced
+                coerced = cast(pd.Series, pd.to_numeric(X[col], errors="coerce"))  # Attempt to coerce to numeric
+                if int(cast(Any, coerced.notna().sum())) > 0:  # Verify if any values were successfully coerced
                     coerced_cols[col] = coerced  # Add to coerced columns
 
             if coerced_cols:  # Verify if any columns were successfully coerced
@@ -2425,6 +2431,8 @@ def run_rfe(csv_path, n_features_to_select=None, step=None, estimator_name=None,
             return  # Exit the function
 
         cleaned_df = preprocess_dataframe(df)  # Preprocess the DataFrame
+        if cleaned_df is None or cleaned_df.empty:  # Verify preprocessing produced usable data
+            return  # Exit the function
 
         X = cleaned_df.iloc[:, :-1]  # Features are all columns except the last
         y = cleaned_df.iloc[:, -1]  # Target is the last column
