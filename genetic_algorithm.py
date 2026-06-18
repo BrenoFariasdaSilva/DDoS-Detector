@@ -1763,7 +1763,7 @@ def cache_preprocessed_data(result, cache_file, csv_path):
         X_train_scaled, X_test_scaled, y_train_np, y_test_np, X_columns = safe_result  # Unpack the first 5 elements safely
 
         if X_train_scaled is None or X_test_scaled is None or y_train_np is None or y_test_np is None or X_columns is None:  # Verify none of the 5 required elements are None
-            logger.warning("One or more preprocessed elements are None; caching may produce incomplete results")  # Log warning without crashing
+            raise ValueError("One or more preprocessed elements are None; cache data cannot be safely written")  # Fail before dereferencing missing arrays
 
         estimated_size = (
             X_train_scaled.nbytes
@@ -2297,9 +2297,9 @@ def compute_fold_metrics(y_true, y_pred):
 
     try:
         acc = accuracy_score(y_true, y_pred)  # Calculate accuracy metric
-        prec = precision_score(y_true, y_pred, average="weighted", zero_division=0)  # Calculate weighted precision
-        rec = recall_score(y_true, y_pred, average="weighted", zero_division=0)  # Calculate weighted recall
-        f1 = f1_score(y_true, y_pred, average="weighted", zero_division=0)  # Calculate weighted F1-score
+        prec = precision_score(y_true, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted precision
+        rec = recall_score(y_true, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted recall
+        f1 = f1_score(y_true, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted F1-score
         fpr, fnr = compute_fpr_fnr_from_labels(y_true, y_pred)  # Compute robust FPR/FNR for binary and multiclass folds
         return acc, prec, rec, f1, fpr, fnr  # Return all six metrics as a tuple
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -2545,9 +2545,9 @@ def evaluate_feature_mask_with_test(feature_mask, X_train, y_train, X_test, y_te
         y_pred_test = model.predict(X_test_sel)  # Predict on test set
 
         test_acc = accuracy_score(y_test, y_pred_test)  # Calculate test accuracy
-        test_prec = precision_score(y_test, y_pred_test, average="weighted", zero_division=0)  # Calculate test precision
-        test_rec = recall_score(y_test, y_pred_test, average="weighted", zero_division=0)  # Calculate test recall
-        test_f1 = f1_score(y_test, y_pred_test, average="weighted", zero_division=0)  # Calculate test F1-score
+        test_prec = precision_score(y_test, y_pred_test, average="weighted", zero_division=cast(Any, 0))  # Calculate test precision
+        test_rec = recall_score(y_test, y_pred_test, average="weighted", zero_division=cast(Any, 0))  # Calculate test recall
+        test_f1 = f1_score(y_test, y_pred_test, average="weighted", zero_division=cast(Any, 0))  # Calculate test F1-score
         test_fpr, test_fnr = compute_fpr_fnr_from_labels(y_test, y_pred_test)  # Compute robust test FPR/FNR for binary and multiclass predictions
 
         return cv_acc, cv_prec, cv_rec, cv_f1, cv_fpr, cv_fnr, test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr  # Return combined CV and test metrics
@@ -6401,10 +6401,10 @@ def merge_and_sort_with_existing_csv(df_new, csv_out, results_cols):
             df_combined = pd.concat([df_existing[results_cols or []], df_new], ignore_index=True, sort=False)  # Combine existing and new DataFrames, ensuring column order
             try:  # Try to sort by timestamp if the column exists and is properly formatted
                 df_combined["timestamp_dt"] = pd.to_datetime(df_combined["timestamp"], format="%Y-%m-%d_%H_%M_%S", errors="coerce")  # Parse timestamp into datetime, coercing errors to NaT
-                df_combined = df_combined.sort_values(by="timestamp_dt", ascending=False)  # Sort by the parsed datetime column in descending order (newest first)
+                df_combined = cast(Any, df_combined).sort_values(by="timestamp_dt", ascending=False)  # Sort by the parsed datetime column in descending order (newest first)
                 df_combined = df_combined.drop(columns=["timestamp_dt"])  # Remove the temporary datetime column after sorting
             except Exception:  # If sorting by timestamp fails (e.g., due to parsing issues), fall back to sorting by timestamp string
-                df_combined = df_combined.sort_values(by="timestamp", ascending=False)  # Sort by timestamp as a string (may not be perfectly chronological if formatting is inconsistent)
+                df_combined = cast(Any, df_combined).sort_values(by="timestamp", ascending=False)  # Sort by timestamp as a string (may not be perfectly chronological if formatting is inconsistent)
             return df_combined.reset_index(drop=True)  # Reset index after sorting and return
         return df_new  # No existing CSV, use the new DataFrame directly
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -6449,16 +6449,16 @@ def write_consolidated_csv(rows, output_dir):
 
                 df_out = ensure_expected_columns(df_out, results_cols or [])  # Add any missing expected columns with None values
 
-                df_out = df_out[results_cols or list(df_out.columns)]  # Reorder columns into the canonical order
+                df_out = df_out.loc[:, results_cols or list(df_out.columns)]  # Reorder columns into the canonical order
 
                 for col in df_out.columns:  # Iterate over all columns
                     col_l = col.lower()  # Lowercase column name for case-insensitive verification
                     if "time" in col_l or "elapsed" in col_l or col in ("hardware", "timestamp"):  # Skip time-related and special columns
-                        df_out[col] = df_out[col].apply(lambda v: int(v) if pd.notnull(v) and str(v).isdigit() else v)  # Convert time-related columns to int if possible
+                        df_out[col] = cast(pd.Series, df_out[col]).apply(lambda v: int(v) if pd.notnull(v) and str(v).isdigit() else v)  # Convert time-related columns to int if possible
                     if any(m in col_l for m in ("accuracy", "precision", "recall", "f1", "fpr", "fnr", "auc", "roc")):  # Verify if column holds a classification metric that must preserve full precision
                         continue  # Preserve full-precision classification metric column without truncation
 
-                generate_csv_and_image(df_out, csv_out, is_visualizable=True)  # Persist consolidated CSV and generate PNG image
+                generate_csv_and_image(cast(pd.DataFrame, df_out), csv_out, is_visualizable=True)  # Persist consolidated CSV and generate PNG image
                 print(
                     f"\n{BackgroundColors.GREEN}Genetic Algorithm consolidated results saved to {BackgroundColors.CYAN}{csv_out}{Style.RESET_ALL}"
                 )  # Notify user of success
@@ -6708,9 +6708,9 @@ def evaluate_final_on_test(model_local, X_test_selected_local, y_test):
             start_test_local = time.perf_counter()  # Record testing start time
             y_pred_local = model_local.predict(X_test_selected_local)  # Generate predictions on test set
             acc_local = accuracy_score(y_test, y_pred_local)  # Calculate accuracy metric
-            prec_local = precision_score(y_test, y_pred_local, average="weighted", zero_division=0)  # Calculate weighted precision metric
-            rec_local = recall_score(y_test, y_pred_local, average="weighted", zero_division=0)  # Calculate weighted recall metric
-            f1_local = f1_score(y_test, y_pred_local, average="weighted", zero_division=0)  # Calculate weighted F1 score
+            prec_local = precision_score(y_test, y_pred_local, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted precision metric
+            rec_local = recall_score(y_test, y_pred_local, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted recall metric
+            f1_local = f1_score(y_test, y_pred_local, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted F1 score
             if len(np.unique(y_test)) == 2:  # Verify if binary classification problem
                 cm_local = confusion_matrix(y_test, y_pred_local)  # Generate confusion matrix for binary classification
                 if cm_local.shape == (2, 2):  # Verify if standard 2x2 binary confusion matrix
@@ -7112,7 +7112,7 @@ def prepare_feature_dataframe(X, feature_names):
     try:
         if not isinstance(X, pd.DataFrame):  # If X is not a pandas DataFrame
             try:  # Try to create a DataFrame with original feature names
-                df_features = pd.DataFrame(X, columns=list(feature_names))  # Create DataFrame with original feature names
+                df_features = pd.DataFrame(X, columns=pd.Index(list(feature_names)))  # Create DataFrame with original feature names
             except Exception:  # If creating DataFrame with original feature names fails
                 df_features = pd.DataFrame(X)  # Create DataFrame without original feature names
                 df_features.columns = [f"feature_{i}" for i in range(df_features.shape[1])]  # Generic feature names
