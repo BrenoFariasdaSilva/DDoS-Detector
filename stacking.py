@@ -69,7 +69,6 @@ import datetime  # For getting the current date and time
 import gc  # For explicit garbage collection to reclaim memory from deleted objects
 import glob  # For file pattern matching
 import importlib  # Import importlib for dynamic module import
-import itertools  # For generating combinations of FS/HP/DA
 import json  # Import json for handling JSON strings within the CSV
 import lightgbm as lgb  # For LightGBM model
 import math  # For mathematical operations
@@ -284,7 +283,7 @@ def get_default_stacking_config():
             "cache_prefix": "Cache_",  # Prefix for cached model files
             "model_export_base": "Feature_Analysis/Stacking/Models/",  # Base directory for model exports
             "results_csv_columns": [
-                "model", "dataset", "execution_mode", "attack_types_combined", "feature_set", "classifier_type", "model_name",
+                "model", "dataset", "execution_mode", "attack_types_combined", "feature_set", "hyperparameter_mode", "classifier_type", "model_name",
                 "data_source", "experiment_id", "experiment_mode", "augmentation_ratio",
                 "n_features", "n_samples_train", "n_samples_test", "accuracy",
                 "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s",
@@ -2722,6 +2721,7 @@ def save_augmentation_comparison_results(file_path, comparison_results, config=N
         column_order = [
             "dataset",
             "feature_set",
+            "hyperparameter_mode",
             "classifier_type",
             "model_name",
             "data_source",
@@ -6104,6 +6104,9 @@ def load_cache_results(csv_path, config=None):
             low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
             df_cache = pd.read_csv(cache_path, low_memory=low_memory)  # Read the cache file
             df_cache.columns = df_cache.columns.str.strip()  # Remove leading/trailing whitespace from column names
+            if "hyperparameter_mode" not in df_cache.columns:  # Legacy cache rows cannot safely distinguish default from optimized evaluations
+                print(f"{BackgroundColors.YELLOW}Ignoring legacy resume cache without hyperparameter_mode to prevent HP-mode leakage: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Explain why the ambiguous cache is not reused
+                return {}  # Start a clean grid rather than risk recovering optimized metrics into default runs
             cache_dict = {}  # Initialize cache dictionary
 
             for _, row in df_cache.iterrows():  # Iterate through each row
@@ -6120,7 +6123,9 @@ def load_cache_results(csv_path, config=None):
                 aug_ratio_row = float(aug_ratio_value) if aug_ratio_value is not None else None  # Parse augmentation ratio from cached row
                 attack_types_raw_row = safe_load_json(cache_row_value("attack_types_combined", None))  # Load attack types from cached row
                 attack_types_list_row = attack_types_raw_row if isinstance(attack_types_raw_row, list) else None  # Normalize attack types to list or None
-                cache_key = build_resume_cache_key(execution_mode_row, data_source_row, experiment_mode_row, aug_ratio_row, attack_types_list_row, feature_set, model_name)  # Build full resume cache key from all distinguishing dimensions
+                hyperparameter_mode_row = str(cache_row_value("hyperparameter_mode", "Default Hyperparameters"))  # Recover explicit hyperparameter mode
+                hyperparameters_enabled_row = hyperparameter_mode_row == "Optimized Hyperparameters"  # Normalize cached hyperparameter mode to the boolean used by resume keys
+                cache_key = build_resume_cache_key(execution_mode_row, data_source_row, experiment_mode_row, aug_ratio_row, attack_types_list_row, feature_set, model_name, hyperparameters_enabled_row)  # Build full resume cache key from all distinguishing dimensions
 
                 result_entry = {
                     "model": cache_row_value("model", ""),
@@ -6128,6 +6133,7 @@ def load_cache_results(csv_path, config=None):
                     "execution_mode": execution_mode_row,
                     "attack_types_combined": cache_row_value("attack_types_combined", None),
                     "feature_set": feature_set,
+                    "hyperparameter_mode": hyperparameter_mode_row,
                     "classifier_type": cache_row_value("classifier_type", ""),
                     "model_name": model_name,
                     "data_source": data_source_row,
@@ -6203,7 +6209,7 @@ def remove_cache_file(csv_path, config=None):
         raise
 
 
-def build_resume_cache_key(execution_mode_str: str, data_source_label: str, experiment_mode: str, augmentation_ratio, attack_types_combined, feature_set: str, model_name: str) -> tuple:
+def build_resume_cache_key(execution_mode_str: str, data_source_label: str, experiment_mode: str, augmentation_ratio, attack_types_combined, feature_set: str, model_name: str, hyperparameters_enabled: bool = False) -> tuple:
     """
     Build a deterministic, collision-free resume cache key for one evaluation unit.
 
@@ -6220,7 +6226,8 @@ def build_resume_cache_key(execution_mode_str: str, data_source_label: str, expe
     try:  # Build a deterministic cache key tuple from all relevant dimensions, using JSON serialization for complex fields to ensure hashability and uniqueness
         attack_key = json.dumps(sorted(str(a) for a in attack_types_combined), sort_keys=True) if attack_types_combined else "None"  # Serialize attack types deterministically or use sentinel string
         ratio_key = str(augmentation_ratio) if augmentation_ratio is not None else "None"  # Serialize augmentation ratio as string or use sentinel
-        return (execution_mode_str, data_source_label, experiment_mode, ratio_key, attack_key, feature_set, model_name)  # Return tuple covering all dimensions that uniquely identify an evaluation unit
+        hyperparameter_mode_key = "optimized" if hyperparameters_enabled else "default"  # Distinguish default and optimized evaluations so resume never crosses HP modes
+        return (execution_mode_str, data_source_label, experiment_mode, ratio_key, attack_key, hyperparameter_mode_key, feature_set, model_name)  # Return tuple covering all dimensions that uniquely identify an evaluation unit
     except Exception as e:  # Catch any unexpected errors in key construction
         print(str(e))  # Log the error message for debugging
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send the exception details via Telegram for monitoring
@@ -7757,7 +7764,7 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
         if use_full:  # Include full features set when strategy is enabled
             feature_sets["Full Features"] = (X_train_scaled, X_test_scaled, feature_names)  # All features with names
 
-        if use_ga:  # Include GA subset when strategy is enabled
+        if use_ga and X_train_ga is not None and X_train_ga.shape[1] > 0:  # Include GA subset only when the artifact produced at least one usable feature
             feature_sets["GA Features"] = (X_train_ga, X_test_ga, ga_actual_features)  # GA subset with actual selected names
 
         if use_pca:  # Include PCA components when strategy is enabled
@@ -7765,13 +7772,13 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
                 (X_train_pca, X_test_pca, None) if X_train_pca is not None else None
             )  # PCA components (only if PCA transformation was successfully applied)
 
-        if use_rfe:  # Include RFE subset when strategy is enabled
+        if use_rfe and X_train_rfe is not None and X_train_rfe.shape[1] > 0:  # Include RFE subset only when the artifact produced at least one usable feature
             feature_sets["RFE Features"] = (X_train_rfe, X_test_rfe, rfe_actual_features)  # RFE subset with actual selected names
 
         feature_sets = {
             k: v for k, v in feature_sets.items() if v is not None
         }  # Remove any None entries (e.g., PCA if not applied)
-        feature_sets = dict(sorted(feature_sets.items()))  # Sort the feature sets by name
+        feature_sets = dict(sorted(feature_sets.items(), key=lambda item: (item[0] != "Full Features", item[0])))  # Keep the required full-feature baseline first, then sort implemented selection modes
 
         verbose_output(
             f"{BackgroundColors.GREEN}Feature strategy: Assembled {len(feature_sets)} set(s): {list(feature_sets.keys())}.{Style.RESET_ALL}", config=config
@@ -7784,7 +7791,7 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
         raise
 
 
-def build_classifier_result_entry(model_class, file, execution_mode_str, attack_types_combined, feature_set_name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, n_features, n_samples_train, n_samples_test, metrics_tuple, subset_feature_names, hyperparams_map=None):
+def build_classifier_result_entry(model_class, file, execution_mode_str, attack_types_combined, feature_set_name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, n_features, n_samples_train, n_samples_test, metrics_tuple, subset_feature_names, hyperparams_map=None, hyperparameters_enabled=False):
     """
     Build a standardized result entry dictionary for classifier evaluation results.
 
@@ -7816,6 +7823,7 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
             "execution_mode": execution_mode_str,  # Execution mode (separate_files or combined_files)
             "attack_types_combined": json.dumps(attack_types_combined) if attack_types_combined else None,  # JSON-serialized attack types or None
             "feature_set": feature_set_name,  # Name of the feature set evaluated
+            "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters",  # Explicit HP mode for result separation and resume safety
             "classifier_type": classifier_type,  # Classifier type (Individual or Stacking)
             "model_name": model_name,  # Model name for result identification
             "data_source": data_source_label,  # Data source label for experiment traceability
@@ -7885,6 +7893,7 @@ def submit_classifier_evaluations_to_pool(executor, individual_models, current_c
     future_to_model = {}  # Map futures to (model_name, model_class, combination_index)
     for model_name, model in individual_models.items():  # Iterate over each individual model
         send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {build_telegram_combination_header(name, model_name, augmentation_ratio, hyperparameters_enabled)}")  # Notify telegram about evaluation start with full active configuration details
+        artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Keep exported/resumed model artifacts isolated by HP mode
         future = executor.submit(
             evaluate_individual_classifier,
             model,
@@ -7896,7 +7905,7 @@ def submit_classifier_evaluations_to_pool(executor, individual_models, current_c
             file,
             scaler,
             subset_feature_names,
-            name,
+            artifact_feature_set,
         )  # Submit evaluation task to thread pool using numpy arrays
         future_to_model[future] = (model_name, model.__class__.__name__, current_combination)  # Store future with metadata
         current_combination += 1  # Advance the global combination counter
@@ -7937,7 +7946,7 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
             model_class, file, execution_mode_str, attack_types_combined, name, "Individual",
             model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio,
             X_train_n_cols, len(y_train), len(y_test), metrics, subset_feature_names,
-            hyperparams_map=hyperparams_map,
+            hyperparams_map=hyperparams_map, hyperparameters_enabled=bool(hyperparams_map),
         )  # Build standardized result entry for this individual classifier
         results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
         send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {build_telegram_combination_header(name, model_name, augmentation_ratio, bool(hyperparams_map))} with F1: {metrics[3]} in {calculate_execution_time(0, metrics[6])}")  # Notify telegram about completion using full active configuration details
@@ -7995,6 +8004,7 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
         attack_types_combined,
         feature_set_name,
         model_name,
+        hyperparameters_enabled,
     )  # Build full resume cache key for this evaluation unit
 
     if resume_key not in cache_dict:  # Skip recovery when no cached result exists for this key
@@ -8095,9 +8105,9 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 file,
                 scaler,
                 subset_feature_names,
-                name,
+                f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}",
                 config=config,
-            )  # Evaluate individual classifier sequentially using numpy arrays
+            )  # Evaluate individual classifier sequentially using HP-isolated model artifact names
 
             model_class = model.__class__.__name__  # Retrieve model class name for result entry
             result_entry = build_classifier_result_entry(
@@ -8105,6 +8115,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio,
                 X_train_n_cols, len(y_train), len(y_test), metrics, subset_feature_names,
                 hyperparams_map=hyperparams_map,
+                hyperparameters_enabled=hyperparameters_enabled,
             )  # Build standardized result entry for this individual classifier
             results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
 
@@ -8181,7 +8192,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             config = CONFIG  # Use global CONFIG
 
         if cache_dict:  # Verify if a cache dictionary is available for resume
-            resume_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, "StackingClassifier")  # Build the full resume cache key for the stacking classifier
+            resume_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, "StackingClassifier", hyperparameters_enabled)  # Build the full resume cache key for the stacking classifier
             if resume_key in cache_dict:  # Verify if the stacking result is already cached from a previous run
                 cached_result = cache_dict[resume_key]  # Retrieve cached stacking result entry for full resume logging
                 combination_header = build_telegram_combination_header(name, "StackingClassifier", augmentation_ratio, hyperparameters_enabled)  # Build full recovered stacking combination label
@@ -8236,7 +8247,8 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
 
         try:
             dataset_name = os.path.basename(os.path.dirname(file))  # Get dataset directory name from file path
-            export_model_and_scaler(stacking_model, scaler, dataset_name, "StackingClassifier", subset_feature_names, best_params=None, feature_set=name, dataset_csv_path=file)  # Export fitted stacking model and scaler to disk
+            artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Keep stacking artifacts isolated by HP mode
+            export_model_and_scaler(stacking_model, scaler, dataset_name, "StackingClassifier", subset_feature_names, best_params=None, feature_set=artifact_feature_set, dataset_csv_path=file)  # Export fitted stacking model and scaler to an HP-specific artifact path
         except Exception:  # If model export fails
             pass  # Continue without exporting
 
@@ -8254,6 +8266,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             stacking_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, "Stacking",
             "StackingClassifier", data_source_label, experiment_id, experiment_mode, augmentation_ratio,
             X_train_n_cols, len(y_train), len(y_test), stacking_metrics, subset_feature_names,
+            hyperparameters_enabled=hyperparameters_enabled,
         )  # Build standardized result entry for the stacking classifier
 
         if cache_ref_file is not None:  # Only persist to cache when a valid cache reference file is available
@@ -8515,6 +8528,7 @@ def evaluate_on_dataset(
     config=None,
     cache_ref_file=None,
     hyperparameters_enabled=None,
+    grid_progress=None,
 ):
     """
     Evaluate classifiers on a single dataset with optional training-only augmentation.
@@ -8573,22 +8587,36 @@ def evaluate_on_dataset(
 
         stacking_model = build_evaluation_stacking_model(base_models, config=config) if stacking_enabled else None  # Build stacking classifier only when enabled
 
+        feature_sets_config = dict(config.get("stacking", {}).get("feature_sets_config", {}))  # Copy feature strategy config so grid-specific enforcement cannot mutate global configuration
+        if config.get("stacking", {}).get("methods", {}).get("feature_selection", True):  # Feature selection enabled: full features remain the required baseline alongside configured methods
+            feature_sets_config["use_full"] = True  # Always include the full-feature baseline in the evaluation grid
+        else:  # Feature selection disabled: only the full-feature baseline may be generated
+            feature_sets_config = {"use_full": True, "use_pca": False, "use_rfe": False, "use_ga": False, "explicit_features": []}  # Suppress every selection strategy without mutating CLI/config state
+
         feature_sets = assemble_feature_sets(
             X_train_scaled, X_test_scaled, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file,
-            feature_sets_config=config.get("stacking", {}).get("feature_sets_config", {}),
+            feature_sets_config=feature_sets_config,
             config=config,
         )  # Assemble feature sets dictionary using configurable strategy selection
 
-        individual_models, total_steps, progress_bar, all_results, current_combination = initialize_evaluation_run_state(
-            base_models, feature_sets, data_source_label, stacking_enabled=stacking_enabled
-        )  # Build individual model map, compute total steps, create progress bar, and initialize result containers
+        if grid_progress is None:  # Standalone evaluation owns its progress bar and local combination counter
+            individual_models, total_steps, progress_bar, all_results, current_combination = initialize_evaluation_run_state(
+                base_models, feature_sets, data_source_label, stacking_enabled=stacking_enabled
+            )  # Build individual model map, compute total steps, create progress bar, and initialize result containers
+        else:  # Full-grid orchestration supplies one shared denominator and counter across HP and augmentation modes
+            individual_models = {k: v for k, v in base_models.items()}  # Preserve the current HP mode's independent model objects
+            total_steps = grid_progress["total_steps"]  # Use the exact generated-grid denominator
+            progress_bar = grid_progress["progress_bar"]  # Reuse the single grid progress bar
+            all_results = {}  # Initialize results for this data/HP slice
+            current_combination = grid_progress["current_combination"]  # Continue from the previous grid slice
 
         for idx, (name, (X_train_subset, X_test_subset, subset_feature_names_list)) in enumerate(feature_sets.items(), start=1):
             if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
                 print(
                     f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}"
                 )  # Output warning
-                progress_bar.update(len(individual_models) + 1)  # Skip all steps for this feature set
+                progress_bar.update(len(individual_models) + (1 if stacking_enabled else 0))  # Skip exactly the steps represented by this empty feature set
+                current_combination += len(individual_models) + (1 if stacking_enabled else 0)  # Keep shared combination numbering aligned with skipped steps
                 continue  # Skip to the next set
 
             individual_results, stacking_result_entry, current_combination = evaluate_single_feature_set(
@@ -8604,7 +8632,10 @@ def evaluate_on_dataset(
             if stacking_result_entry is not None:  # Store stacking result only when stacking evaluation was enabled
                 all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store stacking result with key
 
-        progress_bar.close()  # Close progress bar
+        if grid_progress is None:  # Close only progress bars created by this standalone evaluation
+            progress_bar.close()  # Close local progress bar
+        else:  # Persist the next counter for the following HP/augmentation grid slice
+            grid_progress["current_combination"] = current_combination  # Advance the shared full-grid combination counter
         return all_results  # Return dictionary of results
     except Exception as e:
         print(str(e))
@@ -9369,7 +9400,7 @@ def save_combined_files_results_to_csv(reference_file, results_list, config=None
         raise
 
 
-def save_combined_files_augmentation_comparison(results_original, all_ratio_results, feature_analysis_dir, config=None):
+def save_combined_files_augmentation_comparison(results_original, all_ratio_results, feature_analysis_dir, config=None, comparison_results=None):
     """
     Generates a ratio comparison report and saves it to a CSV file in the feature analysis directory.
 
@@ -9384,13 +9415,14 @@ def save_combined_files_augmentation_comparison(results_original, all_ratio_resu
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        if not all_ratio_results:  # If no ratio experiments produced results
+        if comparison_results is None and not all_ratio_results:  # If no prebuilt comparisons or ratio experiments produced results
             print(
                 f"{BackgroundColors.YELLOW}No augmentation ratio experiments completed successfully for combined files evaluation.{Style.RESET_ALL}"
             )  # Print warning about no completed experiments
             return  # Exit early since there is nothing to compare
 
-        comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate comparison report across all evaluated augmentation ratios
+        if comparison_results is None:  # Build comparisons from result mappings for legacy callers
+            comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate comparison report across all evaluated augmentation ratios
 
         augmentation_comparison_filename = config.get("stacking", {}).get("augmentation_comparison_filename", "Data_Augmentation_Comparison_Results.csv")  # Get base comparison filename from config
         combined_files_comparison_filename = augmentation_comparison_filename.replace(".csv", "_CombinedFiles.csv")  # Build combined files evaluation-specific comparison filename
@@ -9694,42 +9726,75 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             rfe_selected_features = None  # Suppress RFE features when feature selection is disabled
         
         feature_names = [col for col in combined_files_df.columns if col != 'attack_type']  # Get feature column names
+        ga_selected_features, rfe_selected_features = sanitize_and_verify_feature_selections(ga_selected_features, rfe_selected_features, feature_names, config=config)  # Normalize artifacts before grid counting so the denominator matches assembled feature modes
         
         verbose_output(
             f"{BackgroundColors.GREEN}Combined files evaluation dataset features: {BackgroundColors.CYAN}{len(feature_names)} features{Style.RESET_ALL}",
             config=config
         )  # Output feature count
 
-        if methods_cfg.get("hyperparameter_optimization", True):  # Verify if hyperparameter optimization is enabled via toggle
-            base_models, hp_params_map = prepare_models_with_hyperparameters(reference_file, config=config)  # Prepare base models with hyperparameters
-        else:  # Hyperparameter optimization is disabled via toggle
-            base_models = get_models(config=config)  # Instantiate base models without hyperparameter optimization
-            hp_params_map = {}  # Initialize empty hyperparameters mapping when disabled
-        
-        original_experiment_id = generate_experiment_id(reference_file, "combined_files_original_only")  # Generate unique experiment ID
-        
-        test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", False)  # Get test data augmentation flag from config
+        default_models = get_models(config=config)  # Create untouched default/current parameter model objects
+        hp_runs = [(False, default_models, {})]  # Default hyperparameters always form the first complete grid
+        hp_results = extract_hyperparameter_optimization_results(reference_file, config=config) if methods_cfg.get("hyperparameter_optimization", True) else None  # Load optimized parameters only when the method is enabled
+        if hp_results:  # Add a separate optimized grid only when usable optimization results exist
+            optimized_models, optimized_params = prepare_models_with_hyperparameters(reference_file, config=config)  # Instantiate fresh models before applying optimized parameters
+            hp_runs.append((True, optimized_models, optimized_params))  # Keep optimized estimators isolated from defaults
 
-        if not methods_cfg.get("augmentation", True):  # Verify if augmentation is disabled via toggle
-            test_data_augmentation = False  # Override test data augmentation when augmentation method is disabled
+        augmentation_enabled = methods_cfg.get("augmentation", True) and config.get("execution", {}).get("test_data_augmentation", False)  # Both existing toggles must enable augmentation modes
+        combined_augmented_df = load_and_combine_augmented_combined_files(original_files_list, config=config) if augmentation_enabled else None  # Load augmentation source once for the complete grid
+        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]) if combined_augmented_df is not None else []  # Generate ratio modes only when augmentation data is usable
+        feature_mode_count = count_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Count actual feature modes
+        classifier_mode_count = len(default_models) + (1 if methods_cfg.get("stacking", True) else 0)  # Count enabled classifiers including optional stacking
+        total_steps = len(hp_runs) * (1 + len(augmentation_ratios)) * feature_mode_count * classifier_mode_count  # Exact full-grid denominator
+        grid_progress = create_grid_progress(total_steps, f"{dataset_name} Combined Grid")  # Share one counter across HP and augmentation modes
+        all_grid_results = []  # Accumulate every result row for a single consolidated export
+        all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
 
-        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
-        
-        total_steps = 1 + (len(augmentation_ratios) if test_data_augmentation else 0)  # Calculate total evaluation steps
-        
-        print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[1/{total_steps}] Evaluating on ORIGINAL COMBINED FILES EVALUATION data{Style.RESET_ALL}"
-        )  # Print progress message with total step count
-        
-        results_original = evaluate_on_dataset(
-            reference_file, combined_files_df, feature_names, ga_selected_features, pca_n_components,
-            rfe_selected_features, base_models, data_source_label="Original Combined Files", hyperparams_map=hp_params_map,  # Normalized data source label for log and CSV output
-            experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
-            execution_mode_str="combined_files", attack_types_combined=attack_types_list, config=config,
-        )  # Evaluate on original combined files evaluation data with execution mode tracking and explicit config propagation
-        
-        original_results_list = list(results_original.values())  # Convert results dict to list
-        feature_analysis_dir = save_combined_files_results_to_csv(reference_file, original_results_list, config=config)  # Save combined files evaluation results and get Feature_Analysis directory
+        try:  # Ensure the shared progress bar is closed after the complete grid
+            for hyperparameters_enabled, base_models, hp_params_map in hp_runs:  # Finish the default grid before beginning optimized runs
+                hp_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build active HP label
+                send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES] Starting {hp_label} grid | Dataset: {dataset_name}"])  # Announce active HP mode
+                results_original = evaluate_on_dataset(
+                    reference_file, combined_files_df, feature_names, ga_selected_features, pca_n_components,
+                    rfe_selected_features, base_models, data_source_label="Original Combined Files", hyperparams_map=hp_params_map,
+                    experiment_id=generate_experiment_id(reference_file, "combined_files_original_only"), experiment_mode="original_only", augmentation_ratio=None,
+                    execution_mode_str="combined_files", attack_types_combined=attack_types_list, config=config,
+                    hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
+                )  # Evaluate the no-augmentation feature/classifier slice
+                original_results_list = list(results_original.values())  # Convert baseline results for annotation and export
+                annotate_results_with_combination_flags(original_results_list, methods_cfg.get("feature_selection", True), hyperparameters_enabled, False)  # Mark active grid dimensions
+                all_grid_results.extend(original_results_list)  # Preserve baseline rows beside later grid slices
+
+                ratio_results = {}  # Collect this HP mode's ratio results for comparison reporting
+                for ratio in augmentation_ratios:  # Evaluate each configured augmentation ratio separately
+                    df_sampled = sample_augmented_by_ratio(combined_augmented_df, combined_files_df, ratio)  # Sample augmented training rows for the active ratio
+                    if df_sampled is None or df_sampled.empty:  # Skip unusable ratio samples
+                        continue  # Move to the next configured ratio
+                    results_ratio = evaluate_on_dataset(
+                        reference_file, combined_files_df, feature_names, ga_selected_features, pca_n_components,
+                        rfe_selected_features, base_models, data_source_label=f"Original+Augmented@{int(ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map,
+                        experiment_id=generate_experiment_id(reference_file, "combined_files_original_plus_augmented", ratio), experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+                        execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_training=df_sampled,
+                        config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
+                    )  # Evaluate the same feature/classifier grid for this ratio
+                    ratio_results_list = list(results_ratio.values())  # Convert ratio results for annotation and export
+                    annotate_results_with_combination_flags(ratio_results_list, methods_cfg.get("feature_selection", True), hyperparameters_enabled, True)  # Mark active grid dimensions
+                    all_grid_results.extend(ratio_results_list)  # Preserve ratio rows in the consolidated export
+                    ratio_results[ratio] = results_ratio  # Retain ratio result mapping for comparisons
+                    del df_sampled  # Release sampled rows after evaluation
+                    gc.collect()  # Reclaim ratio-specific memory
+
+                if ratio_results:  # Preserve existing augmentation comparison output for this HP mode
+                    comparison_results = generate_ratio_comparison_report(results_original, ratio_results)  # Compare this HP mode's ratios against its matching baseline
+                    for comparison_row in comparison_results:  # Annotate comparison rows so both HP modes remain distinguishable
+                        comparison_row["hyperparameter_mode"] = hp_label  # Store the active HP mode in the comparison export
+                    all_comparison_results.extend(comparison_results)  # Preserve comparisons until the complete grid is ready to save
+        finally:  # Close shared grid progress even if a classifier evaluation fails
+            grid_progress["progress_bar"].close()  # Close the one full-grid progress bar
+
+        feature_analysis_dir = save_combined_files_results_to_csv(reference_file, all_grid_results, config=config)  # Save the complete default-first grid once so no mode overwrites another
+        if all_comparison_results:  # Save all HP modes together so optimized comparisons cannot overwrite defaults
+            save_combined_files_augmentation_comparison(None, None, feature_analysis_dir, config=config, comparison_results=all_comparison_results)  # Preserve existing combined comparison filename and metrics
         
         enable_automl = methods_cfg.get("automl", True)  # Resolve AutoML toggle from stacking methods config
         if enable_automl:  # If AutoML pipeline is enabled
@@ -9739,13 +9804,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         else:  # AutoML pipeline is disabled via method toggle
             print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML pipeline is DISABLED (stacking.methods.automl=false). Skipping AutoML for combined files evaluation. Enable via config or --enable-automl flag.{Style.RESET_ALL}")  # Log AutoML skip reason
         
-        if test_data_augmentation:  # If data augmentation testing is enabled
-            process_combined_files_augmentation_testing(
-                reference_file, original_files_list, combined_files_df, feature_names,
-                ga_selected_features, pca_n_components, rfe_selected_features, base_models,
-                hp_params_map, attack_types_list, results_original, augmentation_ratios,
-                total_steps, feature_analysis_dir, dataset_name, config=config,
-            )  # Process combined files evaluation augmented data evaluation with ratio experiments
+        if combined_augmented_df is not None:  # Release optional combined augmentation source after both HP grids
+            del combined_augmented_df  # Drop augmented dataframe reference
+            gc.collect()  # Reclaim augmentation memory
 
         try:  # Attempt to remove the cache file now that all combined files evaluation results are safely persisted
             remove_cache_file(reference_file, config)  # Remove the per-dataset cache once the full combined files evaluation is confirmed complete
@@ -9885,11 +9946,64 @@ def annotate_results_with_combination_flags(results_list, feature_selection_enab
         for row in results_list:  # For each result row in the list
             row["feature_selection_enabled"] = feature_selection_enabled  # Mark feature selection status
             row["hyperparameters_enabled"] = hyperparameters_enabled  # Mark hyperparameters status
+            row["hyperparameter_mode"] = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Preserve the explicit HP mode in exported rows
             row["data_augmentation_enabled"] = data_augmentation_enabled  # Mark data augmentation status
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
+
+
+def count_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=None):
+    """
+    Count the feature modes that assemble_feature_sets will actually generate for grid progress accounting.
+
+    :param ga_selected_features: Selected feature names produced by GA, if available
+    :param pca_n_components: Number of PCA components to use, if available
+    :param rfe_selected_features: Selected feature names produced by RFE, if available
+    :param feature_names: List of available feature names in the dataset
+    :param config: Optional configuration dictionary; uses global CONFIG when None
+    :return: Number of feature modes that will be generated
+    """
+
+    if config is None:  # If no config provided
+        config = CONFIG  # Use global CONFIG
+
+    methods_cfg = config.get("stacking", {}).get("methods", {})  # Read feature-selection method toggle
+    if not methods_cfg.get("feature_selection", True):  # Disabled feature selection always produces only the required full-feature baseline
+        return 1  # Full Features only
+
+    feature_sets_config = config.get("stacking", {}).get("feature_sets_config", {})  # Read enabled feature strategies
+    count = 1  # Full Features is always the baseline grid mode
+    if feature_sets_config.get("use_ga", True) and ga_selected_features:  # Count GA only when enabled and backed by a non-empty artifact
+        count += 1
+    if feature_sets_config.get("use_pca", True) and pca_n_components:  # Count PCA only when enabled and backed by a valid component count
+        count += 1
+    if feature_sets_config.get("use_rfe", True) and rfe_selected_features:  # Count RFE only when enabled and backed by a non-empty artifact
+        count += 1
+
+    explicit_features = feature_sets_config.get("explicit_features", []) or []  # Read optional explicit feature strategy
+    sanitized_feature_names = {sanitize_feature_name(name) for name in feature_names}  # Normalize available names exactly as assemble_feature_sets does
+    if explicit_features and any(sanitize_feature_name(name) in sanitized_feature_names for name in explicit_features):  # Count explicit mode only when at least one requested feature exists
+        count += 1
+
+    return count  # Return the exact number of feature modes expected from assembly
+
+
+def create_grid_progress(total_steps, description):
+    """
+    Create mutable shared progress state for one complete HP/augmentation/feature/classifier grid.
+
+    :param total_steps: Total number of grid steps expected in the progress bar
+    :param description: Description displayed beside the tqdm progress bar
+    :return: Dictionary containing total steps, current combination counter, and tqdm progress bar
+    """
+
+    return {
+        "total_steps": total_steps,
+        "current_combination": 1,
+        "progress_bar": tqdm(total=total_steps, desc=description, file=sys.stdout),
+    }  # Return shared denominator, counter, and progress bar
 
 
 def save_results_with_optional_suffix(file, results_list, suffix, base_filename_key, fallback_filename, use_stacking_subdir=False, config=None):
@@ -10181,11 +10295,7 @@ def orchestrate_combined_files_combination(files_to_process, ga_sel, pca_n, rfe_
 
 def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     """
-    Orchestrate all 8 combinations of Feature Selection (FS), Hyperparameter
-    Optimization (HP), and Data Augmentation (DA) for each execution mode.
-
-    This function does not change internal evaluation logic; it calls existing
-    evaluation functions with appropriate arguments per combination.
+    Orchestrate the complete feature/HP/augmentation/classifier grid for separate files evaluation.
 
     :param input_path: Path containing dataset files to process.
     :param dataset_name: Optional dataset name for logging.
@@ -10198,77 +10308,99 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
 
     files_to_process = determine_files_to_process(config.get("execution", {}).get("csv_file", None), input_path, config=config)  # Determine files
 
-    configured_mode = config.get("execution", {}).get("execution_mode", "both")  # Read configured mode
-    modes = [configured_mode] if configured_mode in ("separate_files", "combined_files") else ["separate_files", "combined_files"]  # Modes list
-
     methods_cfg = config.get("stacking", {}).get("methods", {})  # Retrieve method toggles from config
     fs_toggle = methods_cfg.get("feature_selection", True)  # Resolve feature selection toggle from config
     hp_toggle = methods_cfg.get("hyperparameter_optimization", True)  # Resolve hyperparameter optimization toggle from config
     da_toggle = methods_cfg.get("augmentation", True)  # Resolve data augmentation toggle from config
-    automl_toggle = methods_cfg.get("automl", True)  # Resolve AutoML toggle from config
+    stacking_enabled = methods_cfg.get("stacking", True)  # Resolve stacking classifier toggle
+    augmentation_requested = da_toggle and config.get("execution", {}).get("test_data_augmentation", False)  # Both existing augmentation toggles must permit ratio modes
 
-    for mode in modes:  # For each mode
-        total_files = len(files_to_process)  # Compute total number of files for progress reporting
-        for idx, file in enumerate(files_to_process, start=1):  # For each file in the input path with index for progress
-            try:  # Protect individual-file orchestration
-                artifacts = locate_and_verify_artifacts(file, config=config)  # Locate feature/HP/DA artifacts
-                fs_ga, fs_pca, fs_rfe = artifacts.get("ga"), artifacts.get("pca"), artifacts.get("rfe")  # Unpack feature artifacts
-                fs_available = bool(fs_ga or fs_rfe or fs_pca)  # True when at least one artifact exists
-                hp_raw = artifacts.get("hyperparams")  # Get hyperparameter mapping if present
-                hp_available = bool(hp_raw)  # True if HP results exist
-                aug_file = artifacts.get("augmented_file")  # Get augmented file path if present
-                aug_available = bool(aug_file)  # True when augmented file exists
+    total_files = len(files_to_process)  # Compute total number of files for progress reporting
+    for idx, file in enumerate(files_to_process, start=1):  # Evaluate each file independently
+        grid_progress = None  # Initialize shared progress state for safe cleanup
+        try:  # Protect individual-file orchestration
+            artifacts = locate_and_verify_artifacts(file, config=config)  # Locate feature, HP, and augmentation artifacts
+            ga_sel = artifacts.get("ga") if fs_toggle else None  # Use GA artifact only when feature selection is enabled
+            pca_n = artifacts.get("pca") if fs_toggle else None  # Use PCA artifact only when feature selection is enabled
+            rfe_sel = artifacts.get("rfe") if fs_toggle else None  # Use RFE artifact only when feature selection is enabled
 
-                fs_options = [True, False] if fs_toggle and fs_available else [False]  # Build feature selection options after artifact availability is known
-                hp_options = [False, True] if hp_toggle and hp_available else [False]  # Always run default HP mode first; only append optimized mode when enabled and available
-                da_options = [False, True] if da_toggle and aug_available else [False]  # Build augmentation options after artifact availability is known, with original-only first
-                combination_options = [(fs_flag, hp_flag, da_flag) for hp_flag, fs_flag, da_flag in itertools.product(hp_options, fs_options, da_options)]  # Generate ordered combinations with HP mode as the outer priority
+            df_original, feature_names = load_and_preprocess_dataset(file, None, config=config)  # Load the original dataset once for every grid slice
+            if df_original is None:  # Skip files that cannot be loaded
+                continue  # Move to the next file
+            ga_sel, rfe_sel = sanitize_and_verify_feature_selections(ga_sel, rfe_sel, feature_names, config=config)  # Normalize artifacts before grid counting so the denominator matches assembled feature modes
 
-                for fs_flag, hp_flag, da_flag in combination_options:  # Iterate generated FS/HP/DA combinations in deterministic default-first order
-                    feature_selection_enabled = fs_flag and fs_available  # Only enabled if requested and available
-                    hyperparameters_enabled = hp_flag and hp_available  # Only enabled if requested and available
-                    data_augmentation_enabled = da_flag and aug_available  # Only enabled if requested and available
+            default_models = get_models(config=config)  # Create an untouched default/current parameter model map
+            hp_runs = [(False, default_models, {})]  # Default hyperparameters always form the first complete grid
+            if hp_toggle and artifacts.get("hyperparams"):  # Add a separate optimized grid only when enabled and optimization results exist
+                optimized_models, optimized_params = prepare_models_with_hyperparameters(file, config=config)  # Build fresh model objects before applying optimized parameters
+                hp_runs.append((True, optimized_models, optimized_params))  # Keep optimized models isolated from default model objects
 
-                    suffix = f"_fs_{'on' if feature_selection_enabled else 'off'}_hp_{'on' if hyperparameters_enabled else 'off'}_da_{'on' if data_augmentation_enabled else 'off'}"  # Suffix
+            df_augmented = load_and_validate_augmented_data(file, df_original, config=config) if augmentation_requested and artifacts.get("augmented_file") else None  # Load compatible augmentation data only when enabled
+            augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]) if df_augmented is not None else []  # Generate ratio modes only when augmentation is usable
+            feature_mode_count = count_grid_feature_modes(ga_sel, pca_n, rfe_sel, feature_names, config=config)  # Count actual feature modes represented by the grid
+            classifier_mode_count = len(default_models) + (1 if stacking_enabled else 0)  # Count enabled individual classifiers plus optional stacking
+            total_steps = len(hp_runs) * (1 + len(augmentation_ratios)) * feature_mode_count * classifier_mode_count  # Exact full-grid combination denominator
+            grid_progress = create_grid_progress(total_steps, f"{os.path.basename(file)} Grid")  # Share one counter across every HP and augmentation mode
+            all_grid_results = []  # Accumulate every grid result for one consolidated export
+            all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
 
-                    print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}Orchestrating: mode={mode}, file=[{idx}/{total_files}] {file}, combo={suffix}{Style.RESET_ALL}")  # Log orchestration with progress indicator
-                    send_telegram_message(TELEGRAM_BOT, [f"[{mode.upper()}] Starting combination: {suffix} | HP: {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'} | DA: {'Data Augmentation' if data_augmentation_enabled else 'No Data Augmentation'} | file: {os.path.basename(file)}"])  # Notify Telegram about FS/HP/DA combination start
+            print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}Orchestrating full grid: file=[{idx}/{total_files}] {file}, combinations={total_steps}{Style.RESET_ALL}")  # Log exact generated grid size
 
-                    if hyperparameters_enabled:  # If we should use hyperparameters
-                        base_models, hp_params_map = prepare_models_with_hyperparameters(file, config=config)  # Apply HP mapping
-                    else:  # Hyperparameters disabled -> use defaults
-                        base_models = get_models(config=config)  # Instantiate base models without HP
-                        hp_params_map = {}  # Empty HP mapping
+            for hyperparameters_enabled, base_models, hp_params_map in hp_runs:  # Complete default grid before starting the optimized grid
+                hp_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build explicit active HP label
+                send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES] Starting {hp_label} grid | file: {os.path.basename(file)}"])  # Announce active HP grid
 
-                    ga_sel = fs_ga if feature_selection_enabled else None  # GA features or None
-                    pca_n = fs_pca if feature_selection_enabled else None  # PCA components or None
-                    rfe_sel = fs_rfe if feature_selection_enabled else None  # RFE features or None
+                results_original = evaluate_on_dataset(
+                    file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models,
+                    data_source_label="Original", hyperparams_map=hp_params_map,
+                    experiment_id=generate_experiment_id(file, "original_only"), experiment_mode="original_only", augmentation_ratio=None,
+                    execution_mode_str="separate_files", attack_types_combined=None, config=config,
+                    hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
+                )  # Evaluate every feature/classifier combination without augmentation
+                original_list = list(results_original.values())  # Convert baseline results for annotation and export
+                annotate_results_with_combination_flags(original_list, fs_toggle, hyperparameters_enabled, False)  # Mark baseline grid dimensions
+                all_grid_results.extend(original_list)  # Preserve baseline rows beside optimized and augmented rows
 
-                    if mode == "separate_files":  # Separate files evaluation per-file
-                        if not orchestrate_binary_combination(
-                            file, ga_sel, pca_n, rfe_sel, base_models, hp_params_map,
-                            hyperparameters_enabled, feature_selection_enabled, data_augmentation_enabled, suffix, config=config,
-                        ):  # If separate files evaluation combination evaluation failed
-                            continue  # Skip to next combination
+                ratio_results = {}  # Collect ratio results for the existing comparison export
+                for ratio in augmentation_ratios:  # Evaluate each configured augmentation ratio as its own grid mode
+                    df_sampled = sample_augmented_by_ratio(df_augmented, df_original, ratio)  # Sample the active augmentation ratio
+                    if df_sampled is None or df_sampled.empty:  # Skip ratios that cannot produce training data
+                        continue  # Move to the next configured ratio
+                    results_ratio = evaluate_on_dataset(
+                        file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models,
+                        data_source_label=f"Original+Augmented@{int(ratio * 100)}%", hyperparams_map=hp_params_map,
+                        experiment_id=generate_experiment_id(file, "original_plus_augmented", ratio), experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+                        execution_mode_str="separate_files", attack_types_combined=None, df_augmented_for_training=df_sampled,
+                        config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
+                    )  # Evaluate the same feature/classifier grid for this augmentation mode
+                    ratio_list = list(results_ratio.values())  # Convert ratio results for annotation and export
+                    annotate_results_with_combination_flags(ratio_list, fs_toggle, hyperparameters_enabled, True)  # Mark active grid dimensions
+                    all_grid_results.extend(ratio_list)  # Preserve ratio rows in the consolidated grid export
+                    ratio_results[ratio] = results_ratio  # Retain ratio results for comparison reporting
+                    del df_sampled  # Release sampled augmentation rows after the ratio evaluation
+                    gc.collect()  # Reclaim ratio-specific memory
 
-                    elif mode == "combined_files":  # Combined files evaluation orchestration
-                        signal = orchestrate_combined_files_combination(
-                            files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map,
-                            hyperparameters_enabled, feature_selection_enabled, data_augmentation_enabled, suffix, config=config,
-                        )  # Orchestrate combined files evaluation combination evaluation
-                        if signal == "break":  # If combination cannot proceed for this mode
-                            break  # Abort combined files evaluation for this file list
-                        elif signal == "continue":  # If combination should skip to next
-                            continue  # Continue with next combination
+                if ratio_results:  # Preserve the existing augmentation comparison report behavior
+                    comparison_results = generate_ratio_comparison_report(results_original, ratio_results)  # Compare this HP mode's ratios against its matching baseline
+                    for comparison_row in comparison_results:  # Annotate comparison rows so default and optimized metrics remain distinguishable
+                        comparison_row["hyperparameter_mode"] = hp_label  # Store the active HP mode in the existing comparison export
+                    all_comparison_results.extend(comparison_results)  # Preserve comparisons until the complete grid is ready to save
 
-                    else:  # Unknown mode (shouldn't happen)
-                        print(f"{BackgroundColors.YELLOW}Unknown execution mode: {mode}{Style.RESET_ALL}")  # Warn
-                        continue  # Skip
-
-            except Exception as e:  # If per-file orchestration fails
-                print(f"{BackgroundColors.RED}Orchestration failed for file {file}: {e}{Style.RESET_ALL}")  # Error
-                send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
-                continue  # Continue with next file
+            save_stacking_results(file, all_grid_results, config=config)  # Save the complete default-first grid once so later modes cannot overwrite earlier rows
+            if all_comparison_results:  # Save all HP modes together so optimized comparisons cannot overwrite default comparisons
+                save_augmentation_comparison_results(file, all_comparison_results, config=config)  # Preserve the existing comparison filename and metrics
+            remove_cache_file(file, config=config)  # Remove resume cache only after the complete grid is safely exported
+            if df_augmented is not None:  # Release optional augmented dataset after both HP grids finish
+                del df_augmented  # Drop augmented dataframe reference
+            del df_original  # Release original dataset after complete file grid
+            gc.collect()  # Reclaim dataset memory
+        except Exception as e:  # If per-file orchestration fails
+            print(f"{BackgroundColors.RED}Orchestration failed for file {file}: {e}{Style.RESET_ALL}")  # Error
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
+            continue  # Continue with next file
+        finally:  # Always close the shared grid progress bar
+            if grid_progress is not None:  # Verify progress state was created
+                grid_progress["progress_bar"].close()  # Close the one full-grid progress bar
 
 
 def execute_both_mode_pipeline(files_to_process, local_dataset_name, config=None):
