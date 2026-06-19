@@ -7854,16 +7854,16 @@ def build_telegram_combination_header(name, model_name, augmentation_ratio=None,
     :param hyperparameters_enabled: Whether optimized hyperparameters are active for this run.
     :return: Human-readable combination header string.
     """
-    parts = [name]  # Start with the feature strategy name
-    if augmentation_ratio is not None:  # Include augmentation information when active
-        parts.append(f"Data Augmentation = {augmentation_ratio:.2f}")
-    if hyperparameters_enabled:  # Include hyperparameter optimization status when active
-        parts.append("Optimized Hyperparameters")
-    parts.append(model_name)  # Append the model name last
+    
+    feature_label = "PCA" if name == "PCA Components" else name  # Normalize PCA wording for compact progress labels
+    hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build explicit HP mode label
+    augmentation_label = f"Data Augmentation = {augmentation_ratio:.2f}" if augmentation_ratio is not None else "No Data Augmentation"  # Build explicit DA mode label
+    parts = [feature_label, hyperparameter_label, augmentation_label, model_name]  # Build full progress label in the expected order
+    
     return " - ".join(parts)
 
 
-def submit_classifier_evaluations_to_pool(executor, individual_models, current_combination, name, X_train_df, y_train, X_test_df, y_test, file, scaler, subset_feature_names, total_steps):
+def submit_classifier_evaluations_to_pool(executor, individual_models, current_combination, name, X_train_df, y_train, X_test_df, y_test, file, scaler, subset_feature_names, total_steps, augmentation_ratio=None, hyperparameters_enabled=False):
     """
     Submit each individual classifier to the thread pool executor and return the futures map alongside the updated combination counter.
 
@@ -7884,7 +7884,7 @@ def submit_classifier_evaluations_to_pool(executor, individual_models, current_c
 
     future_to_model = {}  # Map futures to (model_name, model_class, combination_index)
     for model_name, model in individual_models.items():  # Iterate over each individual model
-        send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {name} - {model_name}")  # Notify telegram about evaluation start
+        send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {build_telegram_combination_header(name, model_name, augmentation_ratio, hyperparameters_enabled)}")  # Notify telegram about evaluation start with full active configuration details
         future = executor.submit(
             evaluate_individual_classifier,
             model,
@@ -7940,7 +7940,7 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
             hyperparams_map=hyperparams_map,
         )  # Build standardized result entry for this individual classifier
         results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
-        send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {name} - {model_name} with F1: {metrics[3]} in {calculate_execution_time(0, metrics[6])}")  # Notify telegram about completion using raw F1 value
+        send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {build_telegram_combination_header(name, model_name, augmentation_ratio, bool(hyperparams_map))} with F1: {metrics[3]} in {calculate_execution_time(0, metrics[6])}")  # Notify telegram about completion using full active configuration details
         progress_bar.update(1)  # Advance progress bar by one step
 
         if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run explainability on original data
@@ -7965,7 +7965,7 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
     return results_dict  # Return accumulated result entries
 
 
-def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, feature_set_name, model_name, results_dict, current_combination, total_steps, progress_bar):
+def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, feature_set_name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=False):
     """
     Recover one cached individual-classifier result (if present), emit resume logs, and advance progress counters.
 
@@ -8002,8 +8002,9 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
 
     cached_result = cache_dict[resume_key]  # Retrieve cached result entry for this classifier
     results_dict[(feature_set_name, model_name)] = cached_result  # Reuse cached entry without recomputation
+    combination_header = build_telegram_combination_header(feature_set_name, model_name, augmentation_ratio, hyperparameters_enabled)  # Build full recovered combination label
     print(
-        f"{BackgroundColors.YELLOW}[RESUME] Recovered combination {current_combination}/{total_steps}: {feature_set_name} - {model_name} from saved partial progress (no recomputation performed).{Style.RESET_ALL}"
+        f"{BackgroundColors.YELLOW}[RESUME] Recovered combination {current_combination}/{total_steps}: {combination_header} from saved partial progress (no recomputation performed).{Style.RESET_ALL}"
     )  # Log recovered combination to stdout for visibility
 
     cached_execution_mode = cached_result.get("execution_mode", execution_mode_str)  # Resolve execution mode from cached entry for log consistency
@@ -8021,7 +8022,7 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
         f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"
     )  # Print a full metrics summary for recovered cached classifier as if freshly evaluated
 
-    telegram_resume_header = f"[RESUME] Recovered combination {current_combination}/{total_steps}: {feature_set_name} - {model_name} from saved partial progress (no recomputation performed)."  # Build Telegram resume header matching stdout semantics
+    telegram_resume_header = f"[RESUME] Recovered combination {current_combination}/{total_steps}: {combination_header} from saved partial progress (no recomputation performed)."  # Build Telegram resume header matching stdout semantics
     telegram_metrics_line = f"{model_name}: Mode {evaluation_mode} | F1-Score {f1} | Accuracy: {acc} | Precision: {prec} | Recall: {rec} | FPR: {fpr} | FNR: {fnr} | Training Time: {cached_elapsed}s | Execution Time: {cached_elapsed}s | Total Time: {cached_human_time} ({cached_elapsed}s)"  # Build Telegram metrics line with full recovered metrics
 
     send_telegram_message(
@@ -8034,7 +8035,7 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
     return (True, current_combination)  # Signal cache hit and return updated counter
 
 
-def run_individual_classifiers_for_feature_set(name, individual_models, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, hyperparams_map, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None):
+def run_individual_classifiers_for_feature_set(name, individual_models, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, hyperparams_map, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None, hyperparameters_enabled=False):
     """
     Evaluates all individual classifiers for a feature set sequentially, collects results, and runs explainability.
 
@@ -8076,10 +8077,12 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         results_dict = {}  # Accumulate result entries for this feature set
 
         for model_name, model in individual_models.items():  # Iterate over each individual model sequentially to prevent loky deadlock
-            recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, results_dict, current_combination, total_steps, progress_bar)  # Attempt to recover cached result for this model and advance counters when recovered
+            recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled)  # Attempt to recover cached result for this model and advance counters when recovered
             if recovered:  # Skip recomputation when cache recovery succeeds
                 continue  # Move to next model because this one has already been recovered
-            send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {build_telegram_combination_header(name, model_name, augmentation_ratio, bool(hyperparams_map))}")  # Notify Telegram about evaluation start with active configuration details
+            combination_header = build_telegram_combination_header(name, model_name, augmentation_ratio, hyperparameters_enabled)  # Build full progress label for this classifier
+            progress_bar.set_description(combination_header)  # Update progress bar with the complete active configuration
+            send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {combination_header}")  # Notify Telegram about evaluation start with active configuration details
             sys.stdout.flush()  # Flush stdout before each classifier to ensure logs are visible under nohup
 
             metrics = evaluate_individual_classifier(
@@ -8111,7 +8114,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 except Exception:  # If cache save fails for any reason
                     pass  # Continue evaluation without failing the run
 
-            send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {build_telegram_combination_header(name, model_name, augmentation_ratio, bool(hyperparams_map))} with F1: {metrics[3]} in {calculate_execution_time(0, metrics[6])}")  # Notify Telegram about completion using active configuration details and raw F1 value
+            send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {combination_header} with F1: {metrics[3]} in {calculate_execution_time(0, metrics[6])}")  # Notify Telegram about completion using active configuration details and raw F1 value
             pass  # Verify removal of duplicate individual model accuracy print
             progress_bar.update(1)  # Advance progress bar by one step
 
@@ -8181,7 +8184,8 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             resume_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, "StackingClassifier")  # Build the full resume cache key for the stacking classifier
             if resume_key in cache_dict:  # Verify if the stacking result is already cached from a previous run
                 cached_result = cache_dict[resume_key]  # Retrieve cached stacking result entry for full resume logging
-                print(f"{BackgroundColors.YELLOW}[RESUME] Recovered combination {current_combination}/{total_steps}: {name} - StackingClassifier from saved partial progress (no recomputation performed).{Style.RESET_ALL}")  # Log recovered stacking combination to stdout for visibility
+                combination_header = build_telegram_combination_header(name, "StackingClassifier", augmentation_ratio, hyperparameters_enabled)  # Build full recovered stacking combination label
+                print(f"{BackgroundColors.YELLOW}[RESUME] Recovered combination {current_combination}/{total_steps}: {combination_header} from saved partial progress (no recomputation performed).{Style.RESET_ALL}")  # Log recovered stacking combination to stdout for visibility
 
                 cached_execution_mode = cached_result.get("execution_mode", execution_mode_str)  # Resolve execution mode from cached entry for log consistency
                 evaluation_mode = str(cached_execution_mode).replace("_", " ").title().replace(" ", "") if cached_execution_mode else "SeparateFiles"  # Normalize execution mode to CamelCase style
@@ -8198,7 +8202,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
                     f"{BackgroundColors.CYAN}StackingClassifier{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"
                 )  # Print a full metrics summary for recovered cached stacking classifier as if freshly evaluated
 
-                telegram_resume_header = f"[RESUME] Recovered combination {current_combination}/{total_steps}: {name} - StackingClassifier from saved partial progress (no recomputation performed)."  # Build Telegram resume header matching stdout semantics
+                telegram_resume_header = f"[RESUME] Recovered combination {current_combination}/{total_steps}: {combination_header} from saved partial progress (no recomputation performed)."  # Build Telegram resume header matching stdout semantics
                 telegram_metrics_line = f"StackingClassifier: Mode {evaluation_mode} | F1-Score {f1} | Accuracy: {acc} | Precision: {prec} | Recall: {rec} | FPR: {fpr} | FNR: {fnr} | Training Time: {cached_elapsed}s | Execution Time: {cached_elapsed}s | Total Time: {cached_human_time} ({cached_elapsed}s)"  # Build Telegram metrics line with full recovered metrics
                 send_telegram_message(TELEGRAM_BOT, f"{telegram_resume_header}\n{telegram_metrics_line}")  # Notify Telegram with full recovered stacking metrics summary
                 progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
@@ -8221,11 +8225,10 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         print(
             f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL} Params: {params_snapshot}"
         )  # Announce the start of stacking classifier training and evaluation with compact parameter snapshot
-        progress_bar.set_description(
-            f"{data_source_label} - {name} (Stacking)"
-        )  # Update progress bar description for stacking classifier
+        combination_header = build_telegram_combination_header(name, "StackingClassifier", augmentation_ratio, hyperparameters_enabled)  # Build full progress label for stacking classifier
+        progress_bar.set_description(combination_header)  # Update progress bar with the complete active configuration
 
-        send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {build_telegram_combination_header(name, 'StackingClassifier', augmentation_ratio, hyperparameters_enabled)}")  # Notify Telegram about stacking evaluation start with active configuration details
+        send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {combination_header}")  # Notify Telegram about stacking evaluation start with active configuration details
 
         stacking_metrics = evaluate_stacking_classifier(
             stacking_model, X_train_df, y_train, X_test_df, y_test
@@ -8259,7 +8262,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             except Exception:  # If cache save fails for any reason
                 pass  # Continue evaluation without failing the run
 
-        send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {build_telegram_combination_header(name, 'StackingClassifier', augmentation_ratio, hyperparameters_enabled)} with F1: {stacking_metrics[3]} in {calculate_execution_time(0, stacking_metrics[6])}")  # Notify Telegram about stacking evaluation completion using active configuration details and raw F1 value
+        send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {combination_header} with F1: {stacking_metrics[3]} in {calculate_execution_time(0, stacking_metrics[6])}")  # Notify Telegram about stacking evaluation completion using active configuration details and raw F1 value
         pass  # Verify removal of duplicate stacking classifier accuracy print
         progress_bar.update(1)  # Advance progress bar after stacking evaluation
         current_combination += 1  # Advance the global combination counter
@@ -8432,6 +8435,7 @@ def evaluate_single_feature_set(
     config=None,
     cache_dict=None,
     cache_ref_file=None,
+    hyperparameters_enabled=False,
 ):
     """
     Evaluate all individual classifiers and the stacking model on one non-empty feature subset.
@@ -8476,7 +8480,7 @@ def evaluate_single_feature_set(
         X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
         data_source_label, experiment_id, experiment_mode, augmentation_ratio,
         hyperparams_map, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
-        cache_dict=cache_dict, cache_ref_file=cache_ref_file,
+        cache_dict=cache_dict, cache_ref_file=cache_ref_file, hyperparameters_enabled=hyperparameters_enabled,
     )  # Evaluate all individual classifiers and collect their result entries with resume support
 
     stacking_result_entry = None
@@ -8486,7 +8490,7 @@ def evaluate_single_feature_set(
             X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
             data_source_label, experiment_id, experiment_mode, augmentation_ratio,
             scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
-            cache_dict=cache_dict, cache_ref_file=cache_ref_file, hyperparameters_enabled=bool(hyperparams_map),
+            cache_dict=cache_dict, cache_ref_file=cache_ref_file, hyperparameters_enabled=hyperparameters_enabled,
         )  # Evaluate stacking classifier, export model artifacts, generate metric plots, and collect result entry with resume support
 
     return individual_results, stacking_result_entry, current_combination  # Return per-model results and updated combination counter to the caller
@@ -8510,6 +8514,7 @@ def evaluate_on_dataset(
     df_augmented_for_training=None,
     config=None,
     cache_ref_file=None,
+    hyperparameters_enabled=None,
 ):
     """
     Evaluate classifiers on a single dataset with optional training-only augmentation.
@@ -8530,12 +8535,16 @@ def evaluate_on_dataset(
     :param df_augmented_for_training: Optional augmented DataFrame to merge into training set only (test set remains original-only)
     :param config: Configuration dictionary (uses global CONFIG if None)
     :param cache_ref_file: Override file path to use when computing the cache file location (required when file is 'combined_files_combined')
+    :param hyperparameters_enabled: Explicit hyperparameter mode flag for progress labels and result flow
     :return: Dictionary mapping (feature_set, model_name) to results
     """
     
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
+
+        if hyperparameters_enabled is None:  # If caller did not provide an explicit HP mode flag
+            hyperparameters_enabled = bool(hyperparams_map)  # Preserve legacy inference for older callers
 
         stacking_enabled = config.get("stacking", {}).get("methods", {}).get("stacking", True)  # Resolve stacking toggle from config
 
@@ -8588,7 +8597,7 @@ def evaluate_on_dataset(
                 file, execution_mode_str, attack_types_combined,
                 data_source_label, experiment_id, experiment_mode, augmentation_ratio,
                 hyperparams_map, scaler, total_steps, current_combination, progress_bar, stacking_enabled=stacking_enabled, config=config,
-                cache_dict=cache_dict, cache_ref_file=effective_cache_ref,
+                cache_dict=cache_dict, cache_ref_file=effective_cache_ref, hyperparameters_enabled=hyperparameters_enabled,
             )  # Evaluate all individual classifiers and stacking model on this non-empty feature subset with resume support
 
             all_results.update(individual_results)  # Merge this feature set's results into the global results dict
@@ -9962,7 +9971,7 @@ def orchestrate_binary_combination(file, ga_sel, pca_n, rfe_sel, base_models, hp
                 experiment_id=generate_experiment_id(file, "original_only"),
                 experiment_mode="original_only", augmentation_ratio=None,
                 execution_mode_str="separate_files", attack_types_combined=None,
-                df_augmented_for_training=None, config=config,
+                df_augmented_for_training=None, config=config, hyperparameters_enabled=hyperparameters_enabled,
             )  # Evaluate original-only separate files evaluation with explicit config propagation
         except Exception as e:  # If evaluation fails
             print(f"{BackgroundColors.RED}Evaluation failed for {file} combo {suffix}: {e}{Style.RESET_ALL}")  # Log error
@@ -10041,7 +10050,7 @@ def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, 
             experiment_mode="original_only", augmentation_ratio=None,
             execution_mode_str="combined_files", attack_types_combined=attack_types,
             df_augmented_for_training=None,
-            cache_ref_file=files_to_process[0], config=config,
+            cache_ref_file=files_to_process[0], config=config, hyperparameters_enabled=hyperparameters_enabled,
         )  # Evaluate combined files evaluation original dataset with cache reference for resume support and explicit config propagation
     except Exception as e:  # If evaluation fails
         print(f"{BackgroundColors.RED}Combined files evaluation failed for combo {suffix}: {e}{Style.RESET_ALL}")  # Error
@@ -10100,7 +10109,7 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
                             experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
                             execution_mode_str="combined_files", attack_types_combined=attack_types,
                             df_augmented_for_training=df_sampled,
-                            cache_ref_file=files_to_process[0], config=config,
+                            cache_ref_file=files_to_process[0], config=config, hyperparameters_enabled=hyperparameters_enabled,
                         )  # Evaluate augmented combined files evaluation combination with cache reference for resume support and explicit config propagation
                     except Exception as e:  # If evaluation failed
                         print(f"{BackgroundColors.YELLOW}Augmented evaluation failed for ratio {ratio} combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
@@ -10198,10 +10207,6 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     da_toggle = methods_cfg.get("augmentation", True)  # Resolve data augmentation toggle from config
     automl_toggle = methods_cfg.get("automl", True)  # Resolve AutoML toggle from config
 
-    fs_options = [True, False] if fs_toggle else [False]  # Build feature selection iteration options based on toggle
-    hp_options = [True, False] if hp_toggle else [False]  # Build hyperparameter optimization iteration options based on toggle
-    da_options = [True, False] if da_toggle else [False]  # Build data augmentation iteration options based on toggle
-
     for mode in modes:  # For each mode
         total_files = len(files_to_process)  # Compute total number of files for progress reporting
         for idx, file in enumerate(files_to_process, start=1):  # For each file in the input path with index for progress
@@ -10214,7 +10219,12 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                 aug_file = artifacts.get("augmented_file")  # Get augmented file path if present
                 aug_available = bool(aug_file)  # True when augmented file exists
 
-                for fs_flag, hp_flag, da_flag in itertools.product(fs_options, hp_options, da_options):  # Cartesian product of FS/HP/DA flags gated by method toggles
+                fs_options = [True, False] if fs_toggle and fs_available else [False]  # Build feature selection options after artifact availability is known
+                hp_options = [False, True] if hp_toggle and hp_available else [False]  # Always run default HP mode first; only append optimized mode when enabled and available
+                da_options = [False, True] if da_toggle and aug_available else [False]  # Build augmentation options after artifact availability is known, with original-only first
+                combination_options = [(fs_flag, hp_flag, da_flag) for hp_flag, fs_flag, da_flag in itertools.product(hp_options, fs_options, da_options)]  # Generate ordered combinations with HP mode as the outer priority
+
+                for fs_flag, hp_flag, da_flag in combination_options:  # Iterate generated FS/HP/DA combinations in deterministic default-first order
                     feature_selection_enabled = fs_flag and fs_available  # Only enabled if requested and available
                     hyperparameters_enabled = hp_flag and hp_available  # Only enabled if requested and available
                     data_augmentation_enabled = da_flag and aug_available  # Only enabled if requested and available
@@ -10222,7 +10232,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     suffix = f"_fs_{'on' if feature_selection_enabled else 'off'}_hp_{'on' if hyperparameters_enabled else 'off'}_da_{'on' if data_augmentation_enabled else 'off'}"  # Suffix
 
                     print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}Orchestrating: mode={mode}, file=[{idx}/{total_files}] {file}, combo={suffix}{Style.RESET_ALL}")  # Log orchestration with progress indicator
-                    send_telegram_message(TELEGRAM_BOT, [f"[{mode.upper()}] Starting combination: {suffix} | file: {os.path.basename(file)}"])  # Notify Telegram about FS/HP/DA combination start
+                    send_telegram_message(TELEGRAM_BOT, [f"[{mode.upper()}] Starting combination: {suffix} | HP: {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'} | DA: {'Data Augmentation' if data_augmentation_enabled else 'No Data Augmentation'} | file: {os.path.basename(file)}"])  # Notify Telegram about FS/HP/DA combination start
 
                     if hyperparameters_enabled:  # If we should use hyperparameters
                         base_models, hp_params_map = prepare_models_with_hyperparameters(file, config=config)  # Apply HP mapping
