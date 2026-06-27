@@ -335,22 +335,23 @@ stacking: # Stacking experiment settings
     dpi: 1000
     format: "png"
 
-  results_csv_columns: # Column ordering for results CSV export
-    - "model" # Model identifier (e.g., "RandomForest", "SVM")
-    - "dataset" # Dataset name extracted from file path
-    - "execution_mode" # Execution mode: "separate_files" or "combined_files"
-    - "attack_types_combined" # For combined_files: comma-separated attack types; for separate_files: same as dataset
-    - "feature_set" # Feature extraction method (e.g., "PCA", "RFE", "GA")
-    - "classifier_type" # Classifier family (e.g., "tree", "ensemble", "neural")
-    - "model_name" # Full model class name
-    - "data_source" # Data source type: "original", "augmented", "combined"
-    - "feature_selection_enabled" # NEW: True/False for FS toggle
-    - "hyperparameters_enabled" # NEW: True/False for HP toggle
-    - "data_augmentation_enabled" # NEW: True/False for DA toggle
+  results_csv_columns: # Column ordering for final results CSV export
     - "experiment_id" # Unique experiment identifier (timestamp-based)
-    - "experiment_mode" # Experiment type: "baseline", "augmentation", "comparison"
+    - "experiment_mode" # Experiment type: "original_only" or "original_plus_augmented"
+    - "execution_mode" # Execution mode: "separate_files" or "combined_files"
+    - "data_source" # Data source label: original, augmented, or combined
+    - "dataset" # Dataset path stored by stacking.py
+    - "attack_types_combined" # JSON list for combined_files; null for separate_files
     - "augmentation_ratio" # Ratio of augmented-to-original samples (null for baseline)
-    - "n_features" # Number of features in the dataset
+    - "feature_selection_enabled" # True/False for FS toggle
+    - "hyperparameters_enabled" # True/False for HP toggle
+    - "data_augmentation_enabled" # True/False for DA toggle
+    - "hyperparameter_mode" # Explicit HP mode label used by resume logic
+    - "feature_set" # Feature extraction method (e.g., "PCA", "RFE", "GA")
+    - "classifier_type" # Classifier grouping: Individual or Stacking
+    - "model_name" # Configured model label (e.g., "Random Forest")
+    - "model" # Concrete estimator class name (e.g., "RandomForestClassifier")
+    - "n_features" # Number of features used for the evaluated row
     - "n_samples_train" # Number of training samples
     - "n_samples_test" # Number of testing samples
     - "accuracy" # Classification accuracy (0.0-1.0)
@@ -361,11 +362,42 @@ stacking: # Stacking experiment settings
     - "fnr" # False Negative Rate (0.0-1.0)
     - "elapsed_time_s" # Elapsed time in seconds for evaluation
     - "cv_method" # Cross-validation method (e.g., "StratifiedKFold")
-    - "top_features" # Top feature names (comma-separated or JSON)
+    - "top_features" # Legacy final-export feature payload, rebuilt from features_list for cache recovery
     - "rfe_ranking" # RFE feature rankings (comma-separated or JSON)
     - "hyperparameters" # Model hyperparameters (JSON string)
-    - "features_list" # Complete feature list (comma-separated or JSON)
+    - "features_list" # Canonical complete feature list (JSON string)
     - "Hardware" # Hardware specification (CPU/GPU model)
+
+  cache_results_csv_columns: # Column ordering for temporary cache CSV export
+    - "experiment_id" # Unique experiment identifier (timestamp-based)
+    - "experiment_mode" # Experiment type: "original_only" or "original_plus_augmented"
+    - "execution_mode" # Execution mode: "separate_files" or "combined_files"
+    - "data_source" # Data source label: original, augmented, or combined
+    - "dataset" # Dataset path stored by stacking.py
+    - "attack_types_combined" # JSON list for combined_files; null for separate_files
+    - "augmentation_ratio" # Ratio of augmented-to-original samples (null for baseline)
+    - "feature_selection_enabled" # True/False for FS toggle
+    - "hyperparameters_enabled" # True/False for HP toggle
+    - "data_augmentation_enabled" # True/False for DA toggle
+    - "hyperparameter_mode" # Explicit HP mode label used by resume logic
+    - "feature_set" # Feature extraction method (e.g., "PCA", "RFE", "GA")
+    - "classifier_type" # Classifier grouping: Individual or Stacking
+    - "model_name" # Configured model label (e.g., "Random Forest")
+    - "model" # Concrete estimator class name (e.g., "RandomForestClassifier")
+    - "n_features" # Number of features used for the evaluated row
+    - "n_samples_train" # Number of training samples
+    - "n_samples_test" # Number of testing samples
+    - "accuracy" # Classification accuracy (0.0-1.0)
+    - "precision" # Precision score (0.0-1.0)
+    - "recall" # Recall score (0.0-1.0)
+    - "f1_score" # F1 score (0.0-1.0)
+    - "fpr" # False Positive Rate (0.0-1.0)
+    - "fnr" # False Negative Rate (0.0-1.0)
+    - "elapsed_time_s" # Elapsed time in seconds for evaluation
+    - "cv_method" # Cross-validation method (e.g., "StratifiedKFold")
+    - "rfe_ranking" # RFE feature rankings (comma-separated or JSON)
+    - "hyperparameters" # Model hyperparameters (JSON string)
+    - "features_list" # Canonical complete feature list (JSON string)
 
   use_suffix_filenames: false # When true, write separate CSVs per combo with suffix
 
