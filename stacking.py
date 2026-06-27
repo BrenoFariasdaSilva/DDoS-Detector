@@ -283,13 +283,23 @@ def get_default_stacking_config():
             "cache_prefix": "Cache_",  # Prefix for cached model files
             "model_export_base": "Feature_Analysis/Stacking/Models/",  # Base directory for model exports
             "results_csv_columns": [
-                "model", "dataset", "execution_mode", "attack_types_combined", "feature_set", "hyperparameter_mode", "classifier_type", "model_name",
-                "data_source", "experiment_id", "experiment_mode", "augmentation_ratio",
-                "n_features", "n_samples_train", "n_samples_test", "accuracy",
-                "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s",
-                "cv_method", "top_features", "rfe_ranking", "hyperparameters",
-                "features_list", "Hardware",
+                "experiment_id", "experiment_mode", "execution_mode", "data_source",
+                "dataset", "attack_types_combined", "augmentation_ratio",
+                "feature_selection_enabled", "hyperparameters_enabled", "data_augmentation_enabled", "hyperparameter_mode",
+                "feature_set", "classifier_type", "model_name", "model",
+                "n_features", "n_samples_train", "n_samples_test",
+                "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s",
+                "cv_method", "top_features", "rfe_ranking", "hyperparameters", "features_list", "Hardware",
             ],  # Column names for results CSV export
+            "cache_results_csv_columns": [
+                "experiment_id", "experiment_mode", "execution_mode", "data_source",
+                "dataset", "attack_types_combined", "augmentation_ratio",
+                "feature_selection_enabled", "hyperparameters_enabled", "data_augmentation_enabled", "hyperparameter_mode",
+                "feature_set", "classifier_type", "model_name", "model",
+                "n_features", "n_samples_train", "n_samples_test",
+                "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s",
+                "cv_method", "rfe_ranking", "hyperparameters", "features_list",
+            ],  # Column names for temporary cache CSV export
             "top_n_features_heatmap": 15,  # Number of top features to show in heatmap
             "combined_files_evaluation": True,  # Default: combined files evaluation enabled; False = separate files evaluation
             "methods": {
@@ -5887,6 +5897,100 @@ def export_feature_artifacts(df, file_path_obj, stacking_dir, config=None):
         raise
 
 
+def get_stacking_results_csv_columns(config: Optional[dict] = None) -> List[str]:
+    """
+    Resolve the configured final stacking results column order.
+
+    :param config: Configuration dictionary, or None to use the global configuration.
+    :return: Ordered list of final stacking results column names.
+    """
+
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Assign the global configuration reference.
+
+    configured_columns = config.get("stacking", {}).get("results_csv_columns")  # Read configured final results columns.
+    if isinstance(configured_columns, list) and configured_columns:  # Verify that a non-empty configured list is available.
+        return list(configured_columns)  # Return a defensive copy of the configured order.
+
+    return list(get_default_stacking_config()["results_csv_columns"])  # Return the default final results order.
+
+
+def get_cache_results_csv_columns(config: Optional[dict] = None) -> List[str]:
+    """
+    Resolve the configured temporary cache results column order.
+
+    :param config: Configuration dictionary, or None to use the global configuration.
+    :return: Ordered list of temporary cache results column names.
+    """
+
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Assign the global configuration reference.
+
+    configured_columns = config.get("stacking", {}).get("cache_results_csv_columns")  # Read configured temporary cache columns.
+    if isinstance(configured_columns, list) and configured_columns:  # Verify that a non-empty configured list is available.
+        return list(configured_columns)  # Return a defensive copy of the configured cache order.
+
+    return list(get_default_stacking_config()["cache_results_csv_columns"])  # Return the default temporary cache order.
+
+
+def resolve_boolean_value(value: Any, default: bool = False) -> bool:
+    """
+    Normalize scalar boolean-like values to a Python bool.
+
+    :param value: Value to normalize into a boolean.
+    :param default: Boolean value returned for missing or unrecognized input.
+    :return: Normalized boolean value.
+    """
+
+    if isinstance(value, bool):  # Preserve native boolean values.
+        return value  # Return the native boolean unchanged.
+
+    if value is None:  # Treat None as missing.
+        return default  # Return the supplied default for missing input.
+
+    try:  # Normalize pandas missing scalars without rejecting lists or arrays.
+        if bool(cast(Any, pd.isna(value))):  # Verify whether the scalar is missing.
+            return default  # Return the supplied default for missing pandas values.
+    except Exception:  # Continue when pandas returns a non-scalar missing mask.
+        pass  # Preserve legacy tolerance for list-like values.
+
+    if isinstance(value, (int, float)):  # Normalize numeric flags.
+        return bool(value)  # Return numeric truthiness.
+
+    if isinstance(value, str):  # Normalize common serialized flags.
+        normalized_value = value.strip().lower()  # Normalize whitespace and case.
+        if normalized_value in ("true", "1", "yes", "y", "on", "optimized", "optimized hyperparameters"):  # Recognize truthy strings.
+            return True  # Return True for recognized truthy strings.
+        if normalized_value in ("false", "0", "no", "n", "off", "default", "default hyperparameters", "", "none", "nan", "null"):  # Recognize falsy strings.
+            return False  # Return False for recognized falsy strings.
+
+    return default  # Return the default for unrecognized values.
+
+
+def has_serialized_value(value: Any) -> bool:
+    """
+    Determine whether a serialized metadata field carries a meaningful value.
+
+    :param value: Serialized or native metadata value to inspect.
+    :return: True when the value contains meaningful metadata, otherwise False.
+    """
+
+    if value is None:  # Treat None as missing metadata.
+        return False  # Return False for missing metadata.
+
+    try:  # Normalize pandas missing scalars without rejecting containers.
+        if bool(cast(Any, pd.isna(value))):  # Verify whether the scalar is missing.
+            return False  # Return False for missing pandas values.
+    except Exception:  # Continue when pandas returns a non-scalar missing mask.
+        pass  # Preserve tolerance for list-like metadata values.
+
+    if isinstance(value, str):  # Normalize serialized metadata strings.
+        normalized_value = value.strip()  # Remove surrounding whitespace.
+        return normalized_value not in ("", "None", "none", "nan", "NaN", "null", "{}", "[]")  # Return whether the string carries data.
+
+    return True  # Treat remaining native values as meaningful metadata.
+
+
 def reorder_and_annotate_dataframe(df, config=None):
     """
     Reorders DataFrame columns according to configuration and appends the hardware column.
@@ -5900,13 +6004,11 @@ def reorder_and_annotate_dataframe(df, config=None):
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        results_csv_columns = config.get("stacking", {}).get("results_csv_columns", [])  # Read desired column order from config
-        column_order = list(results_csv_columns) if results_csv_columns else list(config.get("stacking", {}).get("results_csv_columns", []))  # Use config list as ordering reference
+        column_order = get_stacking_results_csv_columns(config)  # Resolve the final results column order from configuration.
+        df = add_hardware_column(df, column_order)  # Populate the hardware column before the final ordering pass.
+        existing_columns = [col for col in column_order if col in df.columns]  # Select configured columns that exist in the DataFrame.
+        df = df[existing_columns + [c for c in df.columns if c not in existing_columns]]  # Reorder configured columns first and preserve any extra columns after them.
 
-        existing_columns = [col for col in column_order if col in df.columns]  # Filter to only columns that exist in the DataFrame
-        df = df[existing_columns + [c for c in df.columns if c not in existing_columns]]  # Reorder with configured columns first, then any remaining
-
-        df = add_hardware_column(df, existing_columns)  # Append hardware annotation column at the configured position
         return df  # Return the reordered and annotated DataFrame
     except Exception as e:
         print(str(e))
@@ -5931,6 +6033,8 @@ def flatten_and_serialize_results(results_list):
                 if metric in row and row[metric] is not None:  # If metric field is present and has a value
                     row[metric] = row[metric]  # Preserve full float precision for classification metrics
 
+            if "features_list" not in row and "top_features" in row:  # Populate features_list from legacy top_features when only the duplicate field exists.
+                row["features_list"] = row["top_features"]  # Preserve feature metadata under the canonical field.
             if "features_list" in row and not isinstance(row["features_list"], str):  # If features_list is not yet a JSON string
                 row["features_list"] = json.dumps(row["features_list"])  # Serialize features list to JSON string
             if "top_features" in row and not isinstance(row["top_features"], str):  # If top_features is not yet a JSON string
@@ -5940,10 +6044,11 @@ def flatten_and_serialize_results(results_list):
             if "hyperparameters" in row and row["hyperparameters"] is not None and not isinstance(row["hyperparameters"], str):  # If hyperparameters is present and not yet serialized
                 row["hyperparameters"] = json.dumps(row["hyperparameters"])  # Serialize hyperparameters dict to JSON string
 
+            if "hyperparameter_mode" not in row or not has_serialized_value(row["hyperparameter_mode"]):  # Populate explicit HP mode when the row does not carry one.
+                row["hyperparameter_mode"] = "Optimized Hyperparameters" if resolve_boolean_value(row.get("hyperparameters_enabled"), False) or has_serialized_value(row.get("hyperparameters")) else "Default Hyperparameters"  # Derive HP mode from flags or serialized parameters.
             if "feature_selection_enabled" not in row:  # If FS flag missing from row
                 row["feature_selection_enabled"] = False  # Default to False when undefined
-            if "hyperparameters_enabled" not in row:  # If HP flag missing from row
-                row["hyperparameters_enabled"] = False  # Default to False when undefined
+            row["hyperparameters_enabled"] = row["hyperparameter_mode"] == "Optimized Hyperparameters"  # Keep HP boolean aligned with explicit HP mode
             if "data_augmentation_enabled" not in row:  # If DA flag missing from row
                 row["data_augmentation_enabled"] = False  # Default to False when undefined
 
@@ -6103,10 +6208,7 @@ def load_cache_results(csv_path, config=None):
         try:  # Try to load the cache file
             low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
             df_cache = pd.read_csv(cache_path, low_memory=low_memory)  # Read the cache file
-            df_cache.columns = df_cache.columns.str.strip()  # Remove leading/trailing whitespace from column names
-            if "hyperparameter_mode" not in df_cache.columns:  # Legacy cache rows cannot safely distinguish default from optimized evaluations
-                print(f"{BackgroundColors.YELLOW}Ignoring legacy resume cache without hyperparameter_mode to prevent HP-mode leakage: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Explain why the ambiguous cache is not reused
-                return {}  # Start a clean grid rather than risk recovering optimized metrics into default runs
+            df_cache = prepare_cache_dataframe(df_cache, config=config)  # Normalize legacy and current cache schemas before resume use
             cache_dict = {}  # Initialize cache dictionary
 
             for _, row in df_cache.iterrows():  # Iterate through each row
@@ -6124,7 +6226,7 @@ def load_cache_results(csv_path, config=None):
                 attack_types_raw_row = safe_load_json(cache_row_value("attack_types_combined", None))  # Load attack types from cached row
                 attack_types_list_row = attack_types_raw_row if isinstance(attack_types_raw_row, list) else None  # Normalize attack types to list or None
                 hyperparameter_mode_row = str(cache_row_value("hyperparameter_mode", "Default Hyperparameters"))  # Recover explicit hyperparameter mode
-                hyperparameters_enabled_row = hyperparameter_mode_row == "Optimized Hyperparameters"  # Normalize cached hyperparameter mode to the boolean used by resume keys
+                hyperparameters_enabled_row = resolve_boolean_value(cache_row_value("hyperparameters_enabled", False), hyperparameter_mode_row == "Optimized Hyperparameters")  # Normalize cached hyperparameter mode to the boolean used by resume keys
                 cache_key = build_resume_cache_key(execution_mode_row, data_source_row, experiment_mode_row, aug_ratio_row, attack_types_list_row, feature_set, model_name, hyperparameters_enabled_row)  # Build full resume cache key from all distinguishing dimensions
 
                 result_entry = {
@@ -6140,6 +6242,9 @@ def load_cache_results(csv_path, config=None):
                     "experiment_id": cache_row_value("experiment_id", None),
                     "experiment_mode": experiment_mode_row,
                     "augmentation_ratio": aug_ratio_row,
+                    "feature_selection_enabled": resolve_boolean_value(cache_row_value("feature_selection_enabled", False), False),  # Recover normalized FS flag from cache metadata
+                    "hyperparameters_enabled": hyperparameters_enabled_row,  # Recover normalized HP flag from cache metadata
+                    "data_augmentation_enabled": resolve_boolean_value(cache_row_value("data_augmentation_enabled", False), aug_ratio_row is not None),  # Recover normalized DA flag from cache metadata
                     "n_features": int(n_features_value) if (n_features_value := cache_row_value("n_features", None)) is not None else None,
                     "n_samples_train": int(n_samples_train_value) if (n_samples_train_value := cache_row_value("n_samples_train", None)) is not None else None,
                     "n_samples_test": int(n_samples_test_value) if (n_samples_test_value := cache_row_value("n_samples_test", None)) is not None else None,
@@ -6151,7 +6256,7 @@ def load_cache_results(csv_path, config=None):
                     "fnr": float(fnr_value) if (fnr_value := cache_row_value("fnr", None)) is not None else None,
                     "elapsed_time_s": float(elapsed_time_value) if (elapsed_time_value := cache_row_value("elapsed_time_s", None)) is not None else None,
                     "cv_method": cache_row_value("cv_method", None),
-                    "top_features": safe_load_json(cache_row_value("top_features", None)),
+                    "top_features": safe_load_json(cache_row_value("features_list", None)),  # Rebuild duplicate final-export field from canonical cache feature metadata
                     "rfe_ranking": safe_load_json(cache_row_value("rfe_ranking", None)),
                     "hyperparameters": safe_load_json(cache_row_value("hyperparameters", None)),
                     "features_list": safe_load_json(cache_row_value("features_list", None)),
@@ -6234,6 +6339,174 @@ def build_resume_cache_key(execution_mode_str: str, data_source_label: str, expe
         raise  # Re-raise the exception to allow upstream handling if necessary
 
 
+def resolve_hyperparameter_mode_from_row(row: Any) -> str:
+    """
+    Resolve the explicit hyperparameter mode for a cache row.
+
+    :param row: Mapping-like row containing cache metadata.
+    :return: Explicit hyperparameter mode label.
+    """
+
+    mode_value = row.get("hyperparameter_mode", None)  # Read explicit HP mode when present.
+    if has_serialized_value(mode_value):  # Use explicit HP mode when it carries a value.
+        return str(mode_value).strip()  # Return normalized explicit HP mode text.
+
+    enabled_value = row.get("hyperparameters_enabled", False)  # Read legacy HP boolean flag.
+    hyperparameters_value = row.get("hyperparameters", None)  # Read serialized HP metadata for legacy cache rows.
+    enabled = resolve_boolean_value(enabled_value, False) or has_serialized_value(hyperparameters_value)  # Derive optimized mode from explicit flag or serialized parameters.
+
+    return "Optimized Hyperparameters" if enabled else "Default Hyperparameters"  # Return the resolved HP mode label.
+
+
+def build_cache_identity_from_row(row: Any) -> tuple:
+    """
+    Build the resume identity tuple for a normalized cache row.
+
+    :param row: Mapping-like row containing cache metadata.
+    :return: Hashable resume identity tuple.
+    """
+
+    attack_types_raw = safe_load_json(row.get("attack_types_combined", None))  # Decode serialized attack type metadata.
+    attack_types_list = attack_types_raw if isinstance(attack_types_raw, list) else None  # Normalize attack type metadata to a list or None.
+    augmentation_ratio_value = row.get("augmentation_ratio", None)  # Read augmentation ratio metadata.
+    augmentation_ratio = float(augmentation_ratio_value) if has_serialized_value(augmentation_ratio_value) else None  # Normalize augmentation ratio for the resume key.
+    hyperparameter_mode = resolve_hyperparameter_mode_from_row(row)  # Resolve explicit HP mode.
+    hyperparameters_enabled = hyperparameter_mode == "Optimized Hyperparameters"  # Convert HP mode to the boolean identity dimension.
+
+    return build_resume_cache_key(
+        str(row.get("execution_mode", "separate_files")),
+        str(row.get("data_source", "Original")),
+        str(row.get("experiment_mode", "original_only")),
+        augmentation_ratio,
+        attack_types_list,
+        str(row.get("feature_set", "")),
+        str(row.get("model_name", "")),
+        hyperparameters_enabled,
+    )  # Return the existing resume identity tuple.
+
+
+def normalize_cache_dataframe(df: pd.DataFrame, config: Optional[dict] = None) -> pd.DataFrame:
+    """
+    Normalize cache rows from current and legacy temporary cache schemas.
+
+    :param df: Cache DataFrame to normalize.
+    :param config: Configuration dictionary, or None to use the global configuration.
+    :return: Cache DataFrame using the canonical temporary cache schema.
+    """
+
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Assign the global configuration reference.
+
+    normalized_df = df.copy()  # Work on a copy to avoid mutating caller-owned DataFrames.
+    normalized_df.columns = normalized_df.columns.str.strip()  # Normalize column names before schema migration.
+    cache_columns = get_cache_results_csv_columns(config)  # Resolve canonical cache column order.
+    methods_cfg = config.get("stacking", {}).get("methods", {})  # Read active stacking method toggles.
+    feature_selection_default = bool(methods_cfg.get("feature_selection", True))  # Resolve default FS flag for current execution context.
+
+    if "features_list" not in normalized_df.columns and "top_features" in normalized_df.columns:  # Migrate duplicate legacy feature metadata.
+        normalized_df["features_list"] = normalized_df["top_features"]  # Store legacy top_features payload under the canonical field.
+    elif "features_list" in normalized_df.columns and "top_features" in normalized_df.columns:  # Fill missing canonical feature metadata from legacy duplicate payloads.
+        missing_features_mask = normalized_df["features_list"].isna()  # Locate rows with missing canonical feature metadata.
+        normalized_df.loc[missing_features_mask, "features_list"] = normalized_df.loc[missing_features_mask, "top_features"]  # Fill canonical feature metadata from legacy duplicate data.
+
+    if "hyperparameter_mode" not in normalized_df.columns:  # Add explicit HP mode column for legacy cache files.
+        normalized_df["hyperparameter_mode"] = None  # Initialize HP mode before row-wise resolution.
+
+    if "hyperparameters_enabled" not in normalized_df.columns:  # Add HP boolean column for legacy or partial rows.
+        normalized_df["hyperparameters_enabled"] = False  # Initialize HP boolean before row-wise resolution.
+
+    if "hyperparameters" not in normalized_df.columns:  # Add HP metadata column when absent.
+        normalized_df["hyperparameters"] = None  # Preserve canonical schema when no HP metadata exists.
+
+    normalized_df["hyperparameter_mode"] = normalized_df.apply(resolve_hyperparameter_mode_from_row, axis=1)  # Resolve HP mode deterministically for every row.
+    normalized_df["hyperparameters_enabled"] = normalized_df["hyperparameter_mode"].map(lambda value: value == "Optimized Hyperparameters")  # Keep HP boolean synchronized with HP mode.
+
+    normalized_df["feature_selection_enabled"] = feature_selection_default  # Use current method context because cache rows are written before final annotation.
+
+    if "data_augmentation_enabled" not in normalized_df.columns:  # Add DA flag when absent.
+        normalized_df["data_augmentation_enabled"] = False  # Initialize DA flag before ratio-based resolution.
+
+    if "augmentation_ratio" not in normalized_df.columns:  # Add augmentation ratio when absent.
+        normalized_df["augmentation_ratio"] = None  # Preserve canonical schema when no augmentation ratio exists.
+
+    normalized_df["data_augmentation_enabled"] = normalized_df.apply(lambda row: resolve_boolean_value(row.get("data_augmentation_enabled", False), has_serialized_value(row.get("augmentation_ratio", None))), axis=1)  # Normalize DA flag from explicit flag or ratio metadata.
+
+    for column in cache_columns:  # Ensure every canonical cache column exists.
+        if column not in normalized_df.columns:  # Add missing canonical cache columns.
+            normalized_df[column] = None  # Initialize missing canonical values with None.
+
+    normalized_df = normalized_df[cache_columns]  # Apply canonical cache column order and drop duplicate legacy-only fields.
+
+    return normalized_df  # Return normalized cache rows.
+
+
+def deduplicate_cache_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove duplicate cache rows using the resume identity tuple.
+
+    :param df: Normalized cache DataFrame.
+    :return: Deduplicated cache DataFrame.
+    """
+
+    if df.empty:  # Return immediately when no cache rows exist.
+        return df  # Preserve empty DataFrame schema.
+
+    deduped_df = df.copy()  # Work on a copy before adding the transient identity column.
+    deduped_df["cache_identity"] = deduped_df.apply(build_cache_identity_from_row, axis=1)  # Build one identity per cache row.
+    deduped_df = deduped_df.drop_duplicates(subset=["cache_identity"], keep="last")  # Keep the most recent row for each resume identity.
+    deduped_df = deduped_df.drop(columns=["cache_identity"])  # Remove transient identity column before writing.
+
+    return deduped_df  # Return deduplicated cache rows.
+
+
+def prepare_cache_dataframe(df: pd.DataFrame, config: Optional[dict] = None) -> pd.DataFrame:
+    """
+    Normalize, deduplicate, and order temporary cache rows.
+
+    :param df: Cache DataFrame to prepare for reading or writing.
+    :param config: Configuration dictionary, or None to use the global configuration.
+    :return: Prepared cache DataFrame using the canonical schema.
+    """
+
+    normalized_df = normalize_cache_dataframe(df, config=config)  # Normalize current and legacy cache schemas.
+    deduped_df = deduplicate_cache_dataframe(normalized_df)  # Remove duplicate rows by resume identity.
+    ordered_df = deduped_df[get_cache_results_csv_columns(config)]  # Enforce canonical cache column order.
+
+    return ordered_df  # Return prepared cache rows.
+
+
+def persist_cache_result_entry(cache_ref_file: Optional[str], result_entry: dict, cache_dict: Optional[dict], config: Optional[dict] = None) -> None:
+    """
+    Persist one atomic result and register it in the in-memory resume cache.
+
+    :param cache_ref_file: Dataset file path used to derive the cache file location, or None to skip persistence.
+    :param result_entry: Fully computed classifier result entry.
+    :param cache_dict: Mutable in-memory resume cache keyed by resume identity, or None.
+    :param config: Configuration dictionary, or None to use the global configuration.
+    :return: None.
+    """
+
+    if cache_ref_file is None:  # Skip persistence when no cache reference is available.
+        return  # Return without writing.
+
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Assign the global configuration reference.
+
+    methods_cfg = config.get("stacking", {}).get("methods", {})  # Read active method toggles for cache metadata.
+    result_entry["feature_selection_enabled"] = bool(methods_cfg.get("feature_selection", True))  # Persist active FS context with the temporary row.
+    result_entry["hyperparameters_enabled"] = result_entry.get("hyperparameter_mode") == "Optimized Hyperparameters"  # Persist HP boolean derived from explicit HP mode.
+    result_entry["data_augmentation_enabled"] = has_serialized_value(result_entry.get("augmentation_ratio", None))  # Persist DA context from augmentation ratio metadata.
+    resume_key = build_cache_identity_from_row(result_entry)  # Build the same identity used during resume loading.
+
+    if cache_dict is not None and resume_key in cache_dict:  # Avoid duplicate writes when the same identity is already registered in memory.
+        return  # Return without appending a duplicate cache row.
+
+    save_cache_result_entry(cache_ref_file, result_entry, config=config)  # Persist the fully computed atomic result immediately.
+
+    if cache_dict is not None:  # Register successful writes for the remainder of the current process.
+        cache_dict[resume_key] = result_entry  # Store the result under its resume identity.
+
+
 def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> None:
     """
     Atomically append a single result entry to the cache CSV file.
@@ -6259,25 +6532,23 @@ def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> N
             return  # Exit without writing anything
 
         row_dict = flat_rows[0]  # Extract the single flattened row dictionary
+        row_df = prepare_cache_dataframe(pd.DataFrame([row_dict]), config=config)  # Normalize the new row to the canonical cache schema
 
         try:  # Attempt atomic write to cache file
             cache_dir = os.path.dirname(cache_path)  # Get directory containing the cache file
             os.makedirs(cache_dir, exist_ok=True)  # Ensure cache directory exists before writing
             cache_file_exists = os.path.isfile(cache_path)  # Verify if cache file already exists to decide whether to write header
+            if cache_file_exists:  # Read and normalize existing cache rows before appending
+                low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
+                existing_df = pd.read_csv(cache_path, low_memory=low_memory)  # Load existing cache rows for schema migration
+                combined_df = pd.concat([existing_df, row_df], ignore_index=True)  # Append the new atomic result to existing cache rows
+            else:  # Initialize a new cache DataFrame when no cache file exists
+                combined_df = row_df.copy()  # Use the normalized row as the complete cache content
+            combined_df = prepare_cache_dataframe(combined_df, config=config)  # Normalize, deduplicate, and order the complete cache content
             tmp_fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")  # Create temp file in same directory for atomic rename
             try:  # Write to temp file before atomic rename
                 with os.fdopen(tmp_fd, "w", encoding="utf-8", newline="") as tmp_f:  # Open temp file descriptor for writing
-                    if cache_file_exists:  # If cache file exists, read existing content first
-                        with open(cache_path, "r", encoding="utf-8", newline="") as existing_f:  # Open existing cache file for reading
-                            existing_content = existing_f.read()  # Read full existing cache content
-                        tmp_f.write(existing_content)  # Write existing content to temp file
-                        if existing_content and not existing_content.endswith("\n"):  # Verify if existing content needs a trailing newline
-                            tmp_f.write("\n")  # Add trailing newline before appending new row
-                        row_df = pd.DataFrame([row_dict])  # Wrap single row in DataFrame for CSV serialization
-                        tmp_f.write(row_df.to_csv(index=False, header=False))  # Append new row without repeating header
-                    else:  # Cache file does not exist, create with header
-                        row_df = pd.DataFrame([row_dict])  # Wrap single row in DataFrame for CSV serialization
-                        tmp_f.write(row_df.to_csv(index=False, header=True))  # Write new row with header for new cache file
+                    tmp_f.write(combined_df.to_csv(index=False, header=True))  # Write canonical cache content with a single header row
                 os.replace(tmp_path, cache_path)  # Atomic rename from temp to cache path (POSIX guarantees atomicity)
             except Exception:  # If write or rename fails
                 try:  # Attempt to clean up temp file
@@ -6289,7 +6560,8 @@ def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> N
             verbose_output(
                 f"{BackgroundColors.YELLOW}Warning: Failed to save result to cache {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}",
                 config=config,
-            )  # Log cache write failure without interrupting the main evaluation flow
+            )  # Log cache write failure before propagating the exception
+            raise  # Propagate cache write failure so completed atomic results are not treated as safely persisted
     except Exception as e:  # Catch any unexpected errors in the cache saving process
         print(str(e))  # Log the error message for debugging
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send the exception details via Telegram for monitoring
@@ -8119,11 +8391,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             )  # Build standardized result entry for this individual classifier
             results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
 
-            if cache_ref_file is not None:  # Only persist to cache when a valid cache reference file is available
-                try:  # Attempt to atomically append this result to the cache CSV
-                    save_cache_result_entry(cache_ref_file, result_entry, config=config)  # Persist result immediately after computation for resume support
-                except Exception:  # If cache save fails for any reason
-                    pass  # Continue evaluation without failing the run
+            persist_cache_result_entry(cache_ref_file, result_entry, cache_dict, config=config)  # Persist this atomic classifier result immediately and register its resume identity
 
             send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {combination_header} with F1: {metrics[3]} in {calculate_execution_time(0, metrics[6])}")  # Notify Telegram about completion using active configuration details and raw F1 value
             pass  # Verify removal of duplicate individual model accuracy print
@@ -8269,11 +8537,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             hyperparameters_enabled=hyperparameters_enabled,
         )  # Build standardized result entry for the stacking classifier
 
-        if cache_ref_file is not None:  # Only persist to cache when a valid cache reference file is available
-            try:  # Attempt to atomically append the stacking result to the cache CSV
-                save_cache_result_entry(cache_ref_file, stacking_result_entry, config=config)  # Persist stacking result immediately after computation for resume support
-            except Exception:  # If cache save fails for any reason
-                pass  # Continue evaluation without failing the run
+        persist_cache_result_entry(cache_ref_file, stacking_result_entry, cache_dict, config=config)  # Persist this atomic stacking result immediately and register its resume identity
 
         send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {combination_header} with F1: {stacking_metrics[3]} in {calculate_execution_time(0, stacking_metrics[6])}")  # Notify Telegram about stacking evaluation completion using active configuration details and raw F1 value
         pass  # Verify removal of duplicate stacking classifier accuracy print
@@ -9079,13 +9343,14 @@ def build_comparison_result_entry(orig_result, feature_set, classifier_type, mod
         raise
 
 
-def generate_ratio_comparison_report(results_original, all_ratio_results):
+def generate_ratio_comparison_report(results_original, all_ratio_results, config=None):
     """
     Generates and prints comparison report for ratio-based data augmentation evaluation.
     Compares the original baseline against each augmentation ratio experiment.
 
     :param results_original: Dictionary of results from original data evaluation
     :param all_ratio_results: Dictionary mapping ratio (float) to results dictionary
+    :param config: Configuration dictionary (uses global CONFIG if None)
     :return: List of comparison result entries for CSV export
     """
     
@@ -9358,7 +9623,7 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
             )  # Print warning about no completed experiments
             return  # Exit function early when no results are available
 
-        comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate the comparison report across all ratios
+        comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results, config=config)  # Generate the comparison report across all ratios
 
         save_augmentation_comparison_results(file, comparison_results)  # Save comparison results to CSV file
 
@@ -9422,7 +9687,7 @@ def save_combined_files_augmentation_comparison(results_original, all_ratio_resu
             return  # Exit early since there is nothing to compare
 
         if comparison_results is None:  # Build comparisons from result mappings for legacy callers
-            comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results)  # Generate comparison report across all evaluated augmentation ratios
+            comparison_results = generate_ratio_comparison_report(results_original, all_ratio_results, config=config)  # Generate comparison report across all evaluated augmentation ratios
 
         augmentation_comparison_filename = config.get("stacking", {}).get("augmentation_comparison_filename", "Data_Augmentation_Comparison_Results.csv")  # Get base comparison filename from config
         combined_files_comparison_filename = augmentation_comparison_filename.replace(".csv", "_CombinedFiles.csv")  # Build combined files evaluation-specific comparison filename
@@ -9785,7 +10050,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                     gc.collect()  # Reclaim ratio-specific memory
 
                 if ratio_results:  # Preserve existing augmentation comparison output for this HP mode
-                    comparison_results = generate_ratio_comparison_report(results_original, ratio_results)  # Compare this HP mode's ratios against its matching baseline
+                    comparison_results = generate_ratio_comparison_report(results_original, ratio_results, config=config)  # Compare this HP mode's ratios against its matching baseline
                     for comparison_row in comparison_results:  # Annotate comparison rows so both HP modes remain distinguishable
                         comparison_row["hyperparameter_mode"] = hp_label  # Store the active HP mode in the comparison export
                     all_comparison_results.extend(comparison_results)  # Preserve comparisons until the complete grid is ready to save
@@ -10381,7 +10646,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     gc.collect()  # Reclaim ratio-specific memory
 
                 if ratio_results:  # Preserve the existing augmentation comparison report behavior
-                    comparison_results = generate_ratio_comparison_report(results_original, ratio_results)  # Compare this HP mode's ratios against its matching baseline
+                    comparison_results = generate_ratio_comparison_report(results_original, ratio_results, config=config)  # Compare this HP mode's ratios against its matching baseline
                     for comparison_row in comparison_results:  # Annotate comparison rows so default and optimized metrics remain distinguishable
                         comparison_row["hyperparameter_mode"] = hp_label  # Store the active HP mode in the existing comparison export
                     all_comparison_results.extend(comparison_results)  # Preserve comparisons until the complete grid is ready to save
