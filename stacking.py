@@ -148,6 +148,8 @@ TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegr
 
 # Logger Setup:
 logger = None  # Will be initialized in initialize_logger()
+EXPLAINABILITY_EXECUTOR: Optional[concurrent.futures.ThreadPoolExecutor] = None  # Manages queued explainability jobs in one background worker.
+EXPLAINABILITY_FUTURES: List[concurrent.futures.Future] = []  # Tracks scheduled explainability futures until finalization.
 
 
 # Functions Definitions:
@@ -5764,6 +5766,173 @@ def run_explainability_pipeline(model, model_name, X_test, y_test, feature_names
         raise
 
 
+def copy_explainability_value(value: Any) -> Any:
+    """
+    Copy an explainability input value for background ownership.
+
+    :param value: Value that should be detached from later caller mutations.
+    :return: Copied value when possible, otherwise the original value.
+    """
+
+    if value is None:  # Preserve None values without allocation.
+        return None  # Return None directly.
+    if hasattr(value, "copy"):  # Use native copy semantics for dataframe, series, and array objects.
+        try:  # Prefer pandas-style deep copy when supported.
+            return value.copy(deep=True)  # Copy pandas-style objects with deep ownership.
+        except TypeError:  # Fall back for numpy-style copy signatures.
+            return value.copy()  # Copy numpy-style objects with native ownership.
+    if isinstance(value, (list, tuple, dict)):  # Use serialization for common mutable containers.
+        return pickle.loads(pickle.dumps(value))  # Return a detached serialized copy.
+    return value  # Return immutable or opaque values unchanged.
+
+
+def copy_explainability_model(model: Any) -> Any:
+    """
+    Copy fitted model state for background explainability execution.
+
+    :param model: Fitted model object to detach from later training mutations.
+    :return: Serialized copy of the fitted model.
+    """
+
+    return pickle.loads(pickle.dumps(model))  # Snapshot fitted model state before any later refit can mutate it.
+
+
+def snapshot_explainability_inputs(model: Any, X_test: Any, y_test: Any, feature_names: Any, config: dict) -> Tuple[Any, Any, Any, List[Any], dict]:
+    """
+    Snapshot explainability inputs before dispatching background execution.
+
+    :param model: Fitted model object for explainability.
+    :param X_test: Test feature matrix for explainability.
+    :param y_test: Test labels for explainability.
+    :param feature_names: Feature names associated with the test feature matrix.
+    :param config: Configuration dictionary used by explainability routines.
+    :return: Tuple containing detached model, test data, labels, feature names, and config.
+    """
+
+    model_snapshot = copy_explainability_model(model)  # Snapshot fitted model state for background ownership.
+    X_test_snapshot = copy_explainability_value(X_test)  # Copy test feature data before caller reuse or release.
+    y_test_snapshot = copy_explainability_value(y_test)  # Copy test labels before caller reuse or release.
+    feature_names_snapshot = list(feature_names) if feature_names is not None else []  # Snapshot feature metadata as an independent list.
+    config_snapshot = pickle.loads(pickle.dumps(config))  # Snapshot configuration so later mutations do not affect queued work.
+    return model_snapshot, X_test_snapshot, y_test_snapshot, feature_names_snapshot, config_snapshot  # Return the detached explainability inputs.
+
+
+def get_explainability_executor(config: Optional[dict]) -> concurrent.futures.ThreadPoolExecutor:
+    """
+    Return the bounded background executor for explainability jobs.
+
+    :param config: Configuration dictionary used for executor lifecycle.
+    :return: ThreadPoolExecutor used for queued explainability execution.
+    """
+
+    global EXPLAINABILITY_EXECUTOR  # Access the module-level explainability executor.
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Preserve existing CONFIG fallback behavior.
+    if EXPLAINABILITY_EXECUTOR is None:  # Create the executor only once per active run.
+        max_workers = 1  # Use one worker because SHAP, LIME, Matplotlib, and SHAP progress patching share process resources.
+        EXPLAINABILITY_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="explainability")  # Start a bounded deterministic background worker.
+    return EXPLAINABILITY_EXECUTOR  # Return the active executor.
+
+
+def execute_explainability_job(model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: List[Any], dataset_file: str, feature_set: str, execution_mode: str, config: dict) -> Optional[dict]:
+    """
+    Run one queued explainability job and isolate its failures.
+
+    :param model: Detached fitted model for explainability.
+    :param model_name: Model name used for labels and filenames.
+    :param X_test: Detached test feature matrix.
+    :param y_test: Detached test labels.
+    :param feature_names: Detached feature name list.
+    :param dataset_file: Dataset file path used for output directory construction.
+    :param feature_set: Feature set label used for output directory construction.
+    :param execution_mode: Execution mode string used for output directory construction.
+    :param config: Detached configuration dictionary used by explainability routines.
+    :return: Explainability result dictionary or None when explainability fails.
+    """
+
+    try:  # Isolate background explainability failures from classifier execution.
+        return run_explainability_pipeline(model, model_name, X_test, y_test, feature_names, dataset_file, feature_set, execution_mode, config)  # Run the existing explainability pipeline.
+    except Exception as e:  # Log any background explainability failure.
+        print(str(e))  # Print the error through the existing logging path.
+        verbose_output(f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}", config=config)  # Log failure using the existing verbose pattern.
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send failure details through the existing Telegram exception path.
+        return None  # Prevent the failed explainability job from terminating unrelated processing.
+
+
+def schedule_explainability_job(model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: Any, dataset_file: str, feature_set: str, execution_mode: str, config: Optional[dict], experiment_mode: str, hyperparameters_enabled: bool) -> Optional[concurrent.futures.Future]:
+    """
+    Queue explainability execution after classifier result completion.
+
+    :param model: Fitted model object from the completed classifier result.
+    :param model_name: Model name used for labels and filenames.
+    :param X_test: Test feature matrix for explainability.
+    :param y_test: Test labels for explainability.
+    :param feature_names: Feature names associated with the test feature matrix.
+    :param dataset_file: Dataset file path used for output directory construction.
+    :param feature_set: Feature set label used for output directory construction.
+    :param execution_mode: Execution mode string used for output directory construction.
+    :param config: Configuration dictionary used by explainability routines.
+    :param experiment_mode: Experiment mode string controlling original-only explainability.
+    :param hyperparameters_enabled: Whether this classifier result used optimized hyperparameters.
+    :return: Future for the queued job, or None when no job is queued.
+    """
+
+    try:  # Keep scheduling failures isolated from classifier progression.
+        if config is None:  # Use global configuration when no configuration is provided.
+            config = CONFIG  # Preserve existing CONFIG fallback behavior.
+        explainability_config = config.get("explainability", {})  # Read explainability settings from configuration.
+        if not explainability_config.get("enabled", False):  # Preserve disabled-run behavior.
+            return None  # Skip queuing when explainability is disabled.
+        if experiment_mode != "original_only":  # Preserve original-only explainability behavior.
+            return None  # Skip queuing for augmented experiments.
+        hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve HP label for isolated output paths.
+        explainability_feature_set = f"{feature_set} - {hyperparameter_label}"  # Isolate explainability artifacts across default and optimized HP runs.
+        model_snapshot, X_test_snapshot, y_test_snapshot, feature_names_snapshot, config_snapshot = snapshot_explainability_inputs(model, X_test, y_test, feature_names, config)  # Snapshot inputs before dispatch.
+        executor = get_explainability_executor(config_snapshot)  # Resolve the bounded background executor.
+        future = executor.submit(execute_explainability_job, model_snapshot, model_name, X_test_snapshot, y_test_snapshot, feature_names_snapshot, dataset_file, explainability_feature_set, execution_mode, config_snapshot)  # Queue explainability without blocking the training loop.
+        EXPLAINABILITY_FUTURES.append(future)  # Track the future for shutdown finalization.
+        verbose_output(f"{BackgroundColors.GREEN}Queued explainability for {BackgroundColors.CYAN}{model_name} - {explainability_feature_set}{Style.RESET_ALL}", config=config)  # Log queued explainability work.
+        return future  # Return the queued future to the caller.
+    except Exception as e:  # Log scheduling failures and continue classifier processing.
+        print(str(e))  # Print the scheduling error through the existing logging path.
+        verbose_output(f"{BackgroundColors.YELLOW}Explainability scheduling failed for {model_name}: {e}{Style.RESET_ALL}", config=config)  # Log scheduling failure using the existing verbose pattern.
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send scheduling failure details through the existing Telegram exception path.
+        return None  # Keep the main classifier flow non-blocking on scheduling failure.
+
+
+def finalize_pending_explainability_jobs(config: Optional[dict] = None) -> None:
+    """
+    Wait for queued explainability jobs and shut down the executor.
+
+    :param config: Configuration dictionary used for logging.
+    :return: None.
+    """
+
+    global EXPLAINABILITY_EXECUTOR  # Access the module-level explainability executor for shutdown.
+    try:  # Keep finalization failures visible without masking the original program flow.
+        if config is None:  # Use global configuration when no configuration is provided.
+            config = CONFIG  # Preserve existing CONFIG fallback behavior.
+        tracked_futures = list(EXPLAINABILITY_FUTURES)  # Snapshot the tracked futures before waiting.
+        if not tracked_futures and EXPLAINABILITY_EXECUTOR is None:  # Skip finalization when no queued work or worker exists.
+            return  # Return immediately when there is nothing to finalize.
+        if tracked_futures:  # Wait only when futures have been queued.
+            verbose_output(f"{BackgroundColors.GREEN}Waiting for {len(tracked_futures)} queued explainability job(s) to finish before shutdown.{Style.RESET_ALL}", config=config)  # Log explainability finalization.
+            for future in concurrent.futures.as_completed(tracked_futures):  # Wait for every queued future to complete.
+                try:  # Surface any unexpected future exception through existing paths.
+                    future.result()  # Retrieve the result so executor exceptions cannot disappear.
+                except Exception as e:  # Log unexpected future exceptions.
+                    print(str(e))  # Print the future error through the existing logging path.
+                    verbose_output(f"{BackgroundColors.YELLOW}Queued explainability future failed: {e}{Style.RESET_ALL}", config=config)  # Log unexpected future failure.
+                    send_exception_via_telegram(type(e), e, e.__traceback__)  # Send unexpected future failure details through Telegram.
+            EXPLAINABILITY_FUTURES.clear()  # Clear completed futures after finalization.
+        if EXPLAINABILITY_EXECUTOR is not None:  # Shut down an active executor after futures complete.
+            EXPLAINABILITY_EXECUTOR.shutdown(wait=True)  # Stop the background worker after all queued jobs finish.
+            EXPLAINABILITY_EXECUTOR = None  # Allow a later programmatic run to create a fresh executor.
+    except Exception as e:  # Log finalization errors without hiding classifier results.
+        print(str(e))  # Print the finalization error through the existing logging path.
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send finalization failure details through the existing Telegram exception path.
+
+
 def get_hardware_specifications():
     """
     Returns system specs: real CPU model (Windows/Linux/macOS), physical cores,
@@ -8224,21 +8393,11 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
         send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {build_telegram_combination_header(name, model_name, augmentation_ratio, bool(hyperparams_map))} with F1: {metrics[3]} in {calculate_execution_time(0, metrics[6])}")  # Notify telegram about completion using full active configuration details
         progress_bar.update(1)  # Advance progress bar by one step
 
-        if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run explainability on original data
-            try:  # Attempt to run explainability pipeline for this model
-                trained_model = individual_models[model_name]  # Retrieve trained model object for explainability
-                run_explainability_pipeline(
-                    trained_model,
-                    model_name,
-                    X_test_subset,
-                    y_test,
-                    subset_feature_names,
-                    file,
-                    name,
-                    execution_mode_str,
-                    config
-                )  # Run explainability pipeline on original test data only
-            except Exception as e:  # If explainability fails
+        if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
+            try:  # Attempt to queue explainability for this model
+                trained_model = individual_models[model_name]  # Retrieve trained model object for snapshotting
+                schedule_explainability_job(trained_model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, bool(hyperparams_map))  # Queue explainability without blocking future collection
+            except Exception as e:  # If explainability queueing fails
                 verbose_output(
                     f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
                     config=config
@@ -8397,20 +8556,10 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             pass  # Verify removal of duplicate individual model accuracy print
             progress_bar.update(1)  # Advance progress bar by one step
 
-            if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run explainability on original data
-                try:  # Attempt to run explainability pipeline for this model
-                    run_explainability_pipeline(
-                        model,
-                        model_name,
-                        X_test_subset,
-                        y_test,
-                        subset_feature_names,
-                        file,
-                        name,
-                        execution_mode_str,
-                        config
-                    )  # Run explainability pipeline on original test data only
-                except Exception as e:  # If explainability fails
+            if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
+                try:  # Attempt to queue explainability for this model
+                    schedule_explainability_job(model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled)  # Queue explainability without blocking the next classifier
+                except Exception as e:  # If explainability queueing fails
                     verbose_output(
                         f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
                         config=config
@@ -8544,20 +8693,10 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         progress_bar.update(1)  # Advance progress bar after stacking evaluation
         current_combination += 1  # Advance the global combination counter
 
-        if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only run explainability on original data
-            try:  # Attempt to run explainability pipeline for stacking model
-                run_explainability_pipeline(
-                    stacking_model,
-                    "StackingClassifier",
-                    X_test_subset,
-                    y_test,
-                    subset_feature_names,
-                    file,
-                    name,
-                    execution_mode_str,
-                    config
-                )  # Run explainability pipeline on original test data only for stacking model
-            except Exception as e:  # If explainability fails
+        if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
+            try:  # Attempt to queue explainability for stacking model
+                schedule_explainability_job(stacking_model, "StackingClassifier", X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled)  # Queue explainability without blocking the next feature set
+            except Exception as e:  # If explainability queueing fails
                 verbose_output(
                     f"{BackgroundColors.YELLOW}Explainability failed for StackingClassifier: {e}{Style.RESET_ALL}",
                     config=config
@@ -11317,6 +11456,8 @@ def main(config=None):
             paths = [p.strip() if isinstance(p, str) else p for p in paths] if isinstance(paths, list) else paths  # Normalize paths list by stripping each string entry
             process_dataset_paths(dataset_name, paths, config=config)  # Process all paths for this dataset
 
+        finalize_pending_explainability_jobs(config=config)  # Wait for queued explainability artifacts before final program reporting
+
         finish_time = datetime.datetime.now()  # Get the finish time of the program
         print(
             f"\n{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
@@ -11334,6 +11475,8 @@ def main(config=None):
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
+    finally:  # Always finalize queued explainability work before leaving main
+        finalize_pending_explainability_jobs(config=config)  # Finalize queued explainability work before main exits
 
 
 if __name__ == "__main__":
