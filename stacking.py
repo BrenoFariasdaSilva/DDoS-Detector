@@ -280,7 +280,7 @@ def get_default_stacking_config():
             "combined_files_results_filename": "Stacking_Classifiers_CombinedFiles_Results.csv",  # Combined files evaluation results CSV filename
             "augmentation_comparison_filename": "Data_Augmentation_Comparison_Results.csv",  # Augmentation comparison CSV filename
             "data_augmentation_suffix": "_data_augmented",  # File suffix for augmented data files
-            "augmentation_ratios": [0.10, 0.25, 0.50, 0.75, 1.00],  # Ratios of augmented data to sample
+            "augmentation_ratios": [0.25, 0.50, 0.75, 1.00],  # Ratios of augmented data to sample
             "hyperparameters_filename": "Hyperparameter_Optimization_Results.csv",  # Hyperparameter results CSV filename
             "cache_prefix": "Cache_",  # Prefix for cached model files
             "model_export_base": "Feature_Analysis/Stacking/Models/",  # Base directory for model exports
@@ -9696,7 +9696,7 @@ def run_single_ratio_experiment(file, df_original_cleaned, df_augmented_cleaned,
 def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, results_original, config=None):
     """
     Handles complete augmented data evaluation workflow with ratio-based experiments.
-    For each ratio in config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]), samples augmented data proportionally,
+    For each ratio in config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]), samples augmented data proportionally,
     merges with original, evaluates classifiers, and compares against original baseline.
 
     :param file: Original file path
@@ -9725,7 +9725,7 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
         if df_augmented_cleaned is None:  # If augmented data could not be loaded or validated
             return  # Exit function early when no valid augmented data is available
 
-        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Retrieve the list of ratios to evaluate
+        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00])  # Retrieve the list of ratios to evaluate
 
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*100}{Style.RESET_ALL}"
@@ -10146,7 +10146,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
 
         augmentation_enabled = methods_cfg.get("augmentation", True) and config.get("execution", {}).get("test_data_augmentation", False)  # Both existing toggles must enable augmentation modes
         combined_augmented_df = load_and_combine_augmented_combined_files(original_files_list, config=config) if augmentation_enabled else None  # Load augmentation source once for the complete grid
-        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]) if combined_augmented_df is not None else []  # Generate ratio modes only when augmentation data is usable
+        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if combined_augmented_df is not None else []  # Generate ratio modes only when augmentation data is usable
         feature_mode_count = count_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Count actual feature modes
         classifier_mode_count = len(default_models) + (1 if methods_cfg.get("stacking", True) else 0)  # Count enabled classifiers including optional stacking
         total_steps = len(hp_runs) * (1 + len(augmentation_ratios)) * feature_mode_count * classifier_mode_count  # Exact full-grid denominator
@@ -10295,7 +10295,7 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
         original_experiment_id = generate_experiment_id(file, "original_only")  # Generate unique experiment ID for the original-only evaluation
 
         test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", False)  # Get test data augmentation flag from config
-        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
+        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
         
         if test_data_augmentation:  # If data augmentation testing is enabled
             generate_augmentation_tsne_visualization(
@@ -10613,7 +10613,7 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
             if combined_aug_df is None:  # If combine failed
                 print(f"{BackgroundColors.YELLOW}Failed to combine augmented files for combined files evaluation combo {suffix}. Skipping.{Style.RESET_ALL}")  # Warn
             else:  # Proceed with ratio experiments
-                for ratio in config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]):  # For each augmentation ratio
+                for ratio in config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]):  # For each augmentation ratio
                     df_sampled = sample_augmented_by_ratio(combined_aug_df, combined_df, ratio)  # Sample augmented data
                     if df_sampled is None:  # If sampling failed
                         print(f"{BackgroundColors.YELLOW}Sampling failed for ratio {ratio} in combo {suffix}. Skipping ratio.{Style.RESET_ALL}")  # Warn
@@ -10740,7 +10740,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                 hp_runs.append((True, optimized_models, optimized_params))  # Keep optimized models isolated from default model objects
 
             df_augmented = load_and_validate_augmented_data(file, df_original, config=config) if augmentation_requested and artifacts.get("augmented_file") else None  # Load compatible augmentation data only when enabled
-            augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00]) if df_augmented is not None else []  # Generate ratio modes only when augmentation is usable
+            augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if df_augmented is not None else []  # Generate ratio modes only when augmentation is usable
             feature_mode_count = count_grid_feature_modes(ga_sel, pca_n, rfe_sel, feature_names, config=config)  # Count actual feature modes represented by the grid
             classifier_mode_count = len(default_models) + (1 if stacking_enabled else 0)  # Count enabled individual classifiers plus optional stacking
             total_steps = len(hp_runs) * (1 + len(augmentation_ratios)) * feature_mode_count * classifier_mode_count  # Exact full-grid combination denominator
@@ -11370,7 +11370,7 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
         automl_enabled = methods_cfg.get("automl", True)
         stacking_enabled = methods_cfg.get("stacking", True)
         test_data_augmentation = execution_cfg.get("test_data_augmentation", True)
-        augmentation_ratios = stacking_cfg.get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])
+        augmentation_ratios = stacking_cfg.get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00])
 
         dataset_display = dataset_path if dataset_path else "config.yaml (default)"
         lines = [
@@ -11414,7 +11414,7 @@ def main(config=None):
         log_resolved_configuration(config=config)  # Log resolved dataset path and method toggle states
         
         test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", True)  # Get test augmentation flag from config
-        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.10, 0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
+        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
 
         if test_data_augmentation:  # If data augmentation testing is enabled
             print(
