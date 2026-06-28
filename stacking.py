@@ -6425,7 +6425,7 @@ def safe_load_json(val):
     return val  # For non-string values, return as is
             
                 
-def load_cache_results(csv_path, config=None):
+def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  # Load cache rows with optional operator discovery notification.
     """
     Load cached results from the cache file if it exists.
 
@@ -6447,13 +6447,9 @@ def load_cache_results(csv_path, config=None):
             )  # Output the verbose message
             return {}  # Return empty dictionary
 
-        print(
-            f"{BackgroundColors.GREEN}Resume cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
-        )  # Always print cache discovery and exact location when the cache file exists
-        send_telegram_message(
-            TELEGRAM_BOT,  # Use the configured Telegram bot instance for the cache discovery notification
-            f"Resume cache file found at: {cache_path}"
-        )  # Send Telegram notification about cache discovery with the exact path
+        if notify_discovery:  # Emit discovery notifications only for operator-facing resume loads.
+            print(f"{BackgroundColors.GREEN}Resume cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Print cache discovery and exact location when requested.
+            send_telegram_message(TELEGRAM_BOT, f"Resume cache file found at: {cache_path}")  # Send Telegram notification about cache discovery when requested.
 
         verbose_output(
             f"{BackgroundColors.GREEN}Loading cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}",
@@ -6730,6 +6726,119 @@ def prepare_cache_dataframe(df: pd.DataFrame, config: Optional[dict] = None) -> 
     return ordered_df  # Return prepared cache rows.
 
 
+def validate_cache_result_payload(result_entry: dict, config: Optional[dict] = None) -> None:  # Validate one cache row before any disk write.
+    """
+    Validate that one completed atomic result can form a complete canonical cache row.
+
+    :param result_entry: Fully computed classifier result entry.
+    :param config: Configuration dictionary, or None to use the global configuration.
+    :return: None.
+    """
+
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Assign the global configuration reference.
+
+    flat_rows = flatten_and_serialize_results([result_entry])  # Serialize the atomic result through the production result flattener.
+    if not flat_rows:  # Reject empty serialization before touching the cache file.
+        raise ValueError("Cache result serialization produced no rows")  # Raise a persistence-blocking validation error.
+
+    row_df = prepare_cache_dataframe(pd.DataFrame([flat_rows[0]]), config=config)  # Normalize the row through the production cache schema.
+    cache_columns = get_cache_results_csv_columns(config)  # Resolve the canonical temporary cache column order.
+    missing_columns = [column for column in cache_columns if column not in row_df.columns]  # Locate missing canonical cache columns.
+    if missing_columns:  # Reject rows that cannot satisfy the configured cache schema.
+        raise ValueError(f"Cache result row missing required columns: {missing_columns}")  # Raise with precise missing column names.
+
+    row_values = row_df.iloc[0].to_dict()  # Convert the normalized row to scalar metadata for required-field validation.
+    required_payload_columns = [  # List the fields required to identify and recover a completed atomic classifier result.
+        "experiment_id",  # Require the existing experiment identifier for traceability.
+        "experiment_mode",  # Require original-only versus augmented mode.
+        "execution_mode",  # Require separate-files versus combined-files mode.
+        "data_source",  # Require the source label that separates original and augmented rows.
+        "dataset",  # Require dataset identity metadata in the persisted payload.
+        "feature_set",  # Require feature-set identity.
+        "hyperparameter_mode",  # Require default versus optimized hyperparameter identity.
+        "classifier_type",  # Require individual versus stacking classifier grouping.
+        "model_name",  # Require classifier identity.
+        "model",  # Require concrete estimator class metadata.
+        "n_features",  # Require feature-count metadata.
+        "n_samples_train",  # Require training sample count.
+        "n_samples_test",  # Require test sample count.
+        "accuracy",  # Require completed accuracy metric.
+        "precision",  # Require completed precision metric.
+        "recall",  # Require completed recall metric.
+        "f1_score",  # Require completed F1 metric.
+        "fpr",  # Require completed false-positive-rate metric.
+        "fnr",  # Require completed false-negative-rate metric.
+        "elapsed_time_s",  # Require elapsed-time metric.
+        "cv_method",  # Require evaluation method metadata.
+        "features_list",  # Require complete feature payload for resume and exports.
+    ]  # Complete required payload list.
+    missing_values = [column for column in required_payload_columns if not has_serialized_value(row_values.get(column, None))]  # Locate required fields without meaningful values.
+    if missing_values:  # Reject incomplete result rows before disk persistence.
+        raise ValueError(f"Cache result row missing required values: {missing_values}")  # Raise with precise missing value names.
+
+    if str(row_values.get("execution_mode", "")) == "combined_files" and not has_serialized_value(row_values.get("attack_types_combined", None)):  # Require combined attack scope when combined-files mode is active.
+        raise ValueError("Cache result row missing combined attack scope")  # Raise before writing an ambiguous combined-files row.
+    if str(row_values.get("experiment_mode", "")) == "original_plus_augmented" and not has_serialized_value(row_values.get("augmentation_ratio", None)):  # Require the exact ratio for augmented rows.
+        raise ValueError("Cache result row missing augmentation ratio")  # Raise before writing an ambiguous augmented row.
+
+
+def sync_cache_file_data(cache_file: Any) -> None:  # Synchronize temp-file contents where the platform supports it.
+    """
+    Flush and synchronize a temporary cache file before replacement.
+
+    :param cache_file: Open writable file object.
+    :return: None.
+    """
+
+    cache_file.flush()  # Flush Python buffers before the rename boundary.
+    sync_function = getattr(os, "fsync", None)  # Resolve the filesystem sync primitive when available.
+    if sync_function is None:  # Allow platforms without fsync to rely on close semantics.
+        return  # Return after the explicit flush.
+    sync_function(cache_file.fileno())  # Synchronize temp-file bytes before replacement.
+
+
+def sync_cache_parent_directory(cache_path: str) -> None:  # Synchronize rename metadata where the platform supports directory descriptors.
+    """
+    Synchronize the parent directory after an atomic cache replacement when supported.
+
+    :param cache_path: Final cache CSV path.
+    :return: None.
+    """
+
+    sync_function = getattr(os, "fsync", None)  # Resolve the filesystem sync primitive when available.
+    if sync_function is None or os.name == "nt":  # Use a guarded no-op on platforms without portable directory sync.
+        return  # Return after the file replacement has completed.
+
+    directory_fd = None  # Store the parent directory descriptor for cleanup.
+    try:  # Attempt POSIX directory metadata synchronization.
+        directory_fd = os.open(os.path.dirname(os.path.abspath(cache_path)), os.O_RDONLY)  # Open the parent directory for metadata sync.
+        sync_function(directory_fd)  # Synchronize the directory entry created by os.replace.
+    except OSError:  # Treat unsupported directory synchronization as nonfatal portability behavior.
+        return  # Preserve the successful file replacement when directory sync is unsupported.
+    finally:  # Close the directory descriptor when one was opened.
+        if directory_fd is not None:  # Verify that the descriptor exists before closing.
+            os.close(directory_fd)  # Close the parent directory descriptor.
+
+
+def verify_cache_result_persisted(cache_ref_file: str, resume_key: tuple, config: Optional[dict] = None) -> None:  # Verify the real resume loader can discover the written identity.
+    """
+    Reload the cache through the production resume path and verify the written identity.
+
+    :param cache_ref_file: Dataset file path used to derive the cache file location.
+    :param resume_key: Resume identity expected after persistence.
+    :param config: Configuration dictionary, or None to use the global configuration.
+    :return: None.
+    """
+
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Assign the global configuration reference.
+
+    persisted_cache = load_cache_results(cache_ref_file, config=config, notify_discovery=False)  # Reload through the production cache loader used by resume without operator notification.
+    if resume_key not in persisted_cache:  # Reject persistence that cannot be recovered by the real loader.
+        raise RuntimeError(f"Persisted cache result is not recoverable for identity: {resume_key}")  # Raise a persistence-blocking recovery error.
+
+
 def persist_cache_result_entry(cache_ref_file: Optional[str], result_entry: dict, cache_dict: Optional[dict], config: Optional[dict] = None) -> None:
     """
     Persist one atomic result and register it in the in-memory resume cache.
@@ -6751,12 +6860,19 @@ def persist_cache_result_entry(cache_ref_file: Optional[str], result_entry: dict
     result_entry["feature_selection_enabled"] = bool(methods_cfg.get("feature_selection", True))  # Persist active FS context with the temporary row.
     result_entry["hyperparameters_enabled"] = result_entry.get("hyperparameter_mode") == "Optimized Hyperparameters"  # Persist HP boolean derived from explicit HP mode.
     result_entry["data_augmentation_enabled"] = has_serialized_value(result_entry.get("augmentation_ratio", None))  # Persist DA context from augmentation ratio metadata.
+    validate_cache_result_payload(result_entry, config=config)  # Validate the complete normalized cache payload before writing.
     resume_key = build_cache_identity_from_row(result_entry)  # Build the same identity used during resume loading.
 
     if cache_dict is not None and resume_key in cache_dict:  # Avoid duplicate writes when the same identity is already registered in memory.
         return  # Return without appending a duplicate cache row.
 
-    save_cache_result_entry(cache_ref_file, result_entry, config=config)  # Persist the fully computed atomic result immediately.
+    try:  # Persist and verify the row before any in-memory cache registration.
+        save_cache_result_entry(cache_ref_file, result_entry, config=config)  # Persist the fully computed atomic result immediately.
+        verify_cache_result_persisted(cache_ref_file, resume_key, config=config)  # Verify the real resume loader can recover the exact identity.
+    except Exception as e:  # If cache persistence or recovery verification fails.
+        print(f"{BackgroundColors.RED}Failed to persist cache result for identity {resume_key}: {e}{Style.RESET_ALL}")  # Log the affected atomic identity clearly.
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify through the existing exception reporting path.
+        raise  # Propagate the failure so later combinations do not proceed as cached.
 
     if cache_dict is not None:  # Register successful writes for the remainder of the current process.
         cache_dict[resume_key] = result_entry  # Store the result under its resume identity.
@@ -6804,7 +6920,9 @@ def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> N
             try:  # Write to temp file before atomic rename
                 with os.fdopen(tmp_fd, "w", encoding="utf-8", newline="") as tmp_f:  # Open temp file descriptor for writing
                     tmp_f.write(combined_df.to_csv(index=False, header=True))  # Write canonical cache content with a single header row
-                os.replace(tmp_path, cache_path)  # Atomic rename from temp to cache path (POSIX guarantees atomicity)
+                    sync_cache_file_data(tmp_f)  # Flush and synchronize temp-file bytes before replacement
+                os.replace(tmp_path, cache_path)  # Atomically replace the cache file after the temp file is complete
+                sync_cache_parent_directory(cache_path)  # Synchronize parent-directory metadata where supported
             except Exception:  # If write or rename fails
                 try:  # Attempt to clean up temp file
                     os.unlink(tmp_path)  # Remove temp file to avoid leftover artifacts
@@ -8657,9 +8775,9 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 hyperparams_map=hyperparams_map,
                 hyperparameters_enabled=hyperparameters_enabled,
             )  # Build standardized result entry for this individual classifier
-            results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
-
             persist_cache_result_entry(cache_ref_file, result_entry, cache_dict, config=config)  # Persist this atomic classifier result immediately and register its resume identity
+
+            results_dict[(name, model_name)] = result_entry  # Store result keyed by feature set and model only after durable cache verification
 
             send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {combination_header} with F1: {metrics[3]} in {calculate_execution_time(0, metrics[6])}")  # Notify Telegram about completion using active configuration details and raw F1 value
             pass  # Verify removal of duplicate individual model accuracy print
