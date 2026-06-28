@@ -1999,7 +1999,7 @@ def generate_experiment_id(file_path, experiment_mode, augmentation_ratio=None):
 
     :param file_path: Path to the dataset file being processed
     :param experiment_mode: Experiment mode string (e.g., 'original_only' or 'original_plus_augmented')
-    :param augmentation_ratio: Augmentation ratio float (e.g., 0.10) or None for original-only mode
+    :param augmentation_ratio: Augmentation ratio float (e.g., 0.25) or None for original-only mode
     :return: String experiment identifier combining timestamp, filename, mode and ratio
     """
 
@@ -2070,7 +2070,7 @@ def sample_augmented_by_ratio(augmented_df, original_df, ratio):
 
     :param augmented_df: Full augmented DataFrame to sample from
     :param original_df: Original DataFrame used to determine sample count
-    :param ratio: Float ratio (e.g., 0.10 means 10% of original size)
+    :param ratio: Float ratio (e.g., 0.25 means 25% of original size)
     :return: Sampled DataFrame with at most ratio * len(original_df) rows, or None on failure
     """
 
@@ -4307,6 +4307,92 @@ def apply_hyperparameters_to_models(hyperparams_map, models_map, config=None):
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
+
+
+def resolve_hyperparameters_for_model(model_name: str, hyperparams_map: dict) -> Optional[dict]:
+    """
+    Resolve optimized parameters for one classifier.
+
+    :param model_name: Configured classifier name.
+    :param hyperparams_map: Mapping of artifact classifier names to parameter dictionaries.
+    :return: Parameter dictionary for the classifier, or None when unavailable.
+    """
+
+    if not hyperparams_map:  # Return no optimized parameters when the artifact mapping is empty.
+        return None  # Return no optimized parameters.
+
+    params = hyperparams_map.get(model_name, None)  # Prefer exact classifier-name matches from the artifact.
+    if params is None:  # Try case-insensitive matching when an exact key is unavailable.
+        lower_matches = [key for key in hyperparams_map.keys() if str(key).lower() == model_name.lower()]  # Build case-insensitive candidate keys.
+        params = hyperparams_map[lower_matches[0]] if lower_matches else None  # Use the first case-insensitive match when present.
+
+    if params is None:  # Try normalized matching when case-insensitive matching is unavailable.
+        normalized_model_name = normalize(model_name)  # Normalize the configured classifier name.
+        normalized_matches = [key for key in hyperparams_map.keys() if normalize(key) == normalized_model_name]  # Build normalized candidate keys.
+        params = hyperparams_map[normalized_matches[0]] if normalized_matches else None  # Use the first normalized match when present.
+
+    if isinstance(params, str):  # Decode serialized parameter dictionaries from CSV artifacts.
+        try:  # Prefer JSON for exported artifact payloads.
+            params = json.loads(params)  # Decode JSON parameters.
+        except Exception:  # Fall back to Python literal parsing for legacy payloads.
+            try:  # Parse legacy literal dictionaries safely.
+                params = ast.literal_eval(params)  # Decode Python-literal parameters.
+            except Exception:  # Treat undecodable payloads as unavailable.
+                params = None  # Normalize invalid serialized parameters.
+
+    if not isinstance(params, dict):  # Reject missing or invalid parameter payloads.
+        return None  # Return no optimized parameters for this classifier.
+
+    return dict(params)  # Return a defensive copy of the optimized parameters.
+
+
+def build_optimized_hyperparameter_models(file_path: str, config: Optional[dict]) -> Tuple[dict, dict]:
+    """
+    Build optimized models for classifiers with valid artifacts.
+
+    :param file_path: Dataset file path used to locate the hyperparameter artifact.
+    :param config: Configuration dictionary, or None to use the global configuration.
+    :return: Tuple of optimized model mapping and applied parameter mapping.
+    """
+
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Assign the global configuration reference.
+
+    optimized_models = {}  # Accumulate classifiers with valid optimized parameters.
+    optimized_params = {}  # Accumulate applied parameter dictionaries by classifier.
+    active_models = get_models(config=config)  # Resolve enabled classifiers through the existing filtering logic.
+    hp_results_raw = extract_hyperparameter_optimization_results(file_path, config=config)  # Load matching hyperparameter artifact rows for this context.
+
+    if not hp_results_raw:  # Warn when no artifact data exists for the requested optimized branch.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Optimized hyperparameter branch skipped for {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}: no matching artifact rows were found.{Style.RESET_ALL}")  # Report missing optimized artifact rows.
+        return optimized_models, optimized_params  # Return empty optimized mappings.
+
+    hp_params_map = {key: (value.get("best_params") if isinstance(value, dict) else value) for key, value in hp_results_raw.items()}  # Extract best parameter payloads by artifact classifier name.
+
+    for model_name, model in active_models.items():  # Iterate active classifiers in configured order.
+        params = resolve_hyperparameters_for_model(model_name, hp_params_map)  # Resolve valid parameters for this exact classifier.
+        if params is None:  # Skip optimized mode for classifiers without valid parameters.
+            print(f"{BackgroundColors.YELLOW}[WARNING] Optimized hyperparameter branch skipped for {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW}: no valid matching optimized-parameter artifact exists for {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}")  # Report classifier-specific skip reason.
+            continue  # Continue with the next classifier.
+
+        guarded_n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Read the effective n_jobs resource setting.
+        if guarded_n_jobs == 1 and "n_jobs" in params:  # Preserve resource guard when optimized artifacts include n_jobs.
+            params = {key: value for key, value in params.items() if key != "n_jobs"}  # Remove n_jobs from optimized parameters.
+            print(f"{BackgroundColors.YELLOW}[RESOURCE GUARD] Stripped n_jobs from optimized hyperparameters for {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW} to preserve n_jobs=1 safety limit.{Style.RESET_ALL}")  # Report resource-guard parameter removal.
+
+        try:  # Apply the optimized parameters to the classifier instance.
+            model.set_params(**params)  # Apply optimized parameters.
+        except Exception as e:  # Skip this optimized classifier when parameters are incompatible.
+            print(f"{BackgroundColors.YELLOW}[WARNING] Optimized hyperparameter branch skipped for {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW}: parameters could not be applied ({e}).{Style.RESET_ALL}")  # Report incompatible optimized parameters.
+            continue  # Continue with the next classifier.
+
+        optimized_models[model_name] = model  # Store the optimized classifier instance.
+        optimized_params[model_name] = params  # Store the applied optimized parameters.
+
+    if not optimized_models:  # Warn when every optimized classifier branch was rejected.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Optimized hyperparameter branch skipped for {BackgroundColors.CYAN}{file_path}{BackgroundColors.YELLOW}: no enabled classifier had valid applicable optimized parameters.{Style.RESET_ALL}")  # Report that optimized mode is unavailable.
+
+    return optimized_models, optimized_params  # Return only classifiers with verified optimized parameters.
 
 
 def load_pca_object(file_path, pca_n_components, config=None):
@@ -8142,6 +8228,12 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
         )  # Log which feature strategies are active for this evaluation
 
         feature_sets = {}  # Initialize empty feature sets dictionary
+        feature_signatures = set()  # Track semantic feature-set identities to prevent duplicate equivalent runs
+
+        if use_full:  # Include full features set before optional subsets so it remains the baseline
+            full_signature = ("features", tuple(sorted(sanitize_feature_name(f) for f in feature_names)))  # Build order-insensitive full-feature identity
+            feature_sets["Full Features"] = (X_train_scaled, X_test_scaled, feature_names)  # Add all features with names as the baseline mode
+            feature_signatures.add(full_signature)  # Register full-feature identity before optional feature modes
 
         if explicit_features:  # If explicit feature set is provided as an additive strategy
             verbose_output(
@@ -8178,15 +8270,24 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
                 verbose_output(
                     f"{BackgroundColors.GREEN}Resolved explicit features to original column names: {BackgroundColors.CYAN}{valid_explicit}{Style.RESET_ALL}", config=config
                 )  # Log resolved original column names for diagnostics
-                feature_indices = [feature_names_list.index(f) for f in valid_explicit]  # Map each resolved original feature name to its column index
-                X_train_explicit = X_train_scaled[:, feature_indices]  # Extract training columns matching the resolved explicit feature list
-                X_test_explicit = X_test_scaled[:, feature_indices]  # Extract test columns matching the resolved explicit feature list
-                feature_sets["Explicit Features"] = (X_train_explicit, X_test_explicit, valid_explicit)  # Add explicit feature set using original column names as an additional strategy entry
+                explicit_signature = ("features", tuple(sorted(sanitize_feature_name(f) for f in valid_explicit)))  # Build order-insensitive feature identity for duplicate prevention
+                if explicit_signature not in feature_signatures:  # Add explicit mode only when it is semantically distinct
+                    feature_indices = [feature_names_list.index(f) for f in valid_explicit]  # Map each resolved original feature name to its column index
+                    X_train_explicit = X_train_scaled[:, feature_indices]  # Extract training columns matching the resolved explicit feature list
+                    X_test_explicit = X_test_scaled[:, feature_indices]  # Extract test columns matching the resolved explicit feature list
+                    feature_sets["Explicit Features"] = (X_train_explicit, X_test_explicit, valid_explicit)  # Add explicit feature set using original column names as an additional strategy entry
+                    feature_signatures.add(explicit_signature)  # Register explicit feature identity after adding the mode
+                else:  # Duplicate explicit feature set
+                    print(f"{BackgroundColors.YELLOW}[WARNING] Explicit Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Report duplicate feature-set suppression
 
         if use_pca:  # Compute PCA transformation only when PCA strategy is enabled
-            X_train_pca, X_test_pca = apply_pca_transformation(
-                X_train_scaled, X_test_scaled, pca_n_components, file
-            )  # Apply PCA transformation if applicable
+            try:  # Apply PCA transformation while preserving the remaining feature-set modes on failure
+                X_train_pca, X_test_pca = apply_pca_transformation(
+                    X_train_scaled, X_test_scaled, pca_n_components, file, config=config
+                )  # Apply PCA transformation if applicable
+            except Exception as e:  # Skip PCA mode when transformation fails
+                print(f"{BackgroundColors.YELLOW}[WARNING] PCA Components skipped because transformation failed for {BackgroundColors.CYAN}{file}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}")  # Report PCA transformation failure
+                X_train_pca, X_test_pca = None, None  # Suppress PCA mode after failed transformation
         else:  # PCA strategy is disabled
             X_train_pca, X_test_pca = None, None  # Skip PCA transformation when strategy is disabled
 
@@ -8202,19 +8303,27 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
         else:  # RFE strategy is disabled
             X_train_rfe, X_test_rfe, rfe_actual_features = None, None, []  # Skip RFE subset computation when strategy is disabled
 
-        if use_full:  # Include full features set when strategy is enabled
-            feature_sets["Full Features"] = (X_train_scaled, X_test_scaled, feature_names)  # All features with names
-
         if use_ga and X_train_ga is not None and X_train_ga.shape[1] > 0:  # Include GA subset only when the artifact produced at least one usable feature
-            feature_sets["GA Features"] = (X_train_ga, X_test_ga, ga_actual_features)  # GA subset with actual selected names
+            ga_signature = ("features", tuple(sorted(sanitize_feature_name(f) for f in ga_actual_features)))  # Build order-insensitive GA feature identity
+            if ga_signature not in feature_signatures:  # Add GA only when it is semantically distinct
+                feature_sets["GA Features"] = (X_train_ga, X_test_ga, ga_actual_features)  # GA subset with actual selected names
+                feature_signatures.add(ga_signature)  # Register GA feature identity
+            else:  # Duplicate GA feature set
+                print(f"{BackgroundColors.YELLOW}[WARNING] GA Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Report duplicate feature-set suppression
 
-        if use_pca:  # Include PCA components when strategy is enabled
-            feature_sets["PCA Components"] = (
-                (X_train_pca, X_test_pca, None) if X_train_pca is not None else None
-            )  # PCA components (only if PCA transformation was successfully applied)
+        if use_pca and X_train_pca is not None and X_test_pca is not None:  # Include PCA components only when transformation produced both matrices
+            pca_signature = ("pca", int(X_train_pca.shape[1]))  # Build transformed component-space identity
+            if pca_signature not in feature_signatures:  # Add PCA only when this component-space identity is distinct
+                feature_sets["PCA Components"] = (X_train_pca, X_test_pca, None)  # PCA components with synthetic names generated later
+                feature_signatures.add(pca_signature)  # Register PCA component identity
 
         if use_rfe and X_train_rfe is not None and X_train_rfe.shape[1] > 0:  # Include RFE subset only when the artifact produced at least one usable feature
-            feature_sets["RFE Features"] = (X_train_rfe, X_test_rfe, rfe_actual_features)  # RFE subset with actual selected names
+            rfe_signature = ("features", tuple(sorted(sanitize_feature_name(f) for f in rfe_actual_features)))  # Build order-insensitive RFE feature identity
+            if rfe_signature not in feature_signatures:  # Add RFE only when it is semantically distinct
+                feature_sets["RFE Features"] = (X_train_rfe, X_test_rfe, rfe_actual_features)  # RFE subset with actual selected names
+                feature_signatures.add(rfe_signature)  # Register RFE feature identity
+            else:  # Duplicate RFE feature set
+                print(f"{BackgroundColors.YELLOW}[WARNING] RFE Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Report duplicate feature-set suppression
 
         feature_sets = {
             k: v for k, v in feature_sets.items() if v is not None
@@ -9793,9 +9902,12 @@ def save_combined_files_results_to_csv(reference_file, results_list, config=None
         reference_file_path = Path(reference_file)  # Create Path object from reference file
         feature_analysis_dir = reference_file_path.parent / "Feature_Analysis"  # Build Feature_Analysis directory path
         os.makedirs(feature_analysis_dir, exist_ok=True)  # Ensure directory exists on disk
-        combined_files_results_path = feature_analysis_dir / combined_files_results_filename  # Build full combined files evaluation results file path
 
-        save_stacking_results(str(combined_files_results_path), results_list, config=config)  # Save combined files evaluation results to CSV
+        combined_config = dict(config)  # Copy configuration so combined export can override only the result filename
+        combined_stacking_config = dict(combined_config.get("stacking", {}))  # Copy stacking configuration before filename override
+        combined_stacking_config["results_filename"] = combined_files_results_filename  # Use the configured combined-files result filename
+        combined_config["stacking"] = combined_stacking_config  # Store the filename override in the copied configuration
+        save_stacking_results(str(reference_file_path), results_list, config=combined_config)  # Save combined files evaluation results with the combined filename
 
         return feature_analysis_dir  # Return Feature_Analysis directory path for reuse
     except Exception as e:
@@ -10139,17 +10251,18 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
 
         default_models = get_models(config=config)  # Create untouched default/current parameter model objects
         hp_runs = [(False, default_models, {})]  # Default hyperparameters always form the first complete grid
-        hp_results = extract_hyperparameter_optimization_results(reference_file, config=config) if methods_cfg.get("hyperparameter_optimization", True) else None  # Load optimized parameters only when the method is enabled
-        if hp_results:  # Add a separate optimized grid only when usable optimization results exist
-            optimized_models, optimized_params = prepare_models_with_hyperparameters(reference_file, config=config)  # Instantiate fresh models before applying optimized parameters
-            hp_runs.append((True, optimized_models, optimized_params))  # Keep optimized estimators isolated from defaults
+        if methods_cfg.get("hyperparameter_optimization", True):  # Add optimized mode only when the method is enabled
+            optimized_models, optimized_params = build_optimized_hyperparameter_models(reference_file, config=config)  # Build only classifiers with valid optimized artifacts
+            if optimized_models:  # Add optimized mode only when at least one classifier has verified optimized parameters
+                hp_runs.append((True, optimized_models, optimized_params))  # Keep optimized estimators isolated from defaults
 
         augmentation_enabled = methods_cfg.get("augmentation", True) and config.get("execution", {}).get("test_data_augmentation", False)  # Both existing toggles must enable augmentation modes
         combined_augmented_df = load_and_combine_augmented_combined_files(original_files_list, config=config) if augmentation_enabled else None  # Load augmentation source once for the complete grid
         augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if combined_augmented_df is not None else []  # Generate ratio modes only when augmentation data is usable
         feature_mode_count = count_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Count actual feature modes
-        classifier_mode_count = len(default_models) + (1 if methods_cfg.get("stacking", True) else 0)  # Count enabled classifiers including optional stacking
-        total_steps = len(hp_runs) * (1 + len(augmentation_ratios)) * feature_mode_count * classifier_mode_count  # Exact full-grid denominator
+        data_variant_count = 1 + len(augmentation_ratios)  # Count original plus each valid configured augmentation ratio
+        classifier_mode_count = sum(len(models_map) + (1 if methods_cfg.get("stacking", True) else 0) for _, models_map, _ in hp_runs)  # Count enabled classifiers per valid HP mode
+        total_steps = data_variant_count * feature_mode_count * classifier_mode_count  # Exact full-grid denominator
         grid_progress = create_grid_progress(total_steps, f"{dataset_name} Combined Grid")  # Share one counter across HP and augmentation modes
         all_grid_results = []  # Accumulate every result row for a single consolidated export
         all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
@@ -10378,18 +10491,37 @@ def count_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selecte
         return 1  # Full Features only
 
     feature_sets_config = config.get("stacking", {}).get("feature_sets_config", {})  # Read enabled feature strategies
+    feature_signatures = set()  # Track semantic feature-set identities to mirror assembly behavior
+    full_signature = ("features", tuple(sorted(sanitize_feature_name(name) for name in feature_names)))  # Build full-feature identity
+    feature_signatures.add(full_signature)  # Register full-feature baseline identity
     count = 1  # Full Features is always the baseline grid mode
-    if feature_sets_config.get("use_ga", True) and ga_selected_features:  # Count GA only when enabled and backed by a non-empty artifact
-        count += 1
-    if feature_sets_config.get("use_pca", True) and pca_n_components:  # Count PCA only when enabled and backed by a valid component count
-        count += 1
-    if feature_sets_config.get("use_rfe", True) and rfe_selected_features:  # Count RFE only when enabled and backed by a non-empty artifact
-        count += 1
 
     explicit_features = feature_sets_config.get("explicit_features", []) or []  # Read optional explicit feature strategy
-    sanitized_feature_names = {sanitize_feature_name(name) for name in feature_names}  # Normalize available names exactly as assemble_feature_sets does
-    if explicit_features and any(sanitize_feature_name(name) in sanitized_feature_names for name in explicit_features):  # Count explicit mode only when at least one requested feature exists
-        count += 1
+    sanitized_col_map = {sanitize_feature_name(name): name for name in feature_names}  # Build normalized feature lookup
+    valid_explicit = list(dict.fromkeys(sanitized_col_map[sanitize_feature_name(name)] for name in explicit_features if sanitize_feature_name(name) in sanitized_col_map))  # Resolve valid explicit features without duplicates
+    if valid_explicit:  # Count explicit mode only when at least one requested feature exists
+        explicit_signature = ("features", tuple(sorted(sanitize_feature_name(name) for name in valid_explicit)))  # Build explicit feature identity
+        if explicit_signature not in feature_signatures:  # Count explicit only when semantically distinct
+            feature_signatures.add(explicit_signature)  # Register explicit feature identity
+            count += 1  # Increment for distinct explicit feature mode
+
+    if feature_sets_config.get("use_ga", True) and ga_selected_features:  # Count GA only when enabled and backed by a non-empty artifact
+        ga_signature = ("features", tuple(sorted(sanitize_feature_name(name) for name in ga_selected_features)))  # Build GA feature identity
+        if ga_signature not in feature_signatures:  # Count GA only when semantically distinct
+            feature_signatures.add(ga_signature)  # Register GA feature identity
+            count += 1  # Increment for distinct GA feature mode
+
+    if feature_sets_config.get("use_pca", True) and pca_n_components:  # Count PCA only when enabled and backed by a valid component count
+        pca_signature = ("pca", int(min(pca_n_components, len(feature_names))))  # Build PCA component-space identity
+        if pca_signature not in feature_signatures:  # Count PCA only when distinct from existing modes
+            feature_signatures.add(pca_signature)  # Register PCA component identity
+            count += 1  # Increment for PCA feature mode
+
+    if feature_sets_config.get("use_rfe", True) and rfe_selected_features:  # Count RFE only when enabled and backed by a non-empty artifact
+        rfe_signature = ("features", tuple(sorted(sanitize_feature_name(name) for name in rfe_selected_features)))  # Build RFE feature identity
+        if rfe_signature not in feature_signatures:  # Count RFE only when semantically distinct
+            feature_signatures.add(rfe_signature)  # Register RFE feature identity
+            count += 1  # Increment for distinct RFE feature mode
 
     return count  # Return the exact number of feature modes expected from assembly
 
@@ -10735,15 +10867,17 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
 
             default_models = get_models(config=config)  # Create an untouched default/current parameter model map
             hp_runs = [(False, default_models, {})]  # Default hyperparameters always form the first complete grid
-            if hp_toggle and artifacts.get("hyperparams"):  # Add a separate optimized grid only when enabled and optimization results exist
-                optimized_models, optimized_params = prepare_models_with_hyperparameters(file, config=config)  # Build fresh model objects before applying optimized parameters
-                hp_runs.append((True, optimized_models, optimized_params))  # Keep optimized models isolated from default model objects
+            if hp_toggle:  # Add optimized mode only when the method is enabled
+                optimized_models, optimized_params = build_optimized_hyperparameter_models(file, config=config)  # Build only classifiers with valid optimized artifacts
+                if optimized_models:  # Add optimized mode only when at least one classifier has verified optimized parameters
+                    hp_runs.append((True, optimized_models, optimized_params))  # Keep optimized models isolated from default model objects
 
             df_augmented = load_and_validate_augmented_data(file, df_original, config=config) if augmentation_requested and artifacts.get("augmented_file") else None  # Load compatible augmentation data only when enabled
             augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if df_augmented is not None else []  # Generate ratio modes only when augmentation is usable
             feature_mode_count = count_grid_feature_modes(ga_sel, pca_n, rfe_sel, feature_names, config=config)  # Count actual feature modes represented by the grid
-            classifier_mode_count = len(default_models) + (1 if stacking_enabled else 0)  # Count enabled individual classifiers plus optional stacking
-            total_steps = len(hp_runs) * (1 + len(augmentation_ratios)) * feature_mode_count * classifier_mode_count  # Exact full-grid combination denominator
+            data_variant_count = 1 + len(augmentation_ratios)  # Count original plus each valid configured augmentation ratio
+            classifier_mode_count = sum(len(models_map) + (1 if stacking_enabled else 0) for _, models_map, _ in hp_runs)  # Count enabled classifiers per valid HP mode
+            total_steps = data_variant_count * feature_mode_count * classifier_mode_count  # Exact full-grid combination denominator
             grid_progress = create_grid_progress(total_steps, f"{os.path.basename(file)} Grid")  # Share one counter across every HP and augmentation mode
             all_grid_results = []  # Accumulate every grid result for one consolidated export
             all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
