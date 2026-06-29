@@ -425,7 +425,7 @@ def get_default_config():
         },
         "stacking": get_default_stacking_config(),  # Stacking pipeline configuration section
         "evaluation": {
-            "n_jobs": -1,
+            "n_jobs": 1,
             "threads_limit": 2,
             "cv_folds": 10,
             "random_state": 42,
@@ -816,7 +816,7 @@ def set_threads_limit_based_on_ram(config=None):
             )
 
         low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag to determine if model-level parallelism must also be restricted
-        current_n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Read the currently configured n_jobs value before any override
+        current_n_jobs = config.get("evaluation", {}).get("n_jobs", 1)  # Read the currently configured n_jobs value before any override
         effective_n_jobs = 1 if (threads_limit == 1 or low_memory) else current_n_jobs  # Force n_jobs to 1 when RAM-constrained or low_memory is active to prevent OOM during parallel model fitting
         config.setdefault("evaluation", {})["n_jobs"] = effective_n_jobs  # Write effective n_jobs back into config so all downstream model instantiation respects the safe value
 
@@ -3984,7 +3984,7 @@ def get_models(config=None):
             config=config
         )  # Output the verbose message
         
-        n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Get n_jobs from config
+        n_jobs = config.get("evaluation", {}).get("n_jobs", 1)  # Get n_jobs from config
         random_state = config.get("evaluation", {}).get("random_state", 42)  # Get random_state from config
         
         rf_params = config.get("models", {}).get("random_forest", {})  # Random Forest params
@@ -4315,7 +4315,7 @@ def apply_hyperparameters_to_models(hyperparams_map, models_map, config=None):
                     continue  # Skip invalid parameter entries
 
                 try:  # Try applying parameters
-                    guarded_n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Read the currently effective n_jobs to preserve any resource guard overrides
+                    guarded_n_jobs = config.get("evaluation", {}).get("n_jobs", 1)  # Read the currently effective n_jobs to preserve any resource guard overrides
                     if guarded_n_jobs == 1 and "n_jobs" in params:  # Prevent hyperparameter CSV from overriding the resource guard n_jobs=1 setting
                         params = {k: v for k, v in params.items() if k != "n_jobs"}  # Strip n_jobs from params to preserve the RAM-based safety limit
                         verbose_output(
@@ -4407,7 +4407,7 @@ def build_optimized_hyperparameter_models(file_path: str, config: Optional[dict]
             print(f"{BackgroundColors.YELLOW}[WARNING] Optimized hyperparameter branch skipped for {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW}: no valid matching optimized-parameter artifact exists for {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}")  # Report classifier-specific skip reason.
             continue  # Continue with the next classifier.
 
-        guarded_n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Read the effective n_jobs resource setting.
+        guarded_n_jobs = config.get("evaluation", {}).get("n_jobs", 1)  # Read the effective n_jobs resource setting.
         if guarded_n_jobs == 1 and "n_jobs" in params:  # Preserve resource guard when optimized artifacts include n_jobs.
             params = {key: value for key, value in params.items() if key != "n_jobs"}  # Remove n_jobs from optimized parameters.
             print(f"{BackgroundColors.YELLOW}[RESOURCE GUARD] Stripped n_jobs from optimized hyperparameters for {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW} to preserve n_jobs=1 safety limit.{Style.RESET_ALL}")  # Report resource-guard parameter removal.
@@ -7116,7 +7116,7 @@ def create_model_from_params(model_name, params, config=None):
             config = CONFIG  # Use global CONFIG
         
         automl_random_state = config.get("automl", {}).get("random_state", 42)  # Get random state from config
-        n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Get n_jobs from config
+        n_jobs = config.get("evaluation", {}).get("n_jobs", 1)  # Get n_jobs from config
 
         clean_params = {k: v for k, v in params.items() if not k.endswith("_none")}  # Copy params excluding _none flags
 
@@ -7326,7 +7326,7 @@ def automl_stacking_objective(trial, X_train, y_train, cv_folds, candidate_model
             config = CONFIG  # Use global CONFIG
         
         automl_random_state = config.get("automl", {}).get("random_state", 42)  # Get random state from config
-        n_jobs = config.get("evaluation", {}).get("n_jobs", -1)  # Get n_jobs from config
+        n_jobs = config.get("evaluation", {}).get("n_jobs", 1)  # Get n_jobs from config
 
         model_names = list(candidate_models.keys())  # Get list of candidate model names
         selected_models = []  # Initialize list for selected base learners
@@ -7364,7 +7364,7 @@ def automl_stacking_objective(trial, X_train, y_train, cv_folds, candidate_model
                 estimators=estimators,
                 final_estimator=meta_model,
                 cv=StratifiedKFold(n_splits=n_cv_splits, shuffle=True, random_state=automl_random_state),
-                n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
+                n_jobs=config.get("evaluation", {}).get("n_jobs", 1),
             )  # Create stacking classifier with sequential CV folds to prevent nested loky deadlock
 
             mean_f1 = automl_cross_validate_model(stacking, X_train, y_train, cv_folds, trial)  # Cross-validate stacking
@@ -7534,9 +7534,9 @@ def build_automl_stacking_model(best_config, config=None):
         meta_learner_name = best_config["meta_learner"]  # Get meta-learner name
 
         if meta_learner_name == "Logistic Regression":  # Logistic Regression meta-learner
-            meta_model = LogisticRegression(max_iter=1000, random_state=config.get("automl", {}).get("random_state", 42), n_jobs=config.get("evaluation", {}).get("n_jobs", -1))  # Create LR with parallel jobs
+            meta_model = LogisticRegression(max_iter=1000, random_state=config.get("automl", {}).get("random_state", 42), n_jobs=config.get("evaluation", {}).get("n_jobs", 1))  # Create LR with parallel jobs
         elif meta_learner_name == "Random Forest":  # Random Forest meta-learner
-            meta_model = RandomForestClassifier(n_estimators=50, random_state=config.get("automl", {}).get("random_state", 42), n_jobs=config.get("evaluation", {}).get("n_jobs", -1))  # Create RF
+            meta_model = RandomForestClassifier(n_estimators=50, random_state=config.get("automl", {}).get("random_state", 42), n_jobs=config.get("evaluation", {}).get("n_jobs", 1))  # Create RF
         else:  # Gradient Boosting meta-learner
             meta_model = GradientBoostingClassifier(random_state=config.get("automl", {}).get("random_state", 42))  # Create GB
 
@@ -7546,7 +7546,7 @@ def build_automl_stacking_model(best_config, config=None):
             cv=StratifiedKFold(
                 n_splits=best_config["stacking_cv_splits"], shuffle=True, random_state=config.get("automl", {}).get("random_state", 42)
             ),
-            n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
+            n_jobs=config.get("evaluation", {}).get("n_jobs", 1),
         )  # Create stacking classifier with sequential CV folds to prevent nested loky deadlock
 
         return stacking_model  # Return configured stacking model
@@ -8327,9 +8327,9 @@ def build_evaluation_stacking_model(base_models, config=None):
 
         stacking_model = StackingClassifier(
             estimators=estimators,
-            final_estimator=RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=config.get("evaluation", {}).get("n_jobs", -1)),
+            final_estimator=RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=config.get("evaluation", {}).get("n_jobs", 1)),
             cv=StratifiedKFold(n_splits=10, shuffle=True, random_state=42),
-            n_jobs=config.get("evaluation", {}).get("n_jobs", -1),
+            n_jobs=config.get("evaluation", {}).get("n_jobs", 1),
         )  # Define the Stacking Classifier model with sequential CV folds to prevent nested loky deadlock
 
         return stacking_model  # Return the constructed stacking model
