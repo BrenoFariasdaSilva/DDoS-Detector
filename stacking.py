@@ -1067,6 +1067,38 @@ def get_files_to_process(directory_path, file_extension=".csv", config=None):
         raise  # Re-raise to preserve original failure semantics
 
 
+def order_files_by_size_descending(files_list: List[str], config: Optional[dict] = None) -> List[str]:
+    """
+    Order dataset files by filesystem size descending.
+
+    :param files_list: List of dataset file paths.
+    :param config: Configuration dictionary used for verbose output.
+    :return: List of dataset file paths ordered by size descending.
+    """
+
+    try:  # Protect size ordering so project logging and Telegram alerts remain consistent
+        if config is None:  # Use global configuration when no explicit configuration is supplied
+            config = CONFIG  # Assign global configuration reference
+
+        resolved_paths = {}  # Store resolved paths for deterministic equal-size ordering
+        file_sizes = {}  # Store one filesystem size lookup per path
+        for file_path in files_list:  # Iterate filtered file paths in caller-provided order
+            resolved_path = os.path.abspath(file_path)  # Resolve the full path before querying filesystem size
+            resolved_paths[file_path] = resolved_path  # Store the resolved path for later tie ordering
+            try:  # Read the actual filesystem size for this file
+                file_sizes[file_path] = os.path.getsize(resolved_path)  # Store byte size from the resolved path
+            except Exception as e:  # Handle size-read errors with path-specific logging
+                print(f"{BackgroundColors.RED}[ERROR] Failed to read file size for {BackgroundColors.CYAN}{resolved_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}")  # Log size-read failure before aborting
+                raise  # Preserve failure instead of silently dropping files or guessing order
+
+        ordered_files = sorted(files_list, key=lambda file_path: (-file_sizes[file_path], resolved_paths[file_path]))  # Sort by size descending and resolved path ascending for ties
+        return ordered_files  # Return ordered paths using the caller-provided path strings
+    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to preserve original failure semantics
+
+
 def get_dataset_name(input_path):
     """
     Extract the dataset name from CSVs path.
@@ -11185,7 +11217,8 @@ def execute_combined_files_mode_pipeline(files_to_process, local_dataset_name, c
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
         )  # Print closing separator
 
-        combined_files_df, attack_types_list, target_col_name = combine_files_for_combined_evaluation(files_to_process, config=config)  # Combine files for combined files evaluation
+        ordered_files_to_process = order_files_by_size_descending(files_to_process, config=config)  # Order combined files by filesystem size before loading
+        combined_files_df, attack_types_list, target_col_name = combine_files_for_combined_evaluation(ordered_files_to_process, config=config)  # Combine files for combined files evaluation
 
         if combined_files_df is None:  # If combination failed
             print(
