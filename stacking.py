@@ -98,6 +98,7 @@ from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
 from scipy.io import arff as scipy_arff  # Used to read ARFF files
+from sklearn.base import clone  # Clone estimator prototypes before each atomic fit
 from sklearn.decomposition import PCA  # For Principal Component Analysis
 from sklearn.ensemble import (  # For ensemble models
     ExtraTreesClassifier,
@@ -4850,13 +4851,6 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         print(msg)  # Print the summary message to console
         send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
-        try:
-            if dataset_file is not None:
-                dataset_name = os.path.basename(os.path.dirname(dataset_file))
-                export_model_and_scaler(model, scaler, dataset_name, model_name, feature_names or [], best_params=None, feature_set=feature_set, dataset_csv_path=dataset_file)
-        except Exception:
-            pass
-
         return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
     except Exception as e:
         print(str(e))
@@ -8491,6 +8485,103 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
         raise
 
 
+def iterate_feature_sets_sequentially(X_train_scaled: Any, X_test_scaled: Any, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, file: str, feature_sets_config: dict, config: Optional[dict]) -> Any:
+    """
+    Yield feature-set matrices one at a time.
+
+    :param X_train_scaled: Scaled training feature matrix.
+    :param X_test_scaled: Scaled test feature matrix.
+    :param feature_names: Complete ordered feature-name list.
+    :param ga_selected_features: GA-selected feature list or None.
+    :param pca_n_components: PCA component count or None.
+    :param rfe_selected_features: RFE-selected feature list or None.
+    :param file: Dataset path used for PCA artifact loading.
+    :param feature_sets_config: Feature-set strategy configuration.
+    :param config: Runtime configuration dictionary.
+    :return: Iterator yielding feature-set tuples.
+    """
+
+    if config is None:  # Use global configuration when no explicit configuration is supplied.
+        config = CONFIG  # Assign global configuration reference.
+    if feature_sets_config is None:  # Use an empty feature-set configuration when absent.
+        feature_sets_config = {}  # Assign empty configuration mapping.
+
+    explicit_features = feature_sets_config.get("explicit_features", []) or []  # Retrieve optional explicit feature list.
+    use_full = feature_sets_config.get("use_full", True)  # Resolve full-feature strategy toggle.
+    use_ga = feature_sets_config.get("use_ga", True)  # Resolve GA strategy toggle.
+    use_pca = feature_sets_config.get("use_pca", True)  # Resolve PCA strategy toggle.
+    use_rfe = feature_sets_config.get("use_rfe", True)  # Resolve RFE strategy toggle.
+    feature_signatures = set()  # Track semantic feature-set identities for duplicate suppression.
+
+    if use_full:  # Yield full features first to preserve baseline ordering.
+        full_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in feature_names)))  # Build full-feature identity.
+        feature_signatures.add(full_signature)  # Register full-feature identity before optional modes.
+        yield "Full Features", X_train_scaled, X_test_scaled, feature_names  # Yield full-feature matrices without copying.
+
+    if explicit_features:  # Resolve explicit feature mode only when configured.
+        feature_names_list = list(feature_names)  # Normalize feature names for positional lookup.
+        sanitized_col_map = {sanitize_feature_name(column): column for column in feature_names_list}  # Build sanitized feature lookup.
+        valid_explicit = []  # Accumulate valid explicit features in requested order.
+        missing_explicit = []  # Accumulate explicit features absent from the dataset.
+        seen_sanitized = set()  # Track already emitted sanitized feature names.
+        for explicit_feature in explicit_features:  # Iterate requested explicit features.
+            sanitized_feature = sanitize_feature_name(explicit_feature)  # Normalize explicit feature name for lookup.
+            if sanitized_feature in sanitized_col_map and sanitized_feature not in seen_sanitized:  # Verify the feature is present and not duplicated.
+                valid_explicit.append(sanitized_col_map[sanitized_feature])  # Add the original dataset column name.
+                seen_sanitized.add(sanitized_feature)  # Mark sanitized feature as emitted.
+            elif sanitized_feature not in sanitized_col_map:  # Detect requested features absent from the dataset.
+                missing_explicit.append(explicit_feature)  # Store missing explicit feature name.
+        if missing_explicit and not valid_explicit:  # Preserve existing explicit-feature failure behavior.
+            raise ValueError(f"Explicit features not found in dataset columns: {missing_explicit}")  # Raise when every explicit feature is absent.
+        if missing_explicit and valid_explicit:  # Report partial explicit-feature mismatch.
+            print(f"{BackgroundColors.YELLOW}[WARNING] Explicit feature(s) not found in dataset columns and will be skipped: {BackgroundColors.CYAN}{missing_explicit}{Style.RESET_ALL}")  # Log missing explicit features.
+            print(f"{BackgroundColors.GREEN}Proceeding with {BackgroundColors.CYAN}{len(valid_explicit)}{BackgroundColors.GREEN} valid explicit feature(s): {BackgroundColors.CYAN}{valid_explicit}{Style.RESET_ALL}")  # Log valid explicit features.
+        if valid_explicit:  # Yield explicit mode only when at least one feature is valid.
+            explicit_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in valid_explicit)))  # Build explicit feature identity.
+            if explicit_signature not in feature_signatures:  # Suppress duplicate explicit mode.
+                feature_indices = [feature_names_list.index(feature) for feature in valid_explicit]  # Resolve feature positions.
+                X_train_explicit = X_train_scaled[:, feature_indices]  # Materialize explicit training subset for this mode.
+                X_test_explicit = X_test_scaled[:, feature_indices]  # Materialize explicit test subset for this mode.
+                feature_signatures.add(explicit_signature)  # Register explicit feature identity.
+                yield "Explicit Features", X_train_explicit, X_test_explicit, valid_explicit  # Yield explicit feature matrices.
+            else:  # Report duplicate explicit mode suppression.
+                print(f"{BackgroundColors.YELLOW}[WARNING] Explicit Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Log duplicate explicit mode.
+
+    if use_ga:  # Resolve GA feature mode after explicit features.
+        X_train_ga, ga_actual_features = get_feature_subset(X_train_scaled, ga_selected_features, feature_names)  # Materialize GA training subset for this mode.
+        X_test_ga, _ = get_feature_subset(X_test_scaled, ga_selected_features, feature_names)  # Materialize GA test subset for this mode.
+        if X_train_ga is not None and X_train_ga.shape[1] > 0:  # Yield GA only when at least one feature exists.
+            ga_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in ga_actual_features)))  # Build GA feature identity.
+            if ga_signature not in feature_signatures:  # Suppress duplicate GA mode.
+                feature_signatures.add(ga_signature)  # Register GA feature identity.
+                yield "GA Features", X_train_ga, X_test_ga, ga_actual_features  # Yield GA feature matrices.
+            else:  # Report duplicate GA mode suppression.
+                print(f"{BackgroundColors.YELLOW}[WARNING] GA Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Log duplicate GA mode.
+
+    if use_pca:  # Resolve PCA feature mode after GA to preserve sorted evaluation order.
+        try:  # Preserve existing PCA failure tolerance.
+            X_train_pca, X_test_pca = apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file, config=config)  # Materialize PCA matrices for this mode.
+        except Exception as e:  # Skip PCA mode when transformation fails.
+            print(f"{BackgroundColors.YELLOW}[WARNING] PCA Components skipped because transformation failed for {BackgroundColors.CYAN}{file}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}")  # Log PCA transformation failure.
+            X_train_pca, X_test_pca = None, None  # Suppress PCA mode after failure.
+        if X_train_pca is not None and X_test_pca is not None:  # Yield PCA only when both matrices exist.
+            pca_signature = ("pca", int(X_train_pca.shape[1]))  # Build PCA component identity.
+            if pca_signature not in feature_signatures:  # Suppress duplicate PCA mode.
+                feature_signatures.add(pca_signature)  # Register PCA component identity.
+                yield "PCA Components", X_train_pca, X_test_pca, None  # Yield PCA matrices with synthetic names.
+
+    if use_rfe:  # Resolve RFE feature mode last to preserve sorted evaluation order.
+        X_train_rfe, rfe_actual_features = get_feature_subset(X_train_scaled, rfe_selected_features, feature_names)  # Materialize RFE training subset for this mode.
+        X_test_rfe, _ = get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)  # Materialize RFE test subset for this mode.
+        if X_train_rfe is not None and X_train_rfe.shape[1] > 0:  # Yield RFE only when at least one feature exists.
+            rfe_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in rfe_actual_features)))  # Build RFE feature identity.
+            if rfe_signature not in feature_signatures:  # Suppress duplicate RFE mode.
+                feature_signatures.add(rfe_signature)  # Register RFE feature identity.
+                yield "RFE Features", X_train_rfe, X_test_rfe, rfe_actual_features  # Yield RFE feature matrices.
+            else:  # Report duplicate RFE mode suppression.
+                print(f"{BackgroundColors.YELLOW}[WARNING] RFE Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Log duplicate RFE mode.
+
+
 def build_classifier_result_entry(model_class, file, execution_mode_str, attack_types_combined, feature_set_name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, n_features, n_samples_train, n_samples_test, metrics_tuple, subset_feature_names, hyperparams_map=None, hyperparameters_enabled=False):
     """
     Build a standardized result entry dictionary for classifier evaluation results.
@@ -8780,13 +8871,15 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled)  # Attempt to recover cached result for this model and advance counters when recovered
             if recovered:  # Skip recomputation when cache recovery succeeds
                 continue  # Move to next model because this one has already been recovered
+            active_model = clone(model)  # Clone the estimator prototype so fitted state is not retained across atomic classifiers
+            artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Resolve HP-isolated artifact feature-set label
             combination_header = build_telegram_combination_header(name, model_name, augmentation_ratio, hyperparameters_enabled)  # Build full progress label for this classifier
             progress_bar.set_description(combination_header)  # Update progress bar with the complete active configuration
             send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {combination_header}")  # Notify Telegram about evaluation start with active configuration details
             sys.stdout.flush()  # Flush stdout before each classifier to ensure logs are visible under nohup
 
             metrics = evaluate_individual_classifier(
-                model,
+                active_model,  # Use the fitted clone for this atomic classifier.
                 model_name,
                 X_train_df.values,
                 y_train,
@@ -8795,11 +8888,11 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 file,
                 scaler,
                 subset_feature_names,
-                f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}",
+                artifact_feature_set,  # Use the HP-specific artifact label.
                 config=config,
             )  # Evaluate individual classifier sequentially using HP-isolated model artifact names
 
-            model_class = model.__class__.__name__  # Retrieve model class name for result entry
+            model_class = active_model.__class__.__name__  # Retrieve model class name for result entry
             result_entry = build_classifier_result_entry(
                 model_class, file, execution_mode_str, attack_types_combined, name, "Individual",
                 model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio,
@@ -8811,13 +8904,20 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
 
             results_dict[(name, model_name)] = result_entry  # Store result keyed by feature set and model only after durable cache verification
 
+            try:  # Export fitted artifacts only after durable cache persistence succeeds
+                dataset_name = os.path.basename(os.path.dirname(file))  # Resolve dataset directory name for model export
+                if hasattr(active_model, "classes_"):  # Verify fitted classifier state using the common sklearn classes_ marker
+                    export_model_and_scaler(active_model, scaler, dataset_name, model_name, subset_feature_names or [], best_params=None, feature_set=artifact_feature_set, dataset_csv_path=file, config=config)  # Export fitted model and scaler after cache persistence
+            except Exception:  # Preserve existing best-effort export behavior
+                pass  # Continue evaluation when artifact export fails
+
             send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {combination_header} with F1: {metrics[3]} in {calculate_execution_time(0, metrics[6])}")  # Notify Telegram about completion using active configuration details and raw F1 value
             pass  # Verify removal of duplicate individual model accuracy print
             progress_bar.update(1)  # Advance progress bar by one step
 
             if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
                 try:  # Attempt to queue explainability for this model
-                    schedule_explainability_job(model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled)  # Queue explainability without blocking the next classifier
+                    schedule_explainability_job(active_model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled)  # Queue explainability without blocking the next classifier
                 except Exception as e:  # If explainability queueing fails
                     verbose_output(
                         f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
@@ -8825,6 +8925,8 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                     )  # Log error but continue evaluation
 
             current_combination += 1  # Advance the global combination counter
+            del active_model, metrics  # Release fitted estimator and metric tuple before the next classifier
+            gc.collect()  # Reclaim estimator-owned memory before the next atomic classifier
 
         return (results_dict, current_combination)  # Return accumulated results and updated combination counter
     except Exception as e:
@@ -8921,13 +9023,6 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             stacking_model, X_train_df, y_train, X_test_df, y_test
         )  # Evaluate stacking model with DataFrames and retrieve metrics tuple
 
-        try:
-            dataset_name = os.path.basename(os.path.dirname(file))  # Get dataset directory name from file path
-            artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Keep stacking artifacts isolated by HP mode
-            export_model_and_scaler(stacking_model, scaler, dataset_name, "StackingClassifier", subset_feature_names, best_params=None, feature_set=artifact_feature_set, dataset_csv_path=file)  # Export fitted stacking model and scaler to an HP-specific artifact path
-        except Exception:  # If model export fails
-            pass  # Continue without exporting
-
         s_y_pred = stacking_metrics[7] if len(stacking_metrics) > 7 else None  # Extract stacking predictions from metrics tuple for plot generation
 
         try:  # Attempt to generate metric plots for stacking model
@@ -8946,6 +9041,13 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         )  # Build standardized result entry for the stacking classifier
 
         persist_cache_result_entry(cache_ref_file, stacking_result_entry, cache_dict, config=config)  # Persist this atomic stacking result immediately and register its resume identity
+
+        try:  # Export fitted stacking artifacts only after durable cache persistence succeeds
+            dataset_name = os.path.basename(os.path.dirname(file))  # Get dataset directory name from file path
+            artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Keep stacking artifacts isolated by HP mode
+            export_model_and_scaler(stacking_model, scaler, dataset_name, "StackingClassifier", subset_feature_names, best_params=None, feature_set=artifact_feature_set, dataset_csv_path=file, config=config)  # Export fitted stacking model and scaler after cache persistence
+        except Exception:  # If model export fails
+            pass  # Continue without exporting
 
         send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {combination_header} with F1: {stacking_metrics[3]} in {calculate_execution_time(0, stacking_metrics[6])}")  # Notify Telegram about stacking evaluation completion using active configuration details and raw F1 value
         pass  # Verify removal of duplicate stacking classifier accuracy print
@@ -9255,16 +9357,16 @@ def evaluate_on_dataset(
         else:  # Feature selection disabled: only the full-feature baseline may be generated
             feature_sets_config = {"use_full": True, "use_pca": False, "use_rfe": False, "use_ga": False, "explicit_features": []}  # Suppress every selection strategy without mutating CLI/config state
 
-        feature_sets = assemble_feature_sets(
-            X_train_scaled, X_test_scaled, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file,
-            feature_sets_config=feature_sets_config,
-            config=config,
-        )  # Assemble feature sets dictionary using configurable strategy selection
+        feature_set_count = count_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Count feature modes without materializing every feature matrix
 
         if grid_progress is None:  # Standalone evaluation owns its progress bar and local combination counter
-            individual_models, total_steps, progress_bar, all_results, current_combination = initialize_evaluation_run_state(
-                base_models, feature_sets, data_source_label, stacking_enabled=stacking_enabled
-            )  # Build individual model map, compute total steps, create progress bar, and initialize result containers
+            individual_models = {key: value for key, value in base_models.items()}  # Preserve classifier prototypes for sequential cloning
+            total_steps = feature_set_count * len(individual_models)  # Count individual classifier steps for every feature mode
+            if stacking_enabled:  # Add stacking steps only when stacking is enabled
+                total_steps += feature_set_count  # Count one stacking step per feature mode
+            progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout)  # Create local progress bar for standalone evaluation
+            all_results = {}  # Initialize standalone result dictionary
+            current_combination = 1  # Initialize standalone combination counter
         else:  # Full-grid orchestration supplies one shared denominator and counter across HP and augmentation modes
             individual_models = {k: v for k, v in base_models.items()}  # Preserve the current HP mode's independent model objects
             total_steps = grid_progress["total_steps"]  # Use the exact generated-grid denominator
@@ -9272,7 +9374,8 @@ def evaluate_on_dataset(
             all_results = {}  # Initialize results for this data/HP slice
             current_combination = grid_progress["current_combination"]  # Continue from the previous grid slice
 
-        for idx, (name, (X_train_subset, X_test_subset, subset_feature_names_list)) in enumerate(feature_sets.items(), start=1):
+        feature_sets_iter = iterate_feature_sets_sequentially(X_train_scaled, X_test_scaled, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file, feature_sets_config, config)  # Create lazy feature-set iterator
+        for idx, (name, X_train_subset, X_test_subset, subset_feature_names_list) in enumerate(feature_sets_iter, start=1):  # Evaluate one materialized feature set at a time
             if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
                 print(
                     f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}"
@@ -9293,11 +9396,15 @@ def evaluate_on_dataset(
             all_results.update(individual_results)  # Merge this feature set's results into the global results dict
             if stacking_result_entry is not None:  # Store stacking result only when stacking evaluation was enabled
                 all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store stacking result with key
+            del X_train_subset, X_test_subset, subset_feature_names_list, individual_results, stacking_result_entry  # Release feature-set arrays and transient result references after this mode
+            gc.collect()  # Reclaim feature-set memory before constructing the next mode
 
         if grid_progress is None:  # Close only progress bars created by this standalone evaluation
             progress_bar.close()  # Close local progress bar
         else:  # Persist the next counter for the following HP/augmentation grid slice
             grid_progress["current_combination"] = current_combination  # Advance the shared full-grid combination counter
+        del X_train_scaled, X_test_scaled, y_train, y_test, scaler  # Release split/scaled arrays before returning result metadata
+        gc.collect()  # Reclaim split/scaled arrays after all feature modes complete
         return all_results  # Return dictionary of results
     except Exception as e:
         print(str(e))
@@ -10407,8 +10514,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                 hp_runs.append((True, optimized_models, optimized_params))  # Keep optimized estimators isolated from defaults
 
         augmentation_enabled = methods_cfg.get("augmentation", True) and config.get("execution", {}).get("test_data_augmentation", False)  # Both existing toggles must enable augmentation modes
-        combined_augmented_df = load_and_combine_augmented_combined_files(original_files_list, config=config) if augmentation_enabled else None  # Load augmentation source once for the complete grid
-        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if combined_augmented_df is not None else []  # Generate ratio modes only when augmentation data is usable
+        augmented_files_list = load_augmented_files_for_combined_evaluation(original_files_list, config=config) if augmentation_enabled else []  # Resolve augmented file paths without loading their dataframes
+        augmentation_file_paths = [path for path in augmented_files_list if path is not None]  # Filter missing augmented-file placeholders before deferred loading
+        augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if augmentation_file_paths else []  # Generate ratio modes only when augmentation files exist
         feature_mode_count = count_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Count actual feature modes
         data_variant_count = 1 + len(augmentation_ratios)  # Count original plus each valid configured augmentation ratio
         classifier_mode_count = sum(len(models_map) + (1 if methods_cfg.get("stacking", True) else 0) for _, models_map, _ in hp_runs)  # Count enabled classifiers per valid HP mode
@@ -10433,7 +10541,12 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                 all_grid_results.extend(original_results_list)  # Preserve baseline rows beside later grid slices
 
                 ratio_results = {}  # Collect this HP mode's ratio results for comparison reporting
-                for ratio in augmentation_ratios:  # Evaluate each configured augmentation ratio separately
+                combined_augmented_df = None  # Initialize deferred augmentation dataframe for this HP mode
+                if augmentation_ratios:  # Load augmented combined data only after the original-only baseline completes
+                    combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config)  # Combine augmented files for the current HP-mode ratio slice
+                    if combined_augmented_df is None:  # Detect failed augmentation combination
+                        print(f"{BackgroundColors.YELLOW}Failed to combine augmented files for combined files evaluation. Skipping augmentation ratios for {hp_label}.{Style.RESET_ALL}")  # Report skipped augmentation ratios
+                for ratio in (augmentation_ratios if combined_augmented_df is not None else []):  # Evaluate each configured augmentation ratio separately
                     df_sampled = sample_augmented_by_ratio(combined_augmented_df, combined_files_df, ratio)  # Sample augmented training rows for the active ratio
                     if df_sampled is None or df_sampled.empty:  # Skip unusable ratio samples
                         continue  # Move to the next configured ratio
@@ -10450,6 +10563,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                     ratio_results[ratio] = results_ratio  # Retain ratio result mapping for comparisons
                     del df_sampled  # Release sampled rows after evaluation
                     gc.collect()  # Reclaim ratio-specific memory
+                if combined_augmented_df is not None:  # Release deferred augmentation source before the next HP mode starts
+                    del combined_augmented_df  # Drop combined augmented dataframe reference
+                    gc.collect()  # Reclaim combined augmented dataframe memory before continuing
 
                 if ratio_results:  # Preserve existing augmentation comparison output for this HP mode
                     comparison_results = generate_ratio_comparison_report(results_original, ratio_results, config=config)  # Compare this HP mode's ratios against its matching baseline
@@ -10471,10 +10587,6 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         else:  # AutoML pipeline is disabled via method toggle
             print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML pipeline is DISABLED (stacking.methods.automl=false). Skipping AutoML for combined files evaluation. Enable via config or --enable-automl flag.{Style.RESET_ALL}")  # Log AutoML skip reason
         
-        if combined_augmented_df is not None:  # Release optional combined augmentation source after both HP grids
-            del combined_augmented_df  # Drop augmented dataframe reference
-            gc.collect()  # Reclaim augmentation memory
-
         try:  # Attempt to remove the cache file now that all combined files evaluation results are safely persisted
             remove_cache_file(reference_file, config)  # Remove the per-dataset cache once the full combined files evaluation is confirmed complete
         except Exception:  # If cache removal fails for any reason
