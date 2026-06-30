@@ -91,7 +91,7 @@ rfe: dependencies
 stacking-full: dependencies
 	$(ENSURE_LOG_DIR)
 	$(CLEAR_CMD)
-	$(call RUN_AND_LOG, ./stacking.py --verbose --combined-files --disable-stacking --enable-augmentation --test-augmentation --enable-feature-selection --enable-hyperparameters --disable-automl --dataset-file-format=csv --augmentation-file-format=csv $(ARGS))
+	$(call RUN_AND_LOG, ./stacking.py --verbose --combined-files --disable-stacking --enable-augmentation --test-augmentation --enable-feature-selection --enable-hyperparameters --disable-automl --dataset-file-format=csv --augmentation-file-format=csv --enable-memory-watcher $(ARGS))
 
 stacking: dependencies
 	$(ENSURE_LOG_DIR)
