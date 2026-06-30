@@ -381,6 +381,7 @@ def get_default_explainability_config():
             "lime_num_features": 10,  # Number of features to show in LIME explanations
             "shap_max_samples": 100,  # Maximum samples for SHAP computation
             "perm_max_samples": 5000,  # Maximum samples for permutation importance computation to prevent OOM on large datasets
+            "background": False,  # Run explainability synchronously by default to avoid retained model snapshots during later fits
             "random_state": 42,  # Random state for reproducibility
             "output_subdir": "explainability",  # Subdirectory for explainability outputs
         }  # Return default explainability configuration
@@ -2108,7 +2109,7 @@ def sample_augmented_by_ratio(augmented_df, original_df, ratio):
     """
 
     try:
-        n_original = len(original_df)  # Get the number of rows in the original dataset
+        n_original = int(original_df) if isinstance(original_df, (int, np.integer)) else len(original_df)  # Resolve original row count from dataframe or precomputed count.
         n_requested = max(1, int(round(ratio * n_original)))  # Calculate requested sample size capped at minimum 1 row
         n_available = len(augmented_df)  # Get the total number of rows available in augmented data
 
@@ -5999,6 +6000,12 @@ def schedule_explainability_job(model: Any, model_name: str, X_test: Any, y_test
             return None  # Skip queuing for augmented experiments.
         hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve HP label for isolated output paths.
         explainability_feature_set = f"{feature_set} - {hyperparameter_label}"  # Isolate explainability artifacts across default and optimized HP runs.
+        run_in_background = bool(explainability_config.get("background", False))  # Resolve whether explainability may retain detached snapshots while training continues.
+        if not run_in_background:  # Run inline when memory-safe scheduling is active.
+            execute_explainability_job(model, model_name, X_test, y_test, list(feature_names) if feature_names is not None else [], dataset_file, explainability_feature_set, execution_mode, config)  # Run explainability before the next classifier starts.
+            gc.collect()  # Reclaim explainability temporaries before returning to the classifier loop.
+            verbose_output(f"{BackgroundColors.GREEN}Completed synchronous explainability for {BackgroundColors.CYAN}{model_name} - {explainability_feature_set}{Style.RESET_ALL}", config=config)  # Log synchronous explainability completion.
+            return None  # Return without creating a background future.
         model_snapshot, X_test_snapshot, y_test_snapshot, feature_names_snapshot, config_snapshot = snapshot_explainability_inputs(model, X_test, y_test, feature_names, config)  # Snapshot inputs before dispatch.
         executor = get_explainability_executor(config_snapshot)  # Resolve the bounded background executor.
         future = executor.submit(execute_explainability_job, model_snapshot, model_name, X_test_snapshot, y_test_snapshot, feature_names_snapshot, dataset_file, explainability_feature_set, execution_mode, config_snapshot)  # Queue explainability without blocking the training loop.
@@ -9338,6 +9345,10 @@ def evaluate_on_dataset(
             return {}  # Return empty dictionary
 
         X_train_scaled, X_test_scaled, y_train, y_test, scaler = data_splits  # Unpack the data splits tuple
+        del df  # Release the original dataframe after split and scaling before classifier fitting.
+        if df_augmented_for_training is not None:  # Verify whether augmented training dataframe input exists.
+            del df_augmented_for_training  # Release augmented dataframe input after split and scaling before classifier fitting.
+        gc.collect()  # Reclaim released dataframe memory before feature-set materialization.
 
         effective_cache_ref = cache_ref_file if cache_ref_file is not None else (file if file != "combined_files_combined" else None)  # Determine which file to use for cache path computation
         cache_dict = {}  # Initialize empty cache dictionary as fallback when no cache file exists
@@ -10505,6 +10516,10 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             f"{BackgroundColors.GREEN}Combined files evaluation dataset features: {BackgroundColors.CYAN}{len(feature_names)} features{Style.RESET_ALL}",
             config=config
         )  # Output feature count
+        original_sample_count = int(len(combined_files_df))  # Preserve original row count for augmentation sampling after dataframe release.
+        combined_files_df_holder = [combined_files_df]  # Transfer the original combined dataframe so later calls can consume it without caller retention.
+        combined_files_df = None  # Release this frame's direct original combined dataframe reference before classifier fitting.
+        gc.collect()  # Reclaim the released direct dataframe reference before the first evaluation slice.
 
         default_models = get_models(config=config)  # Create untouched default/current parameter model objects
         hp_runs = [(False, default_models, {})]  # Default hyperparameters always form the first complete grid
@@ -10529,43 +10544,65 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             for hyperparameters_enabled, base_models, hp_params_map in hp_runs:  # Finish the default grid before beginning optimized runs
                 hp_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build active HP label
                 send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES] Starting {hp_label} grid | Dataset: {dataset_name}"])  # Announce active HP mode
+                if combined_files_df_holder:  # Use the initially combined dataframe for the first original-only slice.
+                    original_df_for_run = combined_files_df_holder.pop()  # Consume the initially combined dataframe exactly once.
+                else:  # Rebuild the original combined dataframe only for later HP slices that need it.
+                    original_df_for_run, _, _ = combine_files_for_combined_evaluation(original_files_list, config=config)  # Recombine from the same ordered input files for this HP slice.
+                    if original_df_for_run is None:  # Abort this HP slice when recombination fails.
+                        raise RuntimeError("Failed to rebuild original combined files dataframe for later HP slice")  # Raise explicit failure instead of fitting on missing data.
+                original_df_for_run_holder = [original_df_for_run]  # Transfer this HP slice dataframe into evaluation without retaining a caller reference.
+                del original_df_for_run  # Release direct HP slice dataframe reference before model evaluation.
+                gc.collect()  # Reclaim released direct dataframe references before fitting starts.
                 results_original = evaluate_on_dataset(
-                    reference_file, combined_files_df, feature_names, ga_selected_features, pca_n_components,
+                    reference_file, original_df_for_run_holder.pop(), feature_names, ga_selected_features, pca_n_components,
                     rfe_selected_features, base_models, data_source_label="Original Combined Files", hyperparams_map=hp_params_map,
                     experiment_id=generate_experiment_id(reference_file, "combined_files_original_only"), experiment_mode="original_only", augmentation_ratio=None,
                     execution_mode_str="combined_files", attack_types_combined=attack_types_list, config=config,
                     hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
                 )  # Evaluate the no-augmentation feature/classifier slice
+                del original_df_for_run_holder  # Release the empty HP slice transfer holder after evaluation returns.
+                gc.collect()  # Reclaim any released original-only dataframe references before augmentation handling.
                 original_results_list = list(results_original.values())  # Convert baseline results for annotation and export
                 annotate_results_with_combination_flags(original_results_list, methods_cfg.get("feature_selection", True), hyperparameters_enabled, False)  # Mark active grid dimensions
                 all_grid_results.extend(original_results_list)  # Preserve baseline rows beside later grid slices
 
                 ratio_results = {}  # Collect this HP mode's ratio results for comparison reporting
-                combined_augmented_df = None  # Initialize deferred augmentation dataframe for this HP mode
-                if augmentation_ratios:  # Load augmented combined data only after the original-only baseline completes
-                    combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config)  # Combine augmented files for the current HP-mode ratio slice
-                    if combined_augmented_df is None:  # Detect failed augmentation combination
-                        print(f"{BackgroundColors.YELLOW}Failed to combine augmented files for combined files evaluation. Skipping augmentation ratios for {hp_label}.{Style.RESET_ALL}")  # Report skipped augmentation ratios
-                for ratio in (augmentation_ratios if combined_augmented_df is not None else []):  # Evaluate each configured augmentation ratio separately
-                    df_sampled = sample_augmented_by_ratio(combined_augmented_df, combined_files_df, ratio)  # Sample augmented training rows for the active ratio
+                for ratio in augmentation_ratios:  # Evaluate each configured augmentation ratio separately
+                    combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config)  # Combine augmented files only for the active ratio.
+                    if combined_augmented_df is None:  # Skip this ratio when augmented recombination fails.
+                        print(f"{BackgroundColors.YELLOW}Failed to combine augmented files for combined files evaluation ratio {ratio}. Skipping augmentation ratio for {hp_label}.{Style.RESET_ALL}")  # Report skipped augmentation ratio.
+                        continue  # Move to the next configured ratio.
+                    df_sampled = sample_augmented_by_ratio(combined_augmented_df, original_sample_count, ratio)  # Sample augmented rows using the preserved original row count.
+                    del combined_augmented_df  # Release the full augmented combined dataframe before original data is rebuilt.
+                    gc.collect()  # Reclaim augmented source memory before ratio evaluation.
                     if df_sampled is None or df_sampled.empty:  # Skip unusable ratio samples
+                        if df_sampled is not None:  # Release an empty sampled dataframe before continuing.
+                            del df_sampled  # Release unusable sampled dataframe.
+                            gc.collect()  # Reclaim unusable sampled dataframe memory.
                         continue  # Move to the next configured ratio
+                    ratio_original_df, _, _ = combine_files_for_combined_evaluation(original_files_list, config=config)  # Rebuild original combined dataframe after augmented source release.
+                    if ratio_original_df is None:  # Skip this ratio when original recombination fails.
+                        print(f"{BackgroundColors.YELLOW}Failed to rebuild original combined files dataframe for ratio {ratio}. Skipping augmentation ratio for {hp_label}.{Style.RESET_ALL}")  # Report skipped ratio due to missing original data.
+                        del df_sampled  # Release sampled augmented rows when original data is unavailable.
+                        gc.collect()  # Reclaim sampled augmented rows before continuing.
+                        continue  # Move to the next configured ratio.
+                    ratio_original_df_holder = [ratio_original_df]  # Transfer ratio original dataframe into evaluation without retaining a caller reference.
+                    df_sampled_holder = [df_sampled]  # Transfer sampled augmented dataframe into evaluation without retaining a caller reference.
+                    del ratio_original_df, df_sampled  # Release direct ratio dataframe references before model evaluation.
+                    gc.collect()  # Reclaim direct ratio dataframe references before fitting starts.
                     results_ratio = evaluate_on_dataset(
-                        reference_file, combined_files_df, feature_names, ga_selected_features, pca_n_components,
+                        reference_file, ratio_original_df_holder.pop(), feature_names, ga_selected_features, pca_n_components,
                         rfe_selected_features, base_models, data_source_label=f"Original+Augmented@{int(ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map,
                         experiment_id=generate_experiment_id(reference_file, "combined_files_original_plus_augmented", ratio), experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
-                        execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_training=df_sampled,
+                        execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_training=df_sampled_holder.pop(),
                         config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
                     )  # Evaluate the same feature/classifier grid for this ratio
+                    del ratio_original_df_holder, df_sampled_holder  # Release empty transfer holders after ratio evaluation returns.
+                    gc.collect()  # Reclaim released ratio holder references before result aggregation.
                     ratio_results_list = list(results_ratio.values())  # Convert ratio results for annotation and export
                     annotate_results_with_combination_flags(ratio_results_list, methods_cfg.get("feature_selection", True), hyperparameters_enabled, True)  # Mark active grid dimensions
                     all_grid_results.extend(ratio_results_list)  # Preserve ratio rows in the consolidated export
                     ratio_results[ratio] = results_ratio  # Retain ratio result mapping for comparisons
-                    del df_sampled  # Release sampled rows after evaluation
-                    gc.collect()  # Reclaim ratio-specific memory
-                if combined_augmented_df is not None:  # Release deferred augmentation source before the next HP mode starts
-                    del combined_augmented_df  # Drop combined augmented dataframe reference
-                    gc.collect()  # Reclaim combined augmented dataframe memory before continuing
 
                 if ratio_results:  # Preserve existing augmentation comparison output for this HP mode
                     comparison_results = generate_ratio_comparison_report(results_original, ratio_results, config=config)  # Compare this HP mode's ratios against its matching baseline
@@ -10583,7 +10620,13 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         if enable_automl:  # If AutoML pipeline is enabled
             print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[DEBUG] AutoML pipeline is ENABLED. Running AutoML for combined files evaluation dataset.{Style.RESET_ALL}")  # Log AutoML execution start
             send_telegram_message(TELEGRAM_BOT, [f"Running AutoML pipeline for combined files evaluation dataset: {dataset_name}"])  # Notify Telegram about AutoML pipeline execution
-            run_automl_pipeline(reference_file, combined_files_df, feature_names, data_source_label="Original Combined Files", config=config)  # Run AutoML pipeline for combined files evaluation with normalized label
+            automl_combined_df, _, _ = combine_files_for_combined_evaluation(original_files_list, config=config)  # Rebuild original combined dataframe only when AutoML is enabled.
+            if automl_combined_df is None:  # Skip AutoML when original recombination fails.
+                print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML skipped because the original combined files dataframe could not be rebuilt.{Style.RESET_ALL}")  # Log AutoML skip reason.
+            else:  # Run AutoML with the rebuilt dataframe.
+                run_automl_pipeline(reference_file, automl_combined_df, feature_names, data_source_label="Original Combined Files", config=config)  # Run AutoML pipeline for combined files evaluation with normalized label.
+                del automl_combined_df  # Release AutoML combined dataframe after AutoML pipeline returns.
+                gc.collect()  # Reclaim AutoML combined dataframe memory before cache cleanup.
         else:  # AutoML pipeline is disabled via method toggle
             print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML pipeline is DISABLED (stacking.methods.automl=false). Skipping AutoML for combined files evaluation. Enable via config or --enable-automl flag.{Style.RESET_ALL}")  # Log AutoML skip reason
         
@@ -11271,9 +11314,13 @@ def execute_both_mode_pipeline(files_to_process, local_dataset_name, config=None
                 f"{BackgroundColors.RED}Failed to create combined files evaluation dataset. Skipping combined files evaluation.{Style.RESET_ALL}"
             )  # Print error about combination failure
         else:  # If combination succeeded
+            combined_files_df_holder = [combined_files_df]  # Transfer the combined dataframe so the caller can release its direct reference.
+            combined_files_df = None  # Release caller-side combined dataframe reference before nested model evaluation.
+            gc.collect()  # Reclaim caller-side dataframe references before combined evaluation starts.
             process_combined_files_evaluation(
-                files_to_process, combined_files_df, attack_types_list, local_dataset_name, config=config
+                files_to_process, combined_files_df_holder.pop(), attack_types_list, local_dataset_name, config=config
             )  # Process combined files evaluation workflow
+            del combined_files_df_holder  # Release the empty transfer holder after combined evaluation returns.
 
             del combined_files_df  # Release combined files evaluation dataframe to free memory after evaluation
             gc.collect()  # Force garbage collection to reclaim memory from combined files evaluation
@@ -11338,11 +11385,15 @@ def execute_combined_files_mode_pipeline(files_to_process, local_dataset_name, c
             )  # Print error about combination failure
             return  # Exit function early
 
+        combined_files_df_holder = [combined_files_df]  # Transfer the combined dataframe through a one-item holder so the caller can release its direct reference.
+        combined_files_df = None  # Release caller-side combined dataframe reference before entering model evaluation.
+        gc.collect()  # Reclaim caller-side dataframe references before nested evaluation starts.
         process_combined_files_evaluation(
-            files_to_process, combined_files_df, attack_types_list, local_dataset_name, config=config
-        )  # Process combined files evaluation workflow
+            ordered_files_to_process, combined_files_df_holder.pop(), attack_types_list, local_dataset_name, config=config
+        )  # Process combined files evaluation workflow with ordered files preserved.
+        del combined_files_df_holder  # Release the empty transfer holder after evaluation returns.
 
-        del combined_files_df  # Release combined files evaluation dataframe to free memory after evaluation
+        del combined_files_df  # Release the empty combined dataframe placeholder after evaluation
         gc.collect()  # Force garbage collection to reclaim memory from combined files evaluation
     except Exception as e:
         print(str(e))
