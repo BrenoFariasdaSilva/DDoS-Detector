@@ -478,11 +478,104 @@ def finalize_memory_watcher(config: Optional[dict] = None, phase: str = "normal_
         pass  # Continue process shutdown
 
 
+def resolve_path_represents_directory(dataset_path: str) -> bool:
+    """
+    Return whether a dataset path represents a directory.
+
+    :param dataset_path: Dataset path to classify.
+    :return: True when the path represents a directory.
+    """
+
+    path_text = str(dataset_path).strip()  # Normalize incoming path text.
+    normalized_text = path_text.replace("\\", "/")  # Normalize separators for suffix tests.
+    if normalized_text.endswith("/"):  # Treat trailing separators as directory intent.
+        return True  # Return directory intent.
+    path_obj = Path(path_text)  # Build path object for filesystem metadata.
+    if path_obj.exists():  # Use filesystem metadata when available.
+        return path_obj.is_dir()  # Return directory status from the filesystem.
+    return Path(path_text).suffix == ""  # Infer directory intent for extensionless paths.
+
+
+def resolve_dataset_root_path(dataset_path: str) -> Path:
+    """
+    Resolve dataset root directory from a file or directory path.
+
+    :param dataset_path: Dataset file or directory path.
+    :return: Dataset root directory path.
+    """
+
+    path_obj = Path(str(dataset_path).strip())  # Normalize incoming path text into a path object.
+    if resolve_path_represents_directory(str(path_obj)):  # Use the directory itself for directory identities.
+        return path_obj.resolve()  # Return resolved dataset directory.
+    return path_obj.resolve().parent  # Return resolved parent directory for file identities.
+
+
+def resolve_canonical_dataset_identity(dataset_path: str, is_directory: bool) -> str:
+    """
+    Resolve canonical dataset identity path.
+
+    :param dataset_path: Dataset path to normalize.
+    :param is_directory: Whether dataset_path identifies a directory.
+    :return: Canonical dataset identity path.
+    """
+
+    path_text = str(dataset_path).strip()  # Normalize incoming path text.
+    if not path_text:  # Reject empty dataset identity inputs.
+        raise ValueError("Dataset identity path cannot be empty")  # Raise explicit identity failure.
+    normalized_path = os.path.normpath(os.path.expanduser(path_text))  # Normalize local path structure.
+    absolute_path = os.path.abspath(normalized_path)  # Resolve absolute path for relative conversion.
+    try:  # Convert to project-relative identity when possible.
+        identity_path = os.path.relpath(absolute_path)  # Preserve existing relative result convention.
+    except ValueError:  # Fall back for paths on different Windows drives.
+        identity_path = normalized_path  # Preserve normalized input when relative conversion fails.
+    identity_path = identity_path.replace("\\", "/")  # Normalize separators to project CSV convention.
+    while identity_path.startswith("./"):  # Remove duplicate leading current-directory markers.
+        identity_path = identity_path[2:]  # Trim one leading current-directory marker.
+    identity_path = re.sub(r"/+", "/", identity_path).rstrip("/")  # Collapse duplicate separators and trim trailing separators.
+    if is_directory:  # Preserve directory identity with one trailing separator.
+        identity_path = f"{identity_path}/"  # Append canonical directory separator.
+    return identity_path  # Return canonical dataset identity.
+
+
+def build_filename_safe_dataset_identity(dataset_identity: str) -> str:
+    """
+    Build filename-safe text from a dataset identity.
+
+    :param dataset_identity: Canonical dataset identity path.
+    :return: Filename-safe dataset identity text.
+    """
+
+    identity_text = str(dataset_identity).strip().replace("\\", "/")  # Normalize identity text and separators.
+    while identity_text.startswith("./"):  # Remove duplicate leading current-directory markers.
+        identity_text = identity_text[2:]  # Trim one leading current-directory marker.
+    identity_text = re.sub(r"/+", "/", identity_text).strip("/")  # Collapse duplicate separators and trim edges.
+    filename_identity = re.sub(r"[^A-Za-z0-9_]+", "_", identity_text)  # Convert path and delimiter characters to underscores.
+    filename_identity = re.sub(r"_+", "_", filename_identity).strip("_")  # Collapse duplicate underscores after sanitization.
+    if not filename_identity:  # Reject empty filename identity outputs.
+        raise ValueError("Dataset filename identity cannot be empty")  # Raise explicit filename identity failure.
+    return filename_identity  # Return filename-safe identity.
+
+
+def resolve_combined_files_dataset_identity(original_files_list: List[str]) -> str:
+    """
+    Resolve combined-files dataset directory identity.
+
+    :param original_files_list: Source file paths used by combined-files mode.
+    :return: Canonical combined dataset directory identity.
+    """
+
+    if not original_files_list:  # Require source files to derive a combined directory identity.
+        raise ValueError("Combined files dataset identity requires at least one source file")  # Raise explicit combined identity failure.
+    source_directories = [os.path.dirname(os.path.abspath(str(file_path))) for file_path in original_files_list]  # Resolve source directories without changing file order.
+    combined_directory = os.path.commonpath(source_directories)  # Resolve the shared dataset directory from active source files.
+    return resolve_canonical_dataset_identity(combined_directory, True)  # Return canonical directory identity.
+
+
 def get_stacking_output_dir(dataset_file_path: str, config: dict) -> str:
     """
-    Get the output directory for stacking results based on the dataset file path and configuration.
+    Get the output directory for stacking results based on the dataset file or directory path and configuration.
     
-    :param dataset_file_path: The path to the dataset file being processed
+    :param dataset_file_path: The path to the dataset file or directory being processed
     :param config: The configuration dictionary containing the stacking results directory setting
     :return: The resolved path to the stacking results directory for the given dataset
     """
@@ -492,8 +585,7 @@ def get_stacking_output_dir(dataset_file_path: str, config: dict) -> str:
     if not isinstance(config, dict):
         raise ValueError("config must be a dict")
 
-    dataset_file = Path(dataset_file_path).resolve()
-    dataset_root = dataset_file.parent
+    dataset_root = resolve_dataset_root_path(str(dataset_file_path))  # Resolve dataset root from file or directory input.
 
     stacking_cfg = config.get("stacking", {})
     results_dir = stacking_cfg.get("results_dir")
@@ -2397,7 +2489,8 @@ def generate_experiment_id(file_path, experiment_mode, augmentation_ratio=None):
 
     try:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")  # Create a timestamp string for uniqueness
-        file_stem = Path(file_path).stem  # Extract the filename stem without extension
+        path_is_directory = resolve_path_represents_directory(str(file_path))  # Resolve whether experiment identity comes from a directory.
+        file_stem = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file_path), True)) if path_is_directory else Path(file_path).stem  # Resolve experiment filename identity by path scope.
         ratio_tag = f"_ratio{int(augmentation_ratio * 100)}" if augmentation_ratio is not None else ""  # Build ratio tag string or empty
         experiment_id = f"{timestamp}_{file_stem}_{experiment_mode}{ratio_tag}"  # Concatenate all parts into unique identifier
 
@@ -6556,7 +6649,8 @@ def export_feature_artifacts(df, file_path_obj, stacking_dir, config=None):
             feature_counts_df = pd.DataFrame()  # Provide empty DataFrame to allow downstream code to continue
 
         try:  # Attempt to export top-features CSV and heatmap
-            dataset_base = file_path_obj.stem  # Extract stem of filename for output file naming
+            path_is_directory = resolve_path_represents_directory(str(file_path_obj))  # Resolve whether artifact identity comes from a directory.
+            dataset_base = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file_path_obj), True)) if path_is_directory else file_path_obj.stem  # Resolve artifact filename identity by path scope.
             top_csv = stacking_dir / f"{dataset_base}_top_features.csv"  # Build path for top-features CSV
             top_png = stacking_dir / f"{dataset_base}_top_features.png"  # Build path for feature usage heatmap
             export_top_features_csv(feature_counts_df, str(top_csv), dataset_file=str(file_path_obj))  # Export aggregated feature counts to CSV
@@ -6756,11 +6850,12 @@ def save_stacking_results(csv_path, results_list, config=None):
 
         results_filename = config.get("stacking", {}).get("results_filename", "Stacking_Classifiers_Results.csv")  # Get results filename from config
         file_path_obj = Path(csv_path)
-        feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"
+        dataset_root = resolve_dataset_root_path(str(csv_path))  # Resolve output root from file or directory input.
+        feature_analysis_dir = dataset_root / "Feature_Analysis"  # Build Feature_Analysis path from the dataset root.
         os.makedirs(feature_analysis_dir, exist_ok=True)
         
         stacking_results_dir = config.get("stacking", {}).get("results_dir", "Stacking")
-        stacking_dir = file_path_obj.parent / stacking_results_dir
+        stacking_dir = dataset_root / stacking_results_dir  # Build stacking output path from the dataset root.
         os.makedirs(stacking_dir, exist_ok=True)
         output_path = stacking_dir / results_filename
 
@@ -6810,13 +6905,20 @@ def get_cache_file_path(csv_path, config=None):
 
         cache_prefix = config.get("stacking", {}).get("cache_prefix", "CACHE_")  # Get cache prefix from config
         cache_results_subdir = config.get("stacking", {}).get("cache_results_subdir", "Cache_Results")  # Get cache results subdirectory from config
-        dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Get base dataset name
+        path_is_directory = resolve_path_represents_directory(str(csv_path))  # Resolve whether cache identity comes from a directory.
+        if path_is_directory:  # Use directory identity for combined-files cache names.
+            dataset_identity = resolve_canonical_dataset_identity(str(csv_path), True)  # Resolve canonical directory identity.
+            dataset_name = build_filename_safe_dataset_identity(dataset_identity)  # Build filename-safe directory identity.
+            cache_filename_prefix = f"{cache_prefix.rstrip('_-')}-"  # Use hyphen delimiter for path-derived cache identity.
+        else:  # Preserve single-file cache naming behavior.
+            dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Get base dataset name.
+            cache_filename_prefix = cache_prefix  # Preserve configured single-file cache prefix.
         stacking_output_dir = get_stacking_output_dir(csv_path, config)  # Get stacking results directory from config-aware path resolver
         output_dir = os.path.join(stacking_output_dir, cache_results_subdir)  # Build cache directory inside the stacking results directory
 
         validate_output_path(stacking_output_dir, str(Path(output_dir).resolve()))  # Verify cache directory is within the stacking results directory to prevent directory traversal
         os.makedirs(output_dir, exist_ok=True)  # Ensure the cache directory exists
-        cache_filename = f"{cache_prefix}{dataset_name}-Stacking_Classifiers_Results.csv"  # Cache filename
+        cache_filename = f"{cache_filename_prefix}{dataset_name}-Stacking_Classifiers_Results.csv"  # Build cache filename.
         cache_path = os.path.join(output_dir, cache_filename)  # Full cache file path
 
         return cache_path  # Return the cache file path
@@ -8225,10 +8327,12 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
             config = CONFIG  # Use global CONFIG
 
         results = []  # Initialize results list
+        path_is_directory = resolve_path_represents_directory(str(file_path))  # Resolve whether AutoML identity comes from a directory.
+        dataset_identity = resolve_canonical_dataset_identity(str(file_path), True) if path_is_directory else os.path.relpath(file_path)  # Resolve AutoML result-row dataset identity by path scope.
 
         individual_entry = {  # Build individual model result entry
             "model": best_model_name,  # Model class name
-            "dataset": os.path.relpath(file_path),  # Dataset relative path
+            "dataset": dataset_identity,  # Store resolved AutoML dataset identity.
             "feature_set": "AutoML",  # Feature set label
             "classifier_type": "AutoML_Individual",  # Classifier type
             "model_name": f"AutoML_{best_model_name}",  # Prefixed model name
@@ -8257,7 +8361,7 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
         if stacking_metrics is not None and stacking_config is not None:  # If stacking results are available
             stacking_entry = {  # Build stacking result entry
                 "model": "StackingClassifier",  # Model class name
-                "dataset": os.path.relpath(file_path),  # Dataset relative path
+                "dataset": dataset_identity,  # Store resolved AutoML dataset identity.
                 "feature_set": "AutoML",  # Feature set label
                 "classifier_type": "AutoML_Stacking",  # Classifier type
                 "model_name": "AutoML_StackingClassifier",  # Prefixed model name
@@ -8307,8 +8411,8 @@ def save_automl_results(csv_path, results_list, config=None):
         if not results_list:  # If no results to save
             return  # Exit early
 
-        file_path_obj = Path(csv_path)  # Create Path object for dataset file
-        automl_dir = file_path_obj.parent / "Feature_Analysis" / "AutoML"  # Build AutoML output directory
+        dataset_root = resolve_dataset_root_path(str(csv_path))  # Resolve AutoML output root from file or directory input.
+        automl_dir = dataset_root / "Feature_Analysis" / "AutoML"  # Build AutoML output directory from dataset root.
         os.makedirs(automl_dir, exist_ok=True)  # Ensure directory exists
         output_path = automl_dir / config.get("automl", {}).get("results_filename", "AutoML_Results.csv")  # Build output file path
 
@@ -8561,8 +8665,8 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
             X_train_scaled, y_train_arr, X_test_scaled, y_test_arr, model_study, file, config=config
         )  # Phase 2: Run stacking search and evaluation if enabled
 
-        file_path_obj = Path(file)  # Create Path object for file
-        automl_output_dir = str(file_path_obj.parent / "Feature_Analysis" / "AutoML")  # Build AutoML output directory
+        dataset_root = resolve_dataset_root_path(str(file))  # Resolve AutoML artifact root from file or directory input.
+        automl_output_dir = str(dataset_root / "Feature_Analysis" / "AutoML")  # Build AutoML output directory from dataset root.
 
         export_automl_pipeline_artifacts(
             model_study, stacking_study, stacking_config, stacking_metrics,
@@ -9003,9 +9107,10 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
 
     try:
         acc, prec, rec, f1, fpr, fnr, elapsed = metrics_tuple[:7]  # Unpack the first 7 metrics from the tuple
+        dataset_identity = resolve_canonical_dataset_identity(file, True) if execution_mode_str == "combined_files" else os.path.relpath(file)  # Resolve result-row dataset identity by execution mode.
         return {
             "model": model_class,  # Model class name for identification
-            "dataset": os.path.relpath(file),  # Relative dataset path for portability
+            "dataset": dataset_identity,  # Store the resolved dataset identity for CSV exports
             "execution_mode": execution_mode_str,  # Execution mode (separate_files or combined_files)
             "attack_types_combined": json.dumps(attack_types_combined) if attack_types_combined else None,  # JSON-serialized attack types or None
             "feature_set": feature_set_name,  # Name of the feature set evaluated
@@ -9309,7 +9414,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             results_dict[(name, model_name)] = result_entry  # Store result keyed by feature set and model only after durable cache verification
 
             try:  # Export fitted artifacts only after durable cache persistence succeeds
-                dataset_name = os.path.basename(os.path.dirname(file))  # Resolve dataset directory name for model export
+                dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve model export dataset folder by execution mode.
                 if hasattr(active_model, "classes_"):  # Verify fitted classifier state using the common sklearn classes_ marker
                     export_model_and_scaler(active_model, scaler, dataset_name, model_name, subset_feature_names or [], best_params=None, feature_set=artifact_feature_set, dataset_csv_path=file, config=config)  # Export fitted model and scaler after cache persistence
             except Exception:  # Preserve existing best-effort export behavior
@@ -9463,7 +9568,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         write_memory_phase_event("after_cache_persist", config=config, **phase_metadata, event_outcome="persisted")  # Publish stacking cache persistence completion
 
         try:  # Export fitted stacking artifacts only after durable cache persistence succeeds
-            dataset_name = os.path.basename(os.path.dirname(file))  # Get dataset directory name from file path
+            dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve stacking export dataset folder by execution mode.
             artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Keep stacking artifacts isolated by HP mode
             export_model_and_scaler(stacking_model, scaler, dataset_name, "StackingClassifier", subset_feature_names, best_params=None, feature_set=artifact_feature_set, dataset_csv_path=file, config=config)  # Export fitted stacking model and scaler after cache persistence
         except Exception:  # If model export fails
@@ -10599,7 +10704,8 @@ def save_combined_files_results_to_csv(reference_file, results_list, config=None
 
         combined_files_results_filename = config.get("stacking", {}).get("combined_files_results_filename", "Stacking_Classifiers_CombinedFiles_Results.csv")  # Get combined files evaluation results filename from config
         reference_file_path = Path(reference_file)  # Create Path object from reference file
-        feature_analysis_dir = reference_file_path.parent / "Feature_Analysis"  # Build Feature_Analysis directory path
+        dataset_root = resolve_dataset_root_path(str(reference_file_path))  # Resolve Feature_Analysis root from file or directory input.
+        feature_analysis_dir = dataset_root / "Feature_Analysis"  # Build Feature_Analysis directory path from dataset root.
         os.makedirs(feature_analysis_dir, exist_ok=True)  # Ensure directory exists on disk
 
         combined_config = dict(config)  # Copy configuration so combined export can override only the result filename
@@ -10823,9 +10929,11 @@ def process_combined_files_augmentation_testing(reference_file, original_files_l
             f"{BackgroundColors.GREEN}Processing combined files evaluation augmented data...{Style.RESET_ALL}",
             config=config
         )  # Output the verbose message
+        combined_dataset_identity = resolve_combined_files_dataset_identity(original_files_list)  # Resolve canonical combined directory identity.
+        combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use directory path text without trailing separator for path APIs.
 
         generate_augmentation_tsne_visualization(
-            reference_file, combined_files_df, None, None, "original_only"
+            combined_dataset_reference, combined_files_df, None, None, "original_only"  # Use directory identity for combined visualization.
         )  # Generate t-SNE visualization for original combined files evaluation data only
 
         combined_augmented_df = load_and_combine_augmented_combined_files(original_files_list, config=config)  # Load and combine augmented files into a single DataFrame
@@ -10847,7 +10955,7 @@ def process_combined_files_augmentation_testing(reference_file, original_files_l
 
         for ratio_idx, ratio in enumerate(augmentation_ratios, start=1):  # Iterate over each augmentation ratio
             results_ratio = run_combined_files_augmentation_ratio_experiment(
-                reference_file, combined_files_df, combined_augmented_df, feature_names,
+                combined_dataset_reference, combined_files_df, combined_augmented_df, feature_names,  # Use directory identity for ratio evaluation.
                 ga_selected_features, pca_n_components, rfe_selected_features, base_models,
                 hp_params_map, attack_types_list, ratio, ratio_idx, total_steps, dataset_name, config=config,
             )  # Run evaluation for this ratio and retrieve results or None if sampling failed
@@ -10905,7 +11013,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             config=config
         )  # Output the verbose message
     
-        reference_file = original_files_list[0] if original_files_list else "combined_files_combined"  # Get reference file for feature metadata
+        reference_file = original_files_list[0] if original_files_list else "combined_files_combined"  # Get source file for feature metadata.
+        combined_dataset_identity = resolve_combined_files_dataset_identity(original_files_list)  # Resolve canonical combined directory identity.
+        combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use directory path text without trailing separator for path APIs.
         
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
@@ -10985,9 +11095,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                 del original_df_for_run  # Release direct HP slice dataframe reference before model evaluation.
                 gc.collect()  # Reclaim released direct dataframe references before fitting starts.
                 results_original = evaluate_on_dataset(
-                    reference_file, original_df_for_run_holder.pop(), feature_names, ga_selected_features, pca_n_components,
+                    combined_dataset_reference, original_df_for_run_holder.pop(), feature_names, ga_selected_features, pca_n_components,  # Use directory identity for original combined evaluation.
                     rfe_selected_features, base_models, data_source_label="Original Combined Files", hyperparams_map=hp_params_map,
-                    experiment_id=generate_experiment_id(reference_file, "combined_files_original_only"), experiment_mode="original_only", augmentation_ratio=None,
+                    experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_only"), experiment_mode="original_only", augmentation_ratio=None,  # Build original experiment identity from combined directory.
                     execution_mode_str="combined_files", attack_types_combined=attack_types_list, config=config,
                     hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
                 )  # Evaluate the no-augmentation feature/classifier slice
@@ -11022,9 +11132,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                     del ratio_original_df, df_sampled  # Release direct ratio dataframe references before model evaluation.
                     gc.collect()  # Reclaim direct ratio dataframe references before fitting starts.
                     results_ratio = evaluate_on_dataset(
-                        reference_file, ratio_original_df_holder.pop(), feature_names, ga_selected_features, pca_n_components,
+                        combined_dataset_reference, ratio_original_df_holder.pop(), feature_names, ga_selected_features, pca_n_components,  # Use directory identity for augmented combined evaluation.
                         rfe_selected_features, base_models, data_source_label=f"Original+Augmented@{int(ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map,
-                        experiment_id=generate_experiment_id(reference_file, "combined_files_original_plus_augmented", ratio), experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+                        experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_plus_augmented", ratio), experiment_mode="original_plus_augmented", augmentation_ratio=ratio,  # Build augmented experiment identity from combined directory.
                         execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_training=df_sampled_holder.pop(),
                         config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
                     )  # Evaluate the same feature/classifier grid for this ratio
@@ -11043,7 +11153,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         finally:  # Close shared grid progress even if a classifier evaluation fails
             grid_progress["progress_bar"].close()  # Close the one full-grid progress bar
 
-        feature_analysis_dir = save_combined_files_results_to_csv(reference_file, all_grid_results, config=config)  # Save the complete default-first grid once so no mode overwrites another
+        feature_analysis_dir = save_combined_files_results_to_csv(combined_dataset_reference, all_grid_results, config=config)  # Save the complete grid using directory identity.
         if all_comparison_results:  # Save all HP modes together so optimized comparisons cannot overwrite defaults
             save_combined_files_augmentation_comparison(None, None, feature_analysis_dir, config=config, comparison_results=all_comparison_results)  # Preserve existing combined comparison filename and metrics
         
@@ -11055,14 +11165,14 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             if automl_combined_df is None:  # Skip AutoML when original recombination fails.
                 print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML skipped because the original combined files dataframe could not be rebuilt.{Style.RESET_ALL}")  # Log AutoML skip reason.
             else:  # Run AutoML with the rebuilt dataframe.
-                run_automl_pipeline(reference_file, automl_combined_df, feature_names, data_source_label="Original Combined Files", config=config)  # Run AutoML pipeline for combined files evaluation with normalized label.
+                run_automl_pipeline(combined_dataset_reference, automl_combined_df, feature_names, data_source_label="Original Combined Files", config=config)  # Run AutoML pipeline using directory identity.
                 del automl_combined_df  # Release AutoML combined dataframe after AutoML pipeline returns.
                 gc.collect()  # Reclaim AutoML combined dataframe memory before cache cleanup.
         else:  # AutoML pipeline is disabled via method toggle
             print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML pipeline is DISABLED (stacking.methods.automl=false). Skipping AutoML for combined files evaluation. Enable via config or --enable-automl flag.{Style.RESET_ALL}")  # Log AutoML skip reason
         
         try:  # Attempt to remove the cache file now that all combined files evaluation results are safely persisted
-            remove_cache_file(reference_file, config)  # Remove the per-dataset cache once the full combined files evaluation is confirmed complete
+            remove_cache_file(combined_dataset_reference, config)  # Remove the directory-based cache once the full combined files evaluation is confirmed complete
         except Exception:  # If cache removal fails for any reason
             pass  # Proceed without failing the run since the CSV output is already written
     except Exception as e:
@@ -11300,10 +11410,11 @@ def save_results_with_optional_suffix(file, results_list, suffix, base_filename_
         if use_suffix:  # If suffix-based files desired
             base = config.get("stacking", {}).get(base_filename_key, fallback_filename)  # Get base filename from config
             out_name = base.replace('.csv', f"{suffix}.csv")  # Compose suffixed filename
+            dataset_root = resolve_dataset_root_path(str(file))  # Resolve suffixed export root from file or directory input.
             if use_stacking_subdir:  # If Stacking subdirectory should be used
-                out_path = Path(file).parent / "Feature_Analysis" / "Stacking" / out_name  # Build path with Stacking subdir
+                out_path = dataset_root / "Feature_Analysis" / "Stacking" / out_name  # Build path with Stacking subdir from dataset root.
             else:  # Without Stacking subdirectory
-                out_path = Path(file).parent / "Feature_Analysis" / out_name  # Build path without Stacking subdir
+                out_path = dataset_root / "Feature_Analysis" / out_name  # Build path without Stacking subdir from dataset root.
             save_stacking_results(str(out_path), results_list, config=config)  # Save suffixed CSV
         else:  # Default single CSV with extra columns
             save_stacking_results(file, results_list, config=config)  # Save to default location
@@ -11426,18 +11537,20 @@ def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, 
         return "break", None  # Signal to break out of combination loop
 
     feature_names = [c for c in combined_df.columns if c != 'attack_type']  # Extract feature names excluding target
+    combined_dataset_identity = resolve_combined_files_dataset_identity(files_to_process)  # Resolve canonical combined directory identity.
+    combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use directory path text without trailing separator for path APIs.
 
     try:  # Protect evaluation step
         results = evaluate_on_dataset(
-            "combined_files_combined", combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,
+            combined_dataset_reference, combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,  # Use directory identity for legacy combined evaluation.
             data_source_label="Original Combined Files",  # Normalized data source label for log and CSV output
             hyperparams_map=hp_params_map if hyperparameters_enabled else {},
-            experiment_id=generate_experiment_id("combined_files_combined", "combined_files_original_only"),
+            experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_only"),  # Build legacy experiment identity from combined directory.
             experiment_mode="original_only", augmentation_ratio=None,
             execution_mode_str="combined_files", attack_types_combined=attack_types,
             df_augmented_for_training=None,
-            cache_ref_file=files_to_process[0], config=config, hyperparameters_enabled=hyperparameters_enabled,
-        )  # Evaluate combined files evaluation original dataset with cache reference for resume support and explicit config propagation
+            cache_ref_file=combined_dataset_reference, config=config, hyperparameters_enabled=hyperparameters_enabled,  # Use directory identity for cache resume.
+        )  # Evaluate combined files evaluation original dataset with directory cache reference and explicit config propagation
     except Exception as e:  # If evaluation fails
         print(f"{BackgroundColors.RED}Combined files evaluation failed for combo {suffix}: {e}{Style.RESET_ALL}")  # Error
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
@@ -11446,7 +11559,7 @@ def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, 
     results_list = list(results.values())  # Convert results dict to list
     annotate_results_with_combination_flags(results_list, feature_selection_enabled, hyperparameters_enabled, False)  # Annotate results
     save_results_with_optional_suffix(
-        files_to_process[0], results_list, suffix, "combined_files_results_filename",
+        combined_dataset_reference, results_list, suffix, "combined_files_results_filename",  # Use directory identity for legacy combined export.
         "Stacking_Classifiers_CombinedFiles_Results.csv", use_stacking_subdir=False, config=config,
     )  # Save combined files evaluation results with optional suffix
     return "ok", (combined_df, attack_types, feature_names)  # Return success with data payload
@@ -11473,6 +11586,8 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
     """
 
     try:  # Protect augmentation orchestration
+        combined_dataset_identity = resolve_combined_files_dataset_identity(files_to_process)  # Resolve canonical combined directory identity.
+        combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use directory path text without trailing separator for path APIs.
         augmented_files_list = load_augmented_files_for_combined_evaluation(files_to_process, config=config)  # Load augmented files per file
         if not augmented_files_list:  # If none found
             print(f"{BackgroundColors.YELLOW}No augmented files found for combined files evaluation combo {suffix}. Skipping augmentation.{Style.RESET_ALL}")  # Warn
@@ -11488,22 +11603,22 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
                         continue  # Next ratio
                     try:  # Evaluate with augmented training data
                         res = evaluate_on_dataset(
-                            "combined_files_combined", combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,
+                            combined_dataset_reference, combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,  # Use directory identity for legacy augmented evaluation.
                             data_source_label=f"Original+Augmented@{int(ratio*100)}%_CombinedFiles",
                             hyperparams_map=hp_params_map if hyperparameters_enabled else {},
-                            experiment_id=generate_experiment_id("combined_files_combined", "combined_files_original_plus_augmented", ratio),
+                            experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_plus_augmented", ratio),  # Build legacy augmented experiment identity from combined directory.
                             experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
                             execution_mode_str="combined_files", attack_types_combined=attack_types,
                             df_augmented_for_training=df_sampled,
-                            cache_ref_file=files_to_process[0], config=config, hyperparameters_enabled=hyperparameters_enabled,
-                        )  # Evaluate augmented combined files evaluation combination with cache reference for resume support and explicit config propagation
+                            cache_ref_file=combined_dataset_reference, config=config, hyperparameters_enabled=hyperparameters_enabled,  # Use directory identity for cache resume.
+                        )  # Evaluate augmented combined files evaluation combination with directory cache reference and explicit config propagation
                     except Exception as e:  # If evaluation failed
                         print(f"{BackgroundColors.YELLOW}Augmented evaluation failed for ratio {ratio} combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
                         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
                         continue  # Next ratio
                     res_list = list(res.values())  # Convert augmented results to list
                     annotate_results_with_combination_flags(res_list, feature_selection_enabled, hyperparameters_enabled, True)  # Annotate with da enabled
-                    save_stacking_results(files_to_process[0], res_list, config=config)  # Save augmented results
+                    save_stacking_results(combined_dataset_reference, res_list, config=config)  # Save augmented results using directory identity
                 del combined_aug_df  # Release combined augmented dataframe to free memory after all ratios
                 gc.collect()  # Force garbage collection to reclaim memory from augmented data
     except Exception as e:  # Catch augmentation orchestration errors
@@ -11554,7 +11669,8 @@ def orchestrate_combined_files_combination(files_to_process, ga_sel, pca_n, rfe_
         gc.collect()  # Force garbage collection to reclaim memory from combined files evaluation combination
 
         try:  # Attempt to remove the cache file now that all results are safely persisted to CSV
-            remove_cache_file(files_to_process[0], config)  # Remove the per-combination cache once the full combined files evaluation is confirmed complete
+            combined_dataset_identity = resolve_combined_files_dataset_identity(files_to_process)  # Resolve canonical combined directory identity.
+            remove_cache_file(combined_dataset_identity.rstrip("/"), config)  # Remove the directory-based cache once the full combined files evaluation is confirmed complete
         except Exception:  # If cache removal fails for any reason
             pass  # Proceed without failing the run since the CSV output is already written
 
