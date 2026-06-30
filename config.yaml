@@ -487,6 +487,7 @@ explainability:
   max_display_features: 20 # Maximum number of features to display in plots
   lime_num_samples: 1000 # Number of samples for LIME neighborhood generation
   shap_max_samples: 100 # Maximum test samples to use for SHAP (reduces computation time)
+  background: false # Run explainability synchronously to avoid retaining fitted model snapshots during later fits
   random_state: 42 # Random seed for explainability reproducibility
   output_subdir: "Explainability"
 
