@@ -169,6 +169,20 @@ logging: # Logging configuration
   tqdm_bar_format: "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]" # Progress bar format
 
 # ==============================================================================
+# MEMORY WATCHER — Used by stacking.py diagnostics
+# ==============================================================================
+memory_watcher: # Low-overhead process and memory diagnostics
+  enabled: false # Disabled by default for normal stacking runs
+  sample_interval_seconds: 2 # Seconds between watcher samples
+  system_memory_threshold_percent: 90 # System memory pressure threshold for transition events
+  process_rss_threshold_gb: null # Optional target RSS threshold in GB
+  capture_process_tree: true # Record actual recursive child processes separately from threads
+  capture_tracemalloc: false # Optional Python-level allocation tracing
+  tracemalloc_frame_depth: 25 # Frame depth for optional tracemalloc snapshots
+  output_directory: "Logs/Memory_Watch" # Project-relative watcher output root
+  keep_watcher_after_target_exit_seconds: 5 # Terminal grace period after target disappears
+
+# ==============================================================================
 # TELEGRAM — Used by multiple scripts
 # ==============================================================================
 telegram: # Telegram notification settings

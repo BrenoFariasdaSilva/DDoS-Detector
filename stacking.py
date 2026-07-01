@@ -68,6 +68,7 @@ import dataframe_image as dfi  # For exporting DataFrame styled tables as PNG im
 import datetime  # For getting the current date and time
 import gc  # For explicit garbage collection to reclaim memory from deleted objects
 import glob  # For file pattern matching
+import hashlib  # Build stable digests for compact classifier metadata
 import importlib  # Import importlib for dynamic module import
 import json  # Import json for handling JSON strings within the CSV
 import lightgbm as lgb  # For LightGBM model
@@ -91,6 +92,8 @@ import telegram_bot as telegram_module  # For setting Telegram prefix and device
 import time  # For measuring execution time
 import tempfile  # For atomic cache file writes using temp-file and rename strategy
 import traceback  # For formatting and printing exception tracebacks
+import tracemalloc  # Capture optional Python allocation snapshots at phase boundaries
+import uuid  # Generate collision-resistant watcher run identifiers
 import yaml  # Import YAML library
 from colorama import Style  # For terminal text styling
 from joblib import dump, load  # For exporting and loading trained models and scalers
@@ -151,16 +154,428 @@ TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegr
 logger = None  # Will be initialized in initialize_logger()
 EXPLAINABILITY_EXECUTOR: Optional[concurrent.futures.ThreadPoolExecutor] = None  # Manages queued explainability jobs in one background worker.
 EXPLAINABILITY_FUTURES: List[concurrent.futures.Future] = []  # Tracks scheduled explainability futures until finalization.
+MEMORY_WATCHER_PROCESS: Optional[subprocess.Popen] = None  # Holds the single watcher sidecar process for this stacking run
+MEMORY_WATCHER_RUN_DIR: Optional[str] = None  # Holds the unique watcher output directory for this stacking run
+MEMORY_WATCHER_PHASE_STATE_PATH: Optional[str] = None  # Holds the atomic phase-state path shared with the watcher
+MEMORY_WATCHER_EVENT_COUNTER = 0  # Counts emitted phase-state events for watcher ordering
+MEMORY_WATCHER_TRACEMALLOC_PREVIOUS: Optional[tracemalloc.Snapshot] = None  # Holds previous tracemalloc snapshot for concise diffs
+MEMORY_WATCHER_FINALIZED = False  # Prevents duplicate terminal watcher events
 
 
 # Functions Definitions:
 
 
+def get_memory_watcher_config(config: Optional[dict] = None) -> dict:  # Resolve memory watcher configuration
+    """
+    Resolve the memory watcher configuration with safe defaults.
+
+    :param config: Runtime configuration dictionary.
+    :return: Memory watcher configuration dictionary.
+    """
+
+    if config is None:  # Use global configuration when none is provided
+        config = CONFIG  # Read global configuration
+    default_cfg = {"enabled": False, "sample_interval_seconds": 2, "system_memory_threshold_percent": 90, "process_rss_threshold_gb": None, "capture_process_tree": True, "capture_tracemalloc": False, "tracemalloc_frame_depth": 25, "output_directory": "Logs/Memory_Watch", "keep_watcher_after_target_exit_seconds": 5}  # Define watcher defaults
+    runtime_cfg = config.get("memory_watcher", {}) if isinstance(config, dict) else {}  # Read configured watcher section
+    if isinstance(runtime_cfg, dict):  # Merge configured watcher values
+        default_cfg.update(runtime_cfg)  # Apply runtime watcher overrides
+    return default_cfg  # Return resolved watcher configuration
+
+
+def memory_watcher_enabled(config: Optional[dict] = None) -> bool:  # Resolve watcher enabled flag
+    """
+    Return whether the memory watcher is enabled.
+
+    :param config: Runtime configuration dictionary.
+    :return: True when the watcher is enabled.
+    """
+
+    cfg = get_memory_watcher_config(config)  # Read resolved watcher configuration
+    return bool(cfg.get("enabled", False))  # Return enabled state
+
+
+def sanitize_memory_watcher_value(value: Any, depth: int = 0) -> Any:  # Normalize compact watcher metadata
+    """
+    Convert values into compact JSON-safe metadata for the watcher state file.
+
+    :param value: Value to normalize.
+    :param depth: Current recursion depth.
+    :return: JSON-safe compact value.
+    """
+
+    if depth > 4:  # Bound nested metadata depth
+        return str(value)  # Return string representation at depth limit
+    if value is None or isinstance(value, (str, int, float, bool)):  # Preserve simple JSON scalars
+        return value  # Return scalar unchanged
+    if isinstance(value, Path):  # Normalize pathlib paths
+        return str(value)  # Return path string
+    if isinstance(value, np.generic):  # Normalize NumPy scalar values
+        return value.item()  # Return Python scalar value
+    if isinstance(value, (list, tuple, set)):  # Normalize bounded sequences
+        return [sanitize_memory_watcher_value(item, depth + 1) for item in list(value)[:60]]  # Return compact list metadata
+    if isinstance(value, dict):  # Normalize bounded mappings
+        return {str(k): sanitize_memory_watcher_value(v, depth + 1) for k, v in list(value.items())[:80]}  # Return compact mapping metadata
+    return str(value)  # Return safe string representation
+
+
+def get_classifier_n_jobs(model: Any) -> Optional[Any]:  # Read estimator n_jobs setting when exposed
+    """
+    Read an estimator n_jobs parameter when it exists.
+
+    :param model: Estimator object.
+    :return: n_jobs value or None.
+    """
+
+    try:  # Read estimator parameters safely
+        if hasattr(model, "get_params"):  # Use sklearn-style parameter access when available
+            params = model.get_params(deep=False)  # Read shallow estimator parameters
+            if isinstance(params, dict) and "n_jobs" in params:  # Detect exposed n_jobs parameter
+                return params.get("n_jobs")  # Return n_jobs parameter
+    except Exception:  # Keep metadata best-effort
+        return None  # Return unavailable n_jobs value
+    return None  # Return unavailable n_jobs value
+
+
+def get_classifier_params_digest(model: Any) -> dict:  # Build stable classifier parameter digest
+    """
+    Build a stable digest for estimator parameters without storing models or arrays.
+
+    :param model: Estimator object.
+    :return: Digest metadata dictionary.
+    """
+
+    try:  # Read and normalize estimator parameters
+        params = model.get_params(deep=False) if hasattr(model, "get_params") else {}  # Read shallow parameters when available
+        normalized = sanitize_memory_watcher_value(params)  # Normalize parameter values for JSON
+        encoded = json.dumps(normalized, sort_keys=True, default=str)  # Serialize normalized parameters
+        digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()  # Compute stable parameter digest
+        return {"digest": digest, "parameter_count": len(params) if isinstance(params, dict) else None}  # Return compact digest metadata
+    except Exception as exc:  # Keep diagnostics from interrupting training
+        digest = hashlib.sha256(str(model).encode("utf-8", errors="replace")).hexdigest()  # Compute fallback digest from model string
+        return {"digest": digest, "parameter_count": None, "error": str(exc)}  # Return fallback digest metadata
+
+
+def build_memory_phase_metadata(config: Optional[dict] = None, **metadata: Any) -> dict:  # Build compact phase-state metadata
+    """
+    Build a compact phase-state record for the watcher.
+
+    :param config: Runtime configuration dictionary.
+    :param metadata: Phase-specific metadata values.
+    :return: Phase-state metadata dictionary.
+    """
+
+    cfg = config if isinstance(config, dict) else CONFIG  # Resolve runtime configuration
+    watcher_cfg = get_memory_watcher_config(cfg)  # Read watcher configuration
+    event = {"run_id": watcher_cfg.get("run_id"), "main_pid": os.getpid(), "execution_mode": cfg.get("execution", {}).get("execution_mode") if isinstance(cfg, dict) else None, "watcher_run_dir": watcher_cfg.get("run_directory")}  # Build shared metadata base
+    for key, value in metadata.items():  # Merge caller metadata
+        event[key] = sanitize_memory_watcher_value(value)  # Store normalized metadata value
+    return event  # Return compact phase-state metadata
+
+
+def write_memory_tracemalloc_report(phase: str, event_id: int, config: Optional[dict] = None) -> None:  # Write optional tracemalloc report
+    """
+    Write a concise tracemalloc report for selected phase boundaries.
+
+    :param phase: Phase name.
+    :param event_id: Phase event sequence number.
+    :param config: Runtime configuration dictionary.
+    :return: None.
+    """
+
+    global MEMORY_WATCHER_TRACEMALLOC_PREVIOUS  # Update previous snapshot for diff reports
+    try:  # Keep tracemalloc failures diagnostic-only
+        cfg = get_memory_watcher_config(config)  # Read watcher configuration
+        phases = {"startup", "watcher_started", "before_classifier_fit", "after_classifier_fit", "after_prediction_and_metrics", "before_cache_persist", "after_cache_persist", "before_explainability_schedule", "after_explainability_schedule", "before_memory_cleanup", "after_memory_cleanup", "memory_error", "model_error", "final_export", "normal_completion", "abnormal_completion"}  # Define snapshot phase boundaries
+        if not cfg.get("capture_tracemalloc", False):  # Skip when tracemalloc mode is disabled
+            return  # Leave without report
+        if phase not in phases:  # Limit snapshots to selected phase boundaries
+            return  # Leave without report
+        if not tracemalloc.is_tracing():  # Skip when tracing was not started
+            return  # Leave without report
+        run_dir = cfg.get("run_directory") or MEMORY_WATCHER_RUN_DIR  # Resolve watcher run directory
+        if not run_dir:  # Skip when no output directory is available
+            return  # Leave without report
+        snapshot = tracemalloc.take_snapshot()  # Capture Python allocation snapshot
+        safe_phase = re.sub(r"[^A-Za-z0-9_.-]+", "_", phase)  # Normalize phase for filename
+        report_path = os.path.join(run_dir, f"tracemalloc_{event_id:06d}_{safe_phase}.txt")  # Resolve report path
+        previous_snapshot = MEMORY_WATCHER_TRACEMALLOC_PREVIOUS  # Read previous snapshot
+        stats = snapshot.compare_to(previous_snapshot, "lineno")[:20] if previous_snapshot is not None else snapshot.statistics("lineno")[:20]  # Build concise allocation stats
+        with open(report_path, "w", encoding="utf-8") as file_obj:  # Write report file
+            file_obj.write(f"phase={phase}\nevent_id={event_id}\ntimestamp={datetime.datetime.now(datetime.timezone.utc).isoformat()}\n")  # Write report header
+            file_obj.write("Limitation: tracemalloc primarily explains Python-level allocations and may not explain native NumPy or scikit-learn allocations.\n")  # Write tracemalloc limitation
+            for stat in stats:  # Write top allocation rows
+                file_obj.write(f"{stat}\n")  # Write allocation stat row
+        MEMORY_WATCHER_TRACEMALLOC_PREVIOUS = snapshot  # Store snapshot for next diff
+    except Exception as exc:  # Keep training alive if tracemalloc fails
+        try:  # Best-effort warning output
+            print(f"{BackgroundColors.YELLOW}[WARNING] Tracemalloc report failed for phase {phase}: {exc}{Style.RESET_ALL}")  # Log tracemalloc failure
+        except Exception:  # Ignore logging failure
+            pass  # Continue training
+
+
+def write_memory_phase_event(phase: str, config: Optional[dict] = None, **metadata: Any) -> None:  # Write atomic phase-state event
+    """
+    Write the latest compact phase-state JSON atomically for the watcher process.
+
+    :param phase: Phase name.
+    :param config: Runtime configuration dictionary.
+    :param metadata: Compact phase metadata.
+    :return: None.
+    """
+
+    global MEMORY_WATCHER_EVENT_COUNTER  # Increment shared phase event counter
+    try:  # Keep diagnostics from interrupting model execution
+        if not memory_watcher_enabled(config):  # Skip phase writes when watcher is disabled
+            return  # Leave without diagnostics
+        state_path = MEMORY_WATCHER_PHASE_STATE_PATH  # Read shared phase-state path
+        if not state_path:  # Skip until watcher startup resolves the state path
+            return  # Leave without diagnostics
+        MEMORY_WATCHER_EVENT_COUNTER += 1  # Increment monotonic event counter
+        event_id = MEMORY_WATCHER_EVENT_COUNTER  # Capture current event id
+        event = build_memory_phase_metadata(config, **metadata)  # Build compact metadata payload
+        event["event_id"] = event_id  # Store phase event id
+        event["timestamp"] = datetime.datetime.now(datetime.timezone.utc).isoformat()  # Store phase timestamp
+        event["phase"] = phase  # Store phase name
+        tmp_path = f"{state_path}.{os.getpid()}.{event_id}.tmp"  # Build same-directory temporary path
+        with open(tmp_path, "w", encoding="utf-8") as file_obj:  # Write temporary phase state
+            json.dump(sanitize_memory_watcher_value(event), file_obj, sort_keys=True)  # Serialize compact phase state
+            file_obj.write("\n")  # Terminate JSON file
+            file_obj.flush()  # Flush Python buffer
+            os.fsync(file_obj.fileno())  # Flush phase-state data to disk
+        os.replace(tmp_path, state_path)  # Atomically publish latest phase state
+        phase_events_path = os.path.join(os.path.dirname(state_path), "phase_events.jsonl")  # Resolve phase events JSONL path
+        with open(phase_events_path, "a", encoding="utf-8") as events_file:  # Append an ordered main-process phase event
+            events_file.write(json.dumps({"timestamp": event["timestamp"], "event_type": "phase_event", "phase_metadata": sanitize_memory_watcher_value(event)}, sort_keys=True) + "\n")  # Write compact phase event row
+            events_file.flush()  # Flush phase event row promptly
+        write_memory_tracemalloc_report(phase, event_id, config=config)  # Write optional tracemalloc report
+    except Exception as exc:  # Swallow watcher write failures
+        try:  # Best-effort warning output
+            print(f"{BackgroundColors.YELLOW}[WARNING] Memory watcher phase write failed for phase {phase}: {exc}{Style.RESET_ALL}")  # Log phase write failure
+        except Exception:  # Ignore logging failure
+            pass  # Continue training
+
+
+def create_memory_watcher_run_directory(config: Optional[dict] = None) -> Optional[str]:  # Create unique watcher run directory
+    """
+    Create a unique watcher output directory.
+
+    :param config: Runtime configuration dictionary.
+    :return: Absolute run directory path or None.
+    """
+
+    try:  # Keep directory creation best-effort
+        cfg = get_memory_watcher_config(config)  # Read watcher configuration
+        project_root = Path(__file__).resolve().parent  # Resolve repository root for this script
+        output_directory = cfg.get("output_directory", "Logs/Memory_Watch")  # Read configured output directory
+        base_dir = Path(output_directory) if os.path.isabs(str(output_directory)) else project_root / str(output_directory)  # Resolve project-relative output directory
+        base_dir.mkdir(parents=True, exist_ok=True)  # Ensure base output directory exists
+        for _ in range(100):  # Try bounded collision-resistant names
+            run_id = f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}_{uuid.uuid4().hex[:8]}"  # Build unique run identifier
+            run_dir = base_dir / run_id  # Resolve run directory
+            try:  # Attempt exclusive directory creation
+                run_dir.mkdir(parents=False, exist_ok=False)  # Create run directory without overwrite
+                if isinstance(config, dict):  # Store resolved watcher paths in runtime config
+                    config.setdefault("memory_watcher", {})["run_id"] = run_id  # Store watcher run id
+                    config.setdefault("memory_watcher", {})["run_directory"] = str(run_dir)  # Store watcher run directory
+                    config.setdefault("memory_watcher", {})["phase_state_path"] = str(run_dir / "phase_state.json")  # Store phase-state file path
+                return str(run_dir)  # Return unique run directory
+            except FileExistsError:  # Retry on rare name collision
+                continue  # Generate another run id
+        raise RuntimeError("Unable to create a unique memory watcher run directory")  # Raise after bounded attempts
+    except Exception as exc:  # Keep pipeline alive when diagnostics cannot start
+        print(f"{BackgroundColors.YELLOW}[WARNING] Failed to create memory watcher directory: {exc}{Style.RESET_ALL}")  # Log directory creation failure
+        return None  # Signal unavailable watcher directory
+
+
+def start_memory_watcher(config: Optional[dict] = None) -> Optional[subprocess.Popen]:  # Start one watcher sidecar for this run
+    """
+    Start exactly one independent memory watcher process for this top-level run.
+
+    :param config: Runtime configuration dictionary.
+    :return: Watcher process object or None.
+    """
+
+    global MEMORY_WATCHER_PROCESS, MEMORY_WATCHER_RUN_DIR, MEMORY_WATCHER_PHASE_STATE_PATH, MEMORY_WATCHER_FINALIZED, MEMORY_WATCHER_TRACEMALLOC_PREVIOUS  # Update watcher lifecycle globals
+    try:  # Keep watcher startup best-effort
+        if not memory_watcher_enabled(config):  # Skip startup when watcher is disabled
+            return None  # Return without watcher
+        if MEMORY_WATCHER_PROCESS is not None:  # Prevent duplicate watcher sidecars
+            return MEMORY_WATCHER_PROCESS  # Return existing watcher process
+        cfg = get_memory_watcher_config(config)  # Read watcher configuration
+        run_dir = create_memory_watcher_run_directory(config)  # Create unique watcher run directory
+        if not run_dir:  # Abort watcher startup when directory creation failed
+            return None  # Return without watcher
+        phase_state_path = get_memory_watcher_config(config).get("phase_state_path") or os.path.join(run_dir, "phase_state.json")  # Resolve phase-state file path
+        MEMORY_WATCHER_RUN_DIR = run_dir  # Store watcher run directory globally
+        MEMORY_WATCHER_PHASE_STATE_PATH = phase_state_path  # Store phase-state path globally
+        MEMORY_WATCHER_FINALIZED = False  # Reset terminal event state for this run
+        MEMORY_WATCHER_TRACEMALLOC_PREVIOUS = None  # Reset tracemalloc diff state for this run
+        if cfg.get("capture_tracemalloc", False):  # Start tracemalloc only when explicitly enabled
+            try:  # Keep tracemalloc startup best-effort
+                frame_depth = int(cfg.get("tracemalloc_frame_depth", 25) or 25)  # Resolve frame depth
+                if not tracemalloc.is_tracing():  # Start tracing only once
+                    tracemalloc.start(frame_depth)  # Start Python allocation tracing
+            except Exception as exc:  # Preserve training when tracemalloc cannot start
+                print(f"{BackgroundColors.YELLOW}[WARNING] Failed to start tracemalloc: {exc}{Style.RESET_ALL}")  # Log tracemalloc startup failure
+        write_memory_phase_event("startup", config=config, event_outcome="started")  # Publish startup phase before watcher launch
+        watcher_path = Path(__file__).resolve().parent / "Scripts" / "memory_watcher.py"  # Resolve authoritative watcher script path
+        if not watcher_path.exists():  # Abort when watcher script is missing
+            print(f"{BackgroundColors.YELLOW}[WARNING] Memory watcher script not found: {watcher_path}{Style.RESET_ALL}")  # Log missing watcher script
+            return None  # Return without watcher
+        target_process = psutil.Process(os.getpid())  # Resolve current process identity
+        target_create_time = float(target_process.create_time())  # Read target creation timestamp
+        command = [sys.executable, str(watcher_path), "--target-pid", str(os.getpid()), "--target-create-time", str(target_create_time), "--run-dir", run_dir, "--phase-state-path", phase_state_path, "--sample-interval-seconds", str(cfg.get("sample_interval_seconds", 2)), "--system-memory-threshold-percent", str(cfg.get("system_memory_threshold_percent", 90)), "--keep-after-target-exit-seconds", str(cfg.get("keep_watcher_after_target_exit_seconds", 5))]  # Build watcher command without target script name
+        if cfg.get("process_rss_threshold_gb") is not None:  # Add optional process RSS threshold
+            command.extend(["--process-rss-threshold-gb", str(cfg.get("process_rss_threshold_gb"))])  # Add process RSS threshold arguments
+        if cfg.get("capture_process_tree", True):  # Add process-tree capture flag
+            command.append("--capture-process-tree")  # Enable recursive child process rows
+        if cfg.get("capture_tracemalloc", False):  # Add tracemalloc mode flag for summary parity
+            command.append("--capture-tracemalloc")  # Mark tracemalloc mode in watcher summary
+        popen_kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "stdin": subprocess.DEVNULL, "cwd": str(Path(__file__).resolve().parent), "close_fds": True}  # Build detached process settings
+        windows_fallback_creationflags = None  # Track fallback Windows flags when breakaway is rejected
+        if platform.system() == "Windows":  # Use Windows process-group flags when available
+            windows_base_flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)  # Build baseline detached Windows flags
+            windows_breakaway_flag = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)  # Read optional job-breakaway flag
+            popen_kwargs["creationflags"] = windows_base_flags | windows_breakaway_flag  # Request detached Windows watcher process with job breakaway when available
+            windows_fallback_creationflags = windows_base_flags  # Store fallback flags without job breakaway
+        else:  # Use POSIX session isolation when available
+            popen_kwargs["start_new_session"] = True  # Request separate session for watcher process
+        try:  # Launch watcher with preferred detachment settings
+            MEMORY_WATCHER_PROCESS = subprocess.Popen(command, **popen_kwargs)  # Launch watcher without waiting
+        except OSError:  # Retry Windows launch if job breakaway is unavailable
+            if platform.system() == "Windows" and windows_fallback_creationflags is not None:  # Use fallback Windows flags only on Windows
+                popen_kwargs["creationflags"] = windows_fallback_creationflags  # Remove job-breakaway flag for fallback launch
+                MEMORY_WATCHER_PROCESS = subprocess.Popen(command, **popen_kwargs)  # Launch watcher with baseline detached flags
+            else:  # Re-raise non-Windows launch failures
+                raise  # Preserve original startup failure behavior
+        write_memory_phase_event("watcher_started", config=config, watcher_pid=MEMORY_WATCHER_PROCESS.pid, watcher_command_program=os.path.basename(str(watcher_path)), watcher_arguments_contain_target_script=any("stacking.py" in str(part) for part in command), event_outcome="started")  # Publish watcher-started phase
+        print(f"{BackgroundColors.GREEN}[DEBUG] Memory watcher enabled. Output directory: {BackgroundColors.CYAN}{run_dir}{Style.RESET_ALL}")  # Log watcher output path
+        return MEMORY_WATCHER_PROCESS  # Return watcher process object
+    except Exception as exc:  # Preserve model execution on watcher startup failure
+        print(f"{BackgroundColors.YELLOW}[WARNING] Failed to start memory watcher: {exc}{Style.RESET_ALL}")  # Log watcher startup failure
+        return None  # Return without watcher
+
+
+def finalize_memory_watcher(config: Optional[dict] = None, phase: str = "normal_completion", **metadata: Any) -> None:  # Publish terminal watcher phase
+    """
+    Publish terminal watcher phase metadata without waiting for the watcher sidecar.
+
+    :param config: Runtime configuration dictionary.
+    :param phase: Terminal phase name.
+    :param metadata: Additional terminal metadata.
+    :return: None.
+    """
+
+    global MEMORY_WATCHER_FINALIZED  # Prevent duplicate final events
+    try:  # Keep final diagnostics best-effort
+        if not memory_watcher_enabled(config):  # Skip when watcher is disabled
+            return  # Leave without diagnostics
+        if MEMORY_WATCHER_FINALIZED:  # Avoid duplicate terminal phase writes
+            return  # Leave without duplicate event
+        write_memory_phase_event(phase, config=config, **metadata)  # Publish terminal phase state
+        MEMORY_WATCHER_FINALIZED = True  # Mark terminal phase written
+    except Exception:  # Never fail main cleanup due to watcher finalization
+        pass  # Continue process shutdown
+
+
+def resolve_path_represents_directory(dataset_path: str) -> bool:
+    """
+    Return whether a dataset path represents a directory.
+
+    :param dataset_path: Dataset path to classify.
+    :return: True when the path represents a directory.
+    """
+
+    path_text = str(dataset_path).strip()  # Normalize incoming path text.
+    normalized_text = path_text.replace("\\", "/")  # Normalize separators for suffix tests.
+    if normalized_text.endswith("/"):  # Treat trailing separators as directory intent.
+        return True  # Return directory intent.
+    path_obj = Path(path_text)  # Build path object for filesystem metadata.
+    if path_obj.exists():  # Use filesystem metadata when available.
+        return path_obj.is_dir()  # Return directory status from the filesystem.
+    return Path(path_text).suffix == ""  # Infer directory intent for extensionless paths.
+
+
+def resolve_dataset_root_path(dataset_path: str) -> Path:
+    """
+    Resolve dataset root directory from a file or directory path.
+
+    :param dataset_path: Dataset file or directory path.
+    :return: Dataset root directory path.
+    """
+
+    path_obj = Path(str(dataset_path).strip())  # Normalize incoming path text into a path object.
+    if resolve_path_represents_directory(str(path_obj)):  # Use the directory itself for directory identities.
+        return path_obj.resolve()  # Return resolved dataset directory.
+    return path_obj.resolve().parent  # Return resolved parent directory for file identities.
+
+
+def resolve_canonical_dataset_identity(dataset_path: str, is_directory: bool) -> str:
+    """
+    Resolve canonical dataset identity path.
+
+    :param dataset_path: Dataset path to normalize.
+    :param is_directory: Whether dataset_path identifies a directory.
+    :return: Canonical dataset identity path.
+    """
+
+    path_text = str(dataset_path).strip()  # Normalize incoming path text.
+    if not path_text:  # Reject empty dataset identity inputs.
+        raise ValueError("Dataset identity path cannot be empty")  # Raise explicit identity failure.
+    normalized_path = os.path.normpath(os.path.expanduser(path_text))  # Normalize local path structure.
+    absolute_path = os.path.abspath(normalized_path)  # Resolve absolute path for relative conversion.
+    try:  # Convert to project-relative identity when possible.
+        identity_path = os.path.relpath(absolute_path)  # Preserve existing relative result convention.
+    except ValueError:  # Fall back for paths on different Windows drives.
+        identity_path = normalized_path  # Preserve normalized input when relative conversion fails.
+    identity_path = identity_path.replace("\\", "/")  # Normalize separators to project CSV convention.
+    while identity_path.startswith("./"):  # Remove duplicate leading current-directory markers.
+        identity_path = identity_path[2:]  # Trim one leading current-directory marker.
+    identity_path = re.sub(r"/+", "/", identity_path).rstrip("/")  # Collapse duplicate separators and trim trailing separators.
+    if is_directory:  # Preserve directory identity with one trailing separator.
+        identity_path = f"{identity_path}/"  # Append canonical directory separator.
+    return identity_path  # Return canonical dataset identity.
+
+
+def build_filename_safe_dataset_identity(dataset_identity: str) -> str:
+    """
+    Build filename-safe text from a dataset identity.
+
+    :param dataset_identity: Canonical dataset identity path.
+    :return: Filename-safe dataset identity text.
+    """
+
+    identity_text = str(dataset_identity).strip().replace("\\", "/")  # Normalize identity text and separators.
+    while identity_text.startswith("./"):  # Remove duplicate leading current-directory markers.
+        identity_text = identity_text[2:]  # Trim one leading current-directory marker.
+    identity_text = re.sub(r"/+", "/", identity_text).strip("/")  # Collapse duplicate separators and trim edges.
+    filename_identity = re.sub(r"[^A-Za-z0-9_]+", "_", identity_text)  # Convert path and delimiter characters to underscores.
+    filename_identity = re.sub(r"_+", "_", filename_identity).strip("_")  # Collapse duplicate underscores after sanitization.
+    if not filename_identity:  # Reject empty filename identity outputs.
+        raise ValueError("Dataset filename identity cannot be empty")  # Raise explicit filename identity failure.
+    return filename_identity  # Return filename-safe identity.
+
+
+def resolve_combined_files_dataset_identity(original_files_list: List[str]) -> str:
+    """
+    Resolve combined-files dataset directory identity.
+
+    :param original_files_list: Source file paths used by combined-files mode.
+    :return: Canonical combined dataset directory identity.
+    """
+
+    if not original_files_list:  # Require source files to derive a combined directory identity.
+        raise ValueError("Combined files dataset identity requires at least one source file")  # Raise explicit combined identity failure.
+    source_directories = [os.path.dirname(os.path.abspath(str(file_path))) for file_path in original_files_list]  # Resolve source directories without changing file order.
+    combined_directory = os.path.commonpath(source_directories)  # Resolve the shared dataset directory from active source files.
+    return resolve_canonical_dataset_identity(combined_directory, True)  # Return canonical directory identity.
+
+
 def get_stacking_output_dir(dataset_file_path: str, config: dict) -> str:
     """
-    Get the output directory for stacking results based on the dataset file path and configuration.
+    Get the output directory for stacking results based on the dataset file or directory path and configuration.
     
-    :param dataset_file_path: The path to the dataset file being processed
+    :param dataset_file_path: The path to the dataset file or directory being processed
     :param config: The configuration dictionary containing the stacking results directory setting
     :return: The resolved path to the stacking results directory for the given dataset
     """
@@ -170,8 +585,7 @@ def get_stacking_output_dir(dataset_file_path: str, config: dict) -> str:
     if not isinstance(config, dict):
         raise ValueError("config must be a dict")
 
-    dataset_file = Path(dataset_file_path).resolve()
-    dataset_root = dataset_file.parent
+    dataset_root = resolve_dataset_root_path(str(dataset_file_path))  # Resolve dataset root from file or directory input.
 
     stacking_cfg = config.get("stacking", {})
     results_dir = stacking_cfg.get("results_dir")
@@ -258,6 +672,11 @@ def parse_cli_args():
         parser.add_argument("--augmentation-file-format", type=str, default=None, dest="augmentation_file_format", help="File format for augmentation files: arff, csv, parquet, txt")  # Augmentation file format CLI override
         parser.add_argument("--feature-sets", type=str, default=None, dest="feature_sets", help="Comma-separated feature set strategies to enable: full,pca,rfe,ga (overrides config toggles)")  # Feature set strategies CLI override
         parser.add_argument("--features", type=str, default=None, dest="explicit_features", help="Comma-separated explicit feature names")  # Explicit feature list CLI override
+        parser.add_argument("--enable-memory-watcher", dest="enable_memory_watcher", action="store_true", default=None, help="Enable low-overhead memory watcher diagnostics")  # Enable watcher diagnostics via CLI
+        parser.add_argument("--disable-memory-watcher", dest="enable_memory_watcher", action="store_false", help="Disable memory watcher diagnostics")  # Disable watcher diagnostics via CLI
+        parser.add_argument("--memory-watch-interval-seconds", type=float, default=None, dest="memory_watch_interval_seconds", help="Memory watcher sampling interval in seconds")  # Override watcher sampling interval
+        parser.add_argument("--memory-watch-threshold-percent", type=float, default=None, dest="memory_watch_threshold_percent", help="System memory pressure threshold percent")  # Override watcher system threshold
+        parser.add_argument("--enable-memory-tracemalloc", dest="enable_memory_tracemalloc", action="store_true", default=False, help="Enable optional tracemalloc reports at selected phase boundaries")  # Enable optional Python allocation reports
         
         return parser.parse_args()  # Return parsed arguments
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -471,6 +890,17 @@ def get_default_config():
             "enabled": True,
             "clean": True,
         },
+        "memory_watcher": {
+            "enabled": False,  # Keep watcher disabled for normal stacking runs by default
+            "sample_interval_seconds": 2,  # Sample process and system memory every two seconds
+            "system_memory_threshold_percent": 90,  # Emit threshold events at high system memory pressure
+            "process_rss_threshold_gb": None,  # Leave process RSS threshold disabled unless configured
+            "capture_process_tree": True,  # Record actual recursive child process rows
+            "capture_tracemalloc": False,  # Keep Python allocation tracing disabled by default
+            "tracemalloc_frame_depth": 25,  # Use bounded stack depth for optional tracemalloc snapshots
+            "output_directory": "Logs/Memory_Watch",  # Store watcher runs under project logs
+            "keep_watcher_after_target_exit_seconds": 5,  # Give sidecar time to write terminal records
+        },
         "telegram": {
             "enabled": True,
             "verify_env": True,
@@ -631,6 +1061,18 @@ def merge_configs(defaults, file_config, cli_args):
             if not explicit_list:  # If the parsed list is empty after stripping whitespace
                 raise ValueError("--features must provide at least one non-empty feature name")  # Raise with clear error message
             config.setdefault("stacking", {}).setdefault("feature_sets_config", {})["explicit_features"] = explicit_list  # Store parsed explicit feature list in config
+
+        if hasattr(cli_args, "enable_memory_watcher") and cli_args.enable_memory_watcher is not None:  # Memory watcher CLI toggle
+            config.setdefault("memory_watcher", {})["enabled"] = cli_args.enable_memory_watcher  # Apply watcher enabled override
+
+        if hasattr(cli_args, "memory_watch_interval_seconds") and cli_args.memory_watch_interval_seconds is not None:  # Memory watcher interval CLI override
+            config.setdefault("memory_watcher", {})["sample_interval_seconds"] = cli_args.memory_watch_interval_seconds  # Apply watcher interval override
+
+        if hasattr(cli_args, "memory_watch_threshold_percent") and cli_args.memory_watch_threshold_percent is not None:  # Memory watcher threshold CLI override
+            config.setdefault("memory_watcher", {})["system_memory_threshold_percent"] = cli_args.memory_watch_threshold_percent  # Apply watcher system threshold override
+
+        if hasattr(cli_args, "enable_memory_tracemalloc") and cli_args.enable_memory_tracemalloc:  # Optional tracemalloc CLI toggle
+            config.setdefault("memory_watcher", {})["capture_tracemalloc"] = True  # Enable optional Python allocation reports
 
         return config  # Return final merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -1180,8 +1622,10 @@ def process_single_file(f, config=None):
         else:  # If no progress metadata is available
             verbose_output(f"{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{f}{Style.RESET_ALL}", config=config)  # Output the verbose message without index
 
+        write_memory_phase_event("before_each_source_file_load", config=config, dataset_source=f, dataset_identity=os.path.basename(str(f)), event_outcome="starting")  # Publish source-file load start
         df = load_dataset(f, config=config)  # Load the dataset from the file
         if df is None:  # If loading failed
+            write_memory_phase_event("after_each_source_file_load", config=config, dataset_source=f, dataset_identity=os.path.basename(str(f)), event_outcome="load_failed")  # Publish failed source-file load
             return None  # Return None
         
         remove_zero_variance = config.get("dataset", {}).get("remove_zero_variance", True)  # Get remove zero variance flag from config
@@ -1191,6 +1635,7 @@ def process_single_file(f, config=None):
         gc.collect()  # Force garbage collection to reclaim memory from deleted raw dataframe
 
         if df_clean is None or df_clean.empty:  # If preprocessing failed or dataframe is empty
+            write_memory_phase_event("after_each_source_file_load", config=config, dataset_source=f, dataset_identity=os.path.basename(str(f)), event_outcome="empty_after_preprocessing")  # Publish empty source-file result
             return None  # Return None
 
         target_col = detect_label_column(df_clean.columns.tolist())  # Detect label column using naming conventions
@@ -1198,8 +1643,10 @@ def process_single_file(f, config=None):
             target_col = df_clean.columns[-1]  # Fall back to last column as target
         feat_cols = [c for c in df_clean.columns if c != target_col and pd.api.types.is_numeric_dtype(df_clean[c])]  # Get numeric feature columns excluding label column
         if not feat_cols:  # If no numeric features
+            write_memory_phase_event("after_each_source_file_load", config=config, dataset_source=f, dataset_identity=os.path.basename(str(f)), row_count=len(df_clean), feature_count=0, event_outcome="no_numeric_features")  # Publish unusable source-file result
             return None  # Return None
 
+        write_memory_phase_event("after_each_source_file_load", config=config, dataset_source=f, dataset_identity=os.path.basename(str(f)), row_count=len(df_clean), feature_count=len(feat_cols), attack_scope=target_col, event_outcome="loaded")  # Publish successful source-file load
         return (df_clean, target_col, feat_cols)  # Return the processed data
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -1507,6 +1954,7 @@ def concat_files_into_combined_files_df(processed_files_with_labels, common_feat
 
     gc.collect()  # Force garbage collection to reclaim memory from released original dataframes
 
+    write_memory_phase_event("before_combined_dataframe_creation", config=config, source_file_count=len(processed_files_with_labels), feature_count=len(common_features_list), attack_scope=sorted(list(attack_types_set)), train_sample_count=total_samples, event_outcome="starting")  # Publish combined dataframe creation start
     combined_df = pd.concat(combined_parts, ignore_index=True)  # Concatenate all parts into single dataframe
 
     del combined_parts  # Release list of dataframe parts to free memory after concatenation
@@ -1517,9 +1965,11 @@ def concat_files_into_combined_files_df(processed_files_with_labels, common_feat
 
     if combined_df.empty:  # If combined dataframe is empty after cleaning
         print(f"{BackgroundColors.RED}Combined files evaluation dataset is empty after cleaning.{Style.RESET_ALL}")  # Print error
+        write_memory_phase_event("after_combined_dataframe_creation", config=config, source_file_count=len(processed_files_with_labels), feature_count=len(common_features_list), attack_scope=sorted(list(attack_types_set)), event_outcome="empty_after_cleaning")  # Publish failed combined dataframe creation
         return None  # Signal failure to caller
 
     attack_types_list = sorted(list(attack_types_set))  # Convert attack types set to sorted list
+    write_memory_phase_event("after_combined_dataframe_creation", config=config, source_file_count=len(processed_files_with_labels), row_count=len(combined_df), feature_count=len(common_features_list), attack_scope=attack_types_list, event_outcome="created")  # Publish successful combined dataframe creation
     print(
         f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Combined files evaluation dataset created: {BackgroundColors.CYAN}{len(combined_df)} samples, {len(common_features_list)} features, {len(attack_types_list)} classes{Style.RESET_ALL}"
     )  # Print summary of combined dataset
@@ -2039,7 +2489,8 @@ def generate_experiment_id(file_path, experiment_mode, augmentation_ratio=None):
 
     try:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")  # Create a timestamp string for uniqueness
-        file_stem = Path(file_path).stem  # Extract the filename stem without extension
+        path_is_directory = resolve_path_represents_directory(str(file_path))  # Resolve whether experiment identity comes from a directory.
+        file_stem = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file_path), True)) if path_is_directory else Path(file_path).stem  # Resolve experiment filename identity by path scope.
         ratio_tag = f"_ratio{int(augmentation_ratio * 100)}" if augmentation_ratio is not None else ""  # Build ratio tag string or empty
         experiment_id = f"{timestamp}_{file_stem}_{experiment_mode}{ratio_tag}"  # Concatenate all parts into unique identifier
 
@@ -3788,6 +4239,7 @@ def preprocess_dataframe(df, remove_zero_variance=True, config=None):
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
+        write_memory_phase_event("before_preprocessing", config=config, row_count=len(df) if df is not None else None, feature_count=len(df.columns) if df is not None else None, event_outcome="starting")  # Publish preprocessing start
         if remove_zero_variance:  # If remove_zero_variance is set to True
             verbose_output(
                 f"{BackgroundColors.GREEN}Preprocessing DataFrame: "
@@ -3804,6 +4256,7 @@ def preprocess_dataframe(df, remove_zero_variance=True, config=None):
             )
 
         if df is None:  # If the DataFrame is None
+            write_memory_phase_event("after_preprocessing", config=config, row_count=None, feature_count=None, event_outcome="none_input")  # Publish preprocessing none-input outcome
             return df  # Return None
 
         df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
@@ -3823,6 +4276,7 @@ def preprocess_dataframe(df, remove_zero_variance=True, config=None):
                 if zero_var_cols:  # If there are zero-variance columns
                     df_clean = df_clean.drop(columns=zero_var_cols)  # Drop zero-variance columns
 
+        write_memory_phase_event("after_preprocessing", config=config, row_count=len(df_clean), feature_count=len(df_clean.columns), event_outcome="completed")  # Publish preprocessing completion
         return df_clean  # Return the cleaned DataFrame
     except Exception as e:
         print(str(e))
@@ -3884,6 +4338,7 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, X_augment
                 f"{BackgroundColors.RED}No numeric features found in X after filtering.{Style.RESET_ALL}"
             )  # Raise an error if X has no valid feature columns
 
+        write_memory_phase_event("before_train_test_split", config=config, train_sample_count=None, test_sample_count=None, feature_count=X_values.shape[1], event_outcome="starting")  # Publish train/test split start
         sample_indices = np.arange(encoded_values.shape[0], dtype=np.int64)  # Build sample index array for index-based stratified splitting
         train_idx, test_idx = train_test_split(
             sample_indices, test_size=test_size, random_state=random_state, stratify=encoded_values
@@ -3893,6 +4348,7 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, X_augment
         X_test = X_values[test_idx]  # Materialize test features from index split
         y_train = encoded_values[train_idx]  # Materialize encoded training targets from index split
         y_test = encoded_values[test_idx]  # Materialize encoded test targets from index split
+        write_memory_phase_event("after_train_test_split", config=config, train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=X_train.shape[1], event_outcome="completed")  # Publish train/test split completion
 
         del sample_indices, train_idx, test_idx, X_values  # Release split helper arrays and base feature view before augmentation/scaling
         gc.collect()  # Force garbage collection to reclaim memory from released split helpers
@@ -3942,11 +4398,13 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, X_augment
                 config=config
             )  # Output expanded training set size
 
+        write_memory_phase_event("before_scaling", config=config, train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=X_train.shape[1], event_outcome="starting")  # Publish scaling start
         scaler = StandardScaler()  # Initialize the StandardScaler
 
         X_train_scaled = np.asarray(scaler.fit_transform(X_train))  # Fit and transform the training features (including augmented if provided)
 
         X_test_scaled = np.asarray(scaler.transform(X_test))  # Transform the testing features (original data only)
+        write_memory_phase_event("after_scaling", config=config, train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=X_train_scaled.shape[1], event_outcome="completed")  # Publish scaling completion
 
         del X_train, X_test, y_series  # Release large pre-scaled matrices and temporary target Series after scaling
         gc.collect()  # Force garbage collection to reclaim memory from released pre-scaled matrices
@@ -4763,7 +5221,7 @@ def load_existing_model_if_available(model, model_name, dataset_file, feature_se
         raise
 
 
-def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None):
+def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None):  # Evaluate one classifier with optional watcher metadata
     """
     Trains an individual classifier and evaluates its performance on the test set.
 
@@ -4778,12 +5236,14 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
     :param feature_names: List of feature names
     :param feature_set: Feature set name
     :param config: Configuration dictionary (uses global CONFIG if None)
+    :param phase_metadata: Optional compact watcher metadata for this classifier
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
     
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
+        phase_metadata = dict(phase_metadata or {})  # Normalize watcher metadata for safe reuse
         
         skip_train_if_model_exists = config.get("execution", {}).get("skip_train_if_model_exists", False)  # Get skip train flag from config
 
@@ -4820,10 +5280,18 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         if dataset_file is not None and skip_train_if_model_exists:  # If dataset file provided and skip-train flag enabled
             existing_metrics = load_existing_model_if_available(model, model_name, dataset_file, feature_set, X_test, y_test, scaler, config=config)  # Attempt to load a previously saved model from disk
             if existing_metrics is not None:  # If a valid existing model was found and used
+                existing_params_digest = get_classifier_params_digest(model)  # Build loaded classifier parameter digest
+                existing_fit_metadata = dict(phase_metadata)  # Copy caller watcher metadata
+                existing_fit_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else existing_fit_metadata.get("dataset_identity"), "classifier_name": model_name, "classifier_params_digest": existing_params_digest, "classifier_params_reference": f"sha256:{existing_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else existing_fit_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": "loaded_existing_model"})  # Build skipped-fit watcher metadata
+                write_memory_phase_event("after_classifier_fit", config=config, **existing_fit_metadata)  # Publish skipped-fit outcome for existing model reuse
                 return existing_metrics  # Return cached metrics without retraining
 
         sys.stdout.flush()  # Flush stdout before model training to ensure logs are visible under nohup
         model.fit(X_train, y_train)  # Fit the model on the training data using its internal n_jobs parallelism
+        params_digest = get_classifier_params_digest(model)  # Build fitted classifier parameter digest
+        fit_metadata = dict(phase_metadata)  # Copy caller watcher metadata
+        fit_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else fit_metadata.get("dataset_identity"), "classifier_name": model_name, "classifier_params_digest": params_digest, "classifier_params_reference": f"sha256:{params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else fit_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": "fit_completed"})  # Build fit completion watcher metadata
+        write_memory_phase_event("after_classifier_fit", config=config, **fit_metadata)  # Publish classifier fit completion
 
         y_pred = model.predict(X_test)  # Predict the labels for the test set
 
@@ -4853,7 +5321,17 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
         return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
+    except MemoryError as e:  # Handle classifier memory errors with a diagnostic phase
+        error_metadata = dict(phase_metadata or {})  # Copy watcher metadata for memory error
+        error_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else error_metadata.get("dataset_identity"), "classifier_name": model_name, "train_sample_count": len(y_train) if y_train is not None else error_metadata.get("train_sample_count"), "test_sample_count": len(y_test) if y_test is not None else error_metadata.get("test_sample_count"), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else error_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": str(e)})  # Build memory error watcher metadata
+        write_memory_phase_event("memory_error", config=config, **error_metadata)  # Publish classifier memory error
+        print(str(e))  # Print memory error to terminal logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send memory error via Telegram
+        raise  # Preserve original MemoryError behavior
     except Exception as e:
+        error_metadata = dict(phase_metadata or {})  # Copy watcher metadata for model error
+        error_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else error_metadata.get("dataset_identity"), "classifier_name": model_name, "train_sample_count": len(y_train) if y_train is not None else error_metadata.get("train_sample_count"), "test_sample_count": len(y_test) if y_test is not None else error_metadata.get("test_sample_count"), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else error_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": str(e)})  # Build model error watcher metadata
+        write_memory_phase_event("model_error", config=config, **error_metadata)  # Publish classifier model error
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
@@ -6171,7 +6649,8 @@ def export_feature_artifacts(df, file_path_obj, stacking_dir, config=None):
             feature_counts_df = pd.DataFrame()  # Provide empty DataFrame to allow downstream code to continue
 
         try:  # Attempt to export top-features CSV and heatmap
-            dataset_base = file_path_obj.stem  # Extract stem of filename for output file naming
+            path_is_directory = resolve_path_represents_directory(str(file_path_obj))  # Resolve whether artifact identity comes from a directory.
+            dataset_base = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file_path_obj), True)) if path_is_directory else file_path_obj.stem  # Resolve artifact filename identity by path scope.
             top_csv = stacking_dir / f"{dataset_base}_top_features.csv"  # Build path for top-features CSV
             top_png = stacking_dir / f"{dataset_base}_top_features.png"  # Build path for feature usage heatmap
             export_top_features_csv(feature_counts_df, str(top_csv), dataset_file=str(file_path_obj))  # Export aggregated feature counts to CSV
@@ -6371,11 +6850,12 @@ def save_stacking_results(csv_path, results_list, config=None):
 
         results_filename = config.get("stacking", {}).get("results_filename", "Stacking_Classifiers_Results.csv")  # Get results filename from config
         file_path_obj = Path(csv_path)
-        feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"
+        dataset_root = resolve_dataset_root_path(str(csv_path))  # Resolve output root from file or directory input.
+        feature_analysis_dir = dataset_root / "Feature_Analysis"  # Build Feature_Analysis path from the dataset root.
         os.makedirs(feature_analysis_dir, exist_ok=True)
         
         stacking_results_dir = config.get("stacking", {}).get("results_dir", "Stacking")
-        stacking_dir = file_path_obj.parent / stacking_results_dir
+        stacking_dir = dataset_root / stacking_results_dir  # Build stacking output path from the dataset root.
         os.makedirs(stacking_dir, exist_ok=True)
         output_path = stacking_dir / results_filename
 
@@ -6386,13 +6866,16 @@ def save_stacking_results(csv_path, results_list, config=None):
         df = reorder_and_annotate_dataframe(df, config=config)  # Reorder columns by config order and append hardware annotation
 
         try:
+            write_memory_phase_event("final_export", config=config, dataset_source=csv_path, output_path=str(output_path), row_count=len(df), event_outcome="starting")  # Publish final export start
             generate_csv_and_image(df, str(output_path), is_visualizable=True, index=False, encoding="utf-8")  # Persist results CSV and generate PNG
+            write_memory_phase_event("final_export", config=config, dataset_source=csv_path, output_path=str(output_path), row_count=len(df), event_outcome="saved")  # Publish final export completion
             print(
                 f"\n{BackgroundColors.GREEN}Stacking classifier results successfully saved to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
             )  # Notify user of success
 
             export_feature_artifacts(df, file_path_obj, stacking_dir, config=config)  # Export feature usage CSV and heatmap to the Stacking directory
         except Exception as e:
+            write_memory_phase_event("final_export", config=config, dataset_source=csv_path, output_path=str(output_path), row_count=len(df) if 'df' in locals() else None, event_outcome=f"failed:{e}")  # Publish final export failure
             print(
                 f"{BackgroundColors.RED}Failed to write Stacking Classifier CSV to {BackgroundColors.CYAN}{output_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
             )
@@ -6422,13 +6905,20 @@ def get_cache_file_path(csv_path, config=None):
 
         cache_prefix = config.get("stacking", {}).get("cache_prefix", "CACHE_")  # Get cache prefix from config
         cache_results_subdir = config.get("stacking", {}).get("cache_results_subdir", "Cache_Results")  # Get cache results subdirectory from config
-        dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Get base dataset name
+        path_is_directory = resolve_path_represents_directory(str(csv_path))  # Resolve whether cache identity comes from a directory.
+        if path_is_directory:  # Use directory identity for combined-files cache names.
+            dataset_identity = resolve_canonical_dataset_identity(str(csv_path), True)  # Resolve canonical directory identity.
+            dataset_name = build_filename_safe_dataset_identity(dataset_identity)  # Build filename-safe directory identity.
+            cache_filename_prefix = f"{cache_prefix.rstrip('_-')}-"  # Use hyphen delimiter for path-derived cache identity.
+        else:  # Preserve single-file cache naming behavior.
+            dataset_name = os.path.splitext(os.path.basename(csv_path))[0]  # Get base dataset name.
+            cache_filename_prefix = cache_prefix  # Preserve configured single-file cache prefix.
         stacking_output_dir = get_stacking_output_dir(csv_path, config)  # Get stacking results directory from config-aware path resolver
         output_dir = os.path.join(stacking_output_dir, cache_results_subdir)  # Build cache directory inside the stacking results directory
 
         validate_output_path(stacking_output_dir, str(Path(output_dir).resolve()))  # Verify cache directory is within the stacking results directory to prevent directory traversal
         os.makedirs(output_dir, exist_ok=True)  # Ensure the cache directory exists
-        cache_filename = f"{cache_prefix}{dataset_name}-Stacking_Classifiers_Results.csv"  # Cache filename
+        cache_filename = f"{cache_filename_prefix}{dataset_name}-Stacking_Classifiers_Results.csv"  # Build cache filename.
         cache_path = os.path.join(output_dir, cache_filename)  # Full cache file path
 
         return cache_path  # Return the cache file path
@@ -7837,10 +8327,12 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
             config = CONFIG  # Use global CONFIG
 
         results = []  # Initialize results list
+        path_is_directory = resolve_path_represents_directory(str(file_path))  # Resolve whether AutoML identity comes from a directory.
+        dataset_identity = resolve_canonical_dataset_identity(str(file_path), True) if path_is_directory else os.path.relpath(file_path)  # Resolve AutoML result-row dataset identity by path scope.
 
         individual_entry = {  # Build individual model result entry
             "model": best_model_name,  # Model class name
-            "dataset": os.path.relpath(file_path),  # Dataset relative path
+            "dataset": dataset_identity,  # Store resolved AutoML dataset identity.
             "feature_set": "AutoML",  # Feature set label
             "classifier_type": "AutoML_Individual",  # Classifier type
             "model_name": f"AutoML_{best_model_name}",  # Prefixed model name
@@ -7869,7 +8361,7 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
         if stacking_metrics is not None and stacking_config is not None:  # If stacking results are available
             stacking_entry = {  # Build stacking result entry
                 "model": "StackingClassifier",  # Model class name
-                "dataset": os.path.relpath(file_path),  # Dataset relative path
+                "dataset": dataset_identity,  # Store resolved AutoML dataset identity.
                 "feature_set": "AutoML",  # Feature set label
                 "classifier_type": "AutoML_Stacking",  # Classifier type
                 "model_name": "AutoML_StackingClassifier",  # Prefixed model name
@@ -7919,8 +8411,8 @@ def save_automl_results(csv_path, results_list, config=None):
         if not results_list:  # If no results to save
             return  # Exit early
 
-        file_path_obj = Path(csv_path)  # Create Path object for dataset file
-        automl_dir = file_path_obj.parent / "Feature_Analysis" / "AutoML"  # Build AutoML output directory
+        dataset_root = resolve_dataset_root_path(str(csv_path))  # Resolve AutoML output root from file or directory input.
+        automl_dir = dataset_root / "Feature_Analysis" / "AutoML"  # Build AutoML output directory from dataset root.
         os.makedirs(automl_dir, exist_ok=True)  # Ensure directory exists
         output_path = automl_dir / config.get("automl", {}).get("results_filename", "AutoML_Results.csv")  # Build output file path
 
@@ -8173,8 +8665,8 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
             X_train_scaled, y_train_arr, X_test_scaled, y_test_arr, model_study, file, config=config
         )  # Phase 2: Run stacking search and evaluation if enabled
 
-        file_path_obj = Path(file)  # Create Path object for file
-        automl_output_dir = str(file_path_obj.parent / "Feature_Analysis" / "AutoML")  # Build AutoML output directory
+        dataset_root = resolve_dataset_root_path(str(file))  # Resolve AutoML artifact root from file or directory input.
+        automl_output_dir = str(dataset_root / "Feature_Analysis" / "AutoML")  # Build AutoML output directory from dataset root.
 
         export_automl_pipeline_artifacts(
             model_study, stacking_study, stacking_config, stacking_metrics,
@@ -8615,9 +9107,10 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
 
     try:
         acc, prec, rec, f1, fpr, fnr, elapsed = metrics_tuple[:7]  # Unpack the first 7 metrics from the tuple
+        dataset_identity = resolve_canonical_dataset_identity(file, True) if execution_mode_str == "combined_files" else os.path.relpath(file)  # Resolve result-row dataset identity by execution mode.
         return {
             "model": model_class,  # Model class name for identification
-            "dataset": os.path.relpath(file),  # Relative dataset path for portability
+            "dataset": dataset_identity,  # Store the resolved dataset identity for CSV exports
             "execution_mode": execution_mode_str,  # Execution mode (separate_files or combined_files)
             "attack_types_combined": json.dumps(attack_types_combined) if attack_types_combined else None,  # JSON-serialized attack types or None
             "feature_set": feature_set_name,  # Name of the feature set evaluated
@@ -8884,6 +9377,11 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             progress_bar.set_description(combination_header)  # Update progress bar with the complete active configuration
             send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {combination_header}")  # Notify Telegram about evaluation start with active configuration details
             sys.stdout.flush()  # Flush stdout before each classifier to ensure logs are visible under nohup
+            phase_params_digest = get_classifier_params_digest(active_model)  # Build compact classifier parameter digest
+            phase_cache_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, hyperparameters_enabled)  # Build cache identity source for diagnostics
+            phase_cache_digest = hashlib.sha256(json.dumps(phase_cache_key, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Build stable cache identity digest
+            phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "classifier_name": model_name, "classifier_params_digest": phase_params_digest, "classifier_params_reference": f"sha256:{phase_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train_n_cols, "n_jobs": get_classifier_n_jobs(active_model), "cache_identity": phase_cache_digest, "cache_reference": cache_ref_file, "combination_index": current_combination, "total_combinations": total_steps}  # Build compact phase metadata for this classifier
+            write_memory_phase_event("before_classifier_fit", config=config, **phase_metadata, event_outcome="starting")  # Publish classifier fit start
 
             metrics = evaluate_individual_classifier(
                 active_model,  # Use the fitted clone for this atomic classifier.
@@ -8897,7 +9395,9 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 subset_feature_names,
                 artifact_feature_set,  # Use the HP-specific artifact label.
                 config=config,
+                phase_metadata=phase_metadata,  # Pass compact watcher context into fit completion and error events
             )  # Evaluate individual classifier sequentially using HP-isolated model artifact names
+            write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=metrics[0], precision=metrics[1], recall=metrics[2], f1_score=metrics[3], event_outcome="metrics_completed")  # Publish prediction and metrics completion
 
             model_class = active_model.__class__.__name__  # Retrieve model class name for result entry
             result_entry = build_classifier_result_entry(
@@ -8907,12 +9407,14 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 hyperparams_map=hyperparams_map,
                 hyperparameters_enabled=hyperparameters_enabled,
             )  # Build standardized result entry for this individual classifier
+            write_memory_phase_event("before_cache_persist", config=config, **phase_metadata, event_outcome="starting")  # Publish cache persistence start
             persist_cache_result_entry(cache_ref_file, result_entry, cache_dict, config=config)  # Persist this atomic classifier result immediately and register its resume identity
+            write_memory_phase_event("after_cache_persist", config=config, **phase_metadata, event_outcome="persisted")  # Publish cache persistence completion
 
             results_dict[(name, model_name)] = result_entry  # Store result keyed by feature set and model only after durable cache verification
 
             try:  # Export fitted artifacts only after durable cache persistence succeeds
-                dataset_name = os.path.basename(os.path.dirname(file))  # Resolve dataset directory name for model export
+                dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve model export dataset folder by execution mode.
                 if hasattr(active_model, "classes_"):  # Verify fitted classifier state using the common sklearn classes_ marker
                     export_model_and_scaler(active_model, scaler, dataset_name, model_name, subset_feature_names or [], best_params=None, feature_set=artifact_feature_set, dataset_csv_path=file, config=config)  # Export fitted model and scaler after cache persistence
             except Exception:  # Preserve existing best-effort export behavior
@@ -8922,18 +9424,25 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             pass  # Verify removal of duplicate individual model accuracy print
             progress_bar.update(1)  # Advance progress bar by one step
 
+            write_memory_phase_event("before_explainability_schedule", config=config, **phase_metadata, event_outcome="starting")  # Publish explainability scheduling start
+            explainability_outcome = "skipped"  # Track explainability scheduling outcome
             if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
                 try:  # Attempt to queue explainability for this model
                     schedule_explainability_job(active_model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled)  # Queue explainability without blocking the next classifier
+                    explainability_outcome = "scheduled"  # Track successful explainability scheduling
                 except Exception as e:  # If explainability queueing fails
+                    explainability_outcome = f"failed:{e}"  # Track explainability scheduling failure
                     verbose_output(
                         f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
                         config=config
                     )  # Log error but continue evaluation
+            write_memory_phase_event("after_explainability_schedule", config=config, **phase_metadata, event_outcome=explainability_outcome)  # Publish explainability scheduling completion
 
             current_combination += 1  # Advance the global combination counter
+            write_memory_phase_event("before_memory_cleanup", config=config, **phase_metadata, event_outcome="starting")  # Publish per-classifier cleanup start
             del active_model, metrics  # Release fitted estimator and metric tuple before the next classifier
             gc.collect()  # Reclaim estimator-owned memory before the next atomic classifier
+            write_memory_phase_event("after_memory_cleanup", config=config, **phase_metadata, event_outcome="completed")  # Publish per-classifier cleanup completion
 
         return (results_dict, current_combination)  # Return accumulated results and updated combination counter
     except Exception as e:
@@ -9025,10 +9534,17 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         progress_bar.set_description(combination_header)  # Update progress bar with the complete active configuration
 
         send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {combination_header}")  # Notify Telegram about stacking evaluation start with active configuration details
+        phase_params_digest = get_classifier_params_digest(stacking_model)  # Build compact stacking parameter digest
+        phase_cache_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, "StackingClassifier", hyperparameters_enabled)  # Build stacking cache identity source for diagnostics
+        phase_cache_digest = hashlib.sha256(json.dumps(phase_cache_key, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Build stable stacking cache identity digest
+        phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "classifier_name": "StackingClassifier", "classifier_params_digest": phase_params_digest, "classifier_params_reference": f"sha256:{phase_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train_n_cols, "n_jobs": get_classifier_n_jobs(stacking_model), "cache_identity": phase_cache_digest, "cache_reference": cache_ref_file, "combination_index": current_combination, "total_combinations": total_steps}  # Build compact phase metadata for stacking
+        write_memory_phase_event("before_classifier_fit", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking fit start
 
         stacking_metrics = evaluate_stacking_classifier(
             stacking_model, X_train_df, y_train, X_test_df, y_test
         )  # Evaluate stacking model with DataFrames and retrieve metrics tuple
+        write_memory_phase_event("after_classifier_fit", config=config, **phase_metadata, event_outcome="fit_and_prediction_completed")  # Publish stacking fit completion
+        write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=stacking_metrics[0], precision=stacking_metrics[1], recall=stacking_metrics[2], f1_score=stacking_metrics[3], event_outcome="metrics_completed")  # Publish stacking metrics completion
 
         s_y_pred = stacking_metrics[7] if len(stacking_metrics) > 7 else None  # Extract stacking predictions from metrics tuple for plot generation
 
@@ -9047,10 +9563,12 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             hyperparameters_enabled=hyperparameters_enabled,
         )  # Build standardized result entry for the stacking classifier
 
+        write_memory_phase_event("before_cache_persist", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking cache persistence start
         persist_cache_result_entry(cache_ref_file, stacking_result_entry, cache_dict, config=config)  # Persist this atomic stacking result immediately and register its resume identity
+        write_memory_phase_event("after_cache_persist", config=config, **phase_metadata, event_outcome="persisted")  # Publish stacking cache persistence completion
 
         try:  # Export fitted stacking artifacts only after durable cache persistence succeeds
-            dataset_name = os.path.basename(os.path.dirname(file))  # Get dataset directory name from file path
+            dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve stacking export dataset folder by execution mode.
             artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Keep stacking artifacts isolated by HP mode
             export_model_and_scaler(stacking_model, scaler, dataset_name, "StackingClassifier", subset_feature_names, best_params=None, feature_set=artifact_feature_set, dataset_csv_path=file, config=config)  # Export fitted stacking model and scaler after cache persistence
         except Exception:  # If model export fails
@@ -9061,17 +9579,31 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         progress_bar.update(1)  # Advance progress bar after stacking evaluation
         current_combination += 1  # Advance the global combination counter
 
+        write_memory_phase_event("before_explainability_schedule", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking explainability scheduling start
+        explainability_outcome = "skipped"  # Track stacking explainability scheduling outcome
         if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
             try:  # Attempt to queue explainability for stacking model
                 schedule_explainability_job(stacking_model, "StackingClassifier", X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled)  # Queue explainability without blocking the next feature set
+                explainability_outcome = "scheduled"  # Track successful stacking explainability scheduling
             except Exception as e:  # If explainability queueing fails
+                explainability_outcome = f"failed:{e}"  # Track stacking explainability scheduling failure
                 verbose_output(
                     f"{BackgroundColors.YELLOW}Explainability failed for StackingClassifier: {e}{Style.RESET_ALL}",
                     config=config
                 )  # Log error but continue evaluation
+        write_memory_phase_event("after_explainability_schedule", config=config, **phase_metadata, event_outcome=explainability_outcome)  # Publish stacking explainability scheduling completion
+        write_memory_phase_event("before_memory_cleanup", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking cleanup start
+        gc.collect()  # Reclaim any released stacking temporaries before returning
+        write_memory_phase_event("after_memory_cleanup", config=config, **phase_metadata, event_outcome="completed")  # Publish stacking cleanup completion
 
         return (stacking_result_entry, current_combination)  # Return result entry and updated combination counter
+    except MemoryError as e:  # Handle stacking memory errors with diagnostic phase
+        write_memory_phase_event("memory_error", config=config, classifier_name="StackingClassifier", feature_set_name=name, train_sample_count=len(y_train) if y_train is not None else None, test_sample_count=len(y_test) if y_test is not None else None, feature_count=X_train_n_cols, event_outcome=str(e))  # Publish stacking memory error
+        print(str(e))  # Print memory error to terminal logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send memory error via Telegram
+        raise  # Preserve original MemoryError behavior
     except Exception as e:
+        write_memory_phase_event("model_error", config=config, classifier_name="StackingClassifier", feature_set_name=name, train_sample_count=len(y_train) if y_train is not None else None, test_sample_count=len(y_test) if y_test is not None else None, feature_count=X_train_n_cols, event_outcome=str(e))  # Publish stacking model error
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
@@ -9391,10 +9923,13 @@ def evaluate_on_dataset(
                 print(
                     f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}"
                 )  # Output warning
+                write_memory_phase_event("before_feature_set_evaluation", config=config, dataset_identity=os.path.basename(str(file)), dataset_source=file, execution_mode=execution_mode_str, attack_scope=attack_types_combined, data_source=data_source_label, experiment_mode=experiment_mode, augmentation_ratio=augmentation_ratio, feature_set_name=name, hyperparameter_mode="Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=0, event_outcome="skipped_empty")  # Publish skipped feature-set start
+                write_memory_phase_event("after_feature_set_evaluation", config=config, dataset_identity=os.path.basename(str(file)), dataset_source=file, execution_mode=execution_mode_str, attack_scope=attack_types_combined, data_source=data_source_label, experiment_mode=experiment_mode, augmentation_ratio=augmentation_ratio, feature_set_name=name, hyperparameter_mode="Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=0, event_outcome="skipped_empty")  # Publish skipped feature-set completion
                 progress_bar.update(len(individual_models) + (1 if stacking_enabled else 0))  # Skip exactly the steps represented by this empty feature set
                 current_combination += len(individual_models) + (1 if stacking_enabled else 0)  # Keep shared combination numbering aligned with skipped steps
                 continue  # Skip to the next set
 
+            write_memory_phase_event("before_feature_set_evaluation", config=config, dataset_identity=os.path.basename(str(file)), dataset_source=file, execution_mode=execution_mode_str, attack_scope=attack_types_combined, data_source=data_source_label, experiment_mode=experiment_mode, augmentation_ratio=augmentation_ratio, feature_set_name=name, hyperparameter_mode="Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=X_train_subset.shape[1], event_outcome="starting")  # Publish feature-set evaluation start
             individual_results, stacking_result_entry, current_combination = evaluate_single_feature_set(
                 idx, name, X_train_subset, X_test_subset, subset_feature_names_list,
                 individual_models, stacking_model, y_train, y_test,
@@ -9403,6 +9938,7 @@ def evaluate_on_dataset(
                 hyperparams_map, scaler, total_steps, current_combination, progress_bar, stacking_enabled=stacking_enabled, config=config,
                 cache_dict=cache_dict, cache_ref_file=effective_cache_ref, hyperparameters_enabled=hyperparameters_enabled,
             )  # Evaluate all individual classifiers and stacking model on this non-empty feature subset with resume support
+            write_memory_phase_event("after_feature_set_evaluation", config=config, dataset_identity=os.path.basename(str(file)), dataset_source=file, execution_mode=execution_mode_str, attack_scope=attack_types_combined, data_source=data_source_label, experiment_mode=experiment_mode, augmentation_ratio=augmentation_ratio, feature_set_name=name, hyperparameter_mode="Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=X_train_subset.shape[1], event_outcome="completed")  # Publish feature-set evaluation completion
 
             all_results.update(individual_results)  # Merge this feature set's results into the global results dict
             if stacking_result_entry is not None:  # Store stacking result only when stacking evaluation was enabled
@@ -10168,7 +10704,8 @@ def save_combined_files_results_to_csv(reference_file, results_list, config=None
 
         combined_files_results_filename = config.get("stacking", {}).get("combined_files_results_filename", "Stacking_Classifiers_CombinedFiles_Results.csv")  # Get combined files evaluation results filename from config
         reference_file_path = Path(reference_file)  # Create Path object from reference file
-        feature_analysis_dir = reference_file_path.parent / "Feature_Analysis"  # Build Feature_Analysis directory path
+        dataset_root = resolve_dataset_root_path(str(reference_file_path))  # Resolve Feature_Analysis root from file or directory input.
+        feature_analysis_dir = dataset_root / "Feature_Analysis"  # Build Feature_Analysis directory path from dataset root.
         os.makedirs(feature_analysis_dir, exist_ok=True)  # Ensure directory exists on disk
 
         combined_config = dict(config)  # Copy configuration so combined export can override only the result filename
@@ -10392,9 +10929,11 @@ def process_combined_files_augmentation_testing(reference_file, original_files_l
             f"{BackgroundColors.GREEN}Processing combined files evaluation augmented data...{Style.RESET_ALL}",
             config=config
         )  # Output the verbose message
+        combined_dataset_identity = resolve_combined_files_dataset_identity(original_files_list)  # Resolve canonical combined directory identity.
+        combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use directory path text without trailing separator for path APIs.
 
         generate_augmentation_tsne_visualization(
-            reference_file, combined_files_df, None, None, "original_only"
+            combined_dataset_reference, combined_files_df, None, None, "original_only"  # Use directory identity for combined visualization.
         )  # Generate t-SNE visualization for original combined files evaluation data only
 
         combined_augmented_df = load_and_combine_augmented_combined_files(original_files_list, config=config)  # Load and combine augmented files into a single DataFrame
@@ -10416,7 +10955,7 @@ def process_combined_files_augmentation_testing(reference_file, original_files_l
 
         for ratio_idx, ratio in enumerate(augmentation_ratios, start=1):  # Iterate over each augmentation ratio
             results_ratio = run_combined_files_augmentation_ratio_experiment(
-                reference_file, combined_files_df, combined_augmented_df, feature_names,
+                combined_dataset_reference, combined_files_df, combined_augmented_df, feature_names,  # Use directory identity for ratio evaluation.
                 ga_selected_features, pca_n_components, rfe_selected_features, base_models,
                 hp_params_map, attack_types_list, ratio, ratio_idx, total_steps, dataset_name, config=config,
             )  # Run evaluation for this ratio and retrieve results or None if sampling failed
@@ -10474,7 +11013,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             config=config
         )  # Output the verbose message
     
-        reference_file = original_files_list[0] if original_files_list else "combined_files_combined"  # Get reference file for feature metadata
+        reference_file = original_files_list[0] if original_files_list else "combined_files_combined"  # Get source file for feature metadata.
+        combined_dataset_identity = resolve_combined_files_dataset_identity(original_files_list)  # Resolve canonical combined directory identity.
+        combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use directory path text without trailing separator for path APIs.
         
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
@@ -10554,9 +11095,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                 del original_df_for_run  # Release direct HP slice dataframe reference before model evaluation.
                 gc.collect()  # Reclaim released direct dataframe references before fitting starts.
                 results_original = evaluate_on_dataset(
-                    reference_file, original_df_for_run_holder.pop(), feature_names, ga_selected_features, pca_n_components,
+                    combined_dataset_reference, original_df_for_run_holder.pop(), feature_names, ga_selected_features, pca_n_components,  # Use directory identity for original combined evaluation.
                     rfe_selected_features, base_models, data_source_label="Original Combined Files", hyperparams_map=hp_params_map,
-                    experiment_id=generate_experiment_id(reference_file, "combined_files_original_only"), experiment_mode="original_only", augmentation_ratio=None,
+                    experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_only"), experiment_mode="original_only", augmentation_ratio=None,  # Build original experiment identity from combined directory.
                     execution_mode_str="combined_files", attack_types_combined=attack_types_list, config=config,
                     hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
                 )  # Evaluate the no-augmentation feature/classifier slice
@@ -10591,9 +11132,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                     del ratio_original_df, df_sampled  # Release direct ratio dataframe references before model evaluation.
                     gc.collect()  # Reclaim direct ratio dataframe references before fitting starts.
                     results_ratio = evaluate_on_dataset(
-                        reference_file, ratio_original_df_holder.pop(), feature_names, ga_selected_features, pca_n_components,
+                        combined_dataset_reference, ratio_original_df_holder.pop(), feature_names, ga_selected_features, pca_n_components,  # Use directory identity for augmented combined evaluation.
                         rfe_selected_features, base_models, data_source_label=f"Original+Augmented@{int(ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map,
-                        experiment_id=generate_experiment_id(reference_file, "combined_files_original_plus_augmented", ratio), experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+                        experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_plus_augmented", ratio), experiment_mode="original_plus_augmented", augmentation_ratio=ratio,  # Build augmented experiment identity from combined directory.
                         execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_training=df_sampled_holder.pop(),
                         config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
                     )  # Evaluate the same feature/classifier grid for this ratio
@@ -10612,7 +11153,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         finally:  # Close shared grid progress even if a classifier evaluation fails
             grid_progress["progress_bar"].close()  # Close the one full-grid progress bar
 
-        feature_analysis_dir = save_combined_files_results_to_csv(reference_file, all_grid_results, config=config)  # Save the complete default-first grid once so no mode overwrites another
+        feature_analysis_dir = save_combined_files_results_to_csv(combined_dataset_reference, all_grid_results, config=config)  # Save the complete grid using directory identity.
         if all_comparison_results:  # Save all HP modes together so optimized comparisons cannot overwrite defaults
             save_combined_files_augmentation_comparison(None, None, feature_analysis_dir, config=config, comparison_results=all_comparison_results)  # Preserve existing combined comparison filename and metrics
         
@@ -10624,14 +11165,14 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             if automl_combined_df is None:  # Skip AutoML when original recombination fails.
                 print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML skipped because the original combined files dataframe could not be rebuilt.{Style.RESET_ALL}")  # Log AutoML skip reason.
             else:  # Run AutoML with the rebuilt dataframe.
-                run_automl_pipeline(reference_file, automl_combined_df, feature_names, data_source_label="Original Combined Files", config=config)  # Run AutoML pipeline for combined files evaluation with normalized label.
+                run_automl_pipeline(combined_dataset_reference, automl_combined_df, feature_names, data_source_label="Original Combined Files", config=config)  # Run AutoML pipeline using directory identity.
                 del automl_combined_df  # Release AutoML combined dataframe after AutoML pipeline returns.
                 gc.collect()  # Reclaim AutoML combined dataframe memory before cache cleanup.
         else:  # AutoML pipeline is disabled via method toggle
             print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML pipeline is DISABLED (stacking.methods.automl=false). Skipping AutoML for combined files evaluation. Enable via config or --enable-automl flag.{Style.RESET_ALL}")  # Log AutoML skip reason
         
         try:  # Attempt to remove the cache file now that all combined files evaluation results are safely persisted
-            remove_cache_file(reference_file, config)  # Remove the per-dataset cache once the full combined files evaluation is confirmed complete
+            remove_cache_file(combined_dataset_reference, config)  # Remove the directory-based cache once the full combined files evaluation is confirmed complete
         except Exception:  # If cache removal fails for any reason
             pass  # Proceed without failing the run since the CSV output is already written
     except Exception as e:
@@ -10869,10 +11410,11 @@ def save_results_with_optional_suffix(file, results_list, suffix, base_filename_
         if use_suffix:  # If suffix-based files desired
             base = config.get("stacking", {}).get(base_filename_key, fallback_filename)  # Get base filename from config
             out_name = base.replace('.csv', f"{suffix}.csv")  # Compose suffixed filename
+            dataset_root = resolve_dataset_root_path(str(file))  # Resolve suffixed export root from file or directory input.
             if use_stacking_subdir:  # If Stacking subdirectory should be used
-                out_path = Path(file).parent / "Feature_Analysis" / "Stacking" / out_name  # Build path with Stacking subdir
+                out_path = dataset_root / "Feature_Analysis" / "Stacking" / out_name  # Build path with Stacking subdir from dataset root.
             else:  # Without Stacking subdirectory
-                out_path = Path(file).parent / "Feature_Analysis" / out_name  # Build path without Stacking subdir
+                out_path = dataset_root / "Feature_Analysis" / out_name  # Build path without Stacking subdir from dataset root.
             save_stacking_results(str(out_path), results_list, config=config)  # Save suffixed CSV
         else:  # Default single CSV with extra columns
             save_stacking_results(file, results_list, config=config)  # Save to default location
@@ -10995,18 +11537,20 @@ def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, 
         return "break", None  # Signal to break out of combination loop
 
     feature_names = [c for c in combined_df.columns if c != 'attack_type']  # Extract feature names excluding target
+    combined_dataset_identity = resolve_combined_files_dataset_identity(files_to_process)  # Resolve canonical combined directory identity.
+    combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use directory path text without trailing separator for path APIs.
 
     try:  # Protect evaluation step
         results = evaluate_on_dataset(
-            "combined_files_combined", combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,
+            combined_dataset_reference, combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,  # Use directory identity for legacy combined evaluation.
             data_source_label="Original Combined Files",  # Normalized data source label for log and CSV output
             hyperparams_map=hp_params_map if hyperparameters_enabled else {},
-            experiment_id=generate_experiment_id("combined_files_combined", "combined_files_original_only"),
+            experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_only"),  # Build legacy experiment identity from combined directory.
             experiment_mode="original_only", augmentation_ratio=None,
             execution_mode_str="combined_files", attack_types_combined=attack_types,
             df_augmented_for_training=None,
-            cache_ref_file=files_to_process[0], config=config, hyperparameters_enabled=hyperparameters_enabled,
-        )  # Evaluate combined files evaluation original dataset with cache reference for resume support and explicit config propagation
+            cache_ref_file=combined_dataset_reference, config=config, hyperparameters_enabled=hyperparameters_enabled,  # Use directory identity for cache resume.
+        )  # Evaluate combined files evaluation original dataset with directory cache reference and explicit config propagation
     except Exception as e:  # If evaluation fails
         print(f"{BackgroundColors.RED}Combined files evaluation failed for combo {suffix}: {e}{Style.RESET_ALL}")  # Error
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
@@ -11015,7 +11559,7 @@ def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, 
     results_list = list(results.values())  # Convert results dict to list
     annotate_results_with_combination_flags(results_list, feature_selection_enabled, hyperparameters_enabled, False)  # Annotate results
     save_results_with_optional_suffix(
-        files_to_process[0], results_list, suffix, "combined_files_results_filename",
+        combined_dataset_reference, results_list, suffix, "combined_files_results_filename",  # Use directory identity for legacy combined export.
         "Stacking_Classifiers_CombinedFiles_Results.csv", use_stacking_subdir=False, config=config,
     )  # Save combined files evaluation results with optional suffix
     return "ok", (combined_df, attack_types, feature_names)  # Return success with data payload
@@ -11042,6 +11586,8 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
     """
 
     try:  # Protect augmentation orchestration
+        combined_dataset_identity = resolve_combined_files_dataset_identity(files_to_process)  # Resolve canonical combined directory identity.
+        combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use directory path text without trailing separator for path APIs.
         augmented_files_list = load_augmented_files_for_combined_evaluation(files_to_process, config=config)  # Load augmented files per file
         if not augmented_files_list:  # If none found
             print(f"{BackgroundColors.YELLOW}No augmented files found for combined files evaluation combo {suffix}. Skipping augmentation.{Style.RESET_ALL}")  # Warn
@@ -11057,22 +11603,22 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
                         continue  # Next ratio
                     try:  # Evaluate with augmented training data
                         res = evaluate_on_dataset(
-                            "combined_files_combined", combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,
+                            combined_dataset_reference, combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,  # Use directory identity for legacy augmented evaluation.
                             data_source_label=f"Original+Augmented@{int(ratio*100)}%_CombinedFiles",
                             hyperparams_map=hp_params_map if hyperparameters_enabled else {},
-                            experiment_id=generate_experiment_id("combined_files_combined", "combined_files_original_plus_augmented", ratio),
+                            experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_plus_augmented", ratio),  # Build legacy augmented experiment identity from combined directory.
                             experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
                             execution_mode_str="combined_files", attack_types_combined=attack_types,
                             df_augmented_for_training=df_sampled,
-                            cache_ref_file=files_to_process[0], config=config, hyperparameters_enabled=hyperparameters_enabled,
-                        )  # Evaluate augmented combined files evaluation combination with cache reference for resume support and explicit config propagation
+                            cache_ref_file=combined_dataset_reference, config=config, hyperparameters_enabled=hyperparameters_enabled,  # Use directory identity for cache resume.
+                        )  # Evaluate augmented combined files evaluation combination with directory cache reference and explicit config propagation
                     except Exception as e:  # If evaluation failed
                         print(f"{BackgroundColors.YELLOW}Augmented evaluation failed for ratio {ratio} combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
                         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
                         continue  # Next ratio
                     res_list = list(res.values())  # Convert augmented results to list
                     annotate_results_with_combination_flags(res_list, feature_selection_enabled, hyperparameters_enabled, True)  # Annotate with da enabled
-                    save_stacking_results(files_to_process[0], res_list, config=config)  # Save augmented results
+                    save_stacking_results(combined_dataset_reference, res_list, config=config)  # Save augmented results using directory identity
                 del combined_aug_df  # Release combined augmented dataframe to free memory after all ratios
                 gc.collect()  # Force garbage collection to reclaim memory from augmented data
     except Exception as e:  # Catch augmentation orchestration errors
@@ -11123,7 +11669,8 @@ def orchestrate_combined_files_combination(files_to_process, ga_sel, pca_n, rfe_
         gc.collect()  # Force garbage collection to reclaim memory from combined files evaluation combination
 
         try:  # Attempt to remove the cache file now that all results are safely persisted to CSV
-            remove_cache_file(files_to_process[0], config)  # Remove the per-combination cache once the full combined files evaluation is confirmed complete
+            combined_dataset_identity = resolve_combined_files_dataset_identity(files_to_process)  # Resolve canonical combined directory identity.
+            remove_cache_file(combined_dataset_identity.rstrip("/"), config)  # Remove the directory-based cache once the full combined files evaluation is confirmed complete
         except Exception:  # If cache removal fails for any reason
             pass  # Proceed without failing the run since the CSV output is already written
 
@@ -11377,6 +11924,7 @@ def execute_combined_files_mode_pipeline(files_to_process, local_dataset_name, c
         )  # Print closing separator
 
         ordered_files_to_process = order_files_by_size_descending(files_to_process, config=config)  # Order combined files by filesystem size before loading
+        write_memory_phase_event("after_combined_file_discovery", config=config, dataset_identity=local_dataset_name, source_file_count=len(ordered_files_to_process), source_files=[os.path.basename(str(path)) for path in ordered_files_to_process], event_outcome="ordered_largest_to_smallest")  # Publish ordered combined-file list
         combined_files_df, attack_types_list, target_col_name = combine_files_for_combined_evaluation(ordered_files_to_process, config=config)  # Combine files for combined files evaluation
 
         if combined_files_df is None:  # If combination failed
@@ -11470,7 +12018,9 @@ def process_files_in_path(input_path, dataset_name, config=None):
             ),
         )  # Notify Telegram about the full pipeline for this path
 
+        write_memory_phase_event("before_combined_file_discovery", config=config, dataset_source=input_path, dataset_identity=dataset_name, event_outcome="starting")  # Publish file discovery start
         files_to_process = determine_files_to_process(csv_file, input_path, config=config)  # Determine which files to process
+        write_memory_phase_event("after_combined_file_discovery", config=config, dataset_source=input_path, dataset_identity=dataset_name, source_file_count=len(files_to_process), source_files=[os.path.basename(str(path)) for path in files_to_process], event_outcome="completed")  # Publish file discovery completion
 
         local_dataset_name = dataset_name or get_dataset_name(input_path)  # Use provided dataset name or infer from path
 
@@ -11860,6 +12410,7 @@ def main(config=None):
         )  # Output the welcome message
 
         log_resolved_configuration(config=config)  # Log resolved dataset path and method toggle states
+        start_memory_watcher(config=config)  # Start the single watcher sidecar before expensive source-file loading
         
         test_data_augmentation = config.get("execution", {}).get("test_data_augmentation", True)  # Get test augmentation flag from config
         augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00])  # Get augmentation ratios from config
@@ -11915,15 +12466,24 @@ def main(config=None):
         )  # Output the end of the program message
 
         send_telegram_message(TELEGRAM_BOT, [f"Finished Classifiers Stacking at {finish_time.strftime('%Y-%m-%d %H:%M:%S')} | Execution time: {calculate_execution_time(start_time, finish_time)}"])  # Send Telegram message indicating finish
+        finalize_memory_watcher(config=config, phase="normal_completion", event_outcome="completed")  # Publish normal watcher terminal phase
         
         play_sound_enabled = config.get("sound", {}).get("enabled", True)  # Get play sound flag from config
         if play_sound_enabled:  # If play sound is enabled
             atexit.register(play_sound, config=config)  # Register the play_sound function to be called when the program finishes
+    except MemoryError as e:  # Handle top-level memory errors with watcher terminal metadata
+        write_memory_phase_event("memory_error", config=config, event_outcome=str(e))  # Publish top-level memory error phase
+        finalize_memory_watcher(config=config, phase="abnormal_completion", event_outcome=f"memory_error:{e}")  # Publish abnormal watcher terminal phase
+        print(str(e))  # Print memory error to terminal logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send memory error via Telegram
+        raise  # Preserve original MemoryError behavior
     except Exception as e:
+        finalize_memory_watcher(config=config, phase="abnormal_completion", event_outcome=str(e))  # Publish abnormal watcher terminal phase
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
     finally:  # Always finalize queued explainability work before leaving main
+        finalize_memory_watcher(config=config, phase="abnormal_completion", event_outcome="leaving_main_without_normal_completion")  # Publish abnormal terminal phase if no earlier terminal event exists
         finalize_pending_explainability_jobs(config=config)  # Finalize queued explainability work before main exits
 
 
