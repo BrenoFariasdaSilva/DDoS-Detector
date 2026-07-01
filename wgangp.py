@@ -2425,17 +2425,6 @@ def init_results_csv_and_feature_dims(args, config: Dict, dataset) -> tuple:
         print(f"{BackgroundColors.RED}Configuration error: 'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration.{Style.RESET_ALL}")  # Clear error message
         raise ValueError("'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration")  # Stop safely
     
-    if getattr(args, "csv_path", None):  # If csv_path provided, prepare persistent results CSV handle
-        try:  # Attempt to open results CSV once with header written if needed
-            csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
-            data_aug_subdir = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Read data augmentation base directory name from config
-            data_aug_dir = csv_path_obj.parent / data_aug_subdir  # Construct data augmentation directory under dataset folder
-            os.makedirs(data_aug_dir, exist_ok=True)  # Ensure data augmentation directory exists before writing
-            results_csv_path = data_aug_dir / "data_augmentation_results.csv"  # Place results CSV inside Data_Augmentation dir
-            results_csv_file, results_csv_writer = open_results_csv(results_csv_path, results_cols_cfg)  # Open and cache writer
-        except Exception as _rw:  # On failure, warn and continue without persistent csv
-            print(f"{BackgroundColors.YELLOW}Warning: could not initialize results CSV writer: {_rw}{Style.RESET_ALL}")  # Warn and continue
-
     feature_dim = dataset.feature_dim  # Get feature dimensionality from dataset
     n_classes = dataset.n_classes  # Get number of label classes from dataset
 
@@ -2943,13 +2932,7 @@ def inject_hardware_into_csv_row(ordered: list, results_cols_cfg: list, config: 
 
     if config.get("hardware_tracking", False):  # If hardware tracking requested in config
         try:  # Guard hardware detection to avoid breaking flow
-            hw_specs = get_hardware_specifications(device_used=device)  # Query hardware specs dict
-            hw_part = hw_specs.get("gpu", "None") if hw_specs.get("gpu", None) is not None else "None"  # GPU part
-            hardware_str = (  # Build human-readable hardware string
-                f"{hw_specs.get('cpu_model','Unknown')} | Cores: {hw_specs.get('cores','N/A')}"
-                f" | RAM: {hw_specs.get('ram_gb','N/A')} GB | OS: {hw_specs.get('os','Unknown')}"
-                f" | GPU: {hw_part} | CUDA: {hw_specs.get('cuda','No')} | Device Used: {hw_specs.get('device_used','Unknown')}"
-            )  # End hardware string
+            hardware_str = build_hardware_csv_value(device)  # Build GA-style JSON hardware value for one CSV cell
             if "hardware" in results_cols_cfg:  # If a hardware column exists in configured schema
                 try:  # Protect index operations
                     idx_hw = results_cols_cfg.index("hardware")  # Find hardware column index
@@ -2980,6 +2963,63 @@ def flush_csv_file_safely(file_handle) -> None:
         pass  # Ignore outer errors as well
 
 
+def build_hardware_csv_value(device: torch.device) -> str:
+    """
+    Serialize hardware specifications for a CSV cell.
+
+    :param device: Torch device used by the WGAN-GP run.
+    :return: JSON string containing hardware specifications.
+    """
+
+    hardware_specs = get_hardware_specifications(device_used=device)  # Collect hardware specifications with WGAN-GP device context
+    return json.dumps(hardware_specs, default=str)  # Serialize hardware specifications as one CSV cell
+
+
+def count_persisted_generated_samples(out_file: Union[str, Path]) -> int:
+    """
+    Count persisted generated data rows in a CSV file.
+
+    :param out_file: Path to the generated CSV file.
+    :return: Number of generated data rows persisted on disk.
+    """
+
+    out_path = Path(out_file)  # Normalize output path before opening
+    with open(out_path, "r", newline="", encoding="utf-8") as file_obj:  # Open generated CSV using the project CSV parsing mode
+        reader = csv.reader(file_obj)  # Create standard CSV reader for quoted cell safety
+        row_total = sum(1 for _ in reader)  # Count CSV records including the header
+    persisted_rows = max(0, row_total - 1)  # Convert total records into data-row count
+    if persisted_rows <= 0:  # Verify successful generation produced persisted data rows
+        raise ValueError(f"Generated CSV {out_path} does not contain persisted data rows")  # Raise before writing a successful result row
+    return persisted_rows  # Return actual persisted generated sample count
+
+
+def validate_completed_generation_row(row_runtime: Dict, results_cols_cfg: list) -> None:
+    """
+    Validate required completed generation result fields.
+
+    :param row_runtime: Runtime row values keyed by schema column.
+    :param results_cols_cfg: Ordered CSV schema columns.
+    :return: None.
+    """
+
+    required_fields = ["total_generated_samples", "generated_ratio", "epoch", "epoch_time_s", "hardware"]  # Define required completed-result fields
+    missing_schema = [field for field in required_fields if field not in results_cols_cfg]  # Find required fields absent from schema
+    if missing_schema:  # Verify required fields are present in configured schema
+        raise ValueError(f"Results CSV schema is missing required fields: {missing_schema}")  # Raise before any row write
+    missing_values = [field for field in required_fields if row_runtime.get(field) in (None, "")]  # Find required fields without values
+    if missing_values:  # Verify successful result fields have real values
+        raise ValueError(f"Completed generation row is missing required values: {missing_values}")  # Raise before any row write
+    total_generated_value = safe_float(row_runtime.get("total_generated_samples"), 0.0)  # Convert persisted generated sample count to numeric value
+    completed_epoch_value = safe_float(row_runtime.get("epoch"), 0.0)  # Convert completed epoch to numeric value
+    epoch_time_value = safe_float(row_runtime.get("epoch_time_s"), 0.0)  # Convert completed epoch duration to numeric seconds
+    if total_generated_value <= 0.0:  # Verify persisted generated sample count is positive
+        raise ValueError("Completed generation row has no persisted generated samples")  # Raise before any row write
+    if completed_epoch_value <= 0.0:  # Verify completed epoch count is positive
+        raise ValueError("Completed generation row has no completed epoch")  # Raise before any row write
+    if epoch_time_value <= 0.0:  # Verify completed epoch duration is positive
+        raise ValueError("Completed generation row has no completed epoch duration")  # Raise before any row write
+
+
 def update_results_csv_row(results_csv_path: Path, ordered_row: list, results_cols_cfg: list, original_file: str) -> None:
     """
     Load existing results CSV, remove all rows for original_file, append new row, and save back.
@@ -2992,6 +3032,8 @@ def update_results_csv_row(results_csv_path: Path, ordered_row: list, results_co
     """
 
     try:
+        if len(ordered_row) != len(results_cols_cfg):  # Verify row width matches the configured schema width
+            raise ValueError(f"Results row has {len(ordered_row)} fields but schema has {len(results_cols_cfg)} fields")  # Raise before writing a malformed row
         os.makedirs(results_csv_path.parent, exist_ok=True)  # Ensure parent directory exists before any read or write
         existing_rows: list = []  # Accumulate rows not belonging to current original_file
         original_file_idx = results_cols_cfg.index("original_file") if "original_file" in results_cols_cfg else -1  # Locate original_file column index once for efficiency
@@ -3098,21 +3140,9 @@ def write_epoch_csv_row(args, config: Dict, device: torch.device, dataset, epoch
         epoch_elapsed = time.time() - epoch_start_time  # Calculate epoch elapsed seconds
         print(f"{BackgroundColors.GREEN}Epoch {epoch+1} elapsed: {BackgroundColors.CYAN}{epoch_elapsed:.2f}s{Style.RESET_ALL}")  # Print epoch elapsed time
         args._last_epoch_time = safe_float(epoch_elapsed, 0.0)  # Store last epoch elapsed on args for external use safely
+        args._last_completed_epoch = epoch + 1  # Store the completed epoch number for final generation results
     except Exception as _te:  # If timing calculation fails
         print(f"{BackgroundColors.YELLOW}Warning: failed to measure epoch time: {_te}{Style.RESET_ALL}")  # Warn but continue
-
-    try:  # Wrap CSV write to avoid crashing on I/O errors
-        if results_cols_cfg and getattr(args, "csv_path", None):  # Only write when schema and source path are available
-            row_runtime = build_epoch_runtime_row(args, dataset, epoch, metrics_history, opt_G, opt_D)  # Build epoch runtime metrics dict from training state
-            ordered = build_ordered_csv_row_from_runtime(row_runtime, results_cols_cfg, config)  # Build ordered CSV row from runtime values
-            ordered = inject_hardware_into_csv_row(ordered, results_cols_cfg, config, device)  # Inject hardware spec into row if tracking enabled
-            if (epoch + 1) in epoch_milestones:  # Only write per-epoch row when this epoch is a milestone
-                rcsv_path = resolve_results_csv_path(args, config)  # Resolve results CSV path from args and config
-                if rcsv_path is not None:  # Only write when valid path is available
-                    original_file = row_runtime.get("original_file", "")  # Extract original_file value from runtime row for deduplication
-                    update_results_csv_row(rcsv_path, ordered, results_cols_cfg, original_file)  # Perform deduplicated write replacing previous rows for same original_file
-    except Exception as _cw:  # If writing fails, warn and continue training
-        print(f"{BackgroundColors.YELLOW}Warning: failed to write epoch row to results CSV: {_cw}{Style.RESET_ALL}")  # Warn but do not abort
 
 
 def resolve_checkpoint_dir_and_prefix(args, config: Dict, epoch: int) -> tuple:
@@ -3421,18 +3451,6 @@ def write_final_timing_and_csv_row(args, config: Dict, device: torch.device, dat
 
     compute_and_store_final_timing(args, training_start_time, file_start_time)  # Compute and store final timing on args
 
-    try:  # Wrap writes to avoid crashing on I/O errors
-        if results_cols_cfg and getattr(args, "csv_path", None):  # Only write when schema and source path are available
-            final_runtime = build_final_training_runtime_row(args, config, dataset, metrics_history, opt_G, opt_D)  # Build final training runtime metrics dict
-            ordered_final = build_ordered_csv_row_from_runtime(final_runtime, results_cols_cfg, config)  # Build ordered CSV row from runtime values
-            ordered_final = inject_hardware_into_csv_row(ordered_final, results_cols_cfg, config, device)  # Inject hardware spec into final row if tracking enabled
-            rcsv_path = resolve_results_csv_path(args, config)  # Resolve results CSV path from args and config
-            if rcsv_path is not None:  # Only write when valid path is available
-                original_file = final_runtime.get("original_file", "")  # Extract original_file value from final runtime row for deduplication
-                update_results_csv_row(rcsv_path, ordered_final, results_cols_cfg, original_file)  # Perform deduplicated write replacing all previous rows for same original_file
-    except Exception as _fw:  # If writing fails, warn and continue
-        print(f"{BackgroundColors.YELLOW}Warning: failed to write final file row to results CSV: {_fw}{Style.RESET_ALL}")  # Warn about failure
-
 
 def generate_training_plots(args, config: Dict, metrics_history: Dict, file_progress_prefix: str) -> None:
     """
@@ -3508,8 +3526,9 @@ def train(args, config: Optional[Dict] = None):
             write_epoch_csv_row(args, config, device, dataset, epoch, epoch_start_time, epoch_milestones, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history, opt_G, opt_D)  # Write epoch CSV row
             save_training_checkpoint(args, config, device, G, D, opt_G, opt_D, scaler, dataset, epoch, metrics_history)  # Save checkpoint if due
             next_notify = send_epoch_telegram_notifications(args, telegram_enabled, epoch, next_notify, progress_pct, file_progress_prefix)  # Send epoch telegram notifications with file progress prefix
-        
-        write_final_timing_and_csv_row(args, config, device, dataset, training_start_time, file_start_time, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history, opt_G, opt_D)  # Write final timing and CSV row
+
+        write_final_timing_and_csv_row(args, config, device, dataset, training_start_time, file_start_time, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history, opt_G, opt_D)  # Compute final training timing state
+        args._last_metrics_history = metrics_history  # Store metrics history for in-memory generation result rows
         generate_training_plots(args, config, metrics_history, file_progress_prefix)  # Generate training plots
         send_final_telegram_messages(args, config, file_progress_prefix)  # Send final telegram messages
         return (G, dataset, device)  # Return trained generator, dataset, and device for in-memory generation fallback
@@ -4348,11 +4367,12 @@ def resolve_generation_results_csv_path(args, config: Dict, args_ck: Dict) -> tu
     return results_csv_path, ck_csv_path  # Return resolved results CSV path and checkpoint csv path
 
 
-def collect_generation_file_metadata(args, ckpt: Dict, n: int, ck_csv_path) -> Dict:
+def collect_generation_file_metadata(args, args_ck: Dict, ckpt: Dict, n: int, ck_csv_path) -> Dict:
     """
     Collect file metadata for generation results including filenames, counts, and timing.
 
     :param args: Parsed arguments namespace with csv_path, out_file, and timing attributes.
+    :param args_ck: Saved arguments dictionary from the loaded state.
     :param ckpt: Loaded checkpoint dictionary containing metrics_history.
     :param n: Total number of generated samples.
     :param ck_csv_path: Checkpoint-recovered csv Path object (may be None).
@@ -4360,6 +4380,8 @@ def collect_generation_file_metadata(args, ckpt: Dict, n: int, ck_csv_path) -> D
     """
 
     metadata = {}  # Initialize metadata dictionary
+    saved_args = args_ck if isinstance(args_ck, dict) else {}  # Normalize saved arguments
+    source_csv_path = Path(args.csv_path) if getattr(args, "csv_path", None) else ck_csv_path  # Resolve source CSV path from live args or saved path
     if getattr(args, "csv_path", None):  # Verify args.csv_path exists and is not None
         metadata["original_file_name"] = Path(args.csv_path).name  # Use basename from args.csv_path when available
     else:  # Fallback to checkpoint saved path when args.csv_path missing
@@ -4370,11 +4392,11 @@ def collect_generation_file_metadata(args, ckpt: Dict, n: int, ck_csv_path) -> D
                 metadata["original_file_name"] = ""  # Use empty string on any failure
         else:  # No path available
             metadata["original_file_name"] = ""  # Default to empty when no path available
-    metadata["generated_file_name"] = Path(args.out_file).name if getattr(args, "out_file", None) else ""  # Generated file name
+    metadata["generated_file_name"] = str(Path(args.out_file)) if getattr(args, "out_file", None) else ""  # Generated file path
     try:  # Attempt to count original CSV rows
         metadata["original_num"] = None  # Default original count
-        if getattr(args, "csv_path", None):  # If csv_path provided, try reading length
-            metadata["original_num"] = len(pd.read_csv(args.csv_path, low_memory=False))  # Count original CSV rows
+        if source_csv_path is not None:  # If source CSV path is available, read length
+            metadata["original_num"] = len(pd.read_csv(source_csv_path, low_memory=False))  # Count original CSV rows
     except Exception:  # Reading failed
         metadata["original_num"] = None  # Leave as None if reading fails
     metadata["total_generated"] = int(n) if n is not None else ""  # Total generated samples
@@ -4384,12 +4406,13 @@ def collect_generation_file_metadata(args, ckpt: Dict, n: int, ck_csv_path) -> D
             metadata["generated_ratio"] = float(metadata["total_generated"]) / float(metadata["original_num"])  # Compute ratio
     except Exception:  # Computation failed
         metadata["generated_ratio"] = ""  # Leave blank on failure
+    metadata["completed_epoch"] = ckpt.get("epoch", saved_args.get("_last_completed_epoch", getattr(args, "_last_completed_epoch", "")))  # Resolve completed epoch from saved state or live args
     metadata["timing_values"] = {  # Map common column names to stored timing attributes
-        "training_time_s": getattr(args, "_last_training_time", ""),  # Total training elapsed seconds
-        "file_time_s": getattr(args, "_last_file_time", ""),  # Per-file processing elapsed seconds
-        "epoch_time_s": getattr(args, "_last_epoch_time", ""),  # Last epoch elapsed seconds
-        "sample_generation_time_s": getattr(args, "_last_sample_generation_time", ""),  # Sample generation elapsed seconds
-        "model_save_time_s": getattr(args, "_last_model_save_time", ""),  # Model save phase elapsed seconds
+        "training_time_s": getattr(args, "_last_training_time", saved_args.get("_last_training_time", "")),  # Total training elapsed seconds
+        "file_time_s": getattr(args, "_last_file_time", saved_args.get("_last_file_time", "")),  # Per-file processing elapsed seconds
+        "epoch_time_s": getattr(args, "_last_epoch_time", saved_args.get("_last_epoch_time", "")),  # Last completed epoch elapsed seconds
+        "sample_generation_time_s": getattr(args, "_last_sample_generation_time", saved_args.get("_last_sample_generation_time", "")),  # Sample generation elapsed seconds
+        "model_save_time_s": getattr(args, "_last_model_save_time", saved_args.get("_last_model_save_time", "")),  # Model save phase elapsed seconds
     }  # End timing values map
     metadata["critic_loss"] = ""  # Default critic loss
     metadata["generator_loss"] = ""  # Default generator loss
@@ -4433,6 +4456,7 @@ def build_generation_runtime_row(args, config: Dict, n: int, device: torch.devic
     row_runtime["original_num_samples"] = metadata["original_num"] if metadata["original_num"] is not None else ""  # Original sample count
     row_runtime["total_generated_samples"] = metadata["total_generated"]  # Total generated count
     row_runtime["generated_ratio"] = metadata["generated_ratio"]  # Generated/original ratio
+    row_runtime["epoch"] = metadata["completed_epoch"]  # Completed training epoch used for generation
     row_runtime["critic_loss"] = metadata["critic_loss"]  # Last critic loss from checkpoint metrics
     row_runtime["generator_loss"] = metadata["generator_loss"]  # Last generator loss from checkpoint metrics
     for k, v in metadata["timing_values"].items():  # For each timing key known
@@ -4445,15 +4469,7 @@ def build_generation_runtime_row(args, config: Dict, n: int, device: torch.devic
         pass  # Continue despite errors
     try:  # Attempt to inject hardware specification string
         if (row_runtime.get("hardware") is None) or row_runtime.get("hardware") == "":  # If hardware not yet set
-            hw_specs = get_hardware_specifications(device_used=device) if 'get_hardware_specifications' in globals() else None  # Query hardware specs
-            if isinstance(hw_specs, dict):  # If specs returned a valid dict
-                hw_part = hw_specs.get("gpu", "None") if hw_specs.get("gpu", None) is not None else "None"  # GPU part
-                hardware_str = (  # Build human-readable hardware string
-                    f"{hw_specs.get('cpu_model','Unknown')} | Cores: {hw_specs.get('cores','N/A')}"
-                    f" | RAM: {hw_specs.get('ram_gb','N/A')} GB | OS: {hw_specs.get('os','Unknown')}"
-                    f" | GPU: {hw_part} | CUDA: {hw_specs.get('cuda','No')} | Device Used: {hw_specs.get('device_used','Unknown')}"
-                )  # End hardware string
-                row_runtime["hardware"] = hardware_str  # Store hardware specification in runtime dict
+            row_runtime["hardware"] = build_hardware_csv_value(device)  # Store GA-style JSON hardware specification in runtime dict
     except Exception:  # Ignore hardware detection errors
         pass  # Continue despite hardware detection failure
     return row_runtime  # Return populated generation runtime dictionary
@@ -4478,14 +4494,13 @@ def prepare_and_write_results_csv_row(args, config: Dict, args_ck: Dict, ckpt: D
         raise ValueError("'results_csv_columns' missing, empty, or not a list under 'wgangp' section in configuration")  # Stop safely
     results_csv_path, ck_csv_path = resolve_generation_results_csv_path(args, config, args_ck)  # Resolve results CSV path from args or checkpoint
     if results_csv_path is not None:  # If we have a place to record results
-        metadata = collect_generation_file_metadata(args, ckpt, n, ck_csv_path)  # Collect file metadata for generation results
+        metadata = collect_generation_file_metadata(args, args_ck, ckpt, n, ck_csv_path)  # Collect file metadata for generation results
         row_runtime = build_generation_runtime_row(args, config, n, device, metadata)  # Build runtime metrics dictionary for CSV row
+        validate_completed_generation_row(row_runtime, results_cols_cfg)  # Verify completed row fields before writing
         try:  # Wrap open/write in try/except to avoid crashing on I/O issues
-            f_handle, writer = open_results_csv(results_csv_path, results_cols_cfg)  # Get persistent handle and writer
-            if f_handle and writer:  # If we successfully opened or reused a writer
-                ordered = build_ordered_csv_row_from_runtime(row_runtime, results_cols_cfg, config)  # Build ordered CSV row from runtime values using shared function
-                writer.writerow(ordered)  # Write the ordered row to CSV
-                flush_csv_file_safely(f_handle)  # Flush CSV file to disk safely
+            ordered = build_ordered_csv_row_from_runtime(row_runtime, results_cols_cfg, config)  # Build ordered CSV row from runtime values using shared function
+            original_file = row_runtime.get("original_file", "")  # Extract original filename for one-row-per-dataset replacement
+            update_results_csv_row(results_csv_path, ordered, results_cols_cfg, original_file)  # Persist one schema-aligned completed row for this dataset
         except Exception as _we:  # On any write/open failure, warn and continue
             print(f"{BackgroundColors.YELLOW}Warning: failed to persist generation row: {_we}{Style.RESET_ALL}")  # Warn but do not abort
 
@@ -4534,10 +4549,11 @@ def generate(args, config: Optional[Dict] = None):
         notify_start_of_generation(args, n)  # Send Telegram notification about generation start
         all_fake, all_labels, sample_generation_start_time = generate_batches_and_collect_results(args, G, device, labels, n)  # Generate synthetic samples in batches
         df = postprocess_generated_arrays_to_dataframe(args, config, all_fake, all_labels, scaler, label_encoder, feature_cols, device, n, file_progress_prefix)  # Postprocess arrays into DataFrame and save
+        persisted_n = count_persisted_generated_samples(args.out_file)  # Count actual generated rows persisted to CSV
         record_sample_generation_timing(args, sample_generation_start_time)  # Record sample generation elapsed time
-        notify_generation_finish_via_telegram(args, n, file_progress_prefix)  # Send Telegram finish notification
+        notify_generation_finish_via_telegram(args, persisted_n, file_progress_prefix)  # Send Telegram finish notification
         try:  # Wrap result writing in try/except to avoid breaking generation on failures
-            prepare_and_write_results_csv_row(args, config, args_ck, ckpt, n, device)  # Prepare and write results CSV row
+            prepare_and_write_results_csv_row(args, config, args_ck, ckpt, persisted_n, device)  # Prepare and write results CSV row
         except Exception as e:
             warn_on_results_csv_failure(e)  # Warn on results CSV preparation failure
     except Exception as e:
@@ -4577,8 +4593,19 @@ def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset:
         notify_start_of_generation(args, n)  # Send Telegram notification about generation start
         all_fake, all_labels, sample_generation_start_time = generate_batches_and_collect_results(args, G, device, labels, n)  # Generate synthetic samples in batches
         df = postprocess_generated_arrays_to_dataframe(args, config, all_fake, all_labels, scaler, label_encoder, feature_cols, device, n, file_progress_prefix)  # Postprocess arrays into DataFrame and save
+        persisted_n = count_persisted_generated_samples(args.out_file)  # Count actual generated rows persisted to CSV
         record_sample_generation_timing(args, sample_generation_start_time)  # Record sample generation elapsed time
-        notify_generation_finish_via_telegram(args, n, file_progress_prefix)  # Send Telegram finish notification
+        notify_generation_finish_via_telegram(args, persisted_n, file_progress_prefix)  # Send Telegram finish notification
+
+        try:  # Wrap result writing in try/except to avoid breaking generation on failures
+            in_memory_ckpt = {  # Build minimal saved-state metadata for the in-memory generation path
+                "epoch": getattr(args, "_last_completed_epoch", ""),  # Store completed training epoch from live args
+                "metrics_history": getattr(args, "_last_metrics_history", {}),  # Store final metrics history from live training
+                "args": vars(args),  # Store live args for timing fallback values
+            }  # End in-memory saved-state metadata
+            prepare_and_write_results_csv_row(args, config, vars(args), in_memory_ckpt, persisted_n, device)  # Prepare and write results CSV row
+        except Exception as e:
+            warn_on_results_csv_failure(e)  # Warn on results CSV preparation failure
 
         try:
             X_original_inmem = dataset.scaler.inverse_transform(dataset.X.numpy())  # Inverse-transform stored dataset tensor to original feature scale
