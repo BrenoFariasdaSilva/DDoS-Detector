@@ -2297,7 +2297,7 @@ def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict
         return True  # Default to allowing checkpoint saving when verification fails
 
 
-def normalize_args_and_setup_hardware(args, config: Dict) -> tuple:
+def normalize_args_and_setup_hardware(args: Any, config: Dict) -> tuple:
     """
     Normalize argument types and configure hardware settings for training.
 
@@ -2314,7 +2314,10 @@ def normalize_args_and_setup_hardware(args, config: Dict) -> tuple:
     args.seed = int(args.seed)  # Ensure seed is int
     args.epochs = int(args.epochs)  # Ensure epochs is int
     epoch_milestones = compute_epoch_milestones(int(args.epochs))  # Precompute milestone epochs after epochs finalized
-    args.batch_size = int(args.batch_size)  # Ensure batch_size is int
+    configured_batch_size = int(  # Resolve unscaled batch size from merged configuration
+        config.get("training", {}).get("batch_size", args.batch_size)
+    )
+    args.batch_size = configured_batch_size  # Reset batch size before hardware scaling
     args.critic_steps = int(args.critic_steps)  # Ensure critic_steps is int
     args.save_every = int(args.save_every)  # Ensure save_every is int
     args.log_interval = int(args.log_interval)  # Ensure log_interval is int
@@ -2339,7 +2342,7 @@ def normalize_args_and_setup_hardware(args, config: Dict) -> tuple:
         torch.backends.cudnn.benchmark = True  # Enable cuDNN autotuner for potential speedups
         
     batch_multiplier = min(8, max(1, 2 * gpu_count)) if gpu_count > 0 else 1  # Scale by 2x per GPU but cap to 8x to avoid OOM
-    scaled_batch = int(args.batch_size) * batch_multiplier  # Compute scaled batch size
+    scaled_batch = configured_batch_size * batch_multiplier  # Compute scaled batch size once
     args.batch_size = int(scaled_batch)  # Apply scaled batch size to args
     args.use_amp = bool(args.use_amp or (gpu_count > 0 and _torch_autocast is not None))  # Enable AMP when CUDA and autocast available
     suggested_workers = min(max(1, (os.cpu_count() or 1) // 2), 32)  # Suggest a conservative default for num_workers
