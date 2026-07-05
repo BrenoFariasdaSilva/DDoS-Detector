@@ -3005,7 +3005,7 @@ def validate_completed_generation_row(row_runtime: Dict, results_cols_cfg: list)
     :return: None.
     """
 
-    required_fields = ["total_generated_samples", "generated_ratio", "epoch", "epoch_time_s", "hardware"]  # Define required completed-result fields
+    required_fields = ["total_generated_samples", "generated_ratio", "epoch", "epoch_time_s", "testing_time_s", "hardware"]  # Define required completed-result fields
     missing_schema = [field for field in required_fields if field not in results_cols_cfg]  # Find required fields absent from schema
     if missing_schema:  # Verify required fields are present in configured schema
         raise ValueError(f"Results CSV schema is missing required fields: {missing_schema}")  # Raise before any row write
@@ -3037,6 +3037,8 @@ def update_results_csv_row(results_csv_path: Path, ordered_row: list, results_co
     try:
         if len(ordered_row) != len(results_cols_cfg):  # Verify row width matches the configured schema width
             raise ValueError(f"Results row has {len(ordered_row)} fields but schema has {len(results_cols_cfg)} fields")  # Raise before writing a malformed row
+        if all(value is None or str(value).strip() == "" for value in ordered_row):  # Prevent all-empty result rows from being written
+            raise ValueError("Results row is empty after runtime serialization")  # Raise before writing an all-empty row
         os.makedirs(results_csv_path.parent, exist_ok=True)  # Ensure parent directory exists before any read or write
         existing_rows: list = []  # Accumulate rows not belonging to current original_file
         original_file_idx = results_cols_cfg.index("original_file") if "original_file" in results_cols_cfg else -1  # Locate original_file column index once for efficiency
@@ -3046,8 +3048,13 @@ def update_results_csv_row(results_csv_path: Path, ordered_row: list, results_co
                 all_rows = list(reader)  # Read all rows into memory for in-place filtering
             data_rows = all_rows[1:] if (all_rows and all_rows[0] == results_cols_cfg) else all_rows  # Skip header row when schema matches, else treat entire file as data
             for row in data_rows:  # Iterate over retained data rows
-                if not row:  # Skip blank lines present in malformed files
+                if not row or all(str(cell).strip() == "" for cell in row):  # Skip physical blank rows and all-empty CSV records
                     continue  # Do not include empty rows in retained set
+                if row == results_cols_cfg:  # Skip duplicated header rows found in the data area
+                    continue  # Do not preserve repeated schema rows as data
+                if len(row) != len(results_cols_cfg):  # Skip retained rows that do not align with current schema width
+                    print(f"{BackgroundColors.YELLOW}Warning: dropping malformed results CSV row with {len(row)} fields; expected {len(results_cols_cfg)}.{Style.RESET_ALL}")  # Warn about malformed retained row
+                    continue  # Do not preserve malformed rows in rewritten results
                 row_original_file = row[original_file_idx] if original_file_idx >= 0 and original_file_idx < len(row) else ""  # Extract original_file value safely using precomputed index
                 if row_original_file != original_file:  # Retain rows belonging to different original files only
                     existing_rows.append(row)  # Preserve unrelated rows without modification
@@ -4382,7 +4389,7 @@ def collect_generation_file_metadata(args, args_ck: Dict, ckpt: Dict, n: int, ck
     :return: Dictionary with generation metadata values.
     """
 
-    metadata = {}  # Initialize metadata dictionary
+    metadata: Dict[str, Any] = {}  # Initialize metadata dictionary with mixed value types
     saved_args = args_ck if isinstance(args_ck, dict) else {}  # Normalize saved arguments
     source_csv_path = Path(args.csv_path) if getattr(args, "csv_path", None) else ck_csv_path  # Resolve source CSV path from live args or saved path
     if getattr(args, "csv_path", None):  # Verify args.csv_path exists and is not None
@@ -4409,28 +4416,44 @@ def collect_generation_file_metadata(args, args_ck: Dict, ckpt: Dict, n: int, ck
             metadata["generated_ratio"] = float(metadata["total_generated"]) / float(metadata["original_num"])  # Compute ratio
     except Exception:  # Computation failed
         metadata["generated_ratio"] = ""  # Leave blank on failure
+    file_processing_start_time = getattr(args, "_file_processing_start_time", None)  # Retrieve live per-file processing start timestamp when available
+    file_processing_elapsed: Union[str, float] = ""  # Initialize computed per-file elapsed seconds
+    try:  # Calculate encompassing per-file elapsed seconds for active combined runs
+        if file_processing_start_time not in (None, ""):  # Use live per-file timer when present
+            file_processing_start_float = safe_float(file_processing_start_time, 0.0)  # Convert per-file start timestamp safely
+            if file_processing_start_float > 0.0:  # Verify per-file start timestamp is usable
+                file_processing_elapsed = time.time() - file_processing_start_float  # Measure elapsed seconds since file processing began
+    except Exception:  # Fall back to stored per-file timing when live calculation fails
+        file_processing_elapsed = ""  # Keep blank so stored fallback timing can be used
     metadata["completed_epoch"] = ckpt.get("epoch", saved_args.get("_last_completed_epoch", getattr(args, "_last_completed_epoch", "")))  # Resolve completed epoch from saved state or live args
     metadata["timing_values"] = {  # Map common column names to stored timing attributes
         "training_time_s": getattr(args, "_last_training_time", saved_args.get("_last_training_time", "")),  # Total training elapsed seconds
-        "file_time_s": getattr(args, "_last_file_time", saved_args.get("_last_file_time", "")),  # Per-file processing elapsed seconds
+        "file_time_s": file_processing_elapsed if file_processing_elapsed != "" else getattr(args, "_last_file_time", saved_args.get("_last_file_time", "")),  # Per-file elapsed seconds for current combined run or stored fallback
         "epoch_time_s": getattr(args, "_last_epoch_time", saved_args.get("_last_epoch_time", "")),  # Last completed epoch elapsed seconds
+        "testing_time_s": getattr(args, "_last_sample_generation_time", saved_args.get("_last_sample_generation_time", "")),  # Generation/export elapsed seconds for the configured testing column
         "sample_generation_time_s": getattr(args, "_last_sample_generation_time", saved_args.get("_last_sample_generation_time", "")),  # Sample generation elapsed seconds
         "model_save_time_s": getattr(args, "_last_model_save_time", saved_args.get("_last_model_save_time", "")),  # Model save phase elapsed seconds
     }  # End timing values map
-    metadata["critic_loss"] = ""  # Default critic loss
-    metadata["generator_loss"] = ""  # Default generator loss
-    try:  # Attempt to extract losses from checkpoint metrics
-        metrics_history = ckpt.get("metrics_history")  # Try to get metrics history from checkpoint (may be None)
+    metric_key_map = {  # Map CSV result keys to metrics history list keys
+        "critic_loss": "loss_D",  # Critic loss history key
+        "generator_loss": "loss_G",  # Generator loss history key
+        "gp": "gp",  # Gradient penalty history key
+        "D_real": "D_real",  # Average real critic score history key
+        "D_fake": "D_fake",  # Average fake critic score history key
+        "wasserstein": "wasserstein",  # Estimated Wasserstein distance history key
+    }  # End metric key map
+    for result_key in metric_key_map:  # Initialize metric result fields as unavailable
+        metadata[result_key] = ""  # Use existing empty-string convention for unavailable metrics
+    try:  # Attempt to extract final training metrics from saved metrics
+        metrics_history = ckpt.get("metrics_history")  # Try to get metrics history from saved state
         if isinstance(metrics_history, dict):  # If metrics_history is a dict
-            ld = metrics_history.get("loss_D") or []  # Safe list for discriminator losses
-            lg = metrics_history.get("loss_G") or []  # Safe list for generator losses
-            if isinstance(ld, (list, tuple)) and len(ld) > 0:  # If list-like and non-empty
-                metadata["critic_loss"] = ld[-1]  # Use last recorded discriminator loss
-            if isinstance(lg, (list, tuple)) and len(lg) > 0:  # If list-like and non-empty
-                metadata["generator_loss"] = lg[-1]  # Use last recorded generator loss
+            for result_key, history_key in metric_key_map.items():  # Iterate each supported CSV metric
+                history_values = metrics_history.get(history_key) or []  # Read metric history list safely
+                if isinstance(history_values, (list, tuple)) and len(history_values) > 0:  # Use final value when metric history has entries
+                    metadata[result_key] = history_values[-1]  # Store latest metric value
     except Exception:  # Extraction failed
-        metadata["critic_loss"] = ""  # Ignore failures and leave blank
-        metadata["generator_loss"] = ""  # Ignore failures and leave blank
+        for result_key in metric_key_map:  # Reset metric fields on extraction failure
+            metadata[result_key] = ""  # Preserve empty-string convention on extraction failure
     return metadata  # Return populated metadata dictionary
 
 
@@ -4450,7 +4473,7 @@ def build_generation_runtime_row(args, config: Dict, n: int, device: torch.devic
         "critic_iterations": getattr(args, "critic_steps", ""),  # Critic iterations default
         "learning_rate_generator": getattr(args, "lr", ""),  # Generator LR default
         "learning_rate_critic": getattr(args, "lr", ""),  # Critic LR default
-        "testing_time_s": "",  # No testing time available by default
+        "testing_time_s": "",  # Fallback when generation timing is unavailable
         "hardware": None,  # Hardware placeholder
     }  # End runtime defaults
     row_runtime = {}  # Dictionary to hold runtime values for configured columns
@@ -4462,6 +4485,10 @@ def build_generation_runtime_row(args, config: Dict, n: int, device: torch.devic
     row_runtime["epoch"] = metadata["completed_epoch"]  # Completed training epoch used for generation
     row_runtime["critic_loss"] = metadata["critic_loss"]  # Last critic loss from checkpoint metrics
     row_runtime["generator_loss"] = metadata["generator_loss"]  # Last generator loss from checkpoint metrics
+    row_runtime["gp"] = metadata.get("gp", "")  # Last gradient penalty from training metrics
+    row_runtime["D_real"] = metadata.get("D_real", "")  # Last average real critic score from training metrics
+    row_runtime["D_fake"] = metadata.get("D_fake", "")  # Last average fake critic score from training metrics
+    row_runtime["wasserstein"] = metadata.get("wasserstein", "")  # Last Wasserstein estimate from training metrics
     for k, v in metadata["timing_values"].items():  # For each timing key known
         row_runtime[k] = v  # Store timing value under the timing key
     try:  # Apply runtime defaults for missing columns
@@ -5213,7 +5240,8 @@ def execute_training_with_timing(args: Any, config: Dict) -> Optional[tuple]:
 
     training_start_time = time.time()  # Record training start timestamp for elapsed time calculation
     result = train(args, config)  # Execute WGAN-GP training loop with provided configuration
-    args._last_training_time = time.time() - training_start_time  # Store elapsed training seconds on args for reporting
+    if getattr(args, "_last_training_time", "") in ("", None):  # Preserve train-recorded elapsed seconds when available
+        args._last_training_time = time.time() - training_start_time  # Store fallback training elapsed seconds on args for reporting
     return result  # Return training artifacts for in-memory generation fallback
 
 
@@ -5313,6 +5341,7 @@ def run_both_mode_for_csv(args: Any, config: Dict, csv_path_obj: Path, data_aug_
     """
 
     file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Retrieve colored progress prefix from args or use default
+    args._file_processing_start_time = time.time()  # Record combined per-file processing start before training begins
     print(f"{BackgroundColors.GREEN}[1/2] {training_label}{Style.RESET_ALL}")  # Print training phase progress header with label
     training_result = execute_training_with_timing(args, config)  # Train model and capture in-memory artifacts for fallback generation
     checkpoint_path = resolve_checkpoint_after_training(args, config, csv_path_obj, data_aug_dir)  # Resolve generator checkpoint produced by training
