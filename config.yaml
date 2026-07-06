@@ -356,8 +356,8 @@ stacking: # Stacking experiment settings
     - "data_source" # Data source label: original, augmented, or combined
     - "dataset" # Dataset path stored by stacking.py
     - "attack_types_combined" # JSON list for combined_files; null for separate_files
-    - "augmentation_ratio" # Ratio of augmented-to-original samples (null for baseline)
-    - "feature_selection_enabled" # True/False for FS toggle
+    - "augmentation_ratio" # Ratio of augmented-to-original samples (0.0 for baseline/original-only)
+    - "feature_selection_enabled" # True only when the effective feature set applies feature selection
     - "hyperparameters_enabled" # True/False for HP toggle
     - "data_augmentation_enabled" # True/False for DA toggle
     - "hyperparameter_mode" # Explicit HP mode label used by resume logic
@@ -378,7 +378,7 @@ stacking: # Stacking experiment settings
     - "cv_method" # Cross-validation method (e.g., "StratifiedKFold")
     - "top_features" # Legacy final-export feature payload, rebuilt from features_list for cache recovery
     - "rfe_ranking" # RFE feature rankings (comma-separated or JSON)
-    - "hyperparameters" # Model hyperparameters (JSON string)
+    - "hyperparameters" # Effective estimator hyperparameters used for the evaluated row (JSON string)
     - "features_list" # Canonical complete feature list (JSON string)
     - "Hardware" # Hardware specification (CPU/GPU model)
 
@@ -389,8 +389,8 @@ stacking: # Stacking experiment settings
     - "data_source" # Data source label: original, augmented, or combined
     - "dataset" # Dataset path stored by stacking.py
     - "attack_types_combined" # JSON list for combined_files; null for separate_files
-    - "augmentation_ratio" # Ratio of augmented-to-original samples (null for baseline)
-    - "feature_selection_enabled" # True/False for FS toggle
+    - "augmentation_ratio" # Ratio of augmented-to-original samples (0.0 for baseline/original-only)
+    - "feature_selection_enabled" # True only when the effective feature set applies feature selection
     - "hyperparameters_enabled" # True/False for HP toggle
     - "data_augmentation_enabled" # True/False for DA toggle
     - "hyperparameter_mode" # Explicit HP mode label used by resume logic
@@ -410,7 +410,7 @@ stacking: # Stacking experiment settings
     - "elapsed_time_s" # Elapsed time in seconds for evaluation
     - "cv_method" # Cross-validation method (e.g., "StratifiedKFold")
     - "rfe_ranking" # RFE feature rankings (comma-separated or JSON)
-    - "hyperparameters" # Model hyperparameters (JSON string)
+    - "hyperparameters" # Effective estimator hyperparameters used for the evaluated row (JSON string)
     - "features_list" # Canonical complete feature list (JSON string)
 
   use_suffix_filenames: false # When true, write separate CSVs per combo with suffix
