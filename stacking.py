@@ -6758,6 +6758,190 @@ def has_serialized_value(value: Any) -> bool:
     return True  # Treat remaining native values as meaningful metadata.
 
 
+def normalize_metadata_for_json(value: Any, depth: int = 0) -> Any:
+    """
+    Normalize metadata values into deterministic JSON-compatible structures.
+
+    :param value: Metadata value to normalize.
+    :param depth: Current recursion depth.
+    :return: JSON-compatible normalized value.
+    """
+
+    if depth > 8:  # Bound recursive estimator and container traversal.
+        return f"{value.__class__.__module__}.{value.__class__.__name__}"  # Return deterministic class identity at the depth limit.
+
+    if value is None:  # Preserve null metadata values.
+        return None  # Return JSON null.
+
+    try:  # Normalize pandas missing scalars before scalar serialization.
+        if bool(cast(Any, pd.isna(value))):  # Verify whether the scalar is missing.
+            return None  # Return JSON null for pandas missing scalars.
+    except Exception:  # Continue when pandas returns a non-scalar mask.
+        pass  # Preserve container and estimator processing.
+
+    if isinstance(value, bool):  # Preserve native booleans before integer handling.
+        return value  # Return boolean value unchanged.
+
+    if isinstance(value, int):  # Preserve native integers.
+        return value  # Return integer value unchanged.
+
+    if isinstance(value, float):  # Normalize native floats.
+        return value if math.isfinite(value) else None  # Return finite floats and map non-finite values to JSON null.
+
+    if isinstance(value, str):  # Preserve strings.
+        return value  # Return string value unchanged.
+
+    if isinstance(value, np.generic):  # Normalize NumPy scalar values.
+        return normalize_metadata_for_json(value.item(), depth + 1)  # Return normalized Python scalar.
+
+    if isinstance(value, np.ndarray):  # Normalize NumPy arrays.
+        return normalize_metadata_for_json(value.tolist(), depth + 1)  # Return normalized nested list.
+
+    if isinstance(value, Path):  # Normalize pathlib paths.
+        return str(value)  # Return path text.
+
+    if isinstance(value, (datetime.datetime, datetime.date)):  # Normalize datetime values.
+        return value.isoformat()  # Return ISO-8601 text.
+
+    if isinstance(value, dict):  # Normalize mappings with deterministic key order.
+        return {str(key): normalize_metadata_for_json(item_value, depth + 1) for key, item_value in sorted(value.items(), key=lambda item: str(item[0]))}  # Return normalized mapping.
+
+    if isinstance(value, (list, tuple)):  # Normalize ordered collections.
+        return [normalize_metadata_for_json(item, depth + 1) for item in value]  # Return normalized list preserving order.
+
+    if isinstance(value, set):  # Normalize unordered collections deterministically.
+        normalized_items = [normalize_metadata_for_json(item, depth + 1) for item in value]  # Normalize every set item.
+        return sorted(normalized_items, key=lambda item: json.dumps(item, sort_keys=True, default=str))  # Return deterministically ordered set values.
+
+    class_name = f"{value.__class__.__module__}.{value.__class__.__name__}"  # Build deterministic object class identity.
+
+    if isinstance(value, type):  # Normalize class objects.
+        return f"{value.__module__}.{value.__qualname__}"  # Return deterministic class path.
+
+    if callable(value):  # Normalize callable objects without memory addresses.
+        return f"{getattr(value, '__module__', value.__class__.__module__)}.{getattr(value, '__qualname__', value.__class__.__name__)}"  # Return callable identity text.
+
+    if hasattr(value, "get_params"):  # Normalize estimator-like objects through their exposed parameters.
+        try:  # Read shallow parameters to avoid recursive estimator expansion loops.
+            estimator_params = value.get_params(deep=False)  # Read top-level estimator parameters.
+            return {"estimator_class": class_name, "parameters": normalize_metadata_for_json(estimator_params, depth + 1)}  # Return estimator class and normalized parameters.
+        except Exception:  # Fall back to class identity when estimator parameters are unavailable.
+            return {"estimator_class": class_name}  # Return deterministic estimator class identity.
+
+    try:  # Extract public object attributes when available.
+        public_attrs = {key: attr_value for key, attr_value in vars(value).items() if not str(key).startswith("_") and not callable(attr_value)}  # Collect public non-callable attributes.
+    except Exception:  # Use class identity for objects without inspectable attributes.
+        public_attrs = {}  # Normalize unavailable attributes to an empty mapping.
+
+    if public_attrs:  # Preserve meaningful public object state when present.
+        return {"object_class": class_name, "attributes": normalize_metadata_for_json(public_attrs, depth + 1)}  # Return class identity plus normalized attributes.
+
+    return {"object_class": class_name}  # Return deterministic class identity for opaque objects.
+
+
+def serialize_effective_estimator_parameters(model: Any) -> str:
+    """
+    Serialize effective estimator parameters into deterministic JSON.
+
+    :param model: Estimator object whose effective parameters should be serialized.
+    :return: JSON string containing normalized estimator parameters.
+    """
+
+    try:  # Prefer sklearn-style parameter extraction when available.
+        params = model.get_params(deep=True) if hasattr(model, "get_params") else {}  # Read effective estimator parameters.
+    except Exception:  # Fall back to deterministic model identity when parameter extraction fails.
+        params = {"estimator_class": f"{model.__class__.__module__}.{model.__class__.__name__}"}  # Store deterministic estimator class identity.
+
+    normalized_params = normalize_metadata_for_json(params)  # Normalize parameters into JSON-compatible values.
+    return json.dumps(normalized_params, sort_keys=True, allow_nan=False)  # Return deterministic valid JSON.
+
+
+def serialize_result_hyperparameters(model_name: str, hyperparams_map: Optional[dict] = None, effective_hyperparameters: Any = None) -> Optional[str]:
+    """
+    Serialize row hyperparameters from the evaluated estimator or applied mapping.
+
+    :param model_name: Configured classifier name used for mapping lookup.
+    :param hyperparams_map: Optional model-name mapping of applied optimized parameters.
+    :param effective_hyperparameters: Optional effective parameters read from the evaluated estimator.
+    :return: JSON string with row hyperparameters, or None when no source exists.
+    """
+
+    if effective_hyperparameters is not None:  # Prefer parameters read from the estimator that was evaluated.
+        if isinstance(effective_hyperparameters, str):  # Preserve pre-serialized estimator parameters.
+            return effective_hyperparameters  # Return existing JSON payload.
+        normalized_effective = normalize_metadata_for_json(effective_hyperparameters)  # Normalize native estimator parameters.
+        return json.dumps(normalized_effective, sort_keys=True, allow_nan=False)  # Return deterministic valid JSON.
+
+    if hyperparams_map and hyperparams_map.get(model_name) is not None:  # Fall back to the applied parameter mapping for legacy callers.
+        normalized_mapped = normalize_metadata_for_json(hyperparams_map.get(model_name))  # Normalize mapped parameters before serialization.
+        return json.dumps(normalized_mapped, sort_keys=True, allow_nan=False)  # Return deterministic valid JSON.
+
+    return None  # Return no payload when no parameter source exists.
+
+
+def resolve_persisted_augmentation_ratio(experiment_mode: Any, augmentation_ratio: Any) -> Any:
+    """
+    Resolve the persisted augmentation ratio for one result row.
+
+    :param experiment_mode: Experiment mode metadata for the row.
+    :param augmentation_ratio: Raw augmentation ratio metadata for the row.
+    :return: Numeric 0.0 for baseline rows, preserved ratio for augmented rows, or None when unavailable.
+    """
+
+    normalized_mode = str(experiment_mode or "").strip().lower()  # Normalize experiment mode text.
+    if normalized_mode == "original_only":  # Detect baseline rows explicitly.
+        return 0.0  # Persist baseline rows with a numeric zero ratio.
+
+    if not has_serialized_value(augmentation_ratio):  # Preserve missing ratios only for non-baseline rows.
+        return None  # Return missing ratio for validation or legacy recovery.
+
+    try:  # Normalize numeric ratio payloads.
+        return float(augmentation_ratio)  # Return numeric ratio value.
+    except Exception:  # Preserve non-numeric legacy payloads without guessing.
+        return augmentation_ratio  # Return original ratio payload.
+
+
+def resolve_persisted_feature_selection_enabled(feature_set: Any, feature_selection_enabled: Any) -> bool:
+    """
+    Resolve row-level feature-selection metadata.
+
+    :param feature_set: Effective feature-set label for the evaluated row.
+    :param feature_selection_enabled: Raw feature-selection flag from caller or cache.
+    :return: False for Full Features rows, otherwise the normalized caller flag.
+    """
+
+    if str(feature_set or "").strip().lower() == "full features":  # Detect the all-feature baseline mode.
+        return False  # Full Features does not apply a selection strategy.
+
+    return resolve_boolean_value(feature_selection_enabled, False)  # Preserve normalized caller semantics for non-baseline feature sets.
+
+
+def resolve_persisted_data_augmentation_enabled(experiment_mode: Any, augmentation_ratio: Any, data_augmentation_enabled: Any) -> bool:
+    """
+    Resolve row-level data-augmentation metadata.
+
+    :param experiment_mode: Experiment mode metadata for the row.
+    :param augmentation_ratio: Augmentation ratio metadata for the row.
+    :param data_augmentation_enabled: Raw data-augmentation flag from caller or cache.
+    :return: Boolean indicating whether generated data was used for the row.
+    """
+
+    normalized_mode = str(experiment_mode or "").strip().lower()  # Normalize experiment mode text.
+    if normalized_mode == "original_only":  # Detect baseline rows explicitly.
+        return False  # Baseline rows do not use generated data.
+
+    if normalized_mode == "original_plus_augmented":  # Detect augmented experiment rows explicitly.
+        return True  # Augmented rows use generated data.
+
+    resolved_ratio = resolve_persisted_augmentation_ratio(experiment_mode, augmentation_ratio)  # Resolve ratio for legacy rows without explicit mode.
+    try:  # Interpret numeric legacy ratios when mode metadata is unavailable.
+        ratio_active = float(resolved_ratio) > 0.0 if has_serialized_value(resolved_ratio) else False  # Treat only positive numeric ratios as augmented.
+    except Exception:  # Fall back to payload presence for non-numeric legacy ratios.
+        ratio_active = has_serialized_value(resolved_ratio)  # Treat meaningful legacy ratio payload as augmented.
+
+    return resolve_boolean_value(data_augmentation_enabled, ratio_active)  # Preserve explicit flag when recognized, otherwise use ratio-derived semantics.
+
+
 def reorder_and_annotate_dataframe(df, config=None):
     """
     Reorders DataFrame columns according to configuration and appends the hardware column.
@@ -6795,6 +6979,9 @@ def flatten_and_serialize_results(results_list):
         flat_rows = []  # Initialize list to collect flattened rows
         for res in results_list:  # Iterate over each result dictionary
             row = dict(res)  # Create a mutable shallow copy of the result dictionary
+            row["augmentation_ratio"] = resolve_persisted_augmentation_ratio(row.get("experiment_mode", "original_only"), row.get("augmentation_ratio", None))  # Normalize baseline ratio metadata before DataFrame construction.
+            row["feature_selection_enabled"] = resolve_persisted_feature_selection_enabled(row.get("feature_set", ""), row.get("feature_selection_enabled", False))  # Normalize row-level feature-selection metadata.
+            row["data_augmentation_enabled"] = resolve_persisted_data_augmentation_enabled(row.get("experiment_mode", "original_only"), row.get("augmentation_ratio", None), row.get("data_augmentation_enabled", False))  # Normalize row-level data-augmentation metadata.
 
             for metric in ["accuracy", "precision", "recall", "f1_score", "fpr", "fnr"]:  # Iterate over numeric metric field names
                 if metric in row and row[metric] is not None:  # If metric field is present and has a value
@@ -6809,15 +6996,13 @@ def flatten_and_serialize_results(results_list):
             if "rfe_ranking" in row and row["rfe_ranking"] is not None and not isinstance(row["rfe_ranking"], str):  # If rfe_ranking is present and not yet serialized
                 row["rfe_ranking"] = json.dumps(row["rfe_ranking"])  # Serialize RFE ranking to JSON string
             if "hyperparameters" in row and row["hyperparameters"] is not None and not isinstance(row["hyperparameters"], str):  # If hyperparameters is present and not yet serialized
-                row["hyperparameters"] = json.dumps(row["hyperparameters"])  # Serialize hyperparameters dict to JSON string
+                row["hyperparameters"] = json.dumps(normalize_metadata_for_json(row["hyperparameters"]), sort_keys=True, allow_nan=False)  # Serialize hyperparameters as deterministic valid JSON.
 
             if "hyperparameter_mode" not in row or not has_serialized_value(row["hyperparameter_mode"]):  # Populate explicit HP mode when the row does not carry one.
-                row["hyperparameter_mode"] = "Optimized Hyperparameters" if resolve_boolean_value(row.get("hyperparameters_enabled"), False) or has_serialized_value(row.get("hyperparameters")) else "Default Hyperparameters"  # Derive HP mode from flags or serialized parameters.
-            if "feature_selection_enabled" not in row:  # If FS flag missing from row
-                row["feature_selection_enabled"] = False  # Default to False when undefined
+                row["hyperparameter_mode"] = "Optimized Hyperparameters" if resolve_boolean_value(row.get("hyperparameters_enabled"), False) else "Default Hyperparameters"  # Derive HP mode from the semantic HP flag only.
+            row["feature_selection_enabled"] = resolve_persisted_feature_selection_enabled(row.get("feature_set", ""), row.get("feature_selection_enabled", False))  # Reapply feature-selection semantics after legacy defaults.
             row["hyperparameters_enabled"] = row["hyperparameter_mode"] == "Optimized Hyperparameters"  # Keep HP boolean aligned with explicit HP mode
-            if "data_augmentation_enabled" not in row:  # If DA flag missing from row
-                row["data_augmentation_enabled"] = False  # Default to False when undefined
+            row["data_augmentation_enabled"] = resolve_persisted_data_augmentation_enabled(row.get("experiment_mode", "original_only"), row.get("augmentation_ratio", None), row.get("data_augmentation_enabled", False))  # Reapply data-augmentation semantics after legacy defaults.
 
             flat_rows.append(row)  # Append the processed row to the flat list
         return flat_rows  # Return the list of flattened and serialized rows
@@ -6996,7 +7181,7 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
                 data_source_row = str(cache_row_value("data_source", "Original"))  # Get data source label from cached row
                 experiment_mode_row = str(cache_row_value("experiment_mode", "original_only"))  # Get experiment mode from cached row
                 aug_ratio_value = cache_row_value("augmentation_ratio", None)  # Retrieve augmentation ratio when present
-                aug_ratio_row = float(aug_ratio_value) if aug_ratio_value is not None else None  # Parse augmentation ratio from cached row
+                aug_ratio_row = resolve_persisted_augmentation_ratio(experiment_mode_row, aug_ratio_value)  # Normalize augmentation ratio from cached row
                 attack_types_raw_row = safe_load_json(cache_row_value("attack_types_combined", None))  # Load attack types from cached row
                 attack_types_list_row = attack_types_raw_row if isinstance(attack_types_raw_row, list) else None  # Normalize attack types to list or None
                 hyperparameter_mode_row = str(cache_row_value("hyperparameter_mode", "Default Hyperparameters"))  # Recover explicit hyperparameter mode
@@ -7016,9 +7201,9 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
                     "experiment_id": cache_row_value("experiment_id", None),
                     "experiment_mode": experiment_mode_row,
                     "augmentation_ratio": aug_ratio_row,
-                    "feature_selection_enabled": resolve_boolean_value(cache_row_value("feature_selection_enabled", False), False),  # Recover normalized FS flag from cache metadata
+                    "feature_selection_enabled": resolve_persisted_feature_selection_enabled(feature_set, cache_row_value("feature_selection_enabled", False)),  # Recover normalized FS flag from cache metadata
                     "hyperparameters_enabled": hyperparameters_enabled_row,  # Recover normalized HP flag from cache metadata
-                    "data_augmentation_enabled": resolve_boolean_value(cache_row_value("data_augmentation_enabled", False), aug_ratio_row is not None),  # Recover normalized DA flag from cache metadata
+                    "data_augmentation_enabled": resolve_persisted_data_augmentation_enabled(experiment_mode_row, aug_ratio_row, cache_row_value("data_augmentation_enabled", False)),  # Recover normalized DA flag from cache metadata
                     "n_features": int(n_features_value) if (n_features_value := cache_row_value("n_features", None)) is not None else None,
                     "n_samples_train": int(n_samples_train_value) if (n_samples_train_value := cache_row_value("n_samples_train", None)) is not None else None,
                     "n_samples_test": int(n_samples_test_value) if (n_samples_test_value := cache_row_value("n_samples_test", None)) is not None else None,
@@ -7104,7 +7289,8 @@ def build_resume_cache_key(execution_mode_str: str, data_source_label: str, expe
 
     try:  # Build a deterministic cache key tuple from all relevant dimensions, using JSON serialization for complex fields to ensure hashability and uniqueness
         attack_key = json.dumps(sorted(str(a) for a in attack_types_combined), sort_keys=True) if attack_types_combined else "None"  # Serialize attack types deterministically or use sentinel string
-        ratio_key = str(augmentation_ratio) if augmentation_ratio is not None else "None"  # Serialize augmentation ratio as string or use sentinel
+        resolved_ratio = resolve_persisted_augmentation_ratio(experiment_mode, augmentation_ratio)  # Normalize baseline ratios before identity construction.
+        ratio_key = str(resolved_ratio) if resolved_ratio is not None else "None"  # Serialize augmentation ratio as string or use sentinel
         hyperparameter_mode_key = "optimized" if hyperparameters_enabled else "default"  # Distinguish default and optimized evaluations so resume never crosses HP modes
         return (execution_mode_str, data_source_label, experiment_mode, ratio_key, attack_key, hyperparameter_mode_key, feature_set, model_name)  # Return tuple covering all dimensions that uniquely identify an evaluation unit
     except Exception as e:  # Catch any unexpected errors in key construction
@@ -7126,8 +7312,7 @@ def resolve_hyperparameter_mode_from_row(row: Any) -> str:
         return str(mode_value).strip()  # Return normalized explicit HP mode text.
 
     enabled_value = row.get("hyperparameters_enabled", False)  # Read legacy HP boolean flag.
-    hyperparameters_value = row.get("hyperparameters", None)  # Read serialized HP metadata for legacy cache rows.
-    enabled = resolve_boolean_value(enabled_value, False) or has_serialized_value(hyperparameters_value)  # Derive optimized mode from explicit flag or serialized parameters.
+    enabled = resolve_boolean_value(enabled_value, False)  # Derive optimized mode from the semantic HP flag only.
 
     return "Optimized Hyperparameters" if enabled else "Default Hyperparameters"  # Return the resolved HP mode label.
 
@@ -7143,7 +7328,7 @@ def build_cache_identity_from_row(row: Any) -> tuple:
     attack_types_raw = safe_load_json(row.get("attack_types_combined", None))  # Decode serialized attack type metadata.
     attack_types_list = attack_types_raw if isinstance(attack_types_raw, list) else None  # Normalize attack type metadata to a list or None.
     augmentation_ratio_value = row.get("augmentation_ratio", None)  # Read augmentation ratio metadata.
-    augmentation_ratio = float(augmentation_ratio_value) if has_serialized_value(augmentation_ratio_value) else None  # Normalize augmentation ratio for the resume key.
+    augmentation_ratio = resolve_persisted_augmentation_ratio(row.get("experiment_mode", "original_only"), augmentation_ratio_value)  # Normalize augmentation ratio for the resume key.
     hyperparameter_mode = resolve_hyperparameter_mode_from_row(row)  # Resolve explicit HP mode.
     hyperparameters_enabled = hyperparameter_mode == "Optimized Hyperparameters"  # Convert HP mode to the boolean identity dimension.
 
@@ -7192,18 +7377,20 @@ def normalize_cache_dataframe(df: pd.DataFrame, config: Optional[dict] = None) -
     if "hyperparameters" not in normalized_df.columns:  # Add HP metadata column when absent.
         normalized_df["hyperparameters"] = None  # Preserve canonical schema when no HP metadata exists.
 
-    normalized_df["hyperparameter_mode"] = normalized_df.apply(resolve_hyperparameter_mode_from_row, axis=1)  # Resolve HP mode deterministically for every row.
-    normalized_df["hyperparameters_enabled"] = normalized_df["hyperparameter_mode"].map(lambda value: value == "Optimized Hyperparameters")  # Keep HP boolean synchronized with HP mode.
-
-    normalized_df["feature_selection_enabled"] = feature_selection_default  # Use current method context because cache rows are written before final annotation.
-
-    if "data_augmentation_enabled" not in normalized_df.columns:  # Add DA flag when absent.
-        normalized_df["data_augmentation_enabled"] = False  # Initialize DA flag before ratio-based resolution.
-
     if "augmentation_ratio" not in normalized_df.columns:  # Add augmentation ratio when absent.
         normalized_df["augmentation_ratio"] = None  # Preserve canonical schema when no augmentation ratio exists.
 
-    normalized_df["data_augmentation_enabled"] = normalized_df.apply(lambda row: resolve_boolean_value(row.get("data_augmentation_enabled", False), has_serialized_value(row.get("augmentation_ratio", None))), axis=1)  # Normalize DA flag from explicit flag or ratio metadata.
+    if "feature_selection_enabled" not in normalized_df.columns:  # Add FS flag when absent.
+        normalized_df["feature_selection_enabled"] = feature_selection_default  # Initialize FS flag from current method context.
+
+    if "data_augmentation_enabled" not in normalized_df.columns:  # Add DA flag when absent.
+        normalized_df["data_augmentation_enabled"] = False  # Initialize DA flag before row-level resolution.
+
+    normalized_df["hyperparameter_mode"] = normalized_df.apply(resolve_hyperparameter_mode_from_row, axis=1)  # Resolve HP mode deterministically for every row.
+    normalized_df["hyperparameters_enabled"] = normalized_df["hyperparameter_mode"].map(lambda value: value == "Optimized Hyperparameters")  # Keep HP boolean synchronized with HP mode.
+    normalized_df["augmentation_ratio"] = normalized_df.apply(lambda row: resolve_persisted_augmentation_ratio(row.get("experiment_mode", "original_only"), row.get("augmentation_ratio", None)), axis=1)  # Normalize baseline and augmented ratio metadata.
+    normalized_df["feature_selection_enabled"] = normalized_df.apply(lambda row: resolve_persisted_feature_selection_enabled(row.get("feature_set", ""), row.get("feature_selection_enabled", feature_selection_default)), axis=1)  # Normalize row-level FS metadata.
+    normalized_df["data_augmentation_enabled"] = normalized_df.apply(lambda row: resolve_persisted_data_augmentation_enabled(row.get("experiment_mode", "original_only"), row.get("augmentation_ratio", None), row.get("data_augmentation_enabled", False)), axis=1)  # Normalize row-level DA metadata.
 
     for column in cache_columns:  # Ensure every canonical cache column exists.
         if column not in normalized_df.columns:  # Add missing canonical cache columns.
@@ -7278,6 +7465,7 @@ def validate_cache_result_payload(result_entry: dict, config: Optional[dict] = N
         "execution_mode",  # Require separate-files versus combined-files mode.
         "data_source",  # Require the source label that separates original and augmented rows.
         "dataset",  # Require dataset identity metadata in the persisted payload.
+        "augmentation_ratio",  # Require explicit numeric baseline or augmented ratio metadata.
         "feature_set",  # Require feature-set identity.
         "hyperparameter_mode",  # Require default versus optimized hyperparameter identity.
         "classifier_type",  # Require individual versus stacking classifier grouping.
@@ -7294,6 +7482,7 @@ def validate_cache_result_payload(result_entry: dict, config: Optional[dict] = N
         "fnr",  # Require completed false-negative-rate metric.
         "elapsed_time_s",  # Require elapsed-time metric.
         "cv_method",  # Require evaluation method metadata.
+        "hyperparameters",  # Require effective estimator parameter metadata.
         "features_list",  # Require complete feature payload for resume and exports.
     ]  # Complete required payload list.
     missing_values = [column for column in required_payload_columns if not has_serialized_value(row_values.get(column, None))]  # Locate required fields without meaningful values.
@@ -7380,9 +7569,10 @@ def persist_cache_result_entry(cache_ref_file: Optional[str], result_entry: dict
         config = CONFIG  # Assign the global configuration reference.
 
     methods_cfg = config.get("stacking", {}).get("methods", {})  # Read active method toggles for cache metadata.
-    result_entry["feature_selection_enabled"] = bool(methods_cfg.get("feature_selection", True))  # Persist active FS context with the temporary row.
+    result_entry["augmentation_ratio"] = resolve_persisted_augmentation_ratio(result_entry.get("experiment_mode", "original_only"), result_entry.get("augmentation_ratio", None))  # Persist explicit baseline or augmented ratio metadata.
+    result_entry["feature_selection_enabled"] = resolve_persisted_feature_selection_enabled(result_entry.get("feature_set", ""), methods_cfg.get("feature_selection", True))  # Persist row-level FS context with the temporary row.
     result_entry["hyperparameters_enabled"] = result_entry.get("hyperparameter_mode") == "Optimized Hyperparameters"  # Persist HP boolean derived from explicit HP mode.
-    result_entry["data_augmentation_enabled"] = has_serialized_value(result_entry.get("augmentation_ratio", None))  # Persist DA context from augmentation ratio metadata.
+    result_entry["data_augmentation_enabled"] = resolve_persisted_data_augmentation_enabled(result_entry.get("experiment_mode", "original_only"), result_entry.get("augmentation_ratio", None), result_entry.get("data_augmentation_enabled", False))  # Persist row-level DA context.
     validate_cache_result_payload(result_entry, config=config)  # Validate the complete normalized cache payload before writing.
     resume_key = build_cache_identity_from_row(result_entry)  # Build the same identity used during resume loading.
 
@@ -8339,7 +8529,7 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
             "data_source": "Original",  # Data source label
             "experiment_id": None,  # No experiment ID for standalone AutoML runs
             "experiment_mode": "original_only",  # AutoML runs on original data only
-            "augmentation_ratio": None,  # No augmentation ratio for AutoML
+            "augmentation_ratio": resolve_persisted_augmentation_ratio("original_only", None),  # Persist AutoML baseline ratio as numeric zero.
             "n_features": len(feature_names),  # Number of features
             "n_samples_train": n_train,  # Training sample count
             "n_samples_test": n_test,  # Test sample count
@@ -8353,7 +8543,7 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
             "cv_method": f"Optuna({config.get("automl", {}).get("n_trials", 50)} trials, {config.get("automl", {}).get("cv_folds", 5)}-fold CV)",  # CV method description
             "top_features": json.dumps(feature_names),  # Feature names as JSON
             "rfe_ranking": None,  # No RFE ranking for AutoML
-            "hyperparameters": json.dumps(best_params),  # Hyperparameters as JSON
+            "hyperparameters": json.dumps(normalize_metadata_for_json(best_params), sort_keys=True, allow_nan=False),  # Hyperparameters as deterministic valid JSON.
             "features_list": feature_names,  # Feature names list
         }  # Individual model result entry
         results.append(individual_entry)  # Add to results list
@@ -8368,7 +8558,7 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
                 "data_source": "Original",  # Data source label
                 "experiment_id": None,  # No experiment ID for standalone AutoML runs
                 "experiment_mode": "original_only",  # AutoML runs on original data only
-                "augmentation_ratio": None,  # No augmentation ratio for AutoML
+                "augmentation_ratio": resolve_persisted_augmentation_ratio("original_only", None),  # Persist AutoML baseline ratio as numeric zero.
                 "n_features": len(feature_names),  # Number of features
                 "n_samples_train": n_train,  # Training sample count
                 "n_samples_test": n_test,  # Test sample count
@@ -8382,7 +8572,7 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
                 "cv_method": f"Optuna({config.get("automl", {}).get("stacking_trials", 20)} trials, {config.get("automl", {}).get("cv_folds", 5)}-fold CV)",  # CV method description
                 "top_features": json.dumps(feature_names),  # Feature names as JSON
                 "rfe_ranking": None,  # No RFE ranking for AutoML
-                "hyperparameters": json.dumps(stacking_config, default=str),  # Stacking config as JSON
+                "hyperparameters": json.dumps(normalize_metadata_for_json(stacking_config), sort_keys=True, allow_nan=False),  # Stacking config as deterministic valid JSON.
                 "features_list": feature_names,  # Feature names list
             }  # Stacking result entry
             results.append(stacking_entry)  # Add stacking to results list
@@ -9081,7 +9271,7 @@ def iterate_feature_sets_sequentially(X_train_scaled: Any, X_test_scaled: Any, f
                 print(f"{BackgroundColors.YELLOW}[WARNING] RFE Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Log duplicate RFE mode.
 
 
-def build_classifier_result_entry(model_class, file, execution_mode_str, attack_types_combined, feature_set_name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, n_features, n_samples_train, n_samples_test, metrics_tuple, subset_feature_names, hyperparams_map=None, hyperparameters_enabled=False):
+def build_classifier_result_entry(model_class, file, execution_mode_str, attack_types_combined, feature_set_name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, n_features, n_samples_train, n_samples_test, metrics_tuple, subset_feature_names, hyperparams_map=None, hyperparameters_enabled=False, effective_hyperparameters=None):  # Build a standardized classifier result entry.
     """
     Build a standardized result entry dictionary for classifier evaluation results.
 
@@ -9102,12 +9292,15 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
     :param metrics_tuple: Tuple of (accuracy, precision, recall, f1, fpr, fnr, elapsed, ...)
     :param subset_feature_names: List of feature names used
     :param hyperparams_map: Dictionary mapping model names to hyperparameters
+    :param effective_hyperparameters: Effective parameters read from the estimator evaluated for this row
     :return: Dictionary containing the result entry
     """
 
     try:
         acc, prec, rec, f1, fpr, fnr, elapsed = metrics_tuple[:7]  # Unpack the first 7 metrics from the tuple
         dataset_identity = resolve_canonical_dataset_identity(file, True) if execution_mode_str == "combined_files" else os.path.relpath(file)  # Resolve result-row dataset identity by execution mode.
+        persisted_augmentation_ratio = resolve_persisted_augmentation_ratio(experiment_mode, augmentation_ratio)  # Resolve explicit baseline or augmented ratio metadata.
+        serialized_hyperparameters = serialize_result_hyperparameters(model_name, hyperparams_map=hyperparams_map, effective_hyperparameters=effective_hyperparameters)  # Resolve effective estimator parameters for CSV persistence.
         return {
             "model": model_class,  # Model class name for identification
             "dataset": dataset_identity,  # Store the resolved dataset identity for CSV exports
@@ -9120,7 +9313,7 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
             "data_source": data_source_label,  # Data source label for experiment traceability
             "experiment_id": experiment_id,  # Unique experiment identifier
             "experiment_mode": experiment_mode,  # Experiment mode (original_only or original_plus_augmented)
-            "augmentation_ratio": augmentation_ratio,  # Augmentation ratio or None for original-only
+            "augmentation_ratio": persisted_augmentation_ratio,  # Augmentation ratio with 0.0 for original-only rows
             "n_features": n_features,  # Number of features used in evaluation
             "n_samples_train": n_samples_train,  # Number of training samples
             "n_samples_test": n_samples_test,  # Number of test samples
@@ -9134,7 +9327,7 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
             "cv_method": f"StratifiedKFold(n_splits=10)",  # Cross-validation method description
             "top_features": json.dumps(subset_feature_names),  # JSON-serialized subset feature names
             "rfe_ranking": None,  # RFE ranking placeholder (not computed here)
-            "hyperparameters": json.dumps(hyperparams_map.get(model_name)) if hyperparams_map and hyperparams_map.get(model_name) is not None else None,  # JSON-serialized hyperparameters or None
+            "hyperparameters": serialized_hyperparameters,  # JSON-serialized effective estimator hyperparameters
             "features_list": subset_feature_names,  # Raw list of feature names for downstream use
         }  # Return the constructed result entry dictionary
     except Exception as e:
@@ -9238,6 +9431,7 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
             model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio,
             X_train_n_cols, len(y_train), len(y_test), metrics, subset_feature_names,
             hyperparams_map=hyperparams_map, hyperparameters_enabled=bool(hyperparams_map),
+            effective_hyperparameters=serialize_effective_estimator_parameters(individual_models[model_name]),
         )  # Build standardized result entry for this individual classifier
         results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
         send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {build_telegram_combination_header(name, model_name, augmentation_ratio, bool(hyperparams_map))} with F1: {metrics[3]} in {calculate_execution_time(0, metrics[6])}")  # Notify telegram about completion using full active configuration details
@@ -9400,12 +9594,14 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=metrics[0], precision=metrics[1], recall=metrics[2], f1_score=metrics[3], event_outcome="metrics_completed")  # Publish prediction and metrics completion
 
             model_class = active_model.__class__.__name__  # Retrieve model class name for result entry
+            effective_hyperparameters = serialize_effective_estimator_parameters(active_model)  # Serialize effective estimator parameters after fitting.
             result_entry = build_classifier_result_entry(
                 model_class, file, execution_mode_str, attack_types_combined, name, "Individual",
                 model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio,
                 X_train_n_cols, len(y_train), len(y_test), metrics, subset_feature_names,
                 hyperparams_map=hyperparams_map,
                 hyperparameters_enabled=hyperparameters_enabled,
+                effective_hyperparameters=effective_hyperparameters,
             )  # Build standardized result entry for this individual classifier
             write_memory_phase_event("before_cache_persist", config=config, **phase_metadata, event_outcome="starting")  # Publish cache persistence start
             persist_cache_result_entry(cache_ref_file, result_entry, cache_dict, config=config)  # Persist this atomic classifier result immediately and register its resume identity
@@ -9561,6 +9757,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             "StackingClassifier", data_source_label, experiment_id, experiment_mode, augmentation_ratio,
             X_train_n_cols, len(y_train), len(y_test), stacking_metrics, subset_feature_names,
             hyperparameters_enabled=hyperparameters_enabled,
+            effective_hyperparameters=serialize_effective_estimator_parameters(stacking_model),
         )  # Build standardized result entry for the stacking classifier
 
         write_memory_phase_event("before_cache_persist", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking cache persistence start
@@ -10369,7 +10566,7 @@ def build_comparison_result_entry(orig_result, feature_set, classifier_type, mod
             "data_source": data_source,  # Data source label
             "experiment_id": experiment_id,  # Unique experiment identifier for traceability
             "experiment_mode": experiment_mode,  # Experiment mode (original_only or original_plus_augmented)
-            "augmentation_ratio": augmentation_ratio,  # Augmentation ratio float or None
+            "augmentation_ratio": resolve_persisted_augmentation_ratio(experiment_mode, augmentation_ratio),  # Augmentation ratio with 0.0 for original-only rows
             "n_features": n_features_override if n_features_override is not None else orig_result["n_features"],  # Number of features
             "n_samples_train": n_samples_train_override if n_samples_train_override is not None else orig_result["n_samples_train"],  # Training samples count
             "n_samples_test": n_samples_test_override if n_samples_test_override is not None else orig_result["n_samples_test"],  # Test samples count
@@ -11307,10 +11504,11 @@ def annotate_results_with_combination_flags(results_list, feature_selection_enab
 
     try:
         for row in results_list:  # For each result row in the list
-            row["feature_selection_enabled"] = feature_selection_enabled  # Mark feature selection status
+            row["augmentation_ratio"] = resolve_persisted_augmentation_ratio(row.get("experiment_mode", "original_only"), row.get("augmentation_ratio", None))  # Persist explicit baseline or augmented ratio metadata.
+            row["feature_selection_enabled"] = resolve_persisted_feature_selection_enabled(row.get("feature_set", ""), feature_selection_enabled)  # Mark row-level feature selection status.
             row["hyperparameters_enabled"] = hyperparameters_enabled  # Mark hyperparameters status
             row["hyperparameter_mode"] = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Preserve the explicit HP mode in exported rows
-            row["data_augmentation_enabled"] = data_augmentation_enabled  # Mark data augmentation status
+            row["data_augmentation_enabled"] = resolve_persisted_data_augmentation_enabled(row.get("experiment_mode", "original_only"), row.get("augmentation_ratio", None), data_augmentation_enabled)  # Mark row-level data augmentation status.
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
