@@ -642,7 +642,8 @@ wgangp:
     - original_file
     - generated_file
     - original_num_samples
-    - total_generated_samples
+    - generated_num_samples
+    - total_num_samples_after_augmentation
     - generated_ratio
     - epochs
     - batch_size
@@ -660,7 +661,7 @@ wgangp:
     - D_fake
     - wasserstein
     - training_time_s
-    - file_time_s
+    - generated_time_s
     - testing_time_s
     - hardware
   hardware_tracking: true
