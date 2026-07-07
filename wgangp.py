@@ -58,6 +58,7 @@ import csv  # For writing per-directory results CSV
 import dataframe_image as dfi  # For exporting DataFrame to PNG images
 import datetime  # For tracking execution time
 import json  # For saving/loading metrics history
+import math  # Use ceiling rounding for persisted duration values
 import matplotlib.pyplot as plt  # For plotting training metrics
 import numpy as np  # Numerical operations
 import os  # For running a command in the terminal
@@ -688,6 +689,33 @@ def build_default_runtime_config() -> Dict:
             "generating_order": "off",  # Dataset file processing order by file size: "off", "Ascending", or "Descending"
             "execution_mode": "both",  # Execution mode: train, gen, or both for WGANGP
             "results_suffix": "_data_augmented",  # Suffix to add to generated filenames for WGANGP
+            "results_csv_columns": [  # Define the canonical WGAN-GP augmentation result schema
+                "original_file",  # Store the source dataset filename
+                "generated_file",  # Store the persisted augmented dataset path
+                "original_num_samples",  # Store the source dataset row count
+                "generated_num_samples",  # Store only newly generated synthetic rows
+                "total_num_samples_after_augmentation",  # Store final output rows after concatenation
+                "generated_ratio",  # Store generated rows divided by source rows
+                "epochs",  # Store configured total training epochs
+                "batch_size",  # Store effective training batch size
+                "critic_iterations",  # Store critic updates per generator update
+                "lambda_gp",  # Store gradient penalty coefficient
+                "latent_dim",  # Store generator latent vector size
+                "learning_rate_generator",  # Store generator learning rate
+                "learning_rate_critic",  # Store critic learning rate
+                "epoch",  # Store last completed training epoch used for generation
+                "epoch_time_s",  # Store last epoch duration in integer seconds
+                "critic_loss",  # Store final logged critic loss
+                "generator_loss",  # Store final logged generator loss
+                "gp",  # Store final logged gradient penalty
+                "D_real",  # Store final logged real-sample critic score
+                "D_fake",  # Store final logged synthetic-sample critic score
+                "wasserstein",  # Store final logged Wasserstein estimate
+                "training_time_s",  # Store training-loop duration in integer seconds
+                "generated_time_s",  # Store generation and output-write duration in integer seconds
+                "testing_time_s",  # Store output verification and quality-plot duration in integer seconds
+                "hardware",  # Store serialized hardware information
+            ],  # End canonical WGAN-GP augmentation result schema
         },
         "watchdog": {  # Resource watcher configuration
             "max_ram_percent": 100,  # Percent RAM usage considered critical (default 100%)
@@ -1645,6 +1673,108 @@ def safe_float(value: Any, default: float = 0.0) -> float:
         return float(value)  # Attempt conversion to float
     except (TypeError, ValueError):
         return float(default)  # Return fallback default on conversion failure
+
+
+def ceil_seconds(value: Any) -> Union[int, str]:
+    """
+    Return elapsed seconds rounded upward when a value is available.
+
+    :param value: Raw elapsed seconds value.
+    :return: Integer seconds rounded upward, or an empty string when unavailable.
+    """
+
+    if value in (None, ""):  # Preserve unavailable duration values
+        return ""  # Return an empty value for absent timing data
+
+    numeric_value = safe_float(value, 0.0)  # Convert the duration to float seconds
+
+    if numeric_value < 0.0:  # Normalize negative duration values
+        numeric_value = abs(numeric_value)  # Store the positive duration magnitude
+
+    return int(math.ceil(numeric_value))  # Return upward-rounded integer seconds
+
+
+def calculate_generated_count_from_ratio(original_count: int, ratio: float) -> int:
+    """
+    Calculate the synthetic sample count requested by a ratio.
+
+    :param original_count: Source dataset row count.
+    :param ratio: Requested generated-to-original ratio.
+    :return: Deterministic synthetic sample count.
+    """
+
+    original_count_int = max(0, int(original_count))  # Normalize the source row count to a non-negative integer
+    ratio_float = safe_float(ratio, 0.0)  # Normalize the requested ratio to a float
+
+    if original_count_int == 0:  # Return zero when no source rows exist
+        return 0  # Preserve the empty-source invariant
+
+    return max(1, int(math.floor(original_count_int * ratio_float)))  # Preserve existing floor semantics for ratio requests
+
+
+def distribute_generated_counts_by_ratio(class_distribution: Dict, total_preprocessed: int, target_n: int, small_class_threshold: int, small_class_min_samples: int) -> Dict:  # Allocate exact synthetic counts by class
+    """
+    Allocate deterministic per-class synthetic counts that sum to the target.
+
+    :param class_distribution: Dictionary mapping class labels to source counts.
+    :param total_preprocessed: Total number of preprocessed source rows.
+    :param target_n: Requested total number of synthetic rows.
+    :param small_class_threshold: Source-count threshold for small-class minimums.
+    :param small_class_min_samples: Minimum synthetic rows for small classes when feasible.
+    :return: Dictionary mapping class labels to synthetic counts.
+    """
+
+    target_n_int = max(0, int(target_n))  # Normalize target count to a non-negative integer
+    total_preprocessed_int = max(1, int(total_preprocessed))  # Normalize denominator for proportional allocation
+    class_items = [(label, max(0, int(count))) for label, count in class_distribution.items()]  # Normalize class counts for deterministic allocation
+
+    if target_n_int == 0 or not class_items:  # Return zero allocation when no samples can be produced
+        return {label: 0 for label, _count in class_items}  # Preserve labels while assigning zero synthetic rows
+
+    base_counts = {label: 0 for label, _count in class_items}  # Initialize exact per-class allocation
+    small_labels = [label for label, count in class_items if count < small_class_threshold]  # Identify classes eligible for a small-class floor
+    minimum_total = len(small_labels) * max(0, int(small_class_min_samples))  # Compute total floor demand
+
+    if small_labels and 0 < minimum_total <= target_n_int:  # Apply small-class floors only when the requested target can support them
+        for label in small_labels:  # Iterate over eligible small classes
+            base_counts[label] = max(0, int(small_class_min_samples))  # Assign the configured small-class floor
+
+    remaining = target_n_int - sum(base_counts.values())  # Compute remaining rows after feasible floors
+
+    if remaining <= 0:  # Return floor allocation when it exactly consumes the target
+        return base_counts  # Preserve exact target total after feasible floors
+
+    raw_targets = {label: (count / total_preprocessed_int) * target_n_int for label, count in class_items}  # Compute proportional target shares
+    residual_weights = {label: max(0.0, raw_targets[label] - base_counts[label]) for label, _count in class_items}  # Compute allocation weights after floors
+    residual_weight_total = sum(residual_weights.values())  # Sum residual weights for proportional allocation
+
+    if residual_weight_total <= 0.0:  # Fallback when floors exceed proportional raw shares
+        residual_weights = {label: float(count) for label, count in class_items}  # Use source class counts as fallback weights
+        residual_weight_total = sum(residual_weights.values())  # Recompute fallback weight total
+
+    if residual_weight_total <= 0.0:  # Handle degenerate all-zero class counts
+        first_label = class_items[0][0]  # Select the first stable class label
+        base_counts[first_label] += remaining  # Assign all remaining rows deterministically
+        return base_counts  # Return exact allocation for degenerate input
+
+    fractional_parts = []  # Initialize fractional remainder storage
+    allocated_remaining = 0  # Track rows allocated by integer floors
+
+    for label, _count in class_items:  # Allocate integer floors for each class
+        raw_remaining = (residual_weights[label] / residual_weight_total) * remaining  # Compute raw residual allocation
+        floor_remaining = int(math.floor(raw_remaining))  # Round residual allocation down deterministically
+        base_counts[label] += floor_remaining  # Add integer residual allocation to class total
+        allocated_remaining += floor_remaining  # Accumulate allocated residual rows
+        fractional_parts.append((raw_remaining - floor_remaining, str(label), label))  # Store fractional part with stable tie-breaker
+
+    rows_left = remaining - allocated_remaining  # Compute rows left after floor allocation
+    fractional_parts.sort(key=lambda item: (-item[0], item[1]))  # Sort by largest remainder and stable label representation
+
+    for index in range(rows_left):  # Distribute remaining rows by largest fractional remainder
+        label = fractional_parts[index % len(fractional_parts)][2]  # Select class label for the remaining row
+        base_counts[label] += 1  # Add one deterministic remainder row to the selected class
+
+    return base_counts  # Return exact per-class synthetic row allocation
 
 
 def gradient_penalty(critic, real_samples, fake_samples, labels, device, config: Optional[Dict] = None):
@@ -2978,22 +3108,44 @@ def build_hardware_csv_value(device: torch.device) -> str:
     return json.dumps(hardware_specs, default=str)  # Serialize hardware specifications as one CSV cell
 
 
-def count_persisted_generated_samples(out_file: Union[str, Path]) -> int:
+def count_persisted_output_rows(out_file: Union[str, Path]) -> int:
     """
-    Count persisted generated data rows in a CSV file.
+    Count persisted data rows in an augmented CSV file.
 
-    :param out_file: Path to the generated CSV file.
-    :return: Number of generated data rows persisted on disk.
+    :param out_file: Path to the augmented CSV file.
+    :return: Number of data rows persisted on disk.
     """
 
     out_path = Path(out_file)  # Normalize output path before opening
-    with open(out_path, "r", newline="", encoding="utf-8") as file_obj:  # Open generated CSV using the project CSV parsing mode
+    with open(out_path, "r", newline="", encoding="utf-8") as file_obj:  # Open augmented CSV using the project CSV parsing mode
         reader = csv.reader(file_obj)  # Create standard CSV reader for quoted cell safety
         row_total = sum(1 for _ in reader)  # Count CSV records including the header
     persisted_rows = max(0, row_total - 1)  # Convert total records into data-row count
-    if persisted_rows <= 0:  # Verify successful generation produced persisted data rows
-        raise ValueError(f"Generated CSV {out_path} does not contain persisted data rows")  # Raise before writing a successful result row
-    return persisted_rows  # Return actual persisted generated sample count
+    if persisted_rows <= 0:  # Verify persisted augmented data rows exist
+        raise ValueError(f"Augmented CSV {out_path} does not contain persisted data rows")  # Raise before writing a successful result row
+    return persisted_rows  # Return actual persisted output row count
+
+
+def validate_augmentation_sample_totals(args: Any, persisted_total_rows: int) -> None:
+    """
+    Validate augmented output sample totals before result persistence.
+
+    :param args: Runtime arguments namespace carrying augmentation count attributes.
+    :param persisted_total_rows: Data-row count read from the persisted augmented CSV.
+    :return: None.
+    """
+
+    original_rows = int(safe_float(getattr(args, "_last_original_num_samples", 0), 0.0))  # Read source row count from args
+    generated_rows = int(safe_float(getattr(args, "_last_generated_num_samples", 0), 0.0))  # Read synthetic row count from args
+    expected_total_rows = original_rows + generated_rows  # Calculate expected final augmented row count
+
+    if original_rows < 0 or generated_rows < 0:  # Verify row counts are non-negative
+        raise ValueError("Augmentation row counts must be non-negative")  # Raise before writing an invalid result row
+
+    if persisted_total_rows != expected_total_rows:  # Verify persisted output count matches source plus synthetic rows
+        raise ValueError(f"Augmented CSV row count {persisted_total_rows} does not equal original {original_rows} plus generated {generated_rows}")  # Raise before writing an invalid result row
+
+    args._last_total_num_samples_after_augmentation = int(persisted_total_rows)  # Store verified final row count on args
 
 
 def validate_completed_generation_row(row_runtime: Dict, results_cols_cfg: list) -> None:
@@ -3005,22 +3157,36 @@ def validate_completed_generation_row(row_runtime: Dict, results_cols_cfg: list)
     :return: None.
     """
 
-    required_fields = ["total_generated_samples", "generated_ratio", "epoch", "epoch_time_s", "testing_time_s", "hardware"]  # Define required completed-result fields
+    required_fields = ["original_num_samples", "generated_num_samples", "total_num_samples_after_augmentation", "generated_ratio", "epoch", "epoch_time_s", "training_time_s", "generated_time_s", "testing_time_s", "hardware"]  # Define required completed-result fields
     missing_schema = [field for field in required_fields if field not in results_cols_cfg]  # Find required fields absent from schema
     if missing_schema:  # Verify required fields are present in configured schema
         raise ValueError(f"Results CSV schema is missing required fields: {missing_schema}")  # Raise before any row write
     missing_values = [field for field in required_fields if row_runtime.get(field) in (None, "")]  # Find required fields without values
     if missing_values:  # Verify successful result fields have real values
         raise ValueError(f"Completed generation row is missing required values: {missing_values}")  # Raise before any row write
-    total_generated_value = safe_float(row_runtime.get("total_generated_samples"), 0.0)  # Convert persisted generated sample count to numeric value
+
+    original_value = int(safe_float(row_runtime.get("original_num_samples"), 0.0))  # Convert source row count to integer
+    generated_value = int(safe_float(row_runtime.get("generated_num_samples"), 0.0))  # Convert synthetic row count to integer
+    total_value = int(safe_float(row_runtime.get("total_num_samples_after_augmentation"), 0.0))  # Convert final output row count to integer
+    ratio_value = safe_float(row_runtime.get("generated_ratio"), 0.0)  # Convert generated ratio to float
     completed_epoch_value = safe_float(row_runtime.get("epoch"), 0.0)  # Convert completed epoch to numeric value
     epoch_time_value = safe_float(row_runtime.get("epoch_time_s"), 0.0)  # Convert completed epoch duration to numeric seconds
-    if total_generated_value <= 0.0:  # Verify persisted generated sample count is positive
-        raise ValueError("Completed generation row has no persisted generated samples")  # Raise before any row write
+    metric_fields = ["critic_loss", "generator_loss", "gp", "D_real", "D_fake", "wasserstein"]  # Define WGAN-GP metric fields
+    metric_present = any(row_runtime.get(field) not in (None, "") for field in metric_fields)  # Detect whether any final metric value is available
+    missing_metrics = [field for field in metric_fields if row_runtime.get(field) in (None, "")] if metric_present else []  # Find missing metrics only when metric history exists
+
+    if original_value < 0 or generated_value < 0:  # Verify row counts are non-negative
+        raise ValueError("Completed generation row has negative sample counts")  # Raise before any row write
+    if total_value != original_value + generated_value:  # Verify final output count equals source plus synthetic rows
+        raise ValueError("Completed generation row violates original plus generated sample total")  # Raise before any row write
+    if original_value > 0 and abs(ratio_value - (generated_value / original_value)) > 1e-12:  # Verify generated ratio matches generated rows over source rows
+        raise ValueError("Completed generation row has an inconsistent generated_ratio")  # Raise before any row write
     if completed_epoch_value <= 0.0:  # Verify completed epoch count is positive
         raise ValueError("Completed generation row has no completed epoch")  # Raise before any row write
     if epoch_time_value <= 0.0:  # Verify completed epoch duration is positive
         raise ValueError("Completed generation row has no completed epoch duration")  # Raise before any row write
+    if missing_metrics:  # Verify all WGAN-GP metrics are present when any final metric is present
+        raise ValueError(f"Completed generation row is missing WGAN-GP metric values: {missing_metrics}")  # Raise before any row write
 
 
 def update_results_csv_row(results_csv_path: Path, ordered_row: list, results_cols_cfg: list, original_file: str) -> None:
@@ -3108,7 +3274,6 @@ def build_epoch_runtime_row(args, dataset, epoch: int, metrics_history: Dict, op
     row_runtime["epochs"] = getattr(args, "epochs", "")  # Total epochs configured
     row_runtime["epoch_time_s"] = getattr(args, "_last_epoch_time", "")  # Epoch elapsed seconds
     row_runtime["training_time_s"] = getattr(args, "_last_training_time", "")  # Total training elapsed seconds
-    row_runtime["file_time_s"] = getattr(args, "_last_file_time", "")  # File processing elapsed seconds
     row_runtime["batch_size"] = getattr(args, "batch_size", "")  # Effective batch size used
     row_runtime["lambda_gp"] = getattr(args, "lambda_gp", "")  # Gradient penalty coefficient
     row_runtime["latent_dim"] = getattr(args, "latent_dim", "")  # Latent noise dimensionality
@@ -3149,7 +3314,7 @@ def write_epoch_csv_row(args, config: Dict, device: torch.device, dataset, epoch
     try:  # Safely compute and print epoch elapsed time without interrupting training
         epoch_elapsed = time.time() - epoch_start_time  # Calculate epoch elapsed seconds
         print(f"{BackgroundColors.GREEN}Epoch {epoch+1} elapsed: {BackgroundColors.CYAN}{epoch_elapsed:.2f}s{Style.RESET_ALL}")  # Print epoch elapsed time
-        args._last_epoch_time = safe_float(epoch_elapsed, 0.0)  # Store last epoch elapsed on args for external use safely
+        args._last_epoch_time = ceil_seconds(epoch_elapsed)  # Store last epoch elapsed as upward-rounded integer seconds
         args._last_completed_epoch = epoch + 1  # Store the completed epoch number for final generation results
     except Exception as _te:  # If timing calculation fails
         print(f"{BackgroundColors.YELLOW}Warning: failed to measure epoch time: {_te}{Style.RESET_ALL}")  # Warn but continue
@@ -3373,9 +3538,9 @@ def compute_and_store_final_timing(args, training_start_time: float, file_start_
 
     try:  # Safely compute total training and file elapsed times
         training_elapsed = time.time() - training_start_time  # Calculate total training elapsed seconds
-        args._last_training_time = safe_float(training_elapsed, 0.0)  # Store total training elapsed on args for downstream use safely
+        args._last_training_time = ceil_seconds(training_elapsed)  # Store training elapsed as upward-rounded integer seconds
         file_elapsed = time.time() - file_start_time  # Calculate file processing elapsed seconds
-        args._last_file_time = safe_float(file_elapsed, 0.0)  # Store file elapsed on args for downstream use safely
+        args._last_file_time = ceil_seconds(file_elapsed)  # Store file elapsed as upward-rounded integer seconds for console reporting
         print(f"{BackgroundColors.GREEN}Training finished! Total training elapsed: {BackgroundColors.CYAN}{training_elapsed:.2f}s{Style.RESET_ALL}")  # Print total training elapsed message
         print(f"{BackgroundColors.GREEN}File processing elapsed: {BackgroundColors.CYAN}{file_elapsed:.2f}s{Style.RESET_ALL}")  # Print per-file elapsed message
     except Exception as _tt:  # If timing calculation fails, warn but do not interrupt
@@ -3410,11 +3575,12 @@ def build_final_training_runtime_row(args, config: Dict, dataset, metrics_histor
         except Exception:  # If derivation fails
             gen_file = ""  # Leave blank on failure
     final_runtime["generated_file"] = gen_file  # Store generated file path (may be empty)
-    final_runtime["total_generated_samples"] = ""  # Placeholder, generation may fill this later
+    final_runtime["generated_num_samples"] = ""  # Placeholder, generation may fill this later
+    final_runtime["total_num_samples_after_augmentation"] = ""  # Placeholder, generation may fill this later
     final_runtime["generated_ratio"] = ""  # Placeholder ratio
     final_runtime["training_time_s"] = getattr(args, "_last_training_time", "")  # Total training elapsed
-    final_runtime["file_time_s"] = getattr(args, "_last_file_time", "")  # Per-file processing elapsed
-    final_runtime["testing_time_s"] = 0.0  # Default testing/generation time is zero unless generation runs
+    final_runtime["generated_time_s"] = ""  # Placeholder, generation may fill this later
+    final_runtime["testing_time_s"] = ""  # Placeholder, quality verification may fill this later
     final_runtime["epoch"] = ""  # Final summary must not include a per-epoch value
     final_runtime["epoch_time_s"] = ""  # Final summary must not include last epoch duration
     final_runtime["epochs"] = getattr(args, "epochs", "")  # Total epochs configured
@@ -3432,7 +3598,7 @@ def build_final_training_runtime_row(args, config: Dict, dataset, metrics_histor
     final_runtime["D_fake"] = metrics_history.get("D_fake", [])[-1] if metrics_history.get("D_fake") else ""  # Final avg fake score
     final_runtime["wasserstein"] = metrics_history.get("wasserstein", [])[-1] if metrics_history.get("wasserstein") else ""  # Final wasserstein estimate
     try:  # Safely compute generated_ratio using safe conversions
-        total_generated = safe_float(final_runtime.get("total_generated_samples"), 0.0)  # Total generated safely
+        total_generated = safe_float(final_runtime.get("generated_num_samples"), 0.0)  # Total generated safely
         original_samples = safe_float(final_runtime.get("original_num_samples"), 0.0)  # Original samples safely
         final_runtime["generated_ratio"] = (total_generated / original_samples) if original_samples > 0.0 else 0.0  # Guard division and avoid ZeroDivisionError
     except Exception:  # If computation fails
@@ -3527,6 +3693,7 @@ def train(args, config: Optional[Dict] = None):
         metrics_history, start_epoch, step = resume_from_checkpoint(args, config, device, G, D, opt_G, opt_D, scaler, metrics_history, start_epoch, step)  # Resume from checkpoint if available
         telegram_enabled, next_notify, progress_pct = init_telegram_progress(args, config, start_epoch)  # Initialize telegram progress tracking
 
+        training_start_time = time.time()  # Start persisted training duration immediately before the epoch loop
         for epoch in range(start_epoch, args.epochs):  # Loop over epochs starting from resume point
             epoch_start_time = time.time()  # Record epoch start timestamp
             pbar, total_steps = create_epoch_progress_bar(dataloader, args, epoch)  # Create progress bar for epoch
@@ -3838,7 +4005,7 @@ def compute_expected_samples_for_percentage(percent: float, args, config: Option
             except Exception:
                 original_dataset_size = total_preprocessed  # Fallback to preprocessed total on CSV read failure
 
-        return max(1, int(original_dataset_size * percent))  # Return target count as exact multiplier of original CSV row count
+        return calculate_generated_count_from_ratio(original_dataset_size, percent)  # Return deterministic generated rows for the requested ratio
 
     except Exception as e:
         print(str(e))
@@ -3875,6 +4042,31 @@ def resolve_expected_sample_count(args, config: Dict) -> Optional[int]:
     return expected_n  # Return resolved expected sample count
 
 
+def resolve_expected_output_row_count(args, config: Dict) -> Optional[int]:
+    """
+    Resolve the expected persisted augmented dataset row count.
+
+    :param args: Parsed arguments namespace with source and generation settings.
+    :param config: Configuration dictionary with generation settings.
+    :return: Expected final output row count, or None if unavailable.
+    """
+
+    expected_generated = resolve_expected_sample_count(args, config)  # Resolve the expected synthetic row count
+
+    if expected_generated is None:  # Propagate unavailable generated count
+        return None  # Return unavailable output count
+
+    original_count = 0  # Initialize source row count fallback
+
+    if getattr(args, "csv_path", None):  # Use source CSV when available
+        try:  # Read source row count for final output sizing
+            original_count = len(pd.read_csv(args.csv_path, low_memory=False))  # Count source CSV rows
+        except Exception:  # Use zero when source count cannot be read
+            original_count = 0  # Preserve generated-only fallback sizing
+
+    return int(original_count) + int(expected_generated)  # Return final augmented output row count
+
+
 def evaluate_existing_augmentation_file(out_path: Path, file_prefix: str, existing_count: int, expected_n: int, args) -> bool:
     """
     Evaluate whether to regenerate or skip based on existing file count versus expected count.
@@ -3890,18 +4082,18 @@ def evaluate_existing_augmentation_file(out_path: Path, file_prefix: str, existi
     if existing_count == expected_n and not getattr(args, "force_new_samples", False):  # Matching and no force
         send_telegram_message(
             TELEGRAM_BOT,
-            f"{file_prefix} Skipping Generation: {out_path.name} already exists with {existing_count} samples (expected {expected_n}).",
+            f"{file_prefix} Skipping Generation: {out_path.name} already exists with {existing_count} output rows (expected {expected_n}).",
         )  # Notify skip via Telegram
         return False  # Skip generation
     if getattr(args, "force_new_samples", False):  # Forced regeneration
         send_telegram_message(
             TELEGRAM_BOT,
-            f"{file_prefix} Force Regeneration Requested: Removing existing {out_path.name} ({existing_count} samples) and regenerating to {expected_n}.",
+            f"{file_prefix} Force Regeneration Requested: Removing existing {out_path.name} ({existing_count} output rows) and regenerating to {expected_n}.",
         )  # Notify forced regeneration via Telegram
     else:  # Count mismatch requires regeneration
         send_telegram_message(
             TELEGRAM_BOT,
-            f"{file_prefix} Existing {out_path.name} has {existing_count} samples but expected {expected_n}; removing and regenerating.",
+            f"{file_prefix} Existing {out_path.name} has {existing_count} output rows but expected {expected_n}; removing and regenerating.",
         )  # Notify mismatch via Telegram
     try:  # Attempt to delete existing file before regeneration
         out_path.unlink()  # Delete existing file
@@ -3938,12 +4130,12 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
         if not out_path.exists():  # If file does not exist
             return True  # Proceed with generation
 
-        expected_n = resolve_expected_sample_count(args, config)  # Resolve expected sample count from configuration
+        expected_n = resolve_expected_output_row_count(args, config)  # Resolve expected final output row count from configuration
 
         if expected_n is None:  # If expected size cannot be determined
             send_telegram_message(
                 TELEGRAM_BOT,
-                f"{file_prefix} Unable to verify existing augmented file {out_path.name}: expected count undeterminable — regenerating.",
+                f"{file_prefix} Unable to verify existing augmented file {out_path.name}: expected output rows undeterminable — regenerating.",
             )
             try:
                 out_path.unlink()  # Attempt to remove problematic file
@@ -4004,6 +4196,8 @@ def normalize_args_and_load_checkpoint(args, config: Dict) -> tuple:
     send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Starting WGAN-GP generation from {Path(args.checkpoint).name}")  # Telegram start with colored prefix
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)  # Load checkpoint from disk with sklearn objects
     args_ck = ckpt.get("args", {})  # Retrieve saved arguments from checkpoint
+    if not getattr(args, "csv_path", None) and isinstance(args_ck, dict) and args_ck.get("csv_path"):  # Recover source CSV path from saved training arguments
+        args.csv_path = args_ck.get("csv_path")  # Store recovered source CSV path on live args
     scaler = ckpt.get("scaler", None)  # Try to get scaler from checkpoint
     label_encoder = ckpt.get("label_encoder", None)  # Try to get label encoder from checkpoint
     feature_cols = ckpt.get("feature_cols", None)  # Try to get feature column names from checkpoint
@@ -4132,7 +4326,7 @@ def compute_generation_counts_and_labels(args, config: Dict, class_distribution:
             except Exception:
                 original_dataset_size = total_preprocessed  # Fallback to preprocessed total on CSV read failure
 
-        target_n = max(1, int(original_dataset_size * args.n_samples))  # Target total as exact multiplier of original CSV row count
+        target_n = calculate_generated_count_from_ratio(original_dataset_size, args.n_samples)  # Resolve synthetic row target with shared ratio semantics
 
         print(f"{BackgroundColors.CYAN}Generating {args.n_samples*100:.1f}% of original dataset ({target_n} of {original_dataset_size} samples, min {small_class_min_samples} samples for small classes){Style.RESET_ALL}")  # Print generation percentage summary
 
@@ -4141,20 +4335,13 @@ def compute_generation_counts_and_labels(args, config: Dict, class_distribution:
                 raise ValueError(f"Label {args.label} not found in training data class distribution")  # Raise error for unknown label
             n_per_class = {args.label: target_n}  # Assign all target samples to the requested class
         else:  # Generate for all classes proportionally
-            n_per_class = {}  # Initialize per-class count dictionary
-
-            for label, original_count in class_distribution.items():  # For each class in distribution
-                proportion = original_count / max(1, total_preprocessed)  # Proportional share for this class in preprocessed data
-                raw_count = int(proportion * target_n)  # Proportional count scaled to target total
-                final_count = max(small_class_min_samples if original_count < small_class_threshold else 1, raw_count)  # Apply small-class minimum threshold
-                n_per_class[label] = final_count  # Store computed count for this class
-
-            current_total = sum(n_per_class.values())  # Sum per-class counts to verify against target
-            diff = target_n - current_total  # Discrepancy between target and current per-class sum
-
-            if diff != 0:  # If per-class totals do not sum to exactly target_n
-                largest_label = max(n_per_class, key=lambda k: n_per_class[k])  # Find class with most samples for adjustment
-                n_per_class[largest_label] = max(1, n_per_class[largest_label] + diff)  # Adjust largest class to reach exact target total
+            n_per_class = distribute_generated_counts_by_ratio(  # Allocate per-class counts with an exact target sum
+                class_distribution,  # Source class counts used for proportional allocation
+                total_preprocessed,  # Preprocessed denominator used by the existing class-balance policy
+                target_n,  # Exact synthetic row target requested by ratio semantics
+                small_class_threshold,  # Configured source-count threshold for small-class floors
+                small_class_min_samples,  # Configured small-class floor applied only when feasible
+            )  # Finish exact per-class allocation
 
         labels = []  # List to build label array
         for label, count in n_per_class.items():  # For each class
@@ -4228,6 +4415,58 @@ def generate_batches_and_collect_results(args, G: nn.Module, device: torch.devic
     return (all_fake, labels, sample_generation_start_time)  # Return pre-allocated array and original labels array
 
 
+def build_augmented_output_dataframe(args: Any, df_generated: pd.DataFrame) -> tuple:
+    """
+    Build the persisted augmented dataset from original and generated rows.
+
+    :param args: Parsed arguments namespace containing csv_path.
+    :param df_generated: DataFrame containing newly generated synthetic rows.
+    :return: Tuple of final output DataFrame and original source row count.
+    """
+
+    original_count = 0  # Initialize source row count for generated-only fallback
+    output_df = df_generated  # Use generated rows when no source CSV is available
+
+    if getattr(args, "csv_path", None):  # Use source CSV when available
+        original_df = pd.read_csv(args.csv_path, low_memory=False)  # Load source dataset rows for final augmentation output
+        original_count = len(original_df)  # Count source dataset rows before concatenation
+        original_aligned = original_df.reindex(columns=df_generated.columns)  # Align source columns to generated output columns
+        output_df = pd.concat([original_aligned, df_generated], ignore_index=True)  # Concatenate source rows before synthetic rows
+
+    return output_df, original_count  # Return final augmented output and source row count
+
+
+def generate_generation_quality_outputs(args: Any, config: Dict, df_generated: pd.DataFrame, feature_cols: List[str]) -> None:
+    """
+    Generate post-generation quality visualization outputs.
+
+    :param args: Parsed arguments namespace containing csv_path and out_file.
+    :param config: Configuration dictionary with path settings.
+    :param df_generated: DataFrame containing newly generated synthetic rows.
+    :param feature_cols: Feature column names used by the generator.
+    :return: None.
+    """
+
+    if not getattr(args, "csv_path", None):  # Skip quality output when no source CSV path is available
+        return  # Return without creating file-based quality plots
+
+    try:  # Guard quality visualization so CSV persistence remains authoritative
+        orig_df_tsne = pd.read_csv(args.csv_path, low_memory=False)  # Load source CSV for t-SNE comparison
+        valid_tsne_cols = [c for c in feature_cols if c in orig_df_tsne.columns and c in df_generated.columns]  # Retain shared generated feature columns
+
+        if valid_tsne_cols:  # Proceed only when comparable feature columns are available
+            X_original_tsne = orig_df_tsne[valid_tsne_cols].apply(pd.to_numeric, errors="coerce").dropna().values.astype(np.float32)  # Extract numeric source feature matrix
+            X_generated_tsne = df_generated[valid_tsne_cols].values.astype(np.float32)  # Extract generated feature matrix
+            out_file_parent = Path(args.out_file).parent  # Derive parent directory from output path
+            data_aug_dirname = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Read configured augmentation directory name
+            tsne_out_dir = out_file_parent.parent if out_file_parent.name == data_aug_dirname else out_file_parent  # Route plot output beside augmentation artifacts
+            tsne_dataset_name = Path(args.csv_path).stem  # Derive dataset name from source CSV stem
+            generate_tsne_3d_separability_plot(X_original_tsne, X_generated_tsne, tsne_out_dir, dataset_name=tsne_dataset_name, config=config)  # Generate 3D t-SNE quality visualization
+
+    except Exception as _tsne_e:  # Continue when quality visualization fails
+        print(f"{BackgroundColors.YELLOW}[WARNING] t-SNE separability plot failed: {_tsne_e}{Style.RESET_ALL}")  # Warn about t-SNE failure without aborting generation
+
+
 def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List, all_labels: List, scaler: Any, label_encoder: Any, feature_cols: List[str], device: torch.device, n: int, file_progress_prefix: str) -> pd.DataFrame:
     """
     Stack generated arrays, inverse-transform, and build output DataFrame.
@@ -4248,39 +4487,26 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
     X_fake = np.vstack(all_fake) if isinstance(all_fake, list) else all_fake  # Stack batches if list or use pre-allocated array directly
     Y_fake = np.concatenate(all_labels) if isinstance(all_labels, list) else all_labels  # Concatenate if list or use array directly
     X_orig = scaler.inverse_transform(X_fake)  # Inverse transform features to original scale
-    df = pd.DataFrame(X_orig, columns=pd.Index(feature_cols))  # Create DataFrame with original feature names
-    df[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
-    
+    df_generated = pd.DataFrame(X_orig, columns=pd.Index(feature_cols))  # Create DataFrame with original feature names
+    df_generated[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
+    output_df, original_count = build_augmented_output_dataframe(args, df_generated)  # Build final original plus synthetic output DataFrame
+
     if config.get("hardware_tracking", False):  # If enabled in config
         try:  # Guard hardware population to avoid breaking generation
-            df = populate_hardware_column(df, column_name="hardware", device_used=device)  # Populate hardware column
+            output_df = populate_hardware_column(output_df, column_name="hardware", device_used=device)  # Populate hardware column on persisted output
         except Exception:
             pass  # Ignore hardware population errors and continue
-    
-    safe_log("info", f"Saving {n} generated samples to {args.out_file}")  # Log generation save start at INFO level before writing
-    generate_csv_and_image(df, args.out_file, is_visualizable=True)  # Save CSV and generate PNG image when appropriate
-    safe_log("info", f"Successfully saved {n} generated samples to {args.out_file}")  # Log generation save completion at INFO level after writing
-    print(f"{file_progress_prefix} {BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{n}{BackgroundColors.GREEN} generated samples to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message with prefix
-    
-    if getattr(args, "csv_path", None):  # Verify csv_path is available for t-SNE separability plot generation
-        try:
-            orig_df_tsne = pd.read_csv(args.csv_path, low_memory=False)  # Load original CSV for t-SNE comparison
-            valid_tsne_cols = [c for c in feature_cols if c in orig_df_tsne.columns]  # Retain only columns present in both original and generated data
 
-            if valid_tsne_cols:  # Proceed only when at least one matching feature column is available
-                X_original_tsne = orig_df_tsne[valid_tsne_cols].apply(pd.to_numeric, errors="coerce").dropna().values.astype(np.float32)  # Extract numeric original feature matrix dropping non-finite rows
-                col_indices = [feature_cols.index(c) for c in valid_tsne_cols]  # Resolve column indices in the generated feature array
-                X_generated_tsne = X_orig[:, col_indices].astype(np.float32)  # Extract matching generated feature columns as float32
-                out_file_parent = Path(args.out_file).parent  # Derive parent directory from out_file for t-SNE path normalization
-                data_aug_dirname = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")
-                tsne_out_dir = out_file_parent.parent if out_file_parent.name == data_aug_dirname else out_file_parent  # Route t-SNE output to Data_Augmentation when out_file is inside Data_Augmentation
-                tsne_dataset_name = Path(args.csv_path).stem  # Derive dataset name from CSV filename stem
-                generate_tsne_3d_separability_plot(X_original_tsne, X_generated_tsne, tsne_out_dir, dataset_name=tsne_dataset_name, config=config)  # Generate 3D t-SNE separability visualization
+    args._last_original_num_samples = int(original_count)  # Store source row count for result persistence
+    args._last_generated_num_samples = int(len(df_generated))  # Store synthetic row count for result persistence
+    args._last_total_num_samples_after_augmentation = int(len(output_df))  # Store final output row count for result persistence
 
-        except Exception as _tsne_e:
-            print(f"{BackgroundColors.YELLOW}[WARNING] t-SNE separability plot failed: {_tsne_e}{Style.RESET_ALL}")  # Warn about t-SNE failure without aborting generation
+    safe_log("info", f"Saving {len(output_df)} augmented rows with {n} generated samples to {args.out_file}")  # Log augmented save start at INFO level before writing
+    generate_csv_and_image(output_df, args.out_file, is_visualizable=True)  # Save final augmented CSV and generate PNG image when appropriate
+    safe_log("info", f"Successfully saved {len(output_df)} augmented rows with {n} generated samples to {args.out_file}")  # Log augmented save completion at INFO level after writing
+    print(f"{file_progress_prefix} {BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{len(output_df)}{BackgroundColors.GREEN} augmented rows ({BackgroundColors.CYAN}{len(df_generated)}{BackgroundColors.GREEN} generated) to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message with prefix
 
-    return df  # Return constructed DataFrame
+    return df_generated  # Return generated-only DataFrame for quality visualization
 
 
 def record_sample_generation_timing(args, sample_generation_start_time: float) -> None:
@@ -4294,11 +4520,29 @@ def record_sample_generation_timing(args, sample_generation_start_time: float) -
 
     try:  # Safely compute and print sample generation elapsed time
         sample_generation_elapsed = time.time() - sample_generation_start_time  # Calculate sample generation elapsed seconds
-        args._last_sample_generation_time = float(sample_generation_elapsed)  # Store sample generation elapsed on args for downstream use
+        args._last_sample_generation_time = ceil_seconds(sample_generation_elapsed)  # Store generation elapsed as upward-rounded integer seconds
         print(f"{BackgroundColors.GREEN}Sample generation elapsed: {BackgroundColors.CYAN}{sample_generation_elapsed:.2f}s{Style.RESET_ALL}")  # Print sample generation elapsed
     except Exception as _sg:  # If timing calculation fails
         print(f"{BackgroundColors.YELLOW}Warning: failed to measure sample generation time: {_sg}{Style.RESET_ALL}")  # Warn but continue
         args._last_sample_generation_time = ""  # Ensure attribute exists even on failure
+
+
+def record_testing_timing(args, testing_start_time: float) -> None:
+    """
+    Record post-generation verification and quality-output duration.
+
+    :param args: Parsed arguments namespace to store timing on.
+    :param testing_start_time: Timestamp when post-generation verification started.
+    :return: None.
+    """
+
+    try:  # Safely compute and print verification elapsed time
+        testing_elapsed = time.time() - testing_start_time  # Calculate verification elapsed seconds
+        args._last_testing_time = ceil_seconds(testing_elapsed)  # Store verification elapsed as upward-rounded integer seconds
+        print(f"{BackgroundColors.GREEN}Post-generation verification elapsed: {BackgroundColors.CYAN}{testing_elapsed:.2f}s{Style.RESET_ALL}")  # Print verification elapsed
+    except Exception as _tg:  # If timing calculation fails
+        print(f"{BackgroundColors.YELLOW}Warning: failed to measure post-generation verification time: {_tg}{Style.RESET_ALL}")  # Warn but continue
+        args._last_testing_time = ""  # Ensure attribute exists even on failure
 
 
 def notify_generation_finish_via_telegram(args, n: int, file_progress_prefix: str) -> None:
@@ -4403,36 +4647,30 @@ def collect_generation_file_metadata(args, args_ck: Dict, ckpt: Dict, n: int, ck
         else:  # No path available
             metadata["original_file_name"] = ""  # Default to empty when no path available
     metadata["generated_file_name"] = str(Path(args.out_file)) if getattr(args, "out_file", None) else ""  # Generated file path
+    metadata["original_num"] = getattr(args, "_last_original_num_samples", None)  # Prefer source row count captured during output assembly
     try:  # Attempt to count original CSV rows
-        metadata["original_num"] = None  # Default original count
         if source_csv_path is not None:  # If source CSV path is available, read length
             metadata["original_num"] = len(pd.read_csv(source_csv_path, low_memory=False))  # Count original CSV rows
     except Exception:  # Reading failed
-        metadata["original_num"] = None  # Leave as None if reading fails
-    metadata["total_generated"] = int(n) if n is not None else ""  # Total generated samples
+        metadata["original_num"] = metadata["original_num"] if metadata["original_num"] not in (None, "") else None  # Preserve captured source count when reading fails
+    metadata["generated_num"] = int(n) if n is not None else ""  # Store newly generated synthetic rows
+    metadata["total_after_augmentation"] = getattr(args, "_last_total_num_samples_after_augmentation", "")  # Prefer verified final output row count from args
+    if metadata["total_after_augmentation"] in (None, "") and metadata["original_num"] not in (None, "") and metadata["generated_num"] not in (None, ""):  # Build final total when direct value is unavailable
+        metadata["total_after_augmentation"] = int(metadata["original_num"]) + int(metadata["generated_num"])  # Store source plus synthetic row total
     metadata["generated_ratio"] = ""  # Default generated ratio
     try:  # Attempt to compute generated ratio
         if metadata["original_num"] and metadata["original_num"] > 0:  # If original count available
-            metadata["generated_ratio"] = float(metadata["total_generated"]) / float(metadata["original_num"])  # Compute ratio
+            metadata["generated_ratio"] = float(metadata["generated_num"]) / float(metadata["original_num"])  # Compute synthetic-to-source ratio
     except Exception:  # Computation failed
         metadata["generated_ratio"] = ""  # Leave blank on failure
-    file_processing_start_time = getattr(args, "_file_processing_start_time", None)  # Retrieve live per-file processing start timestamp when available
-    file_processing_elapsed: Union[str, float] = ""  # Initialize computed per-file elapsed seconds
-    try:  # Calculate encompassing per-file elapsed seconds for active combined runs
-        if file_processing_start_time not in (None, ""):  # Use live per-file timer when present
-            file_processing_start_float = safe_float(file_processing_start_time, 0.0)  # Convert per-file start timestamp safely
-            if file_processing_start_float > 0.0:  # Verify per-file start timestamp is usable
-                file_processing_elapsed = time.time() - file_processing_start_float  # Measure elapsed seconds since file processing began
-    except Exception:  # Fall back to stored per-file timing when live calculation fails
-        file_processing_elapsed = ""  # Keep blank so stored fallback timing can be used
     metadata["completed_epoch"] = ckpt.get("epoch", saved_args.get("_last_completed_epoch", getattr(args, "_last_completed_epoch", "")))  # Resolve completed epoch from saved state or live args
     metadata["timing_values"] = {  # Map common column names to stored timing attributes
-        "training_time_s": getattr(args, "_last_training_time", saved_args.get("_last_training_time", "")),  # Total training elapsed seconds
-        "file_time_s": file_processing_elapsed if file_processing_elapsed != "" else getattr(args, "_last_file_time", saved_args.get("_last_file_time", "")),  # Per-file elapsed seconds for current combined run or stored fallback
-        "epoch_time_s": getattr(args, "_last_epoch_time", saved_args.get("_last_epoch_time", "")),  # Last completed epoch elapsed seconds
-        "testing_time_s": getattr(args, "_last_sample_generation_time", saved_args.get("_last_sample_generation_time", "")),  # Generation/export elapsed seconds for the configured testing column
-        "sample_generation_time_s": getattr(args, "_last_sample_generation_time", saved_args.get("_last_sample_generation_time", "")),  # Sample generation elapsed seconds
-        "model_save_time_s": getattr(args, "_last_model_save_time", saved_args.get("_last_model_save_time", "")),  # Model save phase elapsed seconds
+        "training_time_s": ceil_seconds(getattr(args, "_last_training_time", saved_args.get("_last_training_time", ""))),  # Total training elapsed seconds
+        "generated_time_s": ceil_seconds(getattr(args, "_last_sample_generation_time", saved_args.get("_last_sample_generation_time", ""))),  # Generation and output-write elapsed seconds
+        "testing_time_s": ceil_seconds(getattr(args, "_last_testing_time", saved_args.get("_last_testing_time", ""))),  # Post-generation verification elapsed seconds
+        "epoch_time_s": ceil_seconds(getattr(args, "_last_epoch_time", saved_args.get("_last_epoch_time", ""))),  # Last completed epoch elapsed seconds
+        "sample_generation_time_s": ceil_seconds(getattr(args, "_last_sample_generation_time", saved_args.get("_last_sample_generation_time", ""))),  # Sample generation elapsed seconds
+        "model_save_time_s": ceil_seconds(getattr(args, "_last_model_save_time", saved_args.get("_last_model_save_time", ""))),  # Model save phase elapsed seconds
     }  # End timing values map
     metric_key_map = {  # Map CSV result keys to metrics history list keys
         "critic_loss": "loss_D",  # Critic loss history key
@@ -4444,13 +4682,16 @@ def collect_generation_file_metadata(args, args_ck: Dict, ckpt: Dict, n: int, ck
     }  # End metric key map
     for result_key in metric_key_map:  # Initialize metric result fields as unavailable
         metadata[result_key] = ""  # Use existing empty-string convention for unavailable metrics
-    try:  # Attempt to extract final training metrics from saved metrics
-        metrics_history = ckpt.get("metrics_history")  # Try to get metrics history from saved state
-        if isinstance(metrics_history, dict):  # If metrics_history is a dict
-            for result_key, history_key in metric_key_map.items():  # Iterate each supported CSV metric
-                history_values = metrics_history.get(history_key) or []  # Read metric history list safely
-                if isinstance(history_values, (list, tuple)) and len(history_values) > 0:  # Use final value when metric history has entries
-                    metadata[result_key] = history_values[-1]  # Store latest metric value
+    try:  # Attempt to extract final training metrics from live and saved histories
+        metrics_candidates = [getattr(args, "_last_metrics_history", None), ckpt.get("metrics_history"), saved_args.get("_last_metrics_history")]  # Prefer live metrics before saved metrics
+        for metrics_history in metrics_candidates:  # Iterate metric history candidates in priority order
+            if isinstance(metrics_history, dict):  # Use dictionaries that match the training history shape
+                for result_key, history_key in metric_key_map.items():  # Iterate each supported CSV metric
+                    history_values = metrics_history.get(history_key) or []  # Read metric history list safely
+                    if metadata.get(result_key) in (None, "") and isinstance(history_values, (list, tuple)) and len(history_values) > 0:  # Fill only missing metric values
+                        metadata[result_key] = history_values[-1]  # Store latest metric value
+        if metadata.get("wasserstein") in (None, "") and metadata.get("D_real") not in (None, "") and metadata.get("D_fake") not in (None, ""):  # Derive Wasserstein only from logged critic scores
+            metadata["wasserstein"] = safe_float(metadata.get("D_real"), 0.0) - safe_float(metadata.get("D_fake"), 0.0)  # Use existing D_real minus D_fake convention
     except Exception:  # Extraction failed
         for result_key in metric_key_map:  # Reset metric fields on extraction failure
             metadata[result_key] = ""  # Preserve empty-string convention on extraction failure
@@ -4473,14 +4714,16 @@ def build_generation_runtime_row(args, config: Dict, n: int, device: torch.devic
         "critic_iterations": getattr(args, "critic_steps", ""),  # Critic iterations default
         "learning_rate_generator": getattr(args, "lr", ""),  # Generator LR default
         "learning_rate_critic": getattr(args, "lr", ""),  # Critic LR default
-        "testing_time_s": "",  # Fallback when generation timing is unavailable
+        "generated_time_s": "",  # Fallback when generation timing is unavailable
+        "testing_time_s": "",  # Fallback when post-generation verification timing is unavailable
         "hardware": None,  # Hardware placeholder
     }  # End runtime defaults
     row_runtime = {}  # Dictionary to hold runtime values for configured columns
     row_runtime["original_file"] = metadata["original_file_name"]  # Original CSV filename
     row_runtime["generated_file"] = metadata["generated_file_name"]  # Generated output filename
     row_runtime["original_num_samples"] = metadata["original_num"] if metadata["original_num"] is not None else ""  # Original sample count
-    row_runtime["total_generated_samples"] = metadata["total_generated"]  # Total generated count
+    row_runtime["generated_num_samples"] = metadata["generated_num"]  # Newly generated synthetic row count
+    row_runtime["total_num_samples_after_augmentation"] = metadata["total_after_augmentation"]  # Final augmented output row count
     row_runtime["generated_ratio"] = metadata["generated_ratio"]  # Generated/original ratio
     row_runtime["epoch"] = metadata["completed_epoch"]  # Completed training epoch used for generation
     row_runtime["critic_loss"] = metadata["critic_loss"]  # Last critic loss from checkpoint metrics
@@ -4579,11 +4822,16 @@ def generate(args, config: Optional[Dict] = None):
         notify_start_of_generation(args, n)  # Send Telegram notification about generation start
         all_fake, all_labels, sample_generation_start_time = generate_batches_and_collect_results(args, G, device, labels, n)  # Generate synthetic samples in batches
         df = postprocess_generated_arrays_to_dataframe(args, config, all_fake, all_labels, scaler, label_encoder, feature_cols, device, n, file_progress_prefix)  # Postprocess arrays into DataFrame and save
-        persisted_n = count_persisted_generated_samples(args.out_file)  # Count actual generated rows persisted to CSV
         record_sample_generation_timing(args, sample_generation_start_time)  # Record sample generation elapsed time
-        notify_generation_finish_via_telegram(args, persisted_n, file_progress_prefix)  # Send Telegram finish notification
+        testing_start_time = time.time()  # Start post-generation verification and quality-output timing
+        persisted_total_rows = count_persisted_output_rows(args.out_file)  # Count actual rows persisted to augmented CSV
+        validate_augmentation_sample_totals(args, persisted_total_rows)  # Verify source, synthetic, and final output row totals
+        generate_generation_quality_outputs(args, config, df, feature_cols)  # Generate post-generation quality visualization outputs
+        record_testing_timing(args, testing_start_time)  # Record post-generation verification and quality-output elapsed time
+        generated_n = int(safe_float(getattr(args, "_last_generated_num_samples", n), n))  # Resolve actual synthetic row count for result persistence
+        notify_generation_finish_via_telegram(args, generated_n, file_progress_prefix)  # Send Telegram finish notification
         try:  # Wrap result writing in try/except to avoid breaking generation on failures
-            prepare_and_write_results_csv_row(args, config, args_ck, ckpt, persisted_n, device)  # Prepare and write results CSV row
+            prepare_and_write_results_csv_row(args, config, args_ck, ckpt, generated_n, device)  # Prepare and write results CSV row
         except Exception as e:
             warn_on_results_csv_failure(e)  # Warn on results CSV preparation failure
     except Exception as e:
@@ -4623,9 +4871,14 @@ def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset:
         notify_start_of_generation(args, n)  # Send Telegram notification about generation start
         all_fake, all_labels, sample_generation_start_time = generate_batches_and_collect_results(args, G, device, labels, n)  # Generate synthetic samples in batches
         df = postprocess_generated_arrays_to_dataframe(args, config, all_fake, all_labels, scaler, label_encoder, feature_cols, device, n, file_progress_prefix)  # Postprocess arrays into DataFrame and save
-        persisted_n = count_persisted_generated_samples(args.out_file)  # Count actual generated rows persisted to CSV
         record_sample_generation_timing(args, sample_generation_start_time)  # Record sample generation elapsed time
-        notify_generation_finish_via_telegram(args, persisted_n, file_progress_prefix)  # Send Telegram finish notification
+        testing_start_time = time.time()  # Start post-generation verification and quality-output timing
+        persisted_total_rows = count_persisted_output_rows(args.out_file)  # Count actual rows persisted to augmented CSV
+        validate_augmentation_sample_totals(args, persisted_total_rows)  # Verify source, synthetic, and final output row totals
+        generate_generation_quality_outputs(args, config, df, feature_cols)  # Generate post-generation quality visualization outputs
+        record_testing_timing(args, testing_start_time)  # Record post-generation verification and quality-output elapsed time
+        generated_n = int(safe_float(getattr(args, "_last_generated_num_samples", n), n))  # Resolve actual synthetic row count for result persistence
+        notify_generation_finish_via_telegram(args, generated_n, file_progress_prefix)  # Send Telegram finish notification
 
         try:  # Wrap result writing in try/except to avoid breaking generation on failures
             in_memory_ckpt = {  # Build minimal saved-state metadata for the in-memory generation path
@@ -4633,20 +4886,9 @@ def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset:
                 "metrics_history": getattr(args, "_last_metrics_history", {}),  # Store final metrics history from live training
                 "args": vars(args),  # Store live args for timing fallback values
             }  # End in-memory saved-state metadata
-            prepare_and_write_results_csv_row(args, config, vars(args), in_memory_ckpt, persisted_n, device)  # Prepare and write results CSV row
+            prepare_and_write_results_csv_row(args, config, vars(args), in_memory_ckpt, generated_n, device)  # Prepare and write results CSV row
         except Exception as e:
             warn_on_results_csv_failure(e)  # Warn on results CSV preparation failure
-
-        try:
-            X_original_inmem = dataset.scaler.inverse_transform(dataset.X.numpy())  # Inverse-transform stored dataset tensor to original feature scale
-            X_generated_inmem = df[feature_cols].values.astype(np.float32)  # Extract generated feature columns from postprocessed DataFrame as float32
-            out_file_parent_inmem = Path(args.out_file).parent  # Derive parent directory from out_file for in-memory t-SNE path normalization
-            data_aug_dirname = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")
-            tsne_out_dir_inmem = out_file_parent_inmem.parent if out_file_parent_inmem.name == data_aug_dirname else out_file_parent_inmem  # Route in-memory t-SNE output to Data_Augmentation when out_file is inside Data_Augmentation
-            tsne_name_inmem = Path(args.csv_path).stem if getattr(args, "csv_path", None) else "generated"  # Build dataset name from CSV stem when path is available
-            generate_tsne_3d_separability_plot(X_original_inmem, X_generated_inmem, tsne_out_dir_inmem, dataset_name=tsne_name_inmem, config=config)  # Generate 3D t-SNE separability plot comparing training data and in-memory generated samples
-        except Exception as _tsne_inmem_e:
-            print(f"{BackgroundColors.YELLOW}[WARNING] t-SNE separability plot failed (in-memory): {_tsne_inmem_e}{Style.RESET_ALL}")  # Warn about t-SNE failure without aborting
 
     except Exception as e:
         handle_generate_top_level_exception(e)  # Handle top-level exception by logging and re-raising
@@ -5007,7 +5249,8 @@ def dispatch_wgangp_execution_mode(args, final_config: Dict) -> None:
         if args.mode == "train":  # Training mode
             training_start_time = time.time()  # Record training start time using time.time()
             train(args, final_config)  # Train model
-            args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
+            if getattr(args, "_last_training_time", "") in ("", None):  # Preserve train-loop timing when train recorded it
+                args._last_training_time = ceil_seconds(time.time() - training_start_time)  # Store fallback elapsed seconds with upward rounding
         elif args.mode == "gen":  # Generation mode
             if args.checkpoint is None:  # Verify checkpoint provided
                 raise ValueError("Generation mode requires checkpoint path")
@@ -5015,7 +5258,8 @@ def dispatch_wgangp_execution_mode(args, final_config: Dict) -> None:
         elif args.mode == "both":  # Combined mode
             training_start_time = time.time()  # Record training start time using time.time()
             train(args, final_config)  # Train first
-            args._last_training_time = time.time() - training_start_time  # Store training elapsed time on args
+            if getattr(args, "_last_training_time", "") in ("", None):  # Preserve train-loop timing when train recorded it
+                args._last_training_time = ceil_seconds(time.time() - training_start_time)  # Store fallback elapsed seconds with upward rounding
             if args.csv_path:  # If CSV provided
                 csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path for path operations
                 data_aug_subdir = final_config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Read configured data augmentation base directory name
@@ -5241,7 +5485,7 @@ def execute_training_with_timing(args: Any, config: Dict) -> Optional[tuple]:
     training_start_time = time.time()  # Record training start timestamp for elapsed time calculation
     result = train(args, config)  # Execute WGAN-GP training loop with provided configuration
     if getattr(args, "_last_training_time", "") in ("", None):  # Preserve train-recorded elapsed seconds when available
-        args._last_training_time = time.time() - training_start_time  # Store fallback training elapsed seconds on args for reporting
+        args._last_training_time = ceil_seconds(time.time() - training_start_time)  # Store fallback training elapsed seconds with upward rounding
     return result  # Return training artifacts for in-memory generation fallback
 
 
@@ -5324,8 +5568,14 @@ def validate_augmentation_output(args: Any, csv_path_obj: Path, file_progress_pr
         print(f"{BackgroundColors.RED}{error_msg}{Style.RESET_ALL}")  # Print error to console in red
         send_telegram_message(TELEGRAM_BOT, error_msg)  # Send zero-row failure notification via Telegram
         sys.exit(1)  # Terminate the script due to zero-row output
-    print(f"{file_progress_prefix} {BackgroundColors.GREEN}[INFO] Augmented dataset successfully saved ({BackgroundColors.CYAN}{row_count}{BackgroundColors.GREEN} samples){Style.RESET_ALL}")  # Log successful validation with sample count
-    send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} [INFO] Augmented dataset successfully saved ({row_count} samples) at {out_path}")  # Send success notification via Telegram
+    expected_total_rows = getattr(args, "_last_total_num_samples_after_augmentation", "")  # Read expected augmented output row count from args
+    if expected_total_rows not in (None, "") and row_count != int(safe_float(expected_total_rows, 0.0)):  # Verify persisted row count matches recorded augmentation total
+        error_msg = f"[ERROR] WGAN-GP augmentation failed on {original_name} — augmented file {out_path.name} has {row_count} rows but expected {expected_total_rows}"  # Build row-mismatch error message
+        print(f"{BackgroundColors.RED}{error_msg}{Style.RESET_ALL}")  # Print error to console in red
+        send_telegram_message(TELEGRAM_BOT, error_msg)  # Send row-mismatch failure notification via Telegram
+        sys.exit(1)  # Terminate the script due to mismatched output rows
+    print(f"{file_progress_prefix} {BackgroundColors.GREEN}[INFO] Augmented dataset successfully saved ({BackgroundColors.CYAN}{row_count}{BackgroundColors.GREEN} rows){Style.RESET_ALL}")  # Log successful validation with row count
+    send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} [INFO] Augmented dataset successfully saved ({row_count} rows) at {out_path}")  # Send success notification via Telegram
 
 
 def run_both_mode_for_csv(args: Any, config: Dict, csv_path_obj: Path, data_aug_dir: Path, training_label: str) -> None:
