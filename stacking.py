@@ -680,6 +680,7 @@ def parse_cli_args():
         parser.add_argument("--disable-hyperparameters", dest="enable_hyperparameters", action="store_false", help="Disable hyperparameter optimization method toggle")
         parser.add_argument("--enable-stacking", dest="enable_stacking", action="store_true", default=None, help="Enable stacking classifier evaluation")
         parser.add_argument("--disable-stacking", dest="enable_stacking", action="store_false", help="Disable stacking classifier evaluation")
+        parser.add_argument("--n-jobs", dest="n_jobs", type=int, default=None, help="Override evaluation.n_jobs for estimators that support parallel fitting (-1 uses all processors; 1 is memory-safe)",)
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
         parser.add_argument("--dataset-file-format", type=str, default=None, dest="dataset_file_format", help="File format for dataset files: arff, csv, parquet, txt")  # Dataset file format CLI override
         parser.add_argument("--augmentation-file-format", type=str, default=None, dest="augmentation_file_format", help="File format for augmentation files: arff, csv, parquet, txt")  # Augmentation file format CLI override
@@ -1052,6 +1053,13 @@ def merge_configs(defaults, file_config, cli_args):
 
         if hasattr(cli_args, "enable_stacking") and cli_args.enable_stacking is not None:  # Stacking classifier evaluation toggle CLI override
             config.setdefault("stacking", {}).setdefault("methods", {})["stacking"] = cli_args.enable_stacking  # Apply stacking toggle override
+
+        if hasattr(cli_args, "n_jobs") and cli_args.n_jobs is not None:  # Evaluation n_jobs CLI override
+            if cli_args.n_jobs == 0:  # scikit-learn/joblib do not accept zero workers
+                raise ValueError(
+                    "--n-jobs must be a non-zero integer; use -1 for all processors or 1 for memory-safe execution"
+                )  # Raise explicit validation error
+            config.setdefault("evaluation", {})["n_jobs"] = cli_args.n_jobs  # Apply n_jobs override to estimator construction config
 
         if hasattr(cli_args, "low_memory") and cli_args.low_memory:  # Low memory CLI override
             config["execution"]["low_memory"] = True  # Apply low memory override to config
