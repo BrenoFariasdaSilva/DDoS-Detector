@@ -85,6 +85,7 @@ import platform  # For getting the operating system name
 import psutil  # For verifying system RAM
 import re  # For regular expressions
 import seaborn as sns  # For generating feature usage heatmaps
+import shutil  # For removing temporary feature-source spill directories
 import shap  # For SHAP explainability analysis
 import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
@@ -267,6 +268,18 @@ def build_memory_phase_metadata(config: Optional[dict] = None, **metadata: Any) 
     cfg = config if isinstance(config, dict) else CONFIG  # Resolve runtime configuration
     watcher_cfg = get_memory_watcher_config(cfg)  # Read watcher configuration
     event = {"run_id": watcher_cfg.get("run_id"), "main_pid": os.getpid(), "execution_mode": cfg.get("execution", {}).get("execution_mode") if isinstance(cfg, dict) else None, "watcher_run_dir": watcher_cfg.get("run_directory")}  # Build shared metadata base
+    try:  # Add process/system memory snapshot only when watcher events are already being emitted
+        process_info = psutil.Process(os.getpid()).memory_info()  # Read current process memory counters
+        virtual_memory = psutil.virtual_memory()  # Read system RAM counters
+        swap_memory = psutil.swap_memory()  # Read system swap counters
+        event["process_rss_gb"] = round(process_info.rss / (1024 ** 3), 4)  # Store resident set size in GiB
+        event["process_vms_gb"] = round(process_info.vms / (1024 ** 3), 4)  # Store virtual memory size in GiB
+        event["system_available_gb"] = round(virtual_memory.available / (1024 ** 3), 4)  # Store currently available system RAM
+        event["system_memory_percent"] = virtual_memory.percent  # Store system memory pressure percentage
+        event["swap_used_gb"] = round(swap_memory.used / (1024 ** 3), 4)  # Store current swap usage in GiB
+        event["swap_percent"] = swap_memory.percent  # Store swap pressure percentage
+    except Exception:  # Keep watcher metadata best-effort
+        pass  # Do not let diagnostics interrupt model execution
     for key, value in metadata.items():  # Merge caller metadata
         event[key] = sanitize_memory_watcher_value(value)  # Store normalized metadata value
     return event  # Return compact phase-state metadata
@@ -746,6 +759,11 @@ def get_default_stacking_config():
                 "use_ga": True,  # Enable GA Features strategy (genetic algorithm selection)
                 "explicit_features": [],  # Optional explicit feature list; when non-empty, added as an additional "Explicit Features" set alongside all enabled strategies. Use this carefully, as when analyzing multiple datasets, you must put features common between the datasets.
             },  # Configurable feature set strategies for evaluation
+            "memory_management": {
+                "spill_full_feature_arrays_after_full_eval": True,  # Spill full scaled source matrices to disk-backed memmaps after the full-feature baseline when later feature modes remain.
+                "spill_min_array_nbytes": 1073741824,  # Minimum combined train/test source matrix bytes before spilling is used.
+                "spill_directory": None,  # Optional directory for temporary spill files; null uses the dataset Stacking/Array_Cache directory.
+            },  # Memory lifecycle controls for large feature-selection grids
         }  # Return default stacking configuration
     except Exception as e:
         print(str(e))
@@ -5021,17 +5039,180 @@ def get_feature_subset(X_scaled, features, feature_names):
         if features:  # Only proceed if the list of selected features is NOT empty/None
             indices = []  # List to store indices of selected features
             selected_names = []  # List to store names of selected features
+            feature_index_map = {feature_name: idx for idx, feature_name in enumerate(feature_names)}  # Build one positional lookup table for deterministic column selection
             for f in features:  # Iterate over each feature in the provided list
-                if f in feature_names:  # Verify if the feature exists in the full feature list
-                    indices.append(feature_names.index(f))  # Append the index of the feature
+                if f in feature_index_map:  # Verify if the feature exists in the full feature list
+                    indices.append(feature_index_map[f])  # Append the index of the feature
                     selected_names.append(f)  # Append the name of the feature
-            return X_scaled[:, indices], selected_names  # Return the subset and actual names
+            subset = np.take(X_scaled, np.asarray(indices, dtype=np.intp), axis=1)  # Materialize selected columns in C-contiguous order instead of NumPy's column-advanced F-contiguous copy
+            if not subset.flags.c_contiguous:  # Defensive guard for array subclasses or unusual input layouts
+                subset = np.ascontiguousarray(subset)  # Ensure downstream estimators do not create an additional order-conversion copy
+            return subset, selected_names  # Return the subset and actual names
         else:  # If no features are selected (or features is None)
             return np.empty((X_scaled.shape[0], 0)), []  # Return empty array and empty list
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
+
+
+def build_array_memory_metadata(prefix: str, array: Any) -> dict:
+    """
+    Build compact memory/layout metadata for a feature matrix.
+
+    :param prefix: Prefix for emitted metadata keys.
+    :param array: Array-like object to inspect.
+    :return: Dictionary containing shape, dtype, bytes, and layout flags.
+    """
+
+    metadata: dict[str, Any] = {}  # Accumulate JSON-safe metadata fields
+    try:
+        arr = np.asarray(array)  # Normalize array-like objects without requesting a copy
+        metadata[f"{prefix}_array_type"] = type(array).__name__  # Store original container type
+        metadata[f"{prefix}_shape"] = list(arr.shape)  # Store matrix shape
+        metadata[f"{prefix}_dtype"] = str(arr.dtype)  # Store dtype string
+        metadata[f"{prefix}_nbytes"] = int(arr.nbytes)  # Store exact byte count
+        metadata[f"{prefix}_nbytes_gb"] = round(arr.nbytes / (1024 ** 3), 4)  # Store byte count in GiB
+        metadata[f"{prefix}_c_contiguous"] = bool(arr.flags.c_contiguous)  # Store C-contiguous flag
+        metadata[f"{prefix}_f_contiguous"] = bool(arr.flags.f_contiguous)  # Store F-contiguous flag
+        metadata[f"{prefix}_writeable"] = bool(arr.flags.writeable)  # Store writeability flag
+        metadata[f"{prefix}_base_type"] = type(arr.base).__name__ if arr.base is not None else None  # Store base owner type when present
+    except Exception as exc:  # Keep diagnostics best-effort
+        metadata[f"{prefix}_metadata_error"] = str(exc)  # Report metadata failure without interrupting training
+    return metadata  # Return compact array metadata
+
+
+def get_array_nbytes(array: Any) -> int:
+    """
+    Return the byte footprint of an array-like object.
+
+    :param array: Array-like object to inspect.
+    :return: Number of bytes occupied by the array data buffer, or zero when unavailable.
+    """
+
+    try:
+        return int(np.asarray(array).nbytes)  # Return NumPy-reported data bytes without requesting a copy
+    except Exception:
+        return 0  # Treat unknown objects as zero-byte for spill threshold decisions
+
+
+def resolve_feature_source_spill_base_directory(file: str, config: Optional[dict] = None) -> Path:
+    """
+    Resolve the base directory used for temporary feature-source memmap files.
+
+    :param file: Dataset file or directory identity for output-root resolution.
+    :param config: Runtime configuration dictionary.
+    :return: Existing base directory for temporary spill subdirectories.
+    """
+
+    if config is None:  # Use global configuration when no explicit configuration is supplied
+        config = CONFIG  # Assign global configuration
+    memory_cfg = config.get("stacking", {}).get("memory_management", {})  # Read memory management settings
+    configured_directory = memory_cfg.get("spill_directory", None)  # Read optional explicit spill directory
+    if configured_directory:  # If operator configured a spill directory
+        base_directory = Path(str(configured_directory)).expanduser()  # Resolve configured directory path
+    else:  # Use the dataset's stacking output area by default
+        base_directory = Path(get_stacking_output_dir(str(file), config)) / "Array_Cache"  # Build dataset-local temporary array cache directory
+    base_directory.mkdir(parents=True, exist_ok=True)  # Ensure base directory exists
+    return base_directory  # Return base directory path
+
+
+def spill_array_to_memmap(array: Any, temp_dir: str, name: str) -> Tuple[np.memmap, str]:
+    """
+    Copy one feature-source array into a temporary C-contiguous memmap.
+
+    :param array: Source array to spill.
+    :param temp_dir: Temporary directory that owns the memmap file.
+    :param name: Logical array name used in the file name.
+    :return: Tuple of memmap array and backing file path.
+    """
+
+    source = np.asarray(array)  # Normalize source without changing dtype
+    if source.ndim != 2:  # Feature-source arrays must be two-dimensional matrices
+        raise ValueError(f"Feature source array {name} must be 2D, got shape {source.shape}")  # Raise explicit shape error
+    file_path = os.path.join(temp_dir, f"{name}_{uuid.uuid4().hex}.dat")  # Build collision-resistant backing file path
+    memmap_array = np.memmap(file_path, dtype=source.dtype, mode="w+", shape=source.shape, order="C")  # Allocate disk-backed C-contiguous matrix
+    memmap_array[:] = source  # Copy exact source values into the memmap without dtype conversion
+    memmap_array.flush()  # Flush backing bytes before releasing the source array
+    return memmap_array, file_path  # Return memmap and backing file path
+
+
+def cleanup_feature_source_arrays(feature_source_arrays: Optional[dict], config: Optional[dict] = None) -> None:
+    """
+    Release feature-source arrays and remove any temporary spill files.
+
+    :param feature_source_arrays: Mutable holder created by evaluate_on_dataset.
+    :param config: Runtime configuration dictionary.
+    :return: None.
+    """
+
+    if not feature_source_arrays:  # Nothing to clean
+        return  # Exit early
+    spill_temp_dir = feature_source_arrays.get("spill_temp_dir")  # Resolve temporary spill directory if one was created
+    try:
+        feature_source_arrays["X_train_scaled"] = None  # Drop train source reference before deleting memmap files
+        feature_source_arrays["X_test_scaled"] = None  # Drop test source reference before deleting memmap files
+        gc.collect()  # Reclaim ndarray or memmap objects before filesystem cleanup
+        if spill_temp_dir and os.path.isdir(spill_temp_dir):  # Remove only this run's unique temporary directory
+            shutil.rmtree(spill_temp_dir, ignore_errors=True)  # Delete temporary memmap files best-effort
+    except Exception as exc:  # Keep cleanup best-effort
+        print(f"{BackgroundColors.YELLOW}[WARNING] Failed to clean feature-source spill files at {spill_temp_dir}: {exc}{Style.RESET_ALL}")  # Log cleanup failure
+    finally:
+        feature_source_arrays.clear()  # Clear holder so repeated cleanup is a no-op
+
+
+def maybe_spill_feature_source_arrays(feature_source_arrays: dict, file: str, config: Optional[dict] = None) -> None:
+    """
+    Spill full scaled source matrices to disk-backed memmaps after Full Features.
+
+    :param feature_source_arrays: Mutable holder containing X_train_scaled and X_test_scaled.
+    :param file: Dataset file or directory identity for resolving spill location.
+    :param config: Runtime configuration dictionary.
+    :return: None.
+    """
+
+    if config is None:  # Use global configuration when no explicit configuration is supplied
+        config = CONFIG  # Assign global configuration
+    memory_cfg = config.get("stacking", {}).get("memory_management", {})  # Read memory management settings
+    if not bool(memory_cfg.get("spill_full_feature_arrays_after_full_eval", True)):  # Honor operator disable switch
+        return  # Leave arrays resident in memory
+    if feature_source_arrays.get("spilled_to_memmap", False):  # Avoid duplicate spilling
+        return  # Already spilled
+
+    X_train_source = feature_source_arrays.get("X_train_scaled")  # Read current full train source matrix
+    X_test_source = feature_source_arrays.get("X_test_scaled")  # Read current full test source matrix
+    if X_train_source is None or X_test_source is None:  # Nothing usable to spill
+        return  # Exit early
+    total_nbytes = get_array_nbytes(X_train_source) + get_array_nbytes(X_test_source)  # Compute combined source matrix footprint
+    min_nbytes = int(memory_cfg.get("spill_min_array_nbytes", 1073741824) or 0)  # Resolve threshold with zero as explicit always-spill
+    if total_nbytes < min_nbytes:  # Skip small datasets where disk spill adds no value
+        return  # Leave arrays in memory
+
+    temp_dir = None  # Track temp dir for failure cleanup
+    try:
+        base_directory = resolve_feature_source_spill_base_directory(file, config=config)  # Resolve spill base directory
+        temp_dir = tempfile.mkdtemp(prefix="FeatureSource_", dir=str(base_directory))  # Create unique spill directory for this evaluation slice
+        X_train_memmap, train_path = spill_array_to_memmap(X_train_source, temp_dir, "X_train_scaled")  # Spill train source matrix
+        X_test_memmap, test_path = spill_array_to_memmap(X_test_source, temp_dir, "X_test_scaled")  # Spill test source matrix
+        feature_source_arrays["X_train_scaled"] = X_train_memmap  # Replace in-memory train matrix with memmap-backed matrix
+        feature_source_arrays["X_test_scaled"] = X_test_memmap  # Replace in-memory test matrix with memmap-backed matrix
+        feature_source_arrays["spilled_to_memmap"] = True  # Mark holder as spilled
+        feature_source_arrays["spill_temp_dir"] = temp_dir  # Store unique spill directory for cleanup
+        feature_source_arrays["spill_paths"] = [train_path, test_path]  # Store backing paths for diagnostics
+        del X_train_source, X_test_source  # Release old in-memory source references held by this helper
+        gc.collect()  # Reclaim old in-memory full matrices before the next feature subset is materialized
+
+        event_metadata = {"dataset_source": file, "spill_temp_dir": temp_dir, "spilled_total_nbytes": total_nbytes, "spilled_total_nbytes_gb": round(total_nbytes / (1024 ** 3), 4), "event_outcome": "completed"}  # Build compact spill event metadata
+        if memory_watcher_enabled(config):  # Add array layout details only when diagnostics are active
+            event_metadata.update(build_array_memory_metadata("feature_source_train", feature_source_arrays["X_train_scaled"]))  # Add train memmap metadata
+            event_metadata.update(build_array_memory_metadata("feature_source_test", feature_source_arrays["X_test_scaled"]))  # Add test memmap metadata
+        write_memory_phase_event("after_feature_source_spill", config=config, **event_metadata)  # Publish spill completion event
+        verbose_output(f"{BackgroundColors.GREEN}[MEMORY] Spilled full feature source matrices ({total_nbytes / (1024 ** 3):.2f} GiB) to temporary memmaps at {BackgroundColors.CYAN}{temp_dir}{Style.RESET_ALL}", config=config)  # Log spill path when verbose
+    except Exception as exc:  # Keep spill failure non-fatal so experiments preserve behavior
+        if temp_dir and os.path.isdir(temp_dir):  # Clean failed partial spill directory
+            shutil.rmtree(temp_dir, ignore_errors=True)  # Remove partial memmap files best-effort
+        write_memory_phase_event("after_feature_source_spill", config=config, dataset_source=file, spilled_total_nbytes=total_nbytes, event_outcome=f"failed:{exc}")  # Publish failed spill event when watcher is active
+        print(f"{BackgroundColors.YELLOW}[WARNING] Feature-source memmap spill failed; continuing with in-memory arrays: {exc}{Style.RESET_ALL}")  # Warn operator that memory-saving spill is unavailable
 
 
 def truncate_value(value):
@@ -5325,6 +5506,11 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         error_metadata = dict(phase_metadata or {})  # Copy watcher metadata for memory error
         error_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else error_metadata.get("dataset_identity"), "classifier_name": model_name, "train_sample_count": len(y_train) if y_train is not None else error_metadata.get("train_sample_count"), "test_sample_count": len(y_test) if y_test is not None else error_metadata.get("test_sample_count"), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else error_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": str(e)})  # Build memory error watcher metadata
         write_memory_phase_event("memory_error", config=config, **error_metadata)  # Publish classifier memory error
+        try:
+            model = None  # Release the partially fitted estimator before heavy error reporting
+            gc.collect()  # Reclaim estimator-owned memory best-effort
+        except Exception:
+            pass  # Do not mask the original MemoryError
         print(str(e))  # Print memory error to terminal logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send memory error via Telegram
         raise  # Preserve original MemoryError behavior
@@ -5332,6 +5518,11 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         error_metadata = dict(phase_metadata or {})  # Copy watcher metadata for model error
         error_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else error_metadata.get("dataset_identity"), "classifier_name": model_name, "train_sample_count": len(y_train) if y_train is not None else error_metadata.get("train_sample_count"), "test_sample_count": len(y_test) if y_test is not None else error_metadata.get("test_sample_count"), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else error_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": str(e)})  # Build model error watcher metadata
         write_memory_phase_event("model_error", config=config, **error_metadata)  # Publish classifier model error
+        try:
+            model = None  # Release the partially fitted estimator before heavy error reporting
+            gc.collect()  # Reclaim estimator-owned memory best-effort
+        except Exception:
+            pass  # Do not mask the original exception
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
@@ -9174,12 +9365,11 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
         raise
 
 
-def iterate_feature_sets_sequentially(X_train_scaled: Any, X_test_scaled: Any, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, file: str, feature_sets_config: dict, config: Optional[dict]) -> Any:
+def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, file: str, feature_sets_config: dict, config: Optional[dict]) -> Any:
     """
     Yield feature-set matrices one at a time.
 
-    :param X_train_scaled: Scaled training feature matrix.
-    :param X_test_scaled: Scaled test feature matrix.
+    :param feature_source_arrays: Mutable holder containing the full scaled train/test source matrices.
     :param feature_names: Complete ordered feature-name list.
     :param ga_selected_features: GA-selected feature list or None.
     :param pca_n_components: PCA component count or None.
@@ -9200,12 +9390,15 @@ def iterate_feature_sets_sequentially(X_train_scaled: Any, X_test_scaled: Any, f
     use_ga = feature_sets_config.get("use_ga", True)  # Resolve GA strategy toggle.
     use_pca = feature_sets_config.get("use_pca", True)  # Resolve PCA strategy toggle.
     use_rfe = feature_sets_config.get("use_rfe", True)  # Resolve RFE strategy toggle.
-    feature_signatures = set()  # Track semantic feature-set identities for duplicate suppression.
+    feature_signatures: set[Tuple[str, Any]] = set()  # Track semantic feature-set identities for duplicate suppression.
+    pending_mode_count = count_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Count modes to decide whether source matrices are still needed after Full Features.
 
     if use_full:  # Yield full features first to preserve baseline ordering.
         full_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in feature_names)))  # Build full-feature identity.
         feature_signatures.add(full_signature)  # Register full-feature identity before optional modes.
-        yield "Full Features", X_train_scaled, X_test_scaled, feature_names  # Yield full-feature matrices without copying.
+        yield "Full Features", feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], feature_names  # Yield full-feature matrices without copying.
+        if pending_mode_count > 1:  # If later feature modes need the full source matrices, spill them before materializing subset copies.
+            maybe_spill_feature_source_arrays(feature_source_arrays, file, config=config)  # Replace large in-memory full matrices with disk-backed memmaps when configured.
 
     if explicit_features:  # Resolve explicit feature mode only when configured.
         feature_names_list = list(feature_names)  # Normalize feature names for positional lookup.
@@ -9228,28 +9421,37 @@ def iterate_feature_sets_sequentially(X_train_scaled: Any, X_test_scaled: Any, f
         if valid_explicit:  # Yield explicit mode only when at least one feature is valid.
             explicit_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in valid_explicit)))  # Build explicit feature identity.
             if explicit_signature not in feature_signatures:  # Suppress duplicate explicit mode.
-                feature_indices = [feature_names_list.index(feature) for feature in valid_explicit]  # Resolve feature positions.
-                X_train_explicit = X_train_scaled[:, feature_indices]  # Materialize explicit training subset for this mode.
-                X_test_explicit = X_test_scaled[:, feature_indices]  # Materialize explicit test subset for this mode.
+                X_train_explicit, explicit_actual_features = get_feature_subset(feature_source_arrays["X_train_scaled"], valid_explicit, feature_names)  # Materialize explicit training subset for this mode.
+                X_test_explicit, _ = get_feature_subset(feature_source_arrays["X_test_scaled"], valid_explicit, feature_names)  # Materialize explicit test subset for this mode.
                 feature_signatures.add(explicit_signature)  # Register explicit feature identity.
-                yield "Explicit Features", X_train_explicit, X_test_explicit, valid_explicit  # Yield explicit feature matrices.
+                try:
+                    yield "Explicit Features", X_train_explicit, X_test_explicit, explicit_actual_features  # Yield explicit feature matrices.
+                finally:
+                    del X_train_explicit, X_test_explicit  # Release explicit subset arrays after caller finishes or aborts this mode.
+                    gc.collect()  # Reclaim explicit subset memory before the next feature mode.
             else:  # Report duplicate explicit mode suppression.
                 print(f"{BackgroundColors.YELLOW}[WARNING] Explicit Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Log duplicate explicit mode.
 
     if use_ga:  # Resolve GA feature mode after explicit features.
-        X_train_ga, ga_actual_features = get_feature_subset(X_train_scaled, ga_selected_features, feature_names)  # Materialize GA training subset for this mode.
-        X_test_ga, _ = get_feature_subset(X_test_scaled, ga_selected_features, feature_names)  # Materialize GA test subset for this mode.
+        X_train_ga, ga_actual_features = get_feature_subset(feature_source_arrays["X_train_scaled"], ga_selected_features, feature_names)  # Materialize GA training subset for this mode.
+        X_test_ga, _ = get_feature_subset(feature_source_arrays["X_test_scaled"], ga_selected_features, feature_names)  # Materialize GA test subset for this mode.
         if X_train_ga is not None and X_train_ga.shape[1] > 0:  # Yield GA only when at least one feature exists.
             ga_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in ga_actual_features)))  # Build GA feature identity.
             if ga_signature not in feature_signatures:  # Suppress duplicate GA mode.
                 feature_signatures.add(ga_signature)  # Register GA feature identity.
-                yield "GA Features", X_train_ga, X_test_ga, ga_actual_features  # Yield GA feature matrices.
+                try:
+                    yield "GA Features", X_train_ga, X_test_ga, ga_actual_features  # Yield GA feature matrices.
+                finally:
+                    del X_train_ga, X_test_ga  # Release GA subset arrays after caller finishes or aborts this mode.
+                    gc.collect()  # Reclaim GA subset memory before the next feature mode.
             else:  # Report duplicate GA mode suppression.
                 print(f"{BackgroundColors.YELLOW}[WARNING] GA Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Log duplicate GA mode.
+                del X_train_ga, X_test_ga  # Release duplicate GA subset arrays immediately.
+                gc.collect()  # Reclaim duplicate GA subset memory.
 
     if use_pca:  # Resolve PCA feature mode after GA to preserve sorted evaluation order.
         try:  # Preserve existing PCA failure tolerance.
-            X_train_pca, X_test_pca = apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file, config=config)  # Materialize PCA matrices for this mode.
+            X_train_pca, X_test_pca = apply_pca_transformation(feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], pca_n_components, file, config=config)  # Materialize PCA matrices for this mode.
         except Exception as e:  # Skip PCA mode when transformation fails.
             print(f"{BackgroundColors.YELLOW}[WARNING] PCA Components skipped because transformation failed for {BackgroundColors.CYAN}{file}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}")  # Log PCA transformation failure.
             X_train_pca, X_test_pca = None, None  # Suppress PCA mode after failure.
@@ -9257,18 +9459,31 @@ def iterate_feature_sets_sequentially(X_train_scaled: Any, X_test_scaled: Any, f
             pca_signature = ("pca", int(X_train_pca.shape[1]))  # Build PCA component identity.
             if pca_signature not in feature_signatures:  # Suppress duplicate PCA mode.
                 feature_signatures.add(pca_signature)  # Register PCA component identity.
-                yield "PCA Components", X_train_pca, X_test_pca, None  # Yield PCA matrices with synthetic names.
+                try:
+                    yield "PCA Components", X_train_pca, X_test_pca, None  # Yield PCA matrices with synthetic names.
+                finally:
+                    del X_train_pca, X_test_pca  # Release PCA matrices after caller finishes or aborts this mode.
+                    gc.collect()  # Reclaim PCA memory before the next feature mode.
+            else:
+                del X_train_pca, X_test_pca  # Release duplicate PCA matrices immediately.
+                gc.collect()  # Reclaim duplicate PCA memory.
 
     if use_rfe:  # Resolve RFE feature mode last to preserve sorted evaluation order.
-        X_train_rfe, rfe_actual_features = get_feature_subset(X_train_scaled, rfe_selected_features, feature_names)  # Materialize RFE training subset for this mode.
-        X_test_rfe, _ = get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)  # Materialize RFE test subset for this mode.
+        X_train_rfe, rfe_actual_features = get_feature_subset(feature_source_arrays["X_train_scaled"], rfe_selected_features, feature_names)  # Materialize RFE training subset for this mode.
+        X_test_rfe, _ = get_feature_subset(feature_source_arrays["X_test_scaled"], rfe_selected_features, feature_names)  # Materialize RFE test subset for this mode.
         if X_train_rfe is not None and X_train_rfe.shape[1] > 0:  # Yield RFE only when at least one feature exists.
             rfe_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in rfe_actual_features)))  # Build RFE feature identity.
             if rfe_signature not in feature_signatures:  # Suppress duplicate RFE mode.
                 feature_signatures.add(rfe_signature)  # Register RFE feature identity.
-                yield "RFE Features", X_train_rfe, X_test_rfe, rfe_actual_features  # Yield RFE feature matrices.
+                try:
+                    yield "RFE Features", X_train_rfe, X_test_rfe, rfe_actual_features  # Yield RFE feature matrices.
+                finally:
+                    del X_train_rfe, X_test_rfe  # Release RFE subset arrays after caller finishes or aborts this mode.
+                    gc.collect()  # Reclaim RFE subset memory.
             else:  # Report duplicate RFE mode suppression.
                 print(f"{BackgroundColors.YELLOW}[WARNING] RFE Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Log duplicate RFE mode.
+                del X_train_rfe, X_test_rfe  # Release duplicate RFE subset arrays immediately.
+                gc.collect()  # Reclaim duplicate RFE subset memory.
 
 
 def build_classifier_result_entry(model_class, file, execution_mode_str, attack_types_combined, feature_set_name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, n_features, n_samples_train, n_samples_test, metrics_tuple, subset_feature_names, hyperparams_map=None, hyperparameters_enabled=False, effective_hyperparameters=None):  # Build a standardized classifier result entry.
@@ -9560,6 +9775,8 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         )  # Update progress bar description for individual model evaluations
 
         results_dict = {}  # Accumulate result entries for this feature set
+        X_train_values = X_train_df.to_numpy(copy=False) if hasattr(X_train_df, "to_numpy") else np.asarray(X_train_df)  # Reuse one no-copy train array view for all classifiers in this feature set
+        X_test_values = X_test_df.to_numpy(copy=False) if hasattr(X_test_df, "to_numpy") else np.asarray(X_test_df)  # Reuse one no-copy test array view for all classifiers in this feature set
 
         for model_name, model in individual_models.items():  # Iterate over each individual model sequentially to prevent loky deadlock
             recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled)  # Attempt to recover cached result for this model and advance counters when recovered
@@ -9575,14 +9792,17 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             phase_cache_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, hyperparameters_enabled)  # Build cache identity source for diagnostics
             phase_cache_digest = hashlib.sha256(json.dumps(phase_cache_key, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Build stable cache identity digest
             phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "classifier_name": model_name, "classifier_params_digest": phase_params_digest, "classifier_params_reference": f"sha256:{phase_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train_n_cols, "n_jobs": get_classifier_n_jobs(active_model), "cache_identity": phase_cache_digest, "cache_reference": cache_ref_file, "combination_index": current_combination, "total_combinations": total_steps}  # Build compact phase metadata for this classifier
+            if memory_watcher_enabled(config):  # Add concrete matrix layout diagnostics only when the watcher is active
+                phase_metadata.update(build_array_memory_metadata("X_train", X_train_values))  # Record train matrix shape/dtype/layout
+                phase_metadata.update(build_array_memory_metadata("X_test", X_test_values))  # Record test matrix shape/dtype/layout
             write_memory_phase_event("before_classifier_fit", config=config, **phase_metadata, event_outcome="starting")  # Publish classifier fit start
 
             metrics = evaluate_individual_classifier(
                 active_model,  # Use the fitted clone for this atomic classifier.
                 model_name,
-                X_train_df.values,
+                X_train_values,
                 y_train,
-                X_test_df.values,
+                X_test_values,
                 y_test,
                 file,
                 scaler,
@@ -9640,8 +9860,21 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             gc.collect()  # Reclaim estimator-owned memory before the next atomic classifier
             write_memory_phase_event("after_memory_cleanup", config=config, **phase_metadata, event_outcome="completed")  # Publish per-classifier cleanup completion
 
+        del X_train_values, X_test_values  # Drop local array views before returning feature-set results
         return (results_dict, current_combination)  # Return accumulated results and updated combination counter
     except Exception as e:
+        try:
+            if "active_model" in locals():  # Release any partially fitted estimator before re-raising
+                del active_model
+            if "metrics" in locals():  # Release metric tuple if the failure happened after evaluation
+                del metrics
+            if "X_train_values" in locals():  # Release train array view held by this function frame
+                del X_train_values
+            if "X_test_values" in locals():  # Release test array view held by this function frame
+                del X_test_values
+            gc.collect()  # Reclaim any released estimator-owned memory before error reporting
+        except Exception:
+            pass  # Do not mask the primary failure
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
@@ -9889,8 +10122,8 @@ def convert_subset_to_dataframes(X_train_subset, X_test_subset, subset_feature_n
     train_names = align_feature_names_to_array(X_train_subset, subset_feature_names, "X_train_subset")  # Align feature names to training array shape
     test_names = align_feature_names_to_array(X_test_subset, subset_feature_names, "X_test_subset")  # Align feature names to test array shape
 
-    X_train_df = pd.DataFrame(X_train_subset, columns=train_names)  # Convert training features to DataFrame with aligned column names
-    X_test_df = pd.DataFrame(X_test_subset, columns=test_names)  # Convert test features to DataFrame with aligned column names
+    X_train_df = pd.DataFrame(X_train_subset, columns=train_names, copy=False)  # Wrap training features without requesting an additional copy
+    X_test_df = pd.DataFrame(X_test_subset, columns=test_names, copy=False)  # Wrap test features without requesting an additional copy
 
     return X_train_df, X_test_df  # Return DataFrames with named columns
 
@@ -10052,7 +10285,9 @@ def evaluate_on_dataset(
     :param hyperparameters_enabled: Explicit hyperparameter mode flag for progress labels and result flow
     :return: Dictionary mapping (feature_set, model_name) to results
     """
-    
+
+    feature_source_arrays = None  # Initialized before try so failure cleanup can run safely even during early setup errors
+    feature_sets_iter = None  # Initialized before try so generator cleanup is always safe
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
@@ -10074,6 +10309,8 @@ def evaluate_on_dataset(
             return {}  # Return empty dictionary
 
         X_train_scaled, X_test_scaled, y_train, y_test, scaler = data_splits  # Unpack the data splits tuple
+        feature_source_arrays = {"X_train_scaled": X_train_scaled, "X_test_scaled": X_test_scaled, "spilled_to_memmap": False}  # Transfer full source matrices into a mutable lifecycle holder.
+        del data_splits, X_train_scaled, X_test_scaled  # Remove duplicate local references so the holder can truly release or spill the full matrices.
         del df  # Release the original dataframe after split and scaling before classifier fitting.
         if df_augmented_for_training is not None:  # Verify whether augmented training dataframe input exists.
             del df_augmented_for_training  # Release augmented dataframe input after split and scaling before classifier fitting.
@@ -10114,7 +10351,7 @@ def evaluate_on_dataset(
             all_results = {}  # Initialize results for this data/HP slice
             current_combination = grid_progress["current_combination"]  # Continue from the previous grid slice
 
-        feature_sets_iter = iterate_feature_sets_sequentially(X_train_scaled, X_test_scaled, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file, feature_sets_config, config)  # Create lazy feature-set iterator
+        feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file, feature_sets_config, config)  # Create lazy feature-set iterator
         for idx, (name, X_train_subset, X_test_subset, subset_feature_names_list) in enumerate(feature_sets_iter, start=1):  # Evaluate one materialized feature set at a time
             if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
                 print(
@@ -10126,7 +10363,11 @@ def evaluate_on_dataset(
                 current_combination += len(individual_models) + (1 if stacking_enabled else 0)  # Keep shared combination numbering aligned with skipped steps
                 continue  # Skip to the next set
 
-            write_memory_phase_event("before_feature_set_evaluation", config=config, dataset_identity=os.path.basename(str(file)), dataset_source=file, execution_mode=execution_mode_str, attack_scope=attack_types_combined, data_source=data_source_label, experiment_mode=experiment_mode, augmentation_ratio=augmentation_ratio, feature_set_name=name, hyperparameter_mode="Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=X_train_subset.shape[1], event_outcome="starting")  # Publish feature-set evaluation start
+            feature_phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train_subset.shape[1]}  # Build reusable feature-set metadata
+            if memory_watcher_enabled(config):  # Add exact matrix layout only when watcher diagnostics are active
+                feature_phase_metadata.update(build_array_memory_metadata("X_train_subset", X_train_subset))  # Add train subset memory metadata
+                feature_phase_metadata.update(build_array_memory_metadata("X_test_subset", X_test_subset))  # Add test subset memory metadata
+            write_memory_phase_event("before_feature_set_evaluation", config=config, **feature_phase_metadata, event_outcome="starting")  # Publish feature-set evaluation start
             individual_results, stacking_result_entry, current_combination = evaluate_single_feature_set(
                 idx, name, X_train_subset, X_test_subset, subset_feature_names_list,
                 individual_models, stacking_model, y_train, y_test,
@@ -10135,7 +10376,7 @@ def evaluate_on_dataset(
                 hyperparams_map, scaler, total_steps, current_combination, progress_bar, stacking_enabled=stacking_enabled, config=config,
                 cache_dict=cache_dict, cache_ref_file=effective_cache_ref, hyperparameters_enabled=hyperparameters_enabled,
             )  # Evaluate all individual classifiers and stacking model on this non-empty feature subset with resume support
-            write_memory_phase_event("after_feature_set_evaluation", config=config, dataset_identity=os.path.basename(str(file)), dataset_source=file, execution_mode=execution_mode_str, attack_scope=attack_types_combined, data_source=data_source_label, experiment_mode=experiment_mode, augmentation_ratio=augmentation_ratio, feature_set_name=name, hyperparameter_mode="Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=X_train_subset.shape[1], event_outcome="completed")  # Publish feature-set evaluation completion
+            write_memory_phase_event("after_feature_set_evaluation", config=config, **feature_phase_metadata, event_outcome="completed")  # Publish feature-set evaluation completion
 
             all_results.update(individual_results)  # Merge this feature set's results into the global results dict
             if stacking_result_entry is not None:  # Store stacking result only when stacking evaluation was enabled
@@ -10147,13 +10388,27 @@ def evaluate_on_dataset(
             progress_bar.close()  # Close local progress bar
         else:  # Persist the next counter for the following HP/augmentation grid slice
             grid_progress["current_combination"] = current_combination  # Advance the shared full-grid combination counter
-        del X_train_scaled, X_test_scaled, y_train, y_test, scaler  # Release split/scaled arrays before returning result metadata
+        if feature_sets_iter is not None and hasattr(feature_sets_iter, "close"):  # Close the generator before deleting source memmaps
+            feature_sets_iter.close()  # Trigger generator-side subset cleanup if not already exhausted
+        cleanup_feature_source_arrays(feature_source_arrays, config=config)  # Release full source arrays or temporary memmaps before returning result metadata
+        feature_source_arrays = None  # Prevent duplicate cleanup in the outer finally
+        del y_train, y_test, scaler  # Release labels and scaler before returning result metadata
         gc.collect()  # Reclaim split/scaled arrays after all feature modes complete
         return all_results  # Return dictionary of results
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
+    finally:
+        try:  # Always close the active feature iterator before source cleanup
+            if feature_sets_iter is not None and hasattr(feature_sets_iter, "close"):  # Verify iterator supports close
+                feature_sets_iter.close()  # Trigger generator-side cleanup on failures and interrupts
+        except Exception:
+            pass  # Do not mask the primary exception
+        try:  # Always release feature source arrays and spill files
+            cleanup_feature_source_arrays(feature_source_arrays, config=config)  # Cleanup is a no-op when already completed
+        except Exception:
+            pass  # Do not mask the primary exception
 
 
 def determine_files_to_process(csv_file, input_path, config=None):
