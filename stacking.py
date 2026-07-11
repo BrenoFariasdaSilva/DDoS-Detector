@@ -76,6 +76,7 @@ import math  # For mathematical operations
 import matplotlib  # For plotting configuration
 matplotlib.use('Agg')  # Use non-interactive backend for server environments
 import matplotlib.pyplot as plt  # For creating t-SNE visualization plots
+import multiprocessing as mp  # For process-isolated explainability execution
 import numpy as np  # Import numpy for numerical operations
 import optuna  # For Bayesian hyperparameter optimization (AutoML)
 import os  # For running a command in the terminal
@@ -83,6 +84,7 @@ import pandas as pd  # Import pandas for data manipulation
 import pickle  # For loading PCA objects
 import platform  # For getting the operating system name
 import psutil  # For verifying system RAM
+import queue as queue_module  # For queue timeout exceptions from explainability status channels
 import re  # For regular expressions
 import seaborn as sns  # For generating feature usage heatmaps
 import shutil  # For removing temporary feature-source spill directories
@@ -90,6 +92,7 @@ import shap  # For SHAP explainability analysis
 import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
+import threading  # For low-overhead training RAM sampling
 import time  # For measuring execution time
 import tempfile  # For atomic cache file writes using temp-file and rename strategy
 import traceback  # For formatting and printing exception tracebacks
@@ -153,8 +156,11 @@ TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegr
 
 # Logger Setup:
 logger = None  # Will be initialized in initialize_logger()
-EXPLAINABILITY_EXECUTOR: Optional[concurrent.futures.ThreadPoolExecutor] = None  # Manages queued explainability jobs in one background worker.
-EXPLAINABILITY_FUTURES: List[concurrent.futures.Future] = []  # Tracks scheduled explainability futures until finalization.
+EXPLAINABILITY_PROCESSES: List[dict] = []  # Tracks process-isolated explainability jobs until finalization.
+EXPLAINABILITY_RAM_THRESHOLD_PERCENT = 50.0  # Defines the strict RAM ceiling for asynchronous explainability dispatch.
+TRAINING_RAM_SAMPLE_INTERVAL_SECONDS = 1.0  # Defines the classifier training RAM polling interval.
+EXPLAINABILITY_PROCESS_START_TIMEOUT_SECONDS = 10.0  # Defines the maximum wait for child initialization status.
+EXPLAINABILITY_PROCESS_JOIN_TIMEOUT_SECONDS = 5.0  # Defines bounded join polling for live explainability children.
 MEMORY_WATCHER_PROCESS: Optional[subprocess.Popen] = None  # Holds the single watcher sidecar process for this stacking run
 MEMORY_WATCHER_RUN_DIR: Optional[str] = None  # Holds the unique watcher output directory for this stacking run
 MEMORY_WATCHER_PHASE_STATE_PATH: Optional[str] = None  # Holds the atomic phase-state path shared with the watcher
@@ -254,6 +260,119 @@ def get_classifier_params_digest(model: Any) -> dict:  # Build stable classifier
     except Exception as exc:  # Keep diagnostics from interrupting training
         digest = hashlib.sha256(str(model).encode("utf-8", errors="replace")).hexdigest()  # Compute fallback digest from model string
         return {"digest": digest, "parameter_count": None, "error": str(exc)}  # Return fallback digest metadata
+
+
+def read_system_ram_percent() -> float:
+    """
+    Read current system RAM usage percentage.
+
+    :return: Current system RAM usage percentage.
+    """
+
+    return float(psutil.virtual_memory().percent)  # Return the current system RAM usage percentage from psutil.
+
+
+def sample_training_ram_usage(stop_event: threading.Event, samples: List[float], interval_seconds: float) -> None:
+    """
+    Sample system RAM usage until classifier training stops.
+
+    :param stop_event: Event used to stop RAM sampling.
+    :param samples: Mutable list receiving RAM usage percentages.
+    :param interval_seconds: Sampling interval in seconds.
+    :return: None.
+    """
+
+    while not stop_event.wait(interval_seconds):  # Continue sampling until the caller stops training monitoring.
+        samples.append(read_system_ram_percent())  # Store the current system RAM usage percentage for this classifier.
+
+
+def start_training_ram_monitor(interval_seconds: float) -> dict:
+    """
+    Start low-overhead RAM sampling for one classifier training period.
+
+    :param interval_seconds: Sampling interval in seconds.
+    :return: Monitor state dictionary used to stop sampling.
+    """
+
+    samples: List[float] = [read_system_ram_percent()]  # Record an immediate RAM sample before classifier fit starts.
+    stop_event = threading.Event()  # Create a stop event owned by this classifier training monitor.
+    safe_interval = max(float(interval_seconds), 0.1)  # Bound the interval away from busy waiting.
+    thread = threading.Thread(target=sample_training_ram_usage, args=(stop_event, samples, safe_interval), name="training-ram-monitor", daemon=True)  # Create one daemon sampler thread for this classifier fit.
+    thread.start()  # Start RAM sampling immediately before classifier fit.
+    return {"stop_event": stop_event, "samples": samples, "thread": thread, "interval_seconds": safe_interval}  # Return monitor state to the caller.
+
+
+def stop_training_ram_monitor(monitor: Optional[dict]) -> dict:
+    """
+    Stop RAM sampling and summarize one classifier training period.
+
+    :param monitor: Monitor state dictionary returned by start_training_ram_monitor.
+    :return: Dictionary containing latest, average, sample count, and thread state.
+    """
+
+    if monitor is None:  # Preserve callers that did not start monitoring.
+        current_percent = read_system_ram_percent()  # Read a fallback RAM value when no monitor exists.
+        return {"latest_percent": current_percent, "average_percent": current_percent, "sample_count": 1, "thread_alive": False}  # Return a one-sample fallback summary.
+    samples = monitor.get("samples", [])  # Read samples collected for this classifier.
+    samples.append(read_system_ram_percent())  # Record the terminal RAM sample immediately after classifier fit exits.
+    stop_event = cast(Any, monitor.get("stop_event"))  # Read the stop event from monitor state.
+    thread = monitor.get("thread")  # Read the sampler thread from monitor state.
+    interval_seconds = float(monitor.get("interval_seconds", TRAINING_RAM_SAMPLE_INTERVAL_SECONDS))  # Read the effective sampling interval.
+    if stop_event is not None:  # Verify that the monitor stop event is present.
+        stop_event.set()  # Signal the sampler thread to stop.
+    if isinstance(thread, threading.Thread):  # Verify that the monitor thread is valid.
+        thread.join(timeout=max(interval_seconds + 1.0, 1.0))  # Wait briefly for sampler cleanup without delaying training flow indefinitely.
+    numeric_samples = [float(value) for value in samples if isinstance(value, (int, float)) and not math.isnan(float(value))]  # Keep numeric RAM samples only.
+    if not numeric_samples:  # Use a fallback sample if all collected values were invalid.
+        numeric_samples = [read_system_ram_percent()]  # Read current RAM usage as the fallback sample.
+    latest_percent = float(numeric_samples[-1])  # Resolve latest observed RAM usage for this classifier.
+    average_percent = float(sum(numeric_samples) / len(numeric_samples))  # Compute arithmetic mean RAM usage for this classifier training period.
+    thread_alive = bool(isinstance(thread, threading.Thread) and thread.is_alive())  # Record whether sampler cleanup completed.
+    return {"latest_percent": latest_percent, "average_percent": average_percent, "sample_count": len(numeric_samples), "thread_alive": thread_alive}  # Return classifier RAM summary.
+
+
+def store_training_ram_stats(stats_holder: Optional[dict], stats: dict) -> None:
+    """
+    Store RAM statistics in the caller-owned classifier state holder.
+
+    :param stats_holder: Mutable state holder supplied by the classifier loop.
+    :param stats: RAM statistics produced by stop_training_ram_monitor.
+    :return: None.
+    """
+
+    if stats_holder is not None:  # Preserve optional caller state ownership.
+        stats_holder.clear()  # Remove stale classifier RAM values before storing this classifier's values.
+        stats_holder.update(stats)  # Store the RAM statistics for the matching classifier.
+
+
+def resolve_training_ram_percent(stats: Optional[dict], key: str) -> Optional[float]:
+    """
+    Resolve one RAM percentage value from classifier training statistics.
+
+    :param stats: RAM statistics dictionary for one classifier.
+    :param key: Statistic key to read.
+    :return: RAM percentage value, or None when unavailable.
+    """
+
+    if not isinstance(stats, dict):  # Treat missing or invalid statistics as unavailable.
+        return None  # Return unavailable percentage.
+    value = stats.get(key)  # Read the requested RAM statistic.
+    if value is None:  # Treat missing values as unavailable.
+        return None  # Return unavailable percentage.
+    return float(value)  # Return the RAM percentage as a float.
+
+
+def format_ram_percent(value: Optional[float]) -> str:
+    """
+    Format a RAM percentage value for logs.
+
+    :param value: RAM percentage value.
+    :return: Formatted RAM percentage string.
+    """
+
+    if value is None:  # Render unavailable values explicitly.
+        return "unavailable"  # Return the unavailable marker.
+    return f"{float(value):.2f}%"  # Return RAM usage formatted with two decimal places.
 
 
 def build_memory_phase_metadata(config: Optional[dict] = None, **metadata: Any) -> dict:  # Build compact phase-state metadata
@@ -819,7 +938,7 @@ def get_default_explainability_config():
             "lime_num_features": 10,  # Number of features to show in LIME explanations
             "shap_max_samples": 100,  # Maximum samples for SHAP computation
             "perm_max_samples": 5000,  # Maximum samples for permutation importance computation to prevent OOM on large datasets
-            "background": False,  # Run explainability synchronously by default to avoid retained model snapshots during later fits
+            "background": False,  # Retain legacy setting while RAM-gated process dispatch is selected automatically
             "random_state": 42,  # Random state for reproducibility
             "output_subdir": "explainability",  # Subdirectory for explainability outputs
         }  # Return default explainability configuration
@@ -5410,7 +5529,7 @@ def load_existing_model_if_available(model, model_name, dataset_file, feature_se
         raise
 
 
-def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None):  # Evaluate one classifier with optional watcher metadata
+def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None):  # Evaluate one classifier with optional watcher metadata and RAM statistics
     """
     Trains an individual classifier and evaluates its performance on the test set.
 
@@ -5426,6 +5545,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
     :param feature_set: Feature set name
     :param config: Configuration dictionary (uses global CONFIG if None)
     :param phase_metadata: Optional compact watcher metadata for this classifier
+    :param training_ram_stats: Mutable holder receiving classifier training RAM statistics
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
     
@@ -5433,6 +5553,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
         phase_metadata = dict(phase_metadata or {})  # Normalize watcher metadata for safe reuse
+        training_ram_monitor = None  # Initialize classifier RAM monitor state for exception-safe cleanup.
         
         skip_train_if_model_exists = config.get("execution", {}).get("skip_train_if_model_exists", False)  # Get skip train flag from config
 
@@ -5473,10 +5594,19 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
                 existing_fit_metadata = dict(phase_metadata)  # Copy caller watcher metadata
                 existing_fit_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else existing_fit_metadata.get("dataset_identity"), "classifier_name": model_name, "classifier_params_digest": existing_params_digest, "classifier_params_reference": f"sha256:{existing_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else existing_fit_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": "loaded_existing_model"})  # Build skipped-fit watcher metadata
                 write_memory_phase_event("after_classifier_fit", config=config, **existing_fit_metadata)  # Publish skipped-fit outcome for existing model reuse
+                store_training_ram_stats(training_ram_stats, stop_training_ram_monitor(None))  # Store a one-sample RAM summary for cached classifier reuse.
                 return existing_metrics  # Return cached metrics without retraining
 
         sys.stdout.flush()  # Flush stdout before model training to ensure logs are visible under nohup
-        model.fit(X_train, y_train)  # Fit the model on the training data using its internal n_jobs parallelism
+        training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before classifier fit.
+        try:  # Ensure RAM monitoring stops even when classifier fit fails.
+            model.fit(X_train, y_train)  # Fit the model on the training data using its internal n_jobs parallelism
+        finally:  # Stop RAM monitoring immediately after classifier fit exits.
+            classifier_ram_stats = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this classifier fit.
+            store_training_ram_stats(training_ram_stats, classifier_ram_stats)  # Associate RAM statistics with this classifier only.
+            training_ram_monitor = None  # Clear monitor state after stop processing.
+        if classifier_ram_stats.get("thread_alive", False):  # Verify whether sampler thread cleanup completed.
+            verbose_output(f"{BackgroundColors.YELLOW}[WARNING] RAM monitor thread remained alive after training {model_name}.{Style.RESET_ALL}", config=config)  # Log monitor cleanup anomaly without changing classifier results.
         params_digest = get_classifier_params_digest(model)  # Build fitted classifier parameter digest
         fit_metadata = dict(phase_metadata)  # Copy caller watcher metadata
         fit_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else fit_metadata.get("dataset_identity"), "classifier_name": model_name, "classifier_params_digest": params_digest, "classifier_params_reference": f"sha256:{params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else fit_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": "fit_completed"})  # Build fit completion watcher metadata
@@ -5536,7 +5666,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         raise
 
 
-def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
+def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config=None, training_ram_stats=None):
     """
     Trains the StackingClassifier model and evaluates its performance on the test set.
 
@@ -5545,10 +5675,15 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
     :param y_train: Training target labels (encoded Series/array).
     :param X_test: Testing features (pandas DataFrame or numpy array with feature names).
     :param y_test: Testing target labels (encoded Series/array).
+    :param config: Configuration dictionary (uses global CONFIG if None).
+    :param training_ram_stats: Mutable holder receiving classifier training RAM statistics.
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
     
     try:
+        if config is None:  # Use global configuration when no explicit configuration is supplied.
+            config = CONFIG  # Assign global CONFIG fallback.
+        training_ram_monitor = None  # Initialize stacking RAM monitor state for exception-safe cleanup.
         verbose_output(
             f"{BackgroundColors.GREEN}Starting training and evaluation of Stacking Classifier...{Style.RESET_ALL}"
         )  # Output the verbose message
@@ -5556,7 +5691,15 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
         start_time = time.time()  # Record the start time for timing training and prediction
 
         sys.stdout.flush()  # Flush stdout before stacking training to ensure logs are visible under nohup
-        model.fit(X_train, y_train)  # Fit the stacking model on the training data (accepts DataFrame or array)
+        training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before stacking fit.
+        try:  # Ensure RAM monitoring stops even when stacking fit fails.
+            model.fit(X_train, y_train)  # Fit the stacking model on the training data (accepts DataFrame or array)
+        finally:  # Stop RAM monitoring immediately after stacking fit exits.
+            stacking_ram_summary = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this stacking fit.
+            store_training_ram_stats(training_ram_stats, stacking_ram_summary)  # Associate RAM statistics with this stacking classifier only.
+            training_ram_monitor = None  # Clear monitor state after stop processing.
+        if stacking_ram_summary.get("thread_alive", False):  # Verify whether sampler thread cleanup completed.
+            verbose_output(f"{BackgroundColors.YELLOW}[WARNING] RAM monitor thread remained alive after training StackingClassifier.{Style.RESET_ALL}", config=config)  # Log monitor cleanup anomaly without changing stacking results.
 
         y_pred = model.predict(X_test)  # Predict the labels for the test set
 
@@ -5573,8 +5716,8 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
         total_seconds = int(round(elapsed_time))  # Reuse elapsed_time as total seconds for reporting
         train_seconds = total_seconds  # Reuse total seconds as training time when only one timer exists
         exec_seconds = total_seconds  # Reuse total seconds as execution time when only one timer exists
-        evaluation_mode = None  # Initialize evaluation mode string from global CONFIG
-        mode_raw = CONFIG.get("execution", {}).get("execution_mode")  # Obtain execution mode from global CONFIG if present
+        evaluation_mode = None  # Initialize evaluation mode string from runtime config
+        mode_raw = config.get("execution", {}).get("execution_mode")  # Obtain execution mode from runtime config if present
         if mode_raw:  # If an execution mode string exists in CONFIG
             evaluation_mode = mode_raw.replace("_", " ").title().replace(" ", "")  # Normalize to CamelCase style
         if evaluation_mode is None:  # If still not resolved
@@ -6607,26 +6750,9 @@ def snapshot_explainability_inputs(model: Any, X_test: Any, y_test: Any, feature
     return model_snapshot, X_test_snapshot, y_test_snapshot, feature_names_snapshot, config_snapshot  # Return the detached explainability inputs.
 
 
-def get_explainability_executor(config: Optional[dict]) -> concurrent.futures.ThreadPoolExecutor:
-    """
-    Return the bounded background executor for explainability jobs.
-
-    :param config: Configuration dictionary used for executor lifecycle.
-    :return: ThreadPoolExecutor used for queued explainability execution.
-    """
-
-    global EXPLAINABILITY_EXECUTOR  # Access the module-level explainability executor.
-    if config is None:  # Use global configuration when no configuration is provided.
-        config = CONFIG  # Preserve existing CONFIG fallback behavior.
-    if EXPLAINABILITY_EXECUTOR is None:  # Create the executor only once per active run.
-        max_workers = 1  # Use one worker because SHAP, LIME, Matplotlib, and SHAP progress patching share process resources.
-        EXPLAINABILITY_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="explainability")  # Start a bounded deterministic background worker.
-    return EXPLAINABILITY_EXECUTOR  # Return the active executor.
-
-
 def execute_explainability_job(model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: List[Any], dataset_file: str, feature_set: str, execution_mode: str, config: dict) -> Optional[dict]:
     """
-    Run one queued explainability job and isolate its failures.
+    Run one explainability job and propagate its failures.
 
     :param model: Detached fitted model for explainability.
     :param model_name: Model name used for labels and filenames.
@@ -6637,21 +6763,248 @@ def execute_explainability_job(model: Any, model_name: str, X_test: Any, y_test:
     :param feature_set: Feature set label used for output directory construction.
     :param execution_mode: Execution mode string used for output directory construction.
     :param config: Detached configuration dictionary used by explainability routines.
-    :return: Explainability result dictionary or None when explainability fails.
+    :return: Explainability result dictionary, or None when explainability is disabled.
     """
 
-    try:  # Isolate background explainability failures from classifier execution.
+    try:  # Run the existing explainability implementation under one failure boundary.
         return run_explainability_pipeline(model, model_name, X_test, y_test, feature_names, dataset_file, feature_set, execution_mode, config)  # Run the existing explainability pipeline.
-    except Exception as e:  # Log any background explainability failure.
+    except Exception as e:  # Log explainability failure before propagating it.
         print(str(e))  # Print the error through the existing logging path.
         verbose_output(f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}", config=config)  # Log failure using the existing verbose pattern.
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send failure details through the existing Telegram exception path.
-        return None  # Prevent the failed explainability job from terminating unrelated processing.
+        raise  # Preserve explainability failure propagation.
 
 
-def schedule_explainability_job(model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: Any, dataset_file: str, feature_set: str, execution_mode: str, config: Optional[dict], experiment_mode: str, hyperparameters_enabled: bool) -> Optional[concurrent.futures.Future]:
+def prepare_explainability_child_config(config: dict) -> dict:
     """
-    Queue explainability execution after classifier result completion.
+    Prepare a process-safe configuration snapshot for explainability.
+
+    :param config: Configuration dictionary used by explainability routines.
+    :return: Detached configuration dictionary for a child process.
+    """
+
+    config_snapshot = pickle.loads(pickle.dumps(config))  # Detach configuration before it crosses the process boundary.
+    config_snapshot.setdefault("logging", {})["clean"] = False  # Prevent child logger initialization from truncating the parent log.
+    return config_snapshot  # Return child-safe configuration snapshot.
+
+
+def run_explainability_process(status_queue: Any, model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: List[Any], dataset_file: str, feature_set: str, execution_mode: str, config: dict) -> None:
+    """
+    Run explainability inside a child process and report lifecycle status.
+
+    :param status_queue: Multiprocessing queue used to report child status.
+    :param model: Detached fitted model for explainability.
+    :param model_name: Model name used for labels and filenames.
+    :param X_test: Detached test feature matrix.
+    :param y_test: Detached test labels.
+    :param feature_names: Detached feature name list.
+    :param dataset_file: Dataset file path used for output directory construction.
+    :param feature_set: Feature set label used for output directory construction.
+    :param execution_mode: Execution mode string used for output directory construction.
+    :param config: Detached configuration dictionary used by explainability routines.
+    :return: None.
+    """
+
+    global CONFIG  # Allow the child process to reuse the standard CONFIG fallback.
+    global logger  # Allow child logger initialization to update the module logger.
+    try:  # Initialize child-side runtime state before reporting startup.
+        CONFIG = config  # Set child CONFIG so existing fallback logic remains valid.
+        if logger is None:  # Initialize child logging only when the child has no logger.
+            initialize_logger(config=config)  # Attach child stdout and stderr to the existing log file in append mode.
+        setup_telegram_bot(config=config)  # Initialize Telegram in the child when configured.
+        status_queue.put({"status": "started", "pid": os.getpid(), "model_name": model_name, "feature_set": feature_set})  # Confirm successful child startup before heavy explainability begins.
+        result = execute_explainability_job(model, model_name, X_test, y_test, feature_names, dataset_file, feature_set, execution_mode, config)  # Run the existing explainability pipeline without reimplementation.
+        result_keys = sorted(result.keys()) if isinstance(result, dict) else []  # Summarize result shape without sending large artifacts through the queue.
+        status_queue.put({"status": "success", "pid": os.getpid(), "model_name": model_name, "feature_set": feature_set, "result_keys": result_keys})  # Report successful explainability completion.
+    except BaseException as e:  # Report any child failure before preserving the nonzero exit.
+        status_queue.put({"status": "failure", "pid": os.getpid(), "model_name": model_name, "feature_set": feature_set, "exception_type": type(e).__name__, "message": str(e), "traceback": traceback.format_exc()})  # Send structured child failure details to the parent.
+        try:  # Preserve existing Telegram exception reporting for child failures.
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify Telegram about the child failure.
+        except Exception:  # Avoid masking the original child failure during notification.
+            pass  # Preserve the original child failure.
+        raise  # Preserve nonzero child process exit status.
+    finally:  # Flush child logs before process exit.
+        try:  # Flush child logger when it exists.
+            if logger is not None:  # Verify child logger exists before flushing.
+                logger.flush()  # Flush child log writes.
+        except Exception:  # Avoid masking child process status during logger flush.
+            pass  # Preserve the original child process status.
+
+
+def drain_explainability_status_queue(status_queue: Any) -> List[dict]:
+    """
+    Drain queued child process status messages without blocking.
+
+    :param status_queue: Multiprocessing queue containing child status messages.
+    :return: List of status dictionaries.
+    """
+
+    statuses: List[dict] = []  # Collect every available child status message.
+    while True:  # Drain until the queue reports no immediately available message.
+        try:  # Read one status message without blocking.
+            statuses.append(status_queue.get_nowait())  # Append the available child status message.
+        except queue_module.Empty:  # Stop when the queue is empty.
+            break  # Leave the draining loop.
+    return statuses  # Return drained status messages.
+
+
+def await_explainability_process_start(process_record: dict, timeout_seconds: float, config: Optional[dict]) -> dict:
+    """
+    Wait for a child process to confirm explainability startup.
+
+    :param process_record: Process record containing process and status queue.
+    :param timeout_seconds: Maximum startup wait in seconds.
+    :param config: Configuration dictionary used for logging.
+    :return: Startup status dictionary.
+    """
+
+    process = process_record["process"]  # Read child process from process record.
+    status_queue = process_record["status_queue"]  # Read child status queue from process record.
+    deadline = time.time() + float(timeout_seconds)  # Compute absolute startup deadline.
+    while time.time() < deadline:  # Wait until child startup succeeds, fails, or times out.
+        try:  # Poll child status with a short timeout.
+            status = status_queue.get(timeout=0.2)  # Wait briefly for a startup status message.
+            process_record.setdefault("statuses", []).append(status)  # Preserve startup status for finalization logs.
+            if status.get("status") == "started":  # Verify successful child startup status.
+                return status  # Return startup status to the scheduler.
+            if status.get("status") == "failure":  # Treat startup failure as unsafe asynchronous dispatch.
+                raise RuntimeError(f"Explainability child failed before startup confirmation for {process_record.get('model_name')}: {status.get('message')}")  # Raise structured startup failure.
+        except queue_module.Empty:  # No status arrived during this poll interval.
+            pass  # Continue waiting until deadline or process exit.
+        if process.exitcode is not None:  # Detect child exit before startup confirmation.
+            raise RuntimeError(f"Explainability child exited before startup confirmation for {process_record.get('model_name')} with exitcode {process.exitcode}")  # Raise failed startup status.
+    raise TimeoutError(f"Explainability child did not confirm startup for {process_record.get('model_name')} within {timeout_seconds:.1f}s")  # Raise startup timeout.
+
+
+def finalize_explainability_process_record(process_record: dict, config: Optional[dict], terminate: bool) -> None:
+    """
+    Join one explainability process and surface its final status.
+
+    :param process_record: Process record containing process, queue, and metadata.
+    :param config: Configuration dictionary used for logging.
+    :param terminate: Whether to terminate a live child during abnormal shutdown.
+    :return: None.
+    """
+
+    process = process_record["process"]  # Read child process from process record.
+    model_name = process_record.get("model_name", "unknown")  # Resolve model name for logs.
+    feature_set = process_record.get("feature_set", "unknown")  # Resolve feature set for logs.
+    if terminate and process.is_alive():  # Terminate live child during abnormal shutdown.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Terminating asynchronous explainability child PID {process.pid} for {model_name} - {feature_set}.{Style.RESET_ALL}")  # Log abnormal child termination.
+        process.terminate()  # Ask the child process to terminate.
+        process.join(timeout=EXPLAINABILITY_PROCESS_JOIN_TIMEOUT_SECONDS)  # Wait briefly after terminate.
+        if process.is_alive():  # Escalate only when the child ignored terminate.
+            process.kill()  # Force-stop the child process.
+            process.join(timeout=EXPLAINABILITY_PROCESS_JOIN_TIMEOUT_SECONDS)  # Reap the force-stopped child.
+    else:  # Normal finalization waits for child completion.
+        while process.is_alive():  # Wait for explainability completion without busy waiting.
+            process.join(timeout=EXPLAINABILITY_PROCESS_JOIN_TIMEOUT_SECONDS)  # Reap progress in bounded intervals.
+    process.join(timeout=0.0)  # Reap final process status after it has stopped.
+    statuses = list(process_record.get("statuses", []))  # Start with statuses consumed during startup confirmation.
+    statuses.extend(drain_explainability_status_queue(process_record["status_queue"]))  # Add any completion or failure statuses.
+    process_record["statuses"] = statuses  # Store complete statuses for diagnostics.
+    exitcode = process.exitcode  # Read final child exit code.
+    status_names = [str(status.get("status")) for status in statuses]  # Extract compact status names for logs.
+    success_seen = any(status.get("status") == "success" for status in statuses)  # Detect successful explainability completion.
+    failure_statuses = [status for status in statuses if status.get("status") == "failure"]  # Collect structured child failures.
+    verbose_output(f"{BackgroundColors.GREEN}[DEBUG] Explainability child finalized: model={model_name}, feature_set={feature_set}, pid={process.pid}, exitcode={exitcode}, statuses={status_names}{Style.RESET_ALL}", config=config)  # Log final child process status.
+    try:  # Release queue feeder resources after draining statuses.
+        process_record["status_queue"].close()  # Close the multiprocessing queue in the parent.
+        process_record["status_queue"].join_thread()  # Join queue feeder resources.
+    except Exception:  # Keep queue cleanup best-effort after child has ended.
+        pass  # Preserve child failure reporting.
+    try:  # Release Process resources after join.
+        process.close()  # Close process object resources after reaping.
+    except Exception:  # Keep process object cleanup best-effort.
+        pass  # Preserve child failure reporting.
+    if terminate:  # Abnormal shutdown cleanup should not mask the original program failure.
+        return  # Return after cleanup during abnormal shutdown.
+    if failure_statuses:  # Surface structured child failure during normal finalization.
+        failure = failure_statuses[-1]  # Use the latest failure status for the error message.
+        raise RuntimeError(f"Explainability child failed for {model_name} - {feature_set}: {failure.get('exception_type')}: {failure.get('message')}")  # Raise child failure before successful program completion.
+    if exitcode not in (0, None):  # Surface nonzero child exit without a structured failure message.
+        raise RuntimeError(f"Explainability child exited with code {exitcode} for {model_name} - {feature_set}")  # Raise nonzero child exit.
+    if not success_seen:  # Require explicit child success on normal finalization.
+        raise RuntimeError(f"Explainability child ended without success status for {model_name} - {feature_set}")  # Raise missing success status.
+
+
+def reap_finished_explainability_processes(config: Optional[dict] = None) -> None:
+    """
+    Reap completed asynchronous explainability processes.
+
+    :param config: Configuration dictionary used for logging.
+    :return: None.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve existing CONFIG fallback behavior.
+    tracked_processes = list(EXPLAINABILITY_PROCESSES)  # Snapshot tracked process records before mutation.
+    EXPLAINABILITY_PROCESSES.clear()  # Rebuild the active process list after reaping completed records.
+    for process_record in tracked_processes:  # Inspect each tracked explainability child.
+        process = process_record.get("process")  # Read process object from record.
+        if process is not None and process.is_alive():  # Keep live child records for later finalization.
+            EXPLAINABILITY_PROCESSES.append(process_record)  # Preserve active child process record.
+        else:  # Reap completed child process immediately.
+            finalize_explainability_process_record(process_record, config=config, terminate=False)  # Join and validate completed child process status.
+
+
+def start_explainability_process(model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: Any, dataset_file: str, feature_set: str, execution_mode: str, config: dict) -> dict:
+    """
+    Start one asynchronous explainability process after snapshotting inputs.
+
+    :param model: Fitted model object from the completed classifier result.
+    :param model_name: Model name used for labels and filenames.
+    :param X_test: Test feature matrix for explainability.
+    :param y_test: Test labels for explainability.
+    :param feature_names: Feature names associated with the test feature matrix.
+    :param dataset_file: Dataset file path used for output directory construction.
+    :param feature_set: Feature set label used for output directory construction.
+    :param execution_mode: Execution mode string used for output directory construction.
+    :param config: Configuration dictionary used by explainability routines.
+    :return: Process record for the started child process.
+    """
+
+    model_snapshot, X_test_snapshot, y_test_snapshot, feature_names_snapshot, config_snapshot = snapshot_explainability_inputs(model, X_test, y_test, feature_names, config)  # Snapshot only explainability inputs before process dispatch.
+    config_snapshot = prepare_explainability_child_config(config_snapshot)  # Prepare child configuration without truncating logs.
+    context = mp.get_context("spawn")  # Use spawn context for deterministic process isolation across platforms.
+    status_queue = context.Queue()  # Create a status queue owned by the same multiprocessing context.
+    process = context.Process(target=run_explainability_process, args=(status_queue, model_snapshot, model_name, X_test_snapshot, y_test_snapshot, feature_names_snapshot, dataset_file, feature_set, execution_mode, config_snapshot), name=f"Explainability-{model_name}")  # Build child process for existing explainability pipeline.
+    process.daemon = False  # Keep child non-daemonic so it can finish artifact writes and queue status.
+    process_record = {"process": process, "status_queue": status_queue, "model_name": model_name, "feature_set": feature_set, "statuses": []}  # Build process record before startup.
+    try:  # Ensure failed startup leaves no live child behind.
+        process.start()  # Start the child process.
+        if process.pid is None:  # Treat missing PID as failed startup.
+            raise RuntimeError(f"Explainability child did not provide a PID for {model_name} - {feature_set}")  # Raise unsafe startup status.
+        start_status = await_explainability_process_start(process_record, EXPLAINABILITY_PROCESS_START_TIMEOUT_SECONDS, config)  # Wait for explicit child startup confirmation.
+        process_record["started_status"] = start_status  # Store startup status for diagnostics.
+        return process_record  # Return confirmed process record.
+    except Exception:  # Reap any partially started child before synchronous fallback.
+        try:  # Terminate partial child process if it is still alive.
+            if process.is_alive():  # Verify process liveness before termination.
+                process.terminate()  # Terminate unsafe partial child startup.
+                process.join(timeout=EXPLAINABILITY_PROCESS_JOIN_TIMEOUT_SECONDS)  # Reap terminated partial child.
+                if process.is_alive():  # Escalate if terminate did not stop the child.
+                    process.kill()  # Force-stop unsafe partial child startup.
+                    process.join(timeout=EXPLAINABILITY_PROCESS_JOIN_TIMEOUT_SECONDS)  # Reap force-stopped partial child.
+            else:  # Process already exited during startup failure.
+                process.join(timeout=EXPLAINABILITY_PROCESS_JOIN_TIMEOUT_SECONDS)  # Reap exited partial child.
+        except Exception:  # Preserve original startup failure if cleanup fails.
+            pass  # Preserve startup failure propagation.
+        try:  # Release partial status queue resources.
+            status_queue.close()  # Close partial startup status queue.
+            status_queue.join_thread()  # Join partial startup queue feeder.
+        except Exception:  # Preserve original startup failure if queue cleanup fails.
+            pass  # Preserve startup failure propagation.
+        try:  # Release partial Process resources after cleanup.
+            process.close()  # Close partial child process object.
+        except Exception:  # Preserve original startup failure if process close fails.
+            pass  # Preserve startup failure propagation.
+        raise  # Propagate startup failure to trigger synchronous fallback.
+
+
+def schedule_explainability_job(model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: Any, dataset_file: str, feature_set: str, execution_mode: str, config: Optional[dict], experiment_mode: str, hyperparameters_enabled: bool, training_ram_stats: Optional[dict] = None) -> Optional[dict]:
+    """
+    Dispatch explainability after classifier result completion.
 
     :param model: Fitted model object from the completed classifier result.
     :param model_name: Model name used for labels and filenames.
@@ -6664,69 +7017,74 @@ def schedule_explainability_job(model: Any, model_name: str, X_test: Any, y_test
     :param config: Configuration dictionary used by explainability routines.
     :param experiment_mode: Experiment mode string controlling original-only explainability.
     :param hyperparameters_enabled: Whether this classifier result used optimized hyperparameters.
-    :return: Future for the queued job, or None when no job is queued.
+    :param training_ram_stats: RAM statistics collected during classifier training.
+    :return: Dispatch outcome dictionary, or None when explainability is disabled for this classifier.
     """
 
-    try:  # Keep scheduling failures isolated from classifier progression.
-        if config is None:  # Use global configuration when no configuration is provided.
-            config = CONFIG  # Preserve existing CONFIG fallback behavior.
-        explainability_config = config.get("explainability", {})  # Read explainability settings from configuration.
-        if not explainability_config.get("enabled", False):  # Preserve disabled-run behavior.
-            return None  # Skip queuing when explainability is disabled.
-        if experiment_mode != "original_only":  # Preserve original-only explainability behavior.
-            return None  # Skip queuing for augmented experiments.
-        hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve HP label for isolated output paths.
-        explainability_feature_set = f"{feature_set} - {hyperparameter_label}"  # Isolate explainability artifacts across default and optimized HP runs.
-        run_in_background = bool(explainability_config.get("background", False))  # Resolve whether explainability may retain detached snapshots while training continues.
-        if not run_in_background:  # Run inline when memory-safe scheduling is active.
-            execute_explainability_job(model, model_name, X_test, y_test, list(feature_names) if feature_names is not None else [], dataset_file, explainability_feature_set, execution_mode, config)  # Run explainability before the next classifier starts.
-            gc.collect()  # Reclaim explainability temporaries before returning to the classifier loop.
-            verbose_output(f"{BackgroundColors.GREEN}Completed synchronous explainability for {BackgroundColors.CYAN}{model_name} - {explainability_feature_set}{Style.RESET_ALL}", config=config)  # Log synchronous explainability completion.
-            return None  # Return without creating a background future.
-        model_snapshot, X_test_snapshot, y_test_snapshot, feature_names_snapshot, config_snapshot = snapshot_explainability_inputs(model, X_test, y_test, feature_names, config)  # Snapshot inputs before dispatch.
-        executor = get_explainability_executor(config_snapshot)  # Resolve the bounded background executor.
-        future = executor.submit(execute_explainability_job, model_snapshot, model_name, X_test_snapshot, y_test_snapshot, feature_names_snapshot, dataset_file, explainability_feature_set, execution_mode, config_snapshot)  # Queue explainability without blocking the training loop.
-        EXPLAINABILITY_FUTURES.append(future)  # Track the future for shutdown finalization.
-        verbose_output(f"{BackgroundColors.GREEN}Queued explainability for {BackgroundColors.CYAN}{model_name} - {explainability_feature_set}{Style.RESET_ALL}", config=config)  # Log queued explainability work.
-        return future  # Return the queued future to the caller.
-    except Exception as e:  # Log scheduling failures and continue classifier processing.
-        print(str(e))  # Print the scheduling error through the existing logging path.
-        verbose_output(f"{BackgroundColors.YELLOW}Explainability scheduling failed for {model_name}: {e}{Style.RESET_ALL}", config=config)  # Log scheduling failure using the existing verbose pattern.
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send scheduling failure details through the existing Telegram exception path.
-        return None  # Keep the main classifier flow non-blocking on scheduling failure.
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Preserve existing CONFIG fallback behavior.
+    explainability_config = config.get("explainability", {})  # Read explainability settings from configuration.
+    if not explainability_config.get("enabled", False):  # Preserve disabled-run behavior.
+        return None  # Return without dispatch when explainability is disabled.
+    if experiment_mode != "original_only":  # Preserve original-only explainability behavior.
+        return None  # Return without dispatch for augmented experiments.
+    hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve HP label for isolated output paths.
+    explainability_feature_set = f"{feature_set} - {hyperparameter_label}"  # Isolate explainability artifacts across default and optimized HP runs.
+    average_training_ram = resolve_training_ram_percent(training_ram_stats, "average_percent")  # Read average classifier training RAM usage.
+    latest_training_ram = resolve_training_ram_percent(training_ram_stats, "latest_percent")  # Read latest classifier training RAM usage.
+    dispatch_ram = read_system_ram_percent()  # Read current system RAM usage at the exact explainability dispatch point.
+    threshold = EXPLAINABILITY_RAM_THRESHOLD_PERCENT  # Resolve strict asynchronous RAM threshold.
+    can_dispatch_async = average_training_ram is not None and average_training_ram < threshold and dispatch_ram < threshold  # Apply strict RAM criteria for asynchronous explainability.
+    if can_dispatch_async:  # Attempt process-isolated explainability only when RAM criteria are satisfied.
+        reap_finished_explainability_processes(config=config)  # Reap any completed child before considering new dispatch.
+        if EXPLAINABILITY_PROCESSES:  # Enforce one active asynchronous explainability process at a time.
+            verbose_output(f"{BackgroundColors.GREEN}[DEBUG] Waiting for active asynchronous explainability before dispatching {model_name}: active={len(EXPLAINABILITY_PROCESSES)}{Style.RESET_ALL}", config=config)  # Log bounded concurrency synchronization.
+            finalize_pending_explainability_jobs(config=config, terminate=False)  # Wait for existing child before starting another child.
+        try:  # Start process-isolated explainability and fall back to synchronous on unsafe startup.
+            process_record = start_explainability_process(model, model_name, X_test, y_test, feature_names, dataset_file, explainability_feature_set, execution_mode, config)  # Start child and wait for startup confirmation.
+            EXPLAINABILITY_PROCESSES.append(process_record)  # Track child for later finalization.
+            verbose_output(f"{BackgroundColors.GREEN}[DEBUG] Explainability dispatch: model={model_name}, feature_set={explainability_feature_set}, avg_training_ram={format_ram_percent(average_training_ram)}, latest_training_ram={format_ram_percent(latest_training_ram)}, dispatch_ram={format_ram_percent(dispatch_ram)}, mode=asynchronous, pid={process_record['process'].pid}{Style.RESET_ALL}", config=config)  # Log asynchronous dispatch decision.
+            return {"mode": "asynchronous", "pid": process_record["process"].pid, "average_training_ram": average_training_ram, "latest_training_ram": latest_training_ram, "dispatch_ram": dispatch_ram}  # Return asynchronous dispatch metadata.
+        except Exception as e:  # Fall back to synchronous explainability when process startup is unsafe.
+            print(f"{BackgroundColors.YELLOW}[WARNING] Asynchronous explainability could not start for {model_name} - {explainability_feature_set}: {e}. Falling back to synchronous execution.{Style.RESET_ALL}")  # Log fallback reason using existing warning style.
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Report unsafe asynchronous startup through existing exception notification.
+    else:  # Use synchronous explainability when RAM criteria are not satisfied.
+        reason = "training_average_unavailable" if average_training_ram is None else "ram_threshold_not_met"  # Resolve synchronous dispatch reason.
+        verbose_output(f"{BackgroundColors.GREEN}[DEBUG] Explainability dispatch: model={model_name}, feature_set={explainability_feature_set}, avg_training_ram={format_ram_percent(average_training_ram)}, latest_training_ram={format_ram_percent(latest_training_ram)}, dispatch_ram={format_ram_percent(dispatch_ram)}, threshold={format_ram_percent(threshold)}, mode=synchronous, reason={reason}{Style.RESET_ALL}", config=config)  # Log synchronous dispatch decision.
+    execute_explainability_job(model, model_name, X_test, y_test, list(feature_names) if feature_names is not None else [], dataset_file, explainability_feature_set, execution_mode, config)  # Run explainability before the next classifier starts.
+    gc.collect()  # Reclaim explainability temporaries before returning to the classifier loop.
+    verbose_output(f"{BackgroundColors.GREEN}Completed synchronous explainability for {BackgroundColors.CYAN}{model_name} - {explainability_feature_set}{Style.RESET_ALL}", config=config)  # Log synchronous explainability completion.
+    return {"mode": "synchronous", "pid": None, "average_training_ram": average_training_ram, "latest_training_ram": latest_training_ram, "dispatch_ram": dispatch_ram}  # Return synchronous dispatch metadata.
 
 
-def finalize_pending_explainability_jobs(config: Optional[dict] = None) -> None:
+def finalize_pending_explainability_jobs(config: Optional[dict] = None, terminate: bool = False) -> None:
     """
-    Wait for queued explainability jobs and shut down the executor.
+    Wait for asynchronous explainability processes and surface failures.
 
     :param config: Configuration dictionary used for logging.
+    :param terminate: Whether live children should be terminated during abnormal shutdown.
     :return: None.
     """
 
-    global EXPLAINABILITY_EXECUTOR  # Access the module-level explainability executor for shutdown.
-    try:  # Keep finalization failures visible without masking the original program flow.
-        if config is None:  # Use global configuration when no configuration is provided.
-            config = CONFIG  # Preserve existing CONFIG fallback behavior.
-        tracked_futures = list(EXPLAINABILITY_FUTURES)  # Snapshot the tracked futures before waiting.
-        if not tracked_futures and EXPLAINABILITY_EXECUTOR is None:  # Skip finalization when no queued work or worker exists.
-            return  # Return immediately when there is nothing to finalize.
-        if tracked_futures:  # Wait only when futures have been queued.
-            verbose_output(f"{BackgroundColors.GREEN}Waiting for {len(tracked_futures)} queued explainability job(s) to finish before shutdown.{Style.RESET_ALL}", config=config)  # Log explainability finalization.
-            for future in concurrent.futures.as_completed(tracked_futures):  # Wait for every queued future to complete.
-                try:  # Surface any unexpected future exception through existing paths.
-                    future.result()  # Retrieve the result so executor exceptions cannot disappear.
-                except Exception as e:  # Log unexpected future exceptions.
-                    print(str(e))  # Print the future error through the existing logging path.
-                    verbose_output(f"{BackgroundColors.YELLOW}Queued explainability future failed: {e}{Style.RESET_ALL}", config=config)  # Log unexpected future failure.
-                    send_exception_via_telegram(type(e), e, e.__traceback__)  # Send unexpected future failure details through Telegram.
-            EXPLAINABILITY_FUTURES.clear()  # Clear completed futures after finalization.
-        if EXPLAINABILITY_EXECUTOR is not None:  # Shut down an active executor after futures complete.
-            EXPLAINABILITY_EXECUTOR.shutdown(wait=True)  # Stop the background worker after all queued jobs finish.
-            EXPLAINABILITY_EXECUTOR = None  # Allow a later programmatic run to create a fresh executor.
-    except Exception as e:  # Log finalization errors without hiding classifier results.
-        print(str(e))  # Print the finalization error through the existing logging path.
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send finalization failure details through the existing Telegram exception path.
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Preserve existing CONFIG fallback behavior.
+    tracked_processes = list(EXPLAINABILITY_PROCESSES)  # Snapshot tracked child processes before waiting.
+    if not tracked_processes:  # Skip finalization when no child processes are tracked.
+        return  # Return immediately when there is nothing to finalize.
+    EXPLAINABILITY_PROCESSES.clear()  # Prevent duplicate finalization of the same child records.
+    verbose_output(f"{BackgroundColors.GREEN}Waiting for {len(tracked_processes)} asynchronous explainability process(es) to finish before shutdown.{Style.RESET_ALL}", config=config)  # Log explainability finalization.
+    finalization_errors: List[Exception] = []  # Collect child finalization errors for propagation.
+    for process_record in tracked_processes:  # Finalize every tracked child process.
+        try:  # Join one child and validate its final status.
+            finalize_explainability_process_record(process_record, config=config, terminate=terminate)  # Reap one child process and report failure status.
+        except Exception as e:  # Collect child finalization errors.
+            finalization_errors.append(e)  # Preserve child finalization error.
+            print(str(e))  # Print finalization error through existing logging path.
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send finalization failure details through Telegram.
+            if terminate:  # Do not mask an earlier abnormal parent failure.
+                continue  # Continue cleanup for remaining child processes.
+    if finalization_errors and not terminate:  # Surface child failures before successful program completion.
+        raise RuntimeError("; ".join(str(error) for error in finalization_errors))  # Raise combined child finalization failure.
 
 
 def get_hardware_specifications():
@@ -9661,14 +10019,15 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
         progress_bar.update(1)  # Advance progress bar by one step
 
         if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
-            try:  # Attempt to queue explainability for this model
+            try:  # Attempt to dispatch explainability for this model.
                 trained_model = individual_models[model_name]  # Retrieve trained model object for snapshotting
-                schedule_explainability_job(trained_model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, bool(hyperparams_map))  # Queue explainability without blocking future collection
+                schedule_explainability_job(trained_model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, bool(hyperparams_map), training_ram_stats=None)  # Dispatch synchronous explainability when legacy future path lacks RAM statistics.
             except Exception as e:  # If explainability queueing fails
                 verbose_output(
                     f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
                     config=config
-                )  # Log error but continue evaluation
+                )  # Log explainability failure before propagation.
+                raise  # Preserve explainability failure propagation.
     return results_dict  # Return accumulated result entries
 
 
@@ -9804,6 +10163,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 phase_metadata.update(build_array_memory_metadata("X_train", X_train_values))  # Record train matrix shape/dtype/layout
                 phase_metadata.update(build_array_memory_metadata("X_test", X_test_values))  # Record test matrix shape/dtype/layout
             write_memory_phase_event("before_classifier_fit", config=config, **phase_metadata, event_outcome="starting")  # Publish classifier fit start
+            training_ram_stats = {}  # Hold RAM statistics for this classifier fit only.
 
             metrics = evaluate_individual_classifier(
                 active_model,  # Use the fitted clone for this atomic classifier.
@@ -9818,6 +10178,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 artifact_feature_set,  # Use the HP-specific artifact label.
                 config=config,
                 phase_metadata=phase_metadata,  # Pass compact watcher context into fit completion and error events
+                training_ram_stats=training_ram_stats,  # Capture per-classifier RAM statistics for explainability scheduling.
             )  # Evaluate individual classifier sequentially using HP-isolated model artifact names
             write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=metrics[0], precision=metrics[1], recall=metrics[2], f1_score=metrics[3], event_outcome="metrics_completed")  # Publish prediction and metrics completion
 
@@ -9851,20 +10212,21 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             write_memory_phase_event("before_explainability_schedule", config=config, **phase_metadata, event_outcome="starting")  # Publish explainability scheduling start
             explainability_outcome = "skipped"  # Track explainability scheduling outcome
             if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
-                try:  # Attempt to queue explainability for this model
-                    schedule_explainability_job(active_model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled)  # Queue explainability without blocking the next classifier
-                    explainability_outcome = "scheduled"  # Track successful explainability scheduling
+                try:  # Attempt to dispatch explainability for this model.
+                    explainability_dispatch = schedule_explainability_job(active_model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled, training_ram_stats=training_ram_stats)  # Dispatch explainability according to RAM-gated process policy.
+                    explainability_outcome = f"scheduled:{explainability_dispatch.get('mode', 'none')}" if isinstance(explainability_dispatch, dict) else "scheduled:none"  # Track selected explainability execution mode.
                 except Exception as e:  # If explainability queueing fails
                     explainability_outcome = f"failed:{e}"  # Track explainability scheduling failure
                     verbose_output(
                         f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
                         config=config
-                    )  # Log error but continue evaluation
+                    )  # Log explainability failure before propagation.
+                    raise  # Preserve explainability failure propagation.
             write_memory_phase_event("after_explainability_schedule", config=config, **phase_metadata, event_outcome=explainability_outcome)  # Publish explainability scheduling completion
 
             current_combination += 1  # Advance the global combination counter
             write_memory_phase_event("before_memory_cleanup", config=config, **phase_metadata, event_outcome="starting")  # Publish per-classifier cleanup start
-            del active_model, metrics  # Release fitted estimator and metric tuple before the next classifier
+            del active_model, metrics, training_ram_stats  # Release fitted estimator, metrics, and RAM stats before the next classifier
             gc.collect()  # Reclaim estimator-owned memory before the next atomic classifier
             write_memory_phase_event("after_memory_cleanup", config=config, **phase_metadata, event_outcome="completed")  # Publish per-classifier cleanup completion
 
@@ -9876,6 +10238,8 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 del active_model
             if "metrics" in locals():  # Release metric tuple if the failure happened after evaluation
                 del metrics
+            if "training_ram_stats" in locals():  # Release classifier RAM statistics if allocated before failure
+                del training_ram_stats
             if "X_train_values" in locals():  # Release train array view held by this function frame
                 del X_train_values
             if "X_test_values" in locals():  # Release test array view held by this function frame
@@ -9976,9 +10340,10 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         phase_cache_digest = hashlib.sha256(json.dumps(phase_cache_key, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Build stable stacking cache identity digest
         phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "classifier_name": "StackingClassifier", "classifier_params_digest": phase_params_digest, "classifier_params_reference": f"sha256:{phase_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train_n_cols, "n_jobs": get_classifier_n_jobs(stacking_model), "cache_identity": phase_cache_digest, "cache_reference": cache_ref_file, "combination_index": current_combination, "total_combinations": total_steps}  # Build compact phase metadata for stacking
         write_memory_phase_event("before_classifier_fit", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking fit start
+        stacking_ram_stats = {}  # Hold RAM statistics for this stacking fit only.
 
         stacking_metrics = evaluate_stacking_classifier(
-            stacking_model, X_train_df, y_train, X_test_df, y_test
+            stacking_model, X_train_df, y_train, X_test_df, y_test, config=config, training_ram_stats=stacking_ram_stats
         )  # Evaluate stacking model with DataFrames and retrieve metrics tuple
         write_memory_phase_event("after_classifier_fit", config=config, **phase_metadata, event_outcome="fit_and_prediction_completed")  # Publish stacking fit completion
         write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=stacking_metrics[0], precision=stacking_metrics[1], recall=stacking_metrics[2], f1_score=stacking_metrics[3], event_outcome="metrics_completed")  # Publish stacking metrics completion
@@ -10020,27 +10385,33 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         write_memory_phase_event("before_explainability_schedule", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking explainability scheduling start
         explainability_outcome = "skipped"  # Track stacking explainability scheduling outcome
         if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
-            try:  # Attempt to queue explainability for stacking model
-                schedule_explainability_job(stacking_model, "StackingClassifier", X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled)  # Queue explainability without blocking the next feature set
-                explainability_outcome = "scheduled"  # Track successful stacking explainability scheduling
+            try:  # Attempt to dispatch explainability for stacking model.
+                explainability_dispatch = schedule_explainability_job(stacking_model, "StackingClassifier", X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled, training_ram_stats=stacking_ram_stats)  # Dispatch explainability according to RAM-gated process policy.
+                explainability_outcome = f"scheduled:{explainability_dispatch.get('mode', 'none')}" if isinstance(explainability_dispatch, dict) else "scheduled:none"  # Track selected explainability execution mode.
             except Exception as e:  # If explainability queueing fails
                 explainability_outcome = f"failed:{e}"  # Track stacking explainability scheduling failure
                 verbose_output(
                     f"{BackgroundColors.YELLOW}Explainability failed for StackingClassifier: {e}{Style.RESET_ALL}",
                     config=config
-                )  # Log error but continue evaluation
+                )  # Log explainability failure before propagation.
+                raise  # Preserve explainability failure propagation.
         write_memory_phase_event("after_explainability_schedule", config=config, **phase_metadata, event_outcome=explainability_outcome)  # Publish stacking explainability scheduling completion
         write_memory_phase_event("before_memory_cleanup", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking cleanup start
+        del stacking_ram_stats  # Release stacking RAM statistics before returning.
         gc.collect()  # Reclaim any released stacking temporaries before returning
         write_memory_phase_event("after_memory_cleanup", config=config, **phase_metadata, event_outcome="completed")  # Publish stacking cleanup completion
 
         return (stacking_result_entry, current_combination)  # Return result entry and updated combination counter
     except MemoryError as e:  # Handle stacking memory errors with diagnostic phase
+        if "stacking_ram_stats" in locals():  # Release stacking RAM statistics if allocated before memory failure.
+            del stacking_ram_stats  # Drop RAM statistics reference before error reporting.
         write_memory_phase_event("memory_error", config=config, classifier_name="StackingClassifier", feature_set_name=name, train_sample_count=len(y_train) if y_train is not None else None, test_sample_count=len(y_test) if y_test is not None else None, feature_count=X_train_n_cols, event_outcome=str(e))  # Publish stacking memory error
         print(str(e))  # Print memory error to terminal logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send memory error via Telegram
         raise  # Preserve original MemoryError behavior
     except Exception as e:
+        if "stacking_ram_stats" in locals():  # Release stacking RAM statistics if allocated before failure.
+            del stacking_ram_stats  # Drop RAM statistics reference before error reporting.
         write_memory_phase_event("model_error", config=config, classifier_name="StackingClassifier", feature_set_name=name, train_sample_count=len(y_train) if y_train is not None else None, test_sample_count=len(y_test) if y_test is not None else None, feature_count=X_train_n_cols, event_outcome=str(e))  # Publish stacking model error
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -12862,6 +13233,7 @@ def main(config=None):
     :return: None
     """
     
+    normal_completion = False  # Track whether the program reached successful explainability finalization.
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
@@ -12916,7 +13288,8 @@ def main(config=None):
             paths = [p.strip() if isinstance(p, str) else p for p in paths] if isinstance(paths, list) else paths  # Normalize paths list by stripping each string entry
             process_dataset_paths(dataset_name, paths, config=config)  # Process all paths for this dataset
 
-        finalize_pending_explainability_jobs(config=config)  # Wait for queued explainability artifacts before final program reporting
+        finalize_pending_explainability_jobs(config=config, terminate=False)  # Wait for asynchronous explainability artifacts before final program reporting
+        normal_completion = True  # Mark successful explainability finalization before final success reporting.
 
         finish_time = datetime.datetime.now()  # Get the finish time of the program
         print(
@@ -12945,7 +13318,7 @@ def main(config=None):
         raise
     finally:  # Always finalize queued explainability work before leaving main
         finalize_memory_watcher(config=config, phase="abnormal_completion", event_outcome="leaving_main_without_normal_completion")  # Publish abnormal terminal phase if no earlier terminal event exists
-        finalize_pending_explainability_jobs(config=config)  # Finalize queued explainability work before main exits
+        finalize_pending_explainability_jobs(config=config, terminate=not normal_completion)  # Finalize or terminate asynchronous explainability work before main exits
 
 
 if __name__ == "__main__":
